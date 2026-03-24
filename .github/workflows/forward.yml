@@ -34,7 +34,7 @@ jobs:
           SOURCE_CHANNEL: ${{ secrets.SOURCE_CHANNEL }}
           SOURCE_TOPIC_ID: ${{ secrets.SOURCE_TOPIC_ID }}
           DEST_CHANNEL: ${{ secrets.DEST_CHANNEL }}
-        run: python forwarder.py --limit 50
+        run: python forwarder.py --limit 3
 
       - name: Persist state
         run: |
