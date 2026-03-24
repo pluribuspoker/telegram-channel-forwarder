@@ -42,7 +42,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout --orphan state-tmp
           git reset
-          git add state.json
+          git add --force state.json
           git commit -m "update state" || echo "No state change"
           git branch -M state-tmp state
           git push --force origin state
