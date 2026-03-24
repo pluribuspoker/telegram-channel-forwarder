@@ -114,28 +114,30 @@ async def main(limit: int = FIRST_RUN_LIMIT):
                 # Album: download all media and send as one message
                 files = []
                 caption = ""
+                caption_entities = None
                 for m in group:
                     data = await client.download_media(m.media, file=bytes)
                     buf = io.BytesIO(data)
                     buf.name = "photo.jpg"
                     files.append(buf)
                     if m.text:
-                        caption = m.text  # caption lives on last message in group
-                await client.send_file(dest_entity, files, caption=caption)
+                        caption = m.text
+                        caption_entities = m.entities
+                await client.send_file(dest_entity, files, caption=caption, formatting_entities=caption_entities)
             else:
                 msg = group[0]
                 if isinstance(msg.media, MessageMediaPhoto):
                     photo = await client.download_media(msg.media, file=bytes)
                     buf = io.BytesIO(photo)
                     buf.name = "photo.jpg"
-                    await client.send_file(dest_entity, buf, caption=msg.text or "")
+                    await client.send_file(dest_entity, buf, caption=msg.text or "", formatting_entities=msg.entities)
 
                 elif isinstance(msg.media, MessageMediaDocument):
                     doc = await client.download_media(msg.media, file=bytes)
-                    await client.send_file(dest_entity, doc, caption=msg.text or "")
+                    await client.send_file(dest_entity, doc, caption=msg.text or "", formatting_entities=msg.entities)
 
                 elif msg.text:
-                    await client.send_message(dest_entity, msg.text)
+                    await client.send_message(dest_entity, msg.text, formatting_entities=msg.entities)
 
                 else:
                     print(f"  Skipped message {msg.id} (unsupported type)")
