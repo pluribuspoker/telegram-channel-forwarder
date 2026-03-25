@@ -13,8 +13,13 @@ on:
         options:
           - real
           - test
-      clear_state:
-        description: "Clear state before running: mapping id to clear one, 'all' to clear everything, leave blank to skip"
+      clear_all_state:
+        description: "Clear state for ALL mappings before running"
+        required: false
+        default: false
+        type: boolean
+      clear_state_id:
+        description: "Clear state for a specific mapping ID (leave blank to skip)"
         required: false
         default: ""
         type: string
@@ -53,7 +58,7 @@ jobs:
           python forwarder.py \
             --limit 50 \
             ${{ inputs.destination == 'test' && '--test' || '' }} \
-            ${{ inputs.clear_state != '' && format('--clear-state {0}', inputs.clear_state) || '' }}
+            ${{ inputs.clear_all_state && '--clear-state all' || inputs.clear_state_id != '' && format('--clear-state {0}', inputs.clear_state_id) || '' }}
 
       - name: Persist state
         run: |
