@@ -45,7 +45,7 @@ jobs:
           TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
           SOURCE_CHANNEL: ${{ secrets.SOURCE_CHANNEL }}
           SOURCE_TOPIC_ID: ${{ secrets.SOURCE_TOPIC_ID }}
-          DEST_CHANNEL: ${{ inputs.destination == 'test' && '-1003713809799' || secrets.DEST_CHANNEL }}
+          DEST_CHANNEL: ${{ inputs.destination == 'test' && secrets.TEST_DEST_CHANNEL || secrets.DEST_CHANNEL }}
         run: python forwarder.py --limit 50
 
       - name: Persist state
