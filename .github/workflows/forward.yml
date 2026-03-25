@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
+    inputs:
+      destination:
+        description: "Destination channel"
+        required: true
+        default: "real"
+        type: choice
+        options:
+          - real
+          - test
 
 permissions:
   contents: write
@@ -36,7 +45,7 @@ jobs:
           TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
           SOURCE_CHANNEL: ${{ secrets.SOURCE_CHANNEL }}
           SOURCE_TOPIC_ID: ${{ secrets.SOURCE_TOPIC_ID }}
-          DEST_CHANNEL: ${{ secrets.DEST_CHANNEL }}
+          DEST_CHANNEL: ${{ inputs.destination == 'test' && '-1003713809799' || secrets.DEST_CHANNEL }}
         run: python forwarder.py --limit 50
 
       - name: Persist state
