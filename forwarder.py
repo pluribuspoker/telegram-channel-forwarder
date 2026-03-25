@@ -1,15 +1,18 @@
 """
 Telegram Channel Forwarder
-Polls a source channel for new messages and re-posts them (text + media)
-to a destination channel. Tracks last-seen message ID in a state file.
+Forwards messages from multiple source channels/topics to destination channels.
+Tracks last-seen message ID per mapping in a state file.
 
 Required env vars:
-  TELEGRAM_API_ID       - from https://my.telegram.org
-  TELEGRAM_API_HASH     - from https://my.telegram.org
-  TELEGRAM_SESSION      - Telethon session string
-  SOURCE_CHANNEL        - source channel username or ID (e.g. "@somechannel" or -1001234567890)
-  SOURCE_TOPIC_ID       - (optional) topic/thread ID to forward from
-  DEST_CHANNEL          - destination channel username or ID
+  TELEGRAM_API_ID    - from https://my.telegram.org
+  TELEGRAM_API_HASH  - from https://my.telegram.org
+  TELEGRAM_SESSION   - Telethon session string
+  MAPPINGS_CONFIG    - JSON array of mapping objects, each with:
+                         id                - unique stable slug for state tracking
+                         source_channel    - username or numeric ID
+                         source_topic_id   - (optional) topic/thread ID
+                         dest_channel      - username or numeric ID
+                         test_dest_channel - (optional) override used with --test flag
 """
 
 import argparse
@@ -33,12 +36,9 @@ load_dotenv()
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
 SESSION = os.environ["TELEGRAM_SESSION"]
-SOURCE_CHANNEL = os.environ["SOURCE_CHANNEL"]
-SOURCE_TOPIC_ID = int(os.environ["SOURCE_TOPIC_ID"]) if os.environ.get("SOURCE_TOPIC_ID") else None
-DEST_CHANNEL = os.environ["DEST_CHANNEL"]
+MAPPINGS = json.loads(os.environ["MAPPINGS_CONFIG"])
 
-# How many messages to look back on first run (safety cap)
-FIRST_RUN_LIMIT = 3
+FIRST_RUN_LIMIT = 50
 
 STATE_FILE = Path(__file__).parent / "state.json"
 
@@ -58,8 +58,8 @@ def save_state(state: dict):
 # ---------------------------------------------------------------------------
 # Resolve a channel reference that might be a username or numeric ID
 # ---------------------------------------------------------------------------
-def parse_channel(raw: str):
-    raw = raw.strip()
+def parse_channel(raw):
+    raw = str(raw).strip()
     try:
         return int(raw)
     except ValueError:
@@ -68,38 +68,43 @@ def parse_channel(raw: str):
 
 
 # ---------------------------------------------------------------------------
-# Core logic
+# Forward a single mapping
 # ---------------------------------------------------------------------------
-async def main(limit: int = FIRST_RUN_LIMIT):
-    client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
-    await client.start()
-    print("✓ Connected to Telegram")
+async def forward_mapping(client, mapping, state, limit, use_test):
+    mapping_id = mapping["id"]
+    source = parse_channel(mapping["source_channel"])
+    topic_id = mapping.get("source_topic_id") or None
+    if topic_id:
+        topic_id = int(topic_id)
 
-    source = parse_channel(SOURCE_CHANNEL)
-    dest = parse_channel(DEST_CHANNEL)
+    dest_raw = mapping.get("test_dest_channel") if use_test else None
+    if not dest_raw:
+        dest_raw = mapping["dest_channel"]
+    dest = parse_channel(dest_raw)
+
+    print(f"\n[{mapping_id}]")
 
     source_entity = await client.get_entity(source)
     dest_entity = await client.get_entity(dest)
     print(f"  Source : {getattr(source_entity, 'title', source)}")
     print(f"  Dest   : {getattr(dest_entity, 'title', dest)}")
 
-    state = load_state()
-    last_id = state.get("last_message_id", 0)
+    mapping_state = state.setdefault(mapping_id, {})
+    last_id = mapping_state.get("last_message_id", 0)
 
     messages = []
-    async for msg in client.iter_messages(source_entity, limit=limit, min_id=last_id, reply_to=SOURCE_TOPIC_ID):
+    async for msg in client.iter_messages(source_entity, limit=limit, min_id=last_id, reply_to=topic_id):
         messages.append(msg)
 
     messages.reverse()
 
     if not messages:
         print("  No new messages.")
-        await client.disconnect()
         return
 
     print(f"  Found {len(messages)} new message(s)")
 
-    # Group messages by grouped_id so albums are sent together
+    # Group by grouped_id so albums are sent together
     groups = []
     for msg in messages:
         if msg.grouped_id and groups and groups[-1][0].grouped_id == msg.grouped_id:
@@ -111,7 +116,6 @@ async def main(limit: int = FIRST_RUN_LIMIT):
     for group in groups:
         try:
             if len(group) > 1:
-                # Album: download all media and send as one message
                 files = []
                 caption = ""
                 caption_entities = None
@@ -149,21 +153,45 @@ async def main(limit: int = FIRST_RUN_LIMIT):
             print(f"  ✗ Failed on message {group[0].id}: {e}", file=sys.stderr)
             break
 
-        state["last_message_id"] = group[-1].id
+        mapping_state["last_message_id"] = group[-1].id
         save_state(state)
 
     print(f"  Re-posted {forwarded} message(s)")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+async def main(limit, use_test, clear_id):
+    state = load_state()
+
+    if clear_id == "all":
+        state = {}
+        save_state(state)
+        print("✓ All state cleared")
+    elif clear_id:
+        state.pop(clear_id, None)
+        save_state(state)
+        print(f"✓ State cleared for: {clear_id}")
+
+    client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
+    await client.start()
+    print("✓ Connected to Telegram")
+
+    for mapping in MAPPINGS:
+        try:
+            await forward_mapping(client, mapping, state, limit, use_test)
+        except Exception as e:
+            print(f"  ✗ Mapping {mapping.get('id')} failed: {e}", file=sys.stderr)
+
     await client.disconnect()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--clear-state", action="store_true", help="Clear saved state before running (re-processes last messages as if first run)")
-    parser.add_argument("--limit", type=int, default=FIRST_RUN_LIMIT, help=f"Max messages to fetch per run (default: {FIRST_RUN_LIMIT})")
+    parser.add_argument("--limit", type=int, default=FIRST_RUN_LIMIT, help=f"Max messages to fetch per mapping per run (default: {FIRST_RUN_LIMIT})")
+    parser.add_argument("--test", action="store_true", help="Use test_dest_channel from each mapping instead of dest_channel")
+    parser.add_argument("--clear-state", metavar="ID", nargs="?", const="all", help="Clear state for a mapping ID, or 'all' to clear everything")
     args = parser.parse_args()
 
-    if args.clear_state and STATE_FILE.exists():
-        STATE_FILE.unlink()
-        print("✓ State reset")
-
-    asyncio.run(main(args.limit))
+    asyncio.run(main(args.limit, args.test, args.clear_state))

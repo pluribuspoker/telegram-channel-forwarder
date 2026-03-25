@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       destination:
-        description: "Destination channel"
+        description: "Destination channel (test uses test_dest_channel from each mapping)"
         required: true
         default: "real"
         type: choice
@@ -14,10 +14,10 @@ on:
           - real
           - test
       clear_state:
-        description: "Clear saved state before running (re-processes last messages as if first run)"
+        description: "Clear state before running: mapping id to clear one, 'all' to clear everything, leave blank to skip"
         required: false
-        default: false
-        type: boolean
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -48,10 +48,12 @@ jobs:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
-          SOURCE_CHANNEL: ${{ secrets.SOURCE_CHANNEL }}
-          SOURCE_TOPIC_ID: ${{ secrets.SOURCE_TOPIC_ID }}
-          DEST_CHANNEL: ${{ inputs.destination == 'test' && secrets.TEST_DEST_CHANNEL || secrets.DEST_CHANNEL }}
-        run: python forwarder.py --limit 50 ${{ inputs.clear_state == true && '--clear-state' || '' }}
+          MAPPINGS_CONFIG: ${{ secrets.MAPPINGS_CONFIG }}
+        run: |
+          python forwarder.py \
+            --limit 50 \
+            ${{ inputs.destination == 'test' && '--test' || '' }} \
+            ${{ inputs.clear_state != '' && format('--clear-state {0}', inputs.clear_state) || '' }}
 
       - name: Persist state
         run: |
