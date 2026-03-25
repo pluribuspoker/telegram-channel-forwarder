@@ -13,6 +13,11 @@ on:
         options:
           - real
           - test
+      clear_state:
+        description: "Clear saved state before running (re-processes last messages as if first run)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -46,7 +51,7 @@ jobs:
           SOURCE_CHANNEL: ${{ secrets.SOURCE_CHANNEL }}
           SOURCE_TOPIC_ID: ${{ secrets.SOURCE_TOPIC_ID }}
           DEST_CHANNEL: ${{ inputs.destination == 'test' && secrets.TEST_DEST_CHANNEL || secrets.DEST_CHANNEL }}
-        run: python forwarder.py --limit 50
+        run: python forwarder.py --limit 50 ${{ inputs.clear_state == true && '--clear-state' || '' }}
 
       - name: Persist state
         run: |
