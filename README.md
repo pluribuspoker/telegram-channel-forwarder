@@ -36,11 +36,11 @@ BOT_TOKEN=your_bot_token
 MAPPINGS_CONFIG='[
   {
     "id": "my-mapping",
-    "source_channel": -1001234567890,
-    "source_topic_id": 12345,
-    "dest_channel": -1009876543210,
-    "test_source_channel": -1001111111111,
-    "test_dest_channel": -1002222222222
+    "source_channel": -100xxxxxxxxxx,
+    "source_topic_id": null,
+    "dest_channel": -100xxxxxxxxxx,
+    "test_source_channel": -100xxxxxxxxxx,
+    "test_dest_channel": -100xxxxxxxxxx
   }
 ]'
 ```
