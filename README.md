@@ -40,7 +40,8 @@ MAPPINGS_CONFIG='[
     "source_topic_id": null,
     "dest_channel": -100xxxxxxxxxx,
     "test_source_channel": -100xxxxxxxxxx,
-    "test_dest_channel": -100xxxxxxxxxx
+    "test_dest_channel": -100xxxxxxxxxx,
+    "filter_pattern": "(?i)^[A-Za-z][A-Za-z ]*:[ ]*[(]"
   }
 ]'
 ```

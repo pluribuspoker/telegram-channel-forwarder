@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-from common import parse_channel, resolve_dest, send_group
+from common import log_group, parse_channel, passes_filter, resolve_dest, send_group
 
 load_dotenv(override=True)
 
@@ -81,7 +81,7 @@ async def main():
         print(f"  Listening: {source_label} → {getattr(dest_entity, 'title', dest_entity)}")
 
         @client.on(events.NewMessage(chats=source_entity))
-        async def handler(event, bot_dest_entity=bot_dest_entity, topic_id=topic_id):
+        async def handler(event, bot_dest_entity=bot_dest_entity, topic_id=topic_id, mapping=mapping):
             msg = event.message
 
             # Filter by topic if needed
@@ -104,18 +104,27 @@ async def main():
                 if existing:
                     existing.cancel()
 
-                async def flush_album(gid=gid, bot_dest_entity=bot_dest_entity):
+                async def flush_album(gid=gid, bot_dest_entity=bot_dest_entity, mapping=mapping):
                     await asyncio.sleep(ALBUM_WAIT)
                     group = sorted(album_buffer.pop(gid, []), key=lambda m: m.id)
                     album_buffer.pop(f"{gid}_task", None)
-                    if group:
+                    if not group:
+                        return
+                    if passes_filter(group, mapping):
+                        log_group(group, sent=True)
                         try:
                             await send_group(client, group, bot_dest_entity, sender=bot)
                         except Exception as e:
                             print(f"  ✗ Album send failed: {e}", file=sys.stderr)
+                    else:
+                        log_group(group, sent=False)
 
                 album_buffer[f"{gid}_task"] = asyncio.create_task(flush_album())
             else:
+                if not passes_filter([msg], mapping):
+                    log_group([msg], sent=False)
+                    return
+                log_group([msg], sent=True)
                 try:
                     await send_group(client, [msg], bot_dest_entity, sender=bot)
                 except Exception as e:

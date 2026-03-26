@@ -2,10 +2,64 @@
 Shared utilities for forwarder.py and listener.py
 """
 
+import datetime
 import io
+import re
 import sys
 
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Logging
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _group_summary(group):
+    """Return (text_preview, media_tag) for a message group."""
+    text = next((m.text for m in group if m.text), "")
+    preview = "  ".join(text.split("\n")).strip()   # flatten newlines
+    preview = " ".join(preview.split())             # collapse extra whitespace
+    if len(preview) > 65:
+        preview = preview[:62] + "…"
+
+    has_media = any(m.media for m in group)
+    if len(group) > 1:
+        media_tag = f"[album ×{len(group)}]"
+    elif has_media:
+        media_tag = "[photo]"
+    else:
+        media_tag = ""
+
+    return preview, media_tag
+
+
+def log_group(group, sent):
+    """Print a single log line for a processed message group."""
+    ts = datetime.datetime.now().strftime("%H:%M:%S")
+    preview, media_tag = _group_summary(group)
+
+    if sent:
+        badge = "✦ SENT    "
+    else:
+        badge = "· filtered"
+
+    body_parts = [p for p in [preview, media_tag] if p]
+    body = "  ".join(body_parts) if body_parts else "(no content)"
+
+    print(f" {ts}  {badge}  ┃  {body}")
+
+
+def passes_filter(group, mapping):
+    """Return True if the message group should be forwarded.
+
+    When `filter_pattern` is set on a mapping, at least one message in the
+    group must have text matching the pattern.  The default pattern matches
+    the picks format:  WORD(S): (anything)  e.g. "STRAIGHT: (1 UNIT)"
+    """
+    pattern = mapping.get("filter_pattern")
+    if not pattern:
+        return True
+    return any(re.search(pattern, m.text or "") for m in group)
 
 
 def parse_channel(raw):

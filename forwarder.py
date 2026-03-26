@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
-from common import parse_channel, resolve_dest, send_group
+from common import log_group, parse_channel, passes_filter, resolve_dest, send_group
 
 load_dotenv(override=True)
 
@@ -101,10 +101,14 @@ async def forward_mapping(client, bot, mapping, state, limit, use_test):
 
     forwarded = 0
     for group in groups:
+        if not passes_filter(group, mapping):
+            log_group(group, sent=False)
+            continue
         try:
             sent = await send_group(client, group, dest_entity, sender=bot)
             if not sent:
                 continue
+            log_group(group, sent=True)
             forwarded += 1
         except Exception as e:
             print(f"  ✗ Failed on message {group[0].id}: {e}", file=sys.stderr)
@@ -113,7 +117,8 @@ async def forward_mapping(client, bot, mapping, state, limit, use_test):
         mapping_state["last_message_id"] = group[-1].id
         save_state(state)
 
-    print(f"  Re-posted {forwarded} message(s)")
+    print(f"  ─────────────────────────────────────────")
+    print(f"  Re-posted {forwarded} / {len(groups)} group(s)")
 
 
 # ---------------------------------------------------------------------------
