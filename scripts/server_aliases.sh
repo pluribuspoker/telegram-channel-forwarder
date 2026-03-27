@@ -11,6 +11,7 @@ _fmtlog() {
         e = sprintf("%c", 27)
         RESET=e"[0m"; DIM=e"[90m"; BOLD=e"[1m"
         GREEN=e"[92m"; RED=e"[91m"; YELLOW=e"[93m"; GREY=e"[90m"
+        TRACKER_PFX=e"[2;36m"; FORWARDER_PFX=e"[2;35m"
     }
     {
         line = $0
@@ -37,6 +38,11 @@ _fmtlog() {
             print DIM ts rest RESET; next
         }
 
+        # Pick prefix color by service
+        if      (prefix ~ /tracker/)   pcolor = TRACKER_PFX
+        else if (prefix ~ /forwarder/) pcolor = FORWARDER_PFX
+        else                           pcolor = DIM
+
         # Color message by content
         if      (msg ~ /\<WIN\>|✅|\[EDIT\]|✦ SENT|Completed successfully|Connected/)     color = GREEN
         else if (msg ~ /\<LOSS\>|❌|Crashed|Failed|errors: [1-9]|\[SKIP\]|failed: [1-9]/) color = RED
@@ -44,7 +50,7 @@ _fmtlog() {
         else if (msg ~ /filtered|· filtered|UNKNOWN/)                                  color = DIM
         else                                                                            color = RESET
 
-        print DIM ts prefix RESET color msg RESET
+        print DIM ts RESET pcolor prefix RESET color msg RESET
     }'
 }
 
