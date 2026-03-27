@@ -537,7 +537,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
             print(f"\n{ch_name}  ({channel_id}):")
             scoreboard_cache: dict = {}
             summary_cache:   dict = {}
-            edited = skipped = errors = 0
+            edited = pending = failed = errors = 0
 
             async for msg in client.iter_messages(channel_id):
                 msg_date = msg.date
@@ -561,7 +561,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 msg_cost_before = usage_cost()
                 parsed = pending_cache.get(cache_key) or await claude_parse(text)
                 if not parsed:
-                    skipped += 1
+                    failed += 1
                     print(f"\n  [SKIP] msg {msg.id}  {date_str}  parse failed")
                     print(f"         {snippet}")
                     await audit.record(
@@ -574,7 +574,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 sport = parsed.get("sport", "Other")
                 picks = parsed.get("picks", [])
                 if not picks:
-                    skipped += 1
+                    failed += 1
                     print(f"\n  [SKIP] msg {msg.id}  {date_str}  no picks extracted  ({sport})")
                     print(f"         {snippet}")
                     await audit.record(
@@ -645,7 +645,10 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
                 # Nothing gradeable — log and skip
                 if not graded:
-                    skipped += 1
+                    if overall == "PENDING":
+                        pending += 1
+                    else:
+                        failed += 1
                     all_descs = "\n".join(
                         f"{v[1]}: {v[0].get('description', '')}|{v[3]}|{v[4]}|{v[2]}" for v in verdicts
                     )
@@ -695,7 +698,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     capper_name=capper,
                 )
 
-            print(f"\n  => edited: {edited}  skipped: {skipped}  errors: {errors}")
+            print(f"\n  => edited: {edited}  pending: {pending}  failed: {failed}  errors: {errors}")
 
     if not dry_run:
         _save_pending_cache(pending_cache)
