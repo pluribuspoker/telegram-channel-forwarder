@@ -124,6 +124,11 @@ def usage_cost() -> float:
     return _usage["input_tokens"] * _COST_PER_INPUT + _usage["output_tokens"] * _COST_PER_OUTPUT
 
 
+def fmt_cost(cost: float) -> str:
+    """Format cost: $0.00 if zero, $0.0000 otherwise."""
+    return f"${cost:.2f}" if cost == 0 else f"${cost:.4f}"
+
+
 async def _claude_create_with_retry(**kwargs) -> object:
     """Call claude().messages.create with up to 4 retries on transient errors (500, 529)."""
     for attempt in range(4):

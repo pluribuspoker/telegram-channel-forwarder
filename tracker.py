@@ -29,6 +29,7 @@ from ai import (
     CONTEXT_SKIP,
     CONTEXT_PENDING,
     usage_cost,
+    fmt_cost,
     _usage,
 )
 
@@ -215,7 +216,7 @@ def _write_detail_file(path: str, source: str, results: list, graded: list,
         if graded:
             pct = round(100 * len(correct_list) / len(graded))
             w(f"Accuracy: {len(correct_list)}/{len(graded)} ({pct}%)")
-        w(f"Cost   : ${cost:.2f}")
+        w(f"Cost   : {fmt_cost(cost)}")
         w(sep)
 
         for r in results:
@@ -371,7 +372,7 @@ async def run_backtest(filepath: str) -> None:
             })
         msg_cost = usage_cost() - msg_cost_before
         if msg_cost > 0:
-            print(f"       $ ${msg_cost:.2f}")
+            print(f"       $ {fmt_cost(msg_cost)}")
 
     # ── Summary ──
     graded = [r for r in results if not r["skipped"]]
@@ -388,7 +389,7 @@ async def run_backtest(filepath: str) -> None:
         print(f"Accuracy : N/A  |  skipped: {len(skipped_list)}/{total}")
 
     cost = usage_cost()
-    print(f"Cost     : ${cost:.2f}")
+    print(f"Cost     : {fmt_cost(cost)}")
 
     if wrong_list:
         print("\nIncorrect grades:")
@@ -483,10 +484,10 @@ async def grade_one(text: str, date: str) -> None:
 
     msg_cost = usage_cost() - msg_cost_before
     if msg_cost > 0:
-        print(f"$ ${msg_cost:.2f}")
+        print(f"$ {fmt_cost(msg_cost)}")
     print()
     cost = usage_cost()
-    print(f"Total cost: ${cost:.2f}")
+    print(f"Total cost: {fmt_cost(cost)}")
 
 
 # ─── Live mode ────────────────────────────────────────────────────────────────
@@ -637,7 +638,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         print(f"           {calc[:120]}")
                 msg_cost = usage_cost() - msg_cost_before
                 if msg_cost > 0:
-                    print(f"         $ ${msg_cost:.2f}")
+                    print(f"         $ {fmt_cost(msg_cost)}")
 
                 # Cache the parse result for pending messages to avoid re-parsing on next run
                 if not graded:
@@ -704,7 +705,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
         _save_pending_cache(pending_cache)
 
     cost = usage_cost()
-    print(f"\nCost: ${cost:.2f}")
+    print(f"\nCost: {fmt_cost(cost)}")
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
