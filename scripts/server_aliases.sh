@@ -38,8 +38,8 @@ _fmtlog() {
         }
 
         # Color message by content
-        if      (msg ~ /WIN|✅|\[EDIT\]|✦ SENT|Completed successfully|Connected/)     color = GREEN
-        else if (msg ~ /LOSS|❌|Crashed|Failed|errors: [1-9]|\[SKIP\]|failed: [1-9]/) color = RED
+        if      (msg ~ /\<WIN\>|✅|\[EDIT\]|✦ SENT|Completed successfully|Connected/)     color = GREEN
+        else if (msg ~ /\<LOSS\>|❌|Crashed|Failed|errors: [1-9]|\[SKIP\]|failed: [1-9]/) color = RED
         else if (msg ~ /PENDING|⏳|\[WAIT\]/)                                          color = RESET
         else if (msg ~ /filtered|· filtered|UNKNOWN/)                                  color = DIM
         else                                                                            color = RESET
