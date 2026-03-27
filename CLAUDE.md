@@ -8,17 +8,20 @@
 ### Server aliases (root)
 
 ```bash
-flogs      # tail forwarder logs (Ctrl+C exits, service keeps running)
-tlogs      # tail tracker logs (last 50 lines + follow)
+flogs      # tail forwarder logs
+tlogs      # tail tracker logs
+logs       # tail both interleaved
 start      # start forwarder + status
 stop       # stop forwarder + status
 restart    # restart forwarder + status
 status     # forwarder status
-deploy     # git pull + restart + status + flogs
+deploy     # git pull + restart + forwarder status + last tracker run + tail both
 
 grade      # run pick grader live (last 1 day) — same as the 5-min timer
 gradetest  # dry run pick grader (last 2 days) — no edits, shows what would happen
 ```
+
+Aliases are defined in `/root/.server_aliases.sh` (sourced from `.bashrc`).
 
 ### Switching to test mode
 
@@ -63,6 +66,10 @@ Audit log: `picks.db` (SQLite) + Telegram audit channel (`AUDIT_CHANNEL_ID`).
 Parse cache: `parse_cache.json` — avoids re-parsing pending picks on every run.
 
 ```bash
-journalctl -u telegram-tracker -n 50 --no-pager  # view tracker run logs
-systemctl list-timers telegram-tracker.timer       # check next scheduled run
+journalctl -u telegram-tracker -n 50 --no-pager   # view recent tracker logs
+journalctl -u telegram-tracker --since today       # all tracker logs today
+journalctl -u telegram-tracker -p err              # only errors
+systemctl list-timers telegram-tracker.timer        # check next scheduled run
 ```
+
+Healthchecks.io receives log output with each ping — last 20 lines on success, last 50 on failure (includes tracebacks).
