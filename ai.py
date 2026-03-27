@@ -232,8 +232,10 @@ async def build_context(
         events = _completed_events(scoreboard)
         event_ids = find_event_ids(events, teams, player)
 
-        # If no match by name, search all completed events
-        if not event_ids:
+        # If no specific teams/player given, search all completed events.
+        # If teams/player ARE given but not found in completed events, fall through
+        # to the scoreboard path below which properly returns CONTEXT_PENDING/SKIP.
+        if not event_ids and not (teams or player):
             event_ids = [e.get("id") for e in events if e.get("id")]
 
         parts = []
