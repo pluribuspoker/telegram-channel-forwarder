@@ -44,6 +44,10 @@ syncenv  # scp local .env to server
 ship     # git push + deploy on server
 ```
 
+### Important
+
+**Never restart or deploy the service yourself.** Rapid bot session restarts trigger Telegram flood waits (rate limiting). Always let the user run `deploy`, `restart`, or `start` manually.
+
 ### Deploy workflow
 
 ```powershell
