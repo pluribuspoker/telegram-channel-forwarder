@@ -363,14 +363,16 @@ def find_event_ids(events: list[dict], teams: list[str], player: str = "") -> li
         return [e.get("id") for e in events if e.get("id")]
 
     for event in events:
-        comp = event.get("competitions", [{}])[0]
+        # Check ALL competitions — UFC events have many bouts, each a separate competition
+        all_comps = event.get("competitions", [{}])
         event_names = []
-        for c in comp.get("competitors", []):
-            n = (
-                c.get("team", {}).get("displayName", "")
-                or c.get("athlete", {}).get("displayName", "")
-            ).lower()
-            event_names.append(n)
+        for comp in all_comps:
+            for c in comp.get("competitors", []):
+                n = (
+                    c.get("team", {}).get("displayName", "")
+                    or c.get("athlete", {}).get("displayName", "")
+                ).lower()
+                event_names.append(n)
 
         if any(
             any(_team_matches(term, en) for en in event_names)
@@ -631,29 +633,25 @@ async def build_context(
 
     # Default: scoreboard text — completed games only
     if scoreboard:
-        if sport != "UFC" and (teams or player):
+        if teams or player:
             events = _completed_events(scoreboard)
             relevant_ids = find_event_ids(events, teams, player)
             if relevant_ids:
-                filtered = [e for e in events if e.get("id") in set(relevant_ids)]
-                if filtered:
-                    return scoreboard_text({"events": filtered}, sport), date
-            # No completed match — check if game exists but hasn't started/finished yet
-            all_events = scoreboard.get("events", [])
-            if find_event_ids(all_events, teams, player):
+                # UFC: show the full card so grader sees all bouts; others: filter to the game
+                display = scoreboard if sport == "UFC" else {"events": [e for e in events if e.get("id") in set(relevant_ids)]}
+                return scoreboard_text(display, sport), date
+            # No completed match — check if game/bout exists but hasn't started/finished yet
+            if find_event_ids(scoreboard.get("events", []), teams, player):
                 return CONTEXT_PENDING, date
             # No match on exact date — try the previous day (handles "sent late" picks)
-            prev_date = (
-                _date.fromisoformat(date) - timedelta(days=1)
-            ).isoformat()
+            prev_date = (_date.fromisoformat(date) - timedelta(days=1)).isoformat()
             prev_sb = await fetch_espn(sport, prev_date)
             if prev_sb:
                 prev_events = _completed_events(prev_sb)
                 prev_ids = find_event_ids(prev_events, teams, player)
                 if prev_ids:
-                    filtered = [e for e in prev_events if e.get("id") in set(prev_ids)]
-                    if filtered:
-                        return scoreboard_text({"events": filtered}, sport), prev_date
+                    display = prev_sb if sport == "UFC" else {"events": [e for e in prev_events if e.get("id") in set(prev_ids)]}
+                    return scoreboard_text(display, sport), prev_date
                 if find_event_ids(prev_sb.get("events", []), teams, player):
                     return CONTEXT_PENDING, prev_date
             # If the sport had NO completed games at all on the pick date (e.g. picks posted
@@ -989,9 +987,12 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
 
         teams  = pick.get("teams") or []
         player = pick.get("player") or ""
-        # Build search terms: full name + individual words longer than 3 chars
+        # For player props, search by player name only — team names appear as game
+        # headers (e.g. "Pirates / Mets:") and would match the wrong line.
+        # For team bets, search by team names.
+        identifiers = [player] if player else teams
         search_terms: list[str] = []
-        for t in teams + ([player] if player else []):
+        for t in identifiers:
             tl = t.lower().strip()
             if tl:
                 search_terms.append(tl)
