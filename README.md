@@ -11,8 +11,10 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 | File | Purpose |
 |---|---|
 | `listener.py` | Real-time forwarder — runs persistently as a systemd service |
-| `tracker.py` | Pick grader — runs every 5 min via systemd timer |
-| `audit.py` | Audit log for tracker — writes to SQLite + Telegram audit channel |
+| `tracker.py` | Pick grader entry point + orchestration (CLI, live mode, backtest, Telegram editing) |
+| `scores.py` | Sports data — ESPN / Odds API fetching, scoreboard formatting, team matching |
+| `ai.py` | Claude AI — pick parsing, grading, context building, cost tracking |
+| `audit.py` | Audit log — writes to SQLite + Telegram audit channel |
 | `common.py` | Shared utilities (Anthropic client, OCR, channel parsing, emoji map) |
 | `run_tracker.sh` | Timer wrapper with retry logic and healthchecks.io signals |
 
