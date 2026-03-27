@@ -615,12 +615,14 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     tag = "WAIT" if has_pending else "SKIP"
                 else:
                     tag = "DRY " if dry_run else "EDIT"
-                print(f"\n  [{tag}] msg {msg.id}")
+                print(f"\n  [{tag}] {capper}  ·  msg {msg.id}")
                 for pick, verdict, calc, ps, gd, *_ in verdicts:
                     desc = pick.get("description", "")[:60]
-                    calc_str = f"  ({calc})" if calc else ""
+                    emoji = VERDICT_EMOJI.get(verdict, "")
                     gd_short = f"{_date.fromisoformat(gd).month}/{_date.fromisoformat(gd).day}" if gd else date_str
-                    print(f"         {verdict:<7}  {desc}{calc_str}  [{ps} · {gd_short}]")
+                    print(f"         • {desc}{emoji} [{ps} · {gd_short}]")
+                    if calc:
+                        print(f"           {calc[:120]}")
 
                 # Cache the parse result for pending messages to avoid re-parsing on next run
                 if not graded:
