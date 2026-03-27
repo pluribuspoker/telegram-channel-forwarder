@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import sys
+import urllib.request
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -38,6 +39,19 @@ MAPPINGS = json.loads(os.environ["MAPPINGS_CONFIG"])
 
 # How long to wait for album messages to arrive before sending as a group
 ALBUM_WAIT = 5.0
+
+
+async def heartbeat():
+    """Ping healthchecks.io every 4 minutes to signal the service is alive."""
+    url = os.environ.get("HEALTHCHECK_URL")
+    if not url:
+        return
+    while True:
+        try:
+            urllib.request.urlopen(url, timeout=10)
+        except Exception:
+            pass
+        await asyncio.sleep(240)
 
 
 async def main():
@@ -133,6 +147,7 @@ async def main():
                     print(f"  ✗ Failed on message {msg.id}: {e}", file=sys.stderr)
 
     print("\n✓ Listening for new messages (Ctrl+C to stop)...")
+    asyncio.create_task(heartbeat())
     try:
         await client.run_until_disconnected()
     finally:

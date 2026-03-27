@@ -123,18 +123,19 @@ async def enrich_caption(group, mapping, client):
 
     Returns (caption, odds_str):
       - odds_str non-empty → OCR succeeded; caller should send text-only, no image
-      - odds_str empty     → OCR failed or disabled; caller should send with image as normal
+      - odds_str empty     → OCR attempted but failed; caller should send with image as normal
+      - odds_str None      → OCR not attempted (disabled or no media)
       - caption is None when OCR is disabled or there is no media to read from
     """
     if not mapping.get("ocr_odds"):
-        return None, ""
+        return None, None
     text = next((m.text for m in group if m.text), "")
     media_msg = next((m for m in group if m.media), None)
     if not media_msg:
-        return None, ""
+        return None, None
     image_bytes = await client.download_media(media_msg.media, file=bytes)
     if not image_bytes:
-        return None, ""
+        return None, None
     odds = await extract_odds(image_bytes)
     if odds:
         return f"{text} {odds}".strip(), odds  # success → text only
