@@ -303,6 +303,7 @@ async def run_backtest(filepath: str) -> None:
         clean = strip_label(plain)
         date = msg["date"][:10]
 
+        msg_cost_before = usage_cost()
         parsed = await claude_parse(clean)
         if not parsed:
             print(f"  [parse fail] msg {msg['id']}")
@@ -368,6 +369,9 @@ async def run_backtest(filepath: str) -> None:
                 "context": context,
                 "raw_text": msg_plain_text(msg),
             })
+        msg_cost = usage_cost() - msg_cost_before
+        if msg_cost > 0:
+            print(f"       $ ${msg_cost:.4f}")
 
     # ── Summary ──
     graded = [r for r in results if not r["skipped"]]
@@ -418,6 +422,7 @@ async def grade_one(text: str, date: str) -> None:
     label = extract_label(text)
     clean = strip_label(text)
 
+    msg_cost_before = usage_cost()
     parsed = await claude_parse(clean)
     if not parsed:
         print("[parse fail]")
@@ -474,8 +479,12 @@ async def grade_one(text: str, date: str) -> None:
             print(f"  LABEL : {label.upper()}  →  {'OK' if correct else ('--' if grade in ('PUSH','UNKNOWN') else 'XX')}")
         print()
 
+    msg_cost = usage_cost() - msg_cost_before
+    if msg_cost > 0:
+        print(f"$ ${msg_cost:.4f}")
+    print()
     cost = usage_cost()
-    print(f"Cost: ${cost:.4f}  ({_usage['input_tokens']:,} in / {_usage['output_tokens']:,} out tokens)")
+    print(f"Total cost: ${cost:.4f}  ({_usage['input_tokens']:,} in / {_usage['output_tokens']:,} out tokens)")
 
 
 # ─── Live mode ────────────────────────────────────────────────────────────────
@@ -547,6 +556,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 capper  = next((l.strip() for l in text.splitlines() if l.strip()), "")
                 snippet = " ".join(text.split())[:80]
                 cache_key = f"{channel_id}:{msg.id}"
+                msg_cost_before = usage_cost()
                 parsed = pending_cache.get(cache_key) or await claude_parse(text)
                 if not parsed:
                     skipped += 1
@@ -623,6 +633,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     print(f"         • {desc}{emoji} [{ps} · {gd_short}]")
                     if calc:
                         print(f"           {calc[:120]}")
+                msg_cost = usage_cost() - msg_cost_before
+                if msg_cost > 0:
+                    print(f"         $ ${msg_cost:.4f}")
 
                 # Cache the parse result for pending messages to avoid re-parsing on next run
                 if not graded:
