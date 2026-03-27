@@ -29,6 +29,7 @@ TELEGRAM_API_HASH=your_api_hash
 TELEGRAM_SESSION=your_session_string
 BOT_TOKEN=your_bot_token
 ANTHROPIC_API_KEY=your_anthropic_api_key
+HEALTHCHECK_URL=https://hc-ping.com/your-uuid
 MAPPINGS_CONFIG='[
   {
     "id": "my-mapping",
@@ -44,6 +45,7 @@ MAPPINGS_CONFIG='[
 - `source_topic_id` — optional, for forum/topic channels only
 - `test_source_channel` / `test_dest_channel` — optional, used with `--test` flag
 - `ANTHROPIC_API_KEY` — only required if any mapping uses `ocr_odds`
+- `HEALTHCHECK_URL` — optional, ping URL from [healthchecks.io](https://healthchecks.io) for uptime monitoring
 
 ### 4. Find channel IDs
 
