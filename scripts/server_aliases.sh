@@ -8,8 +8,9 @@ R='\e[0m'     # reset
 _fmtlog() {
     gawk '
     BEGIN {
-        RESET="\033[0m"; DIM="\033[2m"; BOLD="\033[1m"
-        GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; GREY="\033[90m"
+        e = sprintf("%c", 27)
+        RESET=e"[0m"; DIM=e"[90m"; BOLD=e"[1m"
+        GREEN=e"[92m"; RED=e"[91m"; YELLOW=e"[93m"; GREY=e"[90m"
     }
     {
         line = $0
