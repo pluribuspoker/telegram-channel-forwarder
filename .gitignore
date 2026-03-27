@@ -208,6 +208,7 @@ picks.db-journal
 picks.db-wal
 backtest_*.txt
 parse_cache.json
+data/
 
 # Marimo
 marimo/_static/
