@@ -13,9 +13,13 @@ import os
 import re
 import argparse
 
+from datetime import date as _date, timedelta
+
+import anthropic
 import httpx
 from dotenv import load_dotenv
-import anthropic
+
+from common import VERDICT_EMOJI
 
 load_dotenv()
 
@@ -27,6 +31,11 @@ def claude() -> anthropic.AsyncAnthropic:
     if _claude is None:
         _claude = anthropic.AsyncAnthropic()
     return _claude
+
+
+# Sentinels returned by build_context to signal "no game data" vs "game not yet played"
+CONTEXT_SKIP = "__SKIP__"
+CONTEXT_PENDING = "__PENDING__"
 
 
 # ─── ESPN ─────────────────────────────────────────────────────────────────────
@@ -64,8 +73,7 @@ async def fetch_odds_api_scores(sport: str, date: str) -> list[dict]:
     api_key = os.getenv("ODDS_API_KEY", "")
     if not api_key:
         return []
-    from datetime import date as _d
-    target = _d.fromisoformat(date)
+    target = _date.fromisoformat(date)
     async with httpx.AsyncClient(timeout=15) as http:
         try:
             r = await http.get(
@@ -128,7 +136,7 @@ async def fetch_tennis_match_context(player: str, date: str) -> str:
     Search ESPN core API for a tennis match involving `player` on `date`.
     Tries exact date first; falls back to ±1 day only if no exact match found.
     Returns a formatted string with player names, set scores, and winner.
-    Returns "__SKIP__" if not found.
+    Returns CONTEXT_SKIP if not found.
     """
     from datetime import date as _d
     player_lower = player.lower().strip()
@@ -200,9 +208,7 @@ async def fetch_tennis_match_context(player: str, date: str) -> str:
     result = await _search(max_days=0)
     if result is None:
         result = await _search(max_days=1)
-    return result or "__SKIP__"
-
-    return "__SKIP__"
+    return result or CONTEXT_SKIP
 
 
 async def fetch_espn_summary(sport: str, event_id: str) -> dict | None:
@@ -403,6 +409,11 @@ def strip_label(text: str) -> str:
     return re.sub(r"[\u2705\u274c]", "", text).strip()
 
 
+def grade_matches_label(grade: str, label: str) -> bool:
+    """Check if a graded verdict matches the expected label (win/loss)."""
+    return (grade == "WIN" and label == "win") or (grade == "LOSS" and label == "loss")
+
+
 # ─── Claude prompts ───────────────────────────────────────────────────────────
 
 _PARSE_PROMPT = """\
@@ -575,21 +586,21 @@ async def build_context(
     if sport == "Tennis":
         player_or_team = player or (teams[0] if teams else "")
         if not player_or_team:
-            return "__SKIP__", date
+            return CONTEXT_SKIP, date
         return await fetch_tennis_match_context(player_or_team, date), date
 
     # Boxing: Odds API scores (free tier = last ~3 days only)
     if sport == "Boxing":
         fighter = player or (teams[0] if teams else "")
         if not fighter:
-            return "__SKIP__", date
+            return CONTEXT_SKIP, date
         events = await fetch_odds_api_scores("Boxing", date)
         ctx = odds_api_context(fighter, events)
-        return (ctx if ctx else "__SKIP__"), date
+        return (ctx if ctx else CONTEXT_SKIP), date
 
     # Other unknown sports → skip
     if sport not in ESPN_LEAGUES:
-        return "__SKIP__", date
+        return CONTEXT_SKIP, date
 
     # Props and period bets need game summaries
     needs_summary = period != "game" or bet_type == "prop"
@@ -630,9 +641,8 @@ async def build_context(
             # No completed match — check if game exists but hasn't started/finished yet
             all_events = scoreboard.get("events", [])
             if find_event_ids(all_events, teams, player):
-                return "__PENDING__", date
+                return CONTEXT_PENDING, date
             # No match on exact date — try the previous day (handles "sent late" picks)
-            from datetime import date as _date, timedelta
             prev_date = (
                 _date.fromisoformat(date) - timedelta(days=1)
             ).isoformat()
@@ -645,7 +655,7 @@ async def build_context(
                     if filtered:
                         return scoreboard_text({"events": filtered}, sport), prev_date
                 if find_event_ids(prev_sb.get("events", []), teams, player):
-                    return "__PENDING__", prev_date
+                    return CONTEXT_PENDING, prev_date
             # If the sport had NO completed games at all on the pick date (e.g. picks posted
             # days before a weekend game), scan the next 3 days for a scheduled matchup.
             if not _completed_events(scoreboard):
@@ -653,14 +663,14 @@ async def build_context(
                     future_date = (_date.fromisoformat(date) + timedelta(days=offset)).isoformat()
                     future_sb = await fetch_espn(sport, future_date)
                     if future_sb and find_event_ids(future_sb.get("events", []), teams, player):
-                        return "__PENDING__", future_date
-            return "__SKIP__", date
+                        return CONTEXT_PENDING, future_date
+            return CONTEXT_SKIP, date
         completed = _completed_events(scoreboard)
         if not completed:
-            return "__SKIP__", date
+            return CONTEXT_SKIP, date
         return scoreboard_text({"events": completed}, sport), date
 
-    return "__SKIP__", date
+    return CONTEXT_SKIP, date
 
 
 # ─── Backtest ─────────────────────────────────────────────────────────────────
@@ -727,7 +737,7 @@ def _write_detail_file(path: str, source: str, results: list, graded: list,
             # Context passed to grader
             w("CONTEXT (sent to grader):")
             ctx = r["context"]
-            if ctx == "__SKIP__":
+            if ctx == CONTEXT_SKIP:
                 w("  [skipped — no grader call]")
             else:
                 for line in ctx.splitlines():
@@ -818,12 +828,12 @@ async def run_backtest(filepath: str) -> None:
 
             context, _game_date = await build_context(pick_sport, date, pick, pick_scoreboard, summary_cache)
 
-            if context == "__SKIP__":
+            if context == CONTEXT_SKIP:
                 grade, calc = "UNKNOWN", ""
             else:
                 grade, calc = await claude_grade(pick_desc, date, context)
 
-            correct = (grade == "WIN" and label == "win") or (grade == "LOSS" and label == "loss")
+            correct = grade_matches_label(grade, label)
             skipped = grade in ("PUSH", "UNKNOWN")
             mark = "OK" if correct else ("--" if skipped else "XX")
 
@@ -884,8 +894,7 @@ async def run_backtest(filepath: str) -> None:
             print(f"  {reason}: {count}")
 
     # ── Write detail file ──
-    import os as _os
-    base = _os.path.splitext(_os.path.basename(filepath))[0]
+    base = os.path.splitext(os.path.basename(filepath))[0]
     out_path = f"backtest_{base}.txt"
     _write_detail_file(out_path, filepath, results, graded, correct_list, skipped_list, wrong_list, cost)
     print(f"\nDetail file: {out_path}")
@@ -935,14 +944,14 @@ async def grade_one(text: str, date: str) -> None:
         context, _game_date = await build_context(pick_sport, date, pick, scoreboard, summary_cache)
         print()
         print("  CONTEXT:")
-        if context == "__SKIP__":
+        if context == CONTEXT_SKIP:
             print("    [skipped]")
         else:
             for ln in context.splitlines():
                 print(f"    {ln}")
         print()
 
-        if context != "__SKIP__":
+        if context != CONTEXT_SKIP:
             grade, calc = await claude_grade(pick_desc, date, context)
             print(f"  GRADE : {grade}")
             print(f"  CALC  : {calc}")
@@ -951,7 +960,7 @@ async def grade_one(text: str, date: str) -> None:
             print(f"  GRADE : UNKNOWN (skipped)")
 
         if label:
-            correct = (grade == "WIN" and label == "win") or (grade == "LOSS" and label == "loss")
+            correct = grade_matches_label(grade, label)
             print(f"  LABEL : {label.upper()}  →  {'OK' if correct else ('--' if grade in ('PUSH','UNKNOWN') else 'XX')}")
         print()
 
@@ -961,7 +970,7 @@ async def grade_one(text: str, date: str) -> None:
 
 # ─── Live mode ────────────────────────────────────────────────────────────────
 
-_PICK_EMOJI = {"WIN": "✅", "LOSS": "❌", "PUSH": "↩️"}
+_PICK_EMOJI = {k: v for k, v in VERDICT_EMOJI.items() if k in ("WIN", "LOSS", "PUSH")}
 
 
 def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
@@ -1161,9 +1170,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         pick_sport, date_str, pick,
                         scoreboard_cache[ps_key], summary_cache,
                     )
-                    if context == "__PENDING__":
+                    if context == CONTEXT_PENDING:
                         verdict, calc = "PENDING", ""
-                    elif context == "__SKIP__":
+                    elif context == CONTEXT_SKIP:
                         verdict, calc = "UNKNOWN", ""
                     else:
                         verdict, calc = await claude_grade(
@@ -1273,7 +1282,6 @@ async def main() -> None:
     if args.backtest:
         await run_backtest(args.backtest)
     elif args.grade:
-        from datetime import date as _date
         date = args.date or _date.today().isoformat()
         await grade_one(args.grade, date)
     elif args.live:

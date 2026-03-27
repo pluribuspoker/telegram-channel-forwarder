@@ -16,10 +16,10 @@ ping_hc() {
 
 cd "$APP_DIR"
 
+TRACKER_DAYS="${TRACKER_DAYS:-2}"
+
 ping_hc "/start"
 log "Starting nightly pick grader (days=$TRACKER_DAYS)"
-
-TRACKER_DAYS="${TRACKER_DAYS:-2}"
 SUCCESS=0
 
 for attempt in 1 2 3; do

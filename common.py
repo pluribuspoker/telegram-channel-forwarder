@@ -1,5 +1,5 @@
 """
-Shared utilities for forwarder.py and listener.py
+Shared utilities for the Telegram forwarder and pick tracker.
 """
 
 import base64
@@ -12,6 +12,14 @@ import anthropic
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 
 _anth_client = None
+
+VERDICT_EMOJI = {
+    "WIN":     "✅",
+    "LOSS":    "❌",
+    "PUSH":    "↩️",
+    "UNKNOWN": "❓",
+    "PENDING": "⏳",
+}
 
 
 def _anthropic():

@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 
 import httpx
 
+from common import VERDICT_EMOJI
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "picks.db")
 
 _SCHEMA = """
@@ -48,13 +50,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS grades_msg
 
 _MIGRATION = "ALTER TABLE grades ADD COLUMN capper_name TEXT"
 
-_VERDICT_EMOJI = {
-    "WIN":     "✅",
-    "LOSS":    "❌",
-    "PUSH":    "↩️",
-    "UNKNOWN": "❓",
-    "PENDING": "⏳",
-}
 
 
 class AuditLog:
@@ -75,32 +70,27 @@ class AuditLog:
         self.bot_token = bot_token or os.getenv("BOT_TOKEN", "")
         raw_cid = audit_channel_id or os.getenv("AUDIT_CHANNEL_ID", "")
         self.audit_channel_id: int | None = int(raw_cid) if raw_cid else None
+        self._conn = sqlite3.connect(self.db_path)
+        self._conn.row_factory = sqlite3.Row
         self._init_db()
 
     # ── DB helpers ─────────────────────────────────────────────────────────────
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
-
     def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.executescript(_SCHEMA)
-            try:
-                conn.execute(_MIGRATION)
-                conn.commit()
-            except Exception:
-                pass  # column already exists
+        self._conn.executescript(_SCHEMA)
+        try:
+            self._conn.execute(_MIGRATION)
+            self._conn.commit()
+        except Exception:
+            pass  # column already exists
 
     def _insert(self, row: dict) -> None:
         """Insert or replace a grade row (idempotent on channel_id+message_id)."""
         cols = ", ".join(row.keys())
         placeholders = ", ".join("?" for _ in row)
         sql = f"INSERT OR REPLACE INTO grades ({cols}) VALUES ({placeholders})"
-        with self._connect() as conn:
-            conn.execute(sql, list(row.values()))
-            conn.commit()
+        self._conn.execute(sql, list(row.values()))
+        self._conn.commit()
 
     # ── Core record method ─────────────────────────────────────────────────────
 
@@ -183,10 +173,8 @@ class AuditLog:
             return (text[:idx] + "…") if idx > 0 else sub + "…"
 
         # Line 2 — picks with per-pick emoji, tag, and calc below each
-        _pick_emoji = {"WIN": "✅", "LOSS": "❌", "PUSH": "↩️", "PENDING": "⏳", "UNKNOWN": "❓"}
-        overall_em = _pick_emoji.get(verdict, "")
+        overall_em = VERDICT_EMOJI.get(verdict, "")
         raw_lines = [l for l in (row["pick_desc"] or "").splitlines() if l.strip()]
-        use_bullets = True
         pick_blocks = []
         for l in raw_lines:
             # "description|sport|game_date|calc" (calc may contain |)
@@ -202,14 +190,13 @@ class AuditLog:
                 date_tag = game_date_raw
             pick_tag = f" [{e(pick_sport)} · {date_tag}]" if pick_sport else ""
             # Skip records prefix with "VERDICT: "
-            matched = next((v for v in _pick_emoji if desc_raw.startswith(f"{v}: ")), None)
+            matched = next((v for v in VERDICT_EMOJI if desc_raw.startswith(f"{v}: ")), None)
             if matched:
                 desc = desc_raw[len(matched) + 2:]
-                pick_line = f"{e(desc)}{_pick_emoji[matched]}{pick_tag}"
+                pick_line = f"{e(desc)}{VERDICT_EMOJI[matched]}{pick_tag}"
             else:
                 pick_line = f"{e(desc_raw)}{overall_em}{pick_tag}"
-            if use_bullets:
-                pick_line = f"• {pick_line}"
+            pick_line = f"• {pick_line}"
             block = pick_line
             if pick_calc:
                 block += f"\n<i>{e(_trunc(pick_calc))}</i>"
