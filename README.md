@@ -12,7 +12,7 @@ Automatically re-posts messages from source Telegram channels/topics to destinat
 
 - Python 3.11+
 - Telegram API credentials from [my.telegram.org](https://my.telegram.org)
-- A Telethon `StringSession` (run `python get_session.py` to generate one)
+- A Telethon `StringSession` (run `python scripts/get_session.py` to generate one)
 - A bot token from [@BotFather](https://t.me/botfather) — add the bot as admin to destination channels
 
 ### 2. Install dependencies
@@ -48,7 +48,7 @@ MAPPINGS_CONFIG='[
 ### 4. Find channel IDs
 
 ```bash
-python list_channels.py
+python scripts/list_channels.py
 ```
 
 ## Running
