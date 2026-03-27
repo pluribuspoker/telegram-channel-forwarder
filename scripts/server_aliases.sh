@@ -11,7 +11,7 @@ _fmtlog() {
         e = sprintf("%c", 27)
         RESET=e"[0m"; DIM=e"[90m"; BOLD=e"[1m"
         GREEN=e"[92m"; RED=e"[91m"; YELLOW=e"[93m"; GREY=e"[90m"
-        TRACKER_PFX=e"[2;36m"; FORWARDER_PFX=e"[2;35m"
+        TRACKER_PFX=e"[36m"; FORWARDER_PFX=e"[35m"
     }
     {
         line = $0
@@ -40,7 +40,7 @@ _fmtlog() {
 
         # Pick prefix color by service
         if      (prefix ~ /tracker/)   pcolor = TRACKER_PFX
-        else if (prefix ~ /forwarder/) pcolor = FORWARDER_PFX
+        else if (prefix ~ /forwarder|listener/) pcolor = FORWARDER_PFX
         else                           pcolor = DIM
 
         # Color message by content
