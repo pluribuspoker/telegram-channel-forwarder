@@ -59,7 +59,7 @@ def log_group(group, sent, ocr_odds=None):
     ocr_odds=""    → OCR attempted but failed (falling back to image)
     ocr_odds="-146"→ OCR succeeded; image dropped
     """
-    ts = datetime.datetime.now().strftime("%H:%M:%S")
+    ts = datetime.datetime.now().strftime("%I:%M:%S %p ET").lstrip("0")
     preview, media_tag = _group_summary(group)
 
     if sent:
