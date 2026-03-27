@@ -33,6 +33,7 @@ TELEGRAM_API_ID=your_api_id
 TELEGRAM_API_HASH=your_api_hash
 TELEGRAM_SESSION=your_session_string
 BOT_TOKEN=your_bot_token
+ANTHROPIC_API_KEY=your_anthropic_api_key
 MAPPINGS_CONFIG='[
   {
     "id": "my-mapping",
@@ -41,7 +42,8 @@ MAPPINGS_CONFIG='[
     "dest_channel": -100xxxxxxxxxx,
     "test_source_channel": -100xxxxxxxxxx,
     "test_dest_channel": -100xxxxxxxxxx,
-    "filter_pattern": "(?i)^[A-Za-z][A-Za-z ]*:[ ]*[(]"
+    "filter_pattern": "(?i)^[A-Za-z][A-Za-z ]*:[ ]*[(]",
+    "ocr_odds": true
   }
 ]'
 ```
@@ -82,6 +84,7 @@ Runs `forwarder.py` on a 5-minute cron schedule.
 | `TELEGRAM_API_HASH` | From my.telegram.org |
 | `TELEGRAM_SESSION` | Telethon StringSession |
 | `BOT_TOKEN` | Bot token from BotFather |
+| `ANTHROPIC_API_KEY` | From console.anthropic.com — used for OCR odds extraction |
 | `MAPPINGS_CONFIG` | Minified JSON mappings array |
 
 ### Manual trigger options

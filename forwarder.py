@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
-from common import log_group, parse_channel, passes_filter, resolve_dest, send_group
+from common import enrich_caption, log_group, parse_channel, passes_filter, resolve_dest, send_group
 
 load_dotenv(override=True)
 
@@ -105,7 +105,8 @@ async def forward_mapping(client, bot, mapping, state, limit, use_test):
             log_group(group, sent=False)
             continue
         try:
-            sent = await send_group(client, group, dest_entity, sender=bot)
+            caption = await enrich_caption(group, mapping, client)
+            sent = await send_group(client, group, dest_entity, sender=bot, caption_override=caption)
             if not sent:
                 continue
             log_group(group, sent=True)

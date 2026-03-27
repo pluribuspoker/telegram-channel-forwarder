@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-from common import log_group, parse_channel, passes_filter, resolve_dest, send_group
+from common import enrich_caption, log_group, parse_channel, passes_filter, resolve_dest, send_group
 
 load_dotenv(override=True)
 
@@ -113,7 +113,8 @@ async def main():
                     if passes_filter(group, mapping):
                         log_group(group, sent=True)
                         try:
-                            await send_group(client, group, bot_dest_entity, sender=bot)
+                            caption = await enrich_caption(group, mapping, client)
+                            await send_group(client, group, bot_dest_entity, sender=bot, caption_override=caption)
                         except Exception as e:
                             print(f"  ✗ Album send failed: {e}", file=sys.stderr)
                     else:
@@ -126,7 +127,8 @@ async def main():
                     return
                 log_group([msg], sent=True)
                 try:
-                    await send_group(client, [msg], bot_dest_entity, sender=bot)
+                    caption = await enrich_caption([msg], mapping, client)
+                    await send_group(client, [msg], bot_dest_entity, sender=bot, caption_override=caption)
                 except Exception as e:
                     print(f"  ✗ Failed on message {msg.id}: {e}", file=sys.stderr)
 
