@@ -37,6 +37,22 @@ def claude() -> anthropic.AsyncAnthropic:
 CONTEXT_SKIP = "__SKIP__"
 CONTEXT_PENDING = "__PENDING__"
 
+# Cache of parsed-but-pending messages so we don't re-call Claude on every run
+_PENDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "pending_cache.json")
+
+
+def _load_pending_cache() -> dict:
+    try:
+        with open(_PENDING_CACHE_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_pending_cache(cache: dict) -> None:
+    with open(_PENDING_CACHE_PATH, "w") as f:
+        json.dump(cache, f)
+
 
 # ─── ESPN ─────────────────────────────────────────────────────────────────────
 
@@ -1089,7 +1105,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
     if channel is not None:
         channel_ids = [channel]
 
-    audit  = AuditLog()
+    audit         = AuditLog()
+    pending_cache = _load_pending_cache()
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
     mode   = "DRY RUN" if dry_run else "LIVE"
 
@@ -1129,9 +1146,10 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 if any(ch in text for ch in ("✅", "❌", "↩️")):
                     continue
 
-                capper = next((l.strip() for l in text.splitlines() if l.strip()), "")
-                parsed = await claude_parse(text)
+                capper  = next((l.strip() for l in text.splitlines() if l.strip()), "")
                 snippet = " ".join(text.split())[:80]
+                cache_key = f"{channel_id}:{msg.id}"
+                parsed = pending_cache.get(cache_key) or await claude_parse(text)
                 if not parsed:
                     skipped += 1
                     print(f"\n  [SKIP] msg {msg.id}  {date_str}  parse failed")
@@ -1205,6 +1223,10 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     calc_str = f"  ({calc})" if calc else ""
                     print(f"         {verdict:<7}  {desc}{calc_str}")
 
+                # Cache the parse result for pending messages to avoid re-parsing on next run
+                if not graded:
+                    pending_cache[cache_key] = parsed
+
                 # Nothing gradeable — log and skip
                 if not graded:
                     skipped += 1
@@ -1234,6 +1256,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     await asyncio.sleep(0.5)   # stay under Telegram flood limit
 
                 edited += 1
+                pending_cache.pop(cache_key, None)  # graded — evict from pending cache
                 all_descs = "\n".join(
                     f"{v[0].get('description', '')}|{v[3]}|{v[4]}|{v[2]}" for v in verdicts if v[1] in _PICK_EMOJI
                 )
@@ -1257,6 +1280,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 )
 
             print(f"\n  => edited: {edited}  skipped: {skipped}  errors: {errors}")
+
+    if not dry_run:
+        _save_pending_cache(pending_cache)
 
     cost = usage_cost()
     print(f"\nCost: ${cost:.4f}  ({_usage['input_tokens']:,} in / {_usage['output_tokens']:,} out)")

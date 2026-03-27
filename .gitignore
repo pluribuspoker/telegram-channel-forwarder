@@ -207,6 +207,7 @@ picks.db
 picks.db-journal
 picks.db-wal
 backtest_*.txt
+pending_cache.json
 
 # Marimo
 marimo/_static/

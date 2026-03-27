@@ -25,13 +25,13 @@ StandardOutput=journal
 StandardError=journal
 EOF
 
-echo "=== 3. Systemd timer (3 AM ET) ==="
+echo "=== 3. Systemd timer (every 5 minutes) ==="
 cat > /etc/systemd/system/telegram-tracker.timer << 'EOF'
 [Unit]
-Description=Run Telegram Pick Grader nightly at 3 AM ET
+Description=Run Telegram Pick Grader every 5 minutes
 
 [Timer]
-OnCalendar=America/New_York *-*-* 03:00:00
+OnCalendar=*:0/5
 Persistent=true
 
 [Install]

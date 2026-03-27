@@ -1,7 +1,7 @@
 #!/bin/bash
-# Nightly pick grader — invoked by systemd timer at 3 AM ET
+# Pick grader — invoked by systemd timer every 5 minutes
 # Signals healthchecks.io on start / success / failure
-# Retries up to 3 times on failure before giving up
+# Retries once on failure (next scheduled run is only 5 min away anyway)
 
 APP_DIR="/home/forwarder/app"
 PYTHON="/home/forwarder/venv/bin/python"
@@ -16,27 +16,27 @@ ping_hc() {
 
 cd "$APP_DIR"
 
-TRACKER_DAYS="${TRACKER_DAYS:-2}"
+TRACKER_DAYS="${TRACKER_DAYS:-1}"
 
 ping_hc "/start"
-log "Starting nightly pick grader (days=$TRACKER_DAYS)"
+log "Starting pick grader (days=$TRACKER_DAYS)"
 SUCCESS=0
 
-for attempt in 1 2 3; do
-    log "Attempt $attempt/3..."
+for attempt in 1 2; do
+    log "Attempt $attempt/2..."
     if $PYTHON tracker.py --live --days "$TRACKER_DAYS"; then
         SUCCESS=1
         break
     fi
     log "Attempt $attempt failed"
-    [ "$attempt" -lt 3 ] && sleep 300
+    [ "$attempt" -lt 2 ] && sleep 60
 done
 
 if [ "$SUCCESS" -eq 1 ]; then
     log "Completed successfully"
     ping_hc
 else
-    log "All 3 attempts failed"
+    log "Both attempts failed"
     ping_hc "/fail"
     exit 1
 fi
