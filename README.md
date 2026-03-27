@@ -4,12 +4,7 @@ Automatically re-posts messages from source Telegram channels/topics to destinat
 
 ## How it works
 
-Two modes:
-
-- **`listener.py`** — runs persistently, forwards messages in real-time (~2 seconds latency)
-- **`forwarder.py`** — polling script, designed for scheduled runs (e.g. GitHub Actions)
-
-A user account reads from source channels (supports private channels). A bot posts to destination channels (required for push notifications).
+`listener.py` runs persistently and forwards messages in real-time (~2 seconds latency). A user account reads from source channels (supports private channels). A bot posts to destination channels (required for push notifications).
 
 ## Setup
 
@@ -56,6 +51,13 @@ MAPPINGS_CONFIG='[
 python list_channels.py
 ```
 
+## Running
+
+```bash
+python listener.py         # real mode
+python listener.py --test  # uses test_source/dest channels
+```
+
 ## Mapping options
 
 Each object in `MAPPINGS_CONFIG` supports these optional fields:
@@ -78,13 +80,9 @@ When `true`, the attached image on a matched message is sent to Claude Haiku, wh
 "ocr_odds": true
 ```
 
-Requires `ANTHROPIC_API_KEY`.
-
-Example forwarded output: `STRAIGHT: (1 UNIT)\n\nUCLA +6.5 -146`
+Requires `ANTHROPIC_API_KEY`. Example output: `STRAIGHT: (1 UNIT)\n\nUCLA +6.5 -146`
 
 ## Logging
-
-Both scripts print a line per processed message group:
 
 ```
  15:43:26  ✦ SENT     ┃  STRAIGHT: (1 UNIT)  UCLA +6.5  [ocr: -146]
@@ -92,42 +90,6 @@ Both scripts print a line per processed message group:
  15:43:50  · filtered ┃  Putting half the OSU winnings on it
 ```
 
-## Running locally
-
-```bash
-# Real-time listener (recommended)
-python listener.py
-
-# Test mode (uses test_source/dest channels)
-python listener.py --test
-
-# Polling mode
-python forwarder.py --limit 50
-python forwarder.py --clear-state        # reset all state
-python forwarder.py --clear-state my-id  # reset one mapping
-```
-
-## GitHub Actions
-
-Runs `forwarder.py` on a 5-minute cron schedule.
-
-### Required secrets
-
-| Secret | Description |
-|---|---|
-| `TELEGRAM_API_ID` | From my.telegram.org |
-| `TELEGRAM_API_HASH` | From my.telegram.org |
-| `TELEGRAM_SESSION` | Telethon StringSession |
-| `BOT_TOKEN` | Bot token from BotFather |
-| `ANTHROPIC_API_KEY` | From console.anthropic.com — required when using `ocr_odds` |
-| `MAPPINGS_CONFIG` | Minified JSON mappings array |
-
-### Manual trigger options
-
-- **Destination** — `real` or `test`
-- **Clear all state** — checkbox to reset all mapping state
-- **Clear state for specific mapping** — enter a mapping ID
-
 ## Adding a new mapping
 
-Update `MAPPINGS_CONFIG` in `.env` and in the GitHub secret — no code changes needed.
+Update `MAPPINGS_CONFIG` in `.env` — no code changes needed.
