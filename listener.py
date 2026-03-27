@@ -43,7 +43,7 @@ ALBUM_WAIT = 5.0
 
 async def heartbeat():
     """Ping healthchecks.io every 4 minutes to signal the service is alive."""
-    url = os.environ.get("HEALTHCHECK_URL")
+    url = os.environ.get("LISTENER_HEALTHCHECK_URL")
     if not url:
         return
     while True:

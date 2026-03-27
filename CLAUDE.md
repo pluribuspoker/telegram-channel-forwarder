@@ -28,6 +28,14 @@ exit
 start
 ```
 
+### Local PowerShell aliases
+
+```powershell
+vps      # ssh root@209.38.51.86
+syncenv  # scp local .env to server
+ship     # git push + deploy on server
+```
+
 ### Deploy workflow
 
 ```powershell
@@ -40,3 +48,9 @@ ship   # pushes to GitHub + runs deploy on server
 # Server only (as root)
 deploy   # git pull + restart + logs
 ```
+
+---
+
+## Active plans
+
+- `plans/pick-tracker.md` — nightly cron to grade picks (win/loss) via Odds API + Claude

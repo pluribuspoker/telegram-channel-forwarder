@@ -203,6 +203,10 @@ cython_debug/
 
 state.json
 *.png
+picks.db
+picks.db-journal
+picks.db-wal
+backtest_*.txt
 
 # Marimo
 marimo/_static/
