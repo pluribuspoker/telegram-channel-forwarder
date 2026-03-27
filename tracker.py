@@ -20,22 +20,19 @@ import httpx
 from dotenv import load_dotenv
 
 from common import VERDICT_EMOJI
+from scores import ESPN_LEAGUES, fetch_espn, scoreboard_text
+from ai import (
+    claude,
+    claude_parse,
+    claude_grade,
+    build_context,
+    CONTEXT_SKIP,
+    CONTEXT_PENDING,
+    usage_cost,
+    _usage,
+)
 
 load_dotenv()
-
-_claude: anthropic.AsyncAnthropic | None = None
-
-
-def claude() -> anthropic.AsyncAnthropic:
-    global _claude
-    if _claude is None:
-        _claude = anthropic.AsyncAnthropic()
-    return _claude
-
-
-# Sentinels returned by build_context to signal "no game data" vs "game not yet played"
-CONTEXT_SKIP = "__SKIP__"
-CONTEXT_PENDING = "__PENDING__"
 
 # Cache of parsed-but-pending messages so we don't re-call Claude on every run
 _PENDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "parse_cache.json")
@@ -52,352 +49,6 @@ def _load_pending_cache() -> dict:
 def _save_pending_cache(cache: dict) -> None:
     with open(_PENDING_CACHE_PATH, "w") as f:
         json.dump(cache, f)
-
-
-# ─── ESPN ─────────────────────────────────────────────────────────────────────
-
-ESPN_LEAGUES: dict[str, tuple[str, str]] = {
-    "NBA":   ("basketball", "nba"),
-    "NCAAB": ("basketball", "mens-college-basketball"),
-    "MLB":   ("baseball", "mlb"),
-    "NFL":   ("football", "nfl"),
-    "NHL":   ("hockey", "nhl"),
-    "NCAAF": ("football", "college-football"),
-    "UFC":   ("mma", "ufc"),
-    "UFL":   ("football", "ufl"),
-}
-
-# Extra query params per sport (e.g. groups=50 for all D1 NCAAB games)
-SPORT_EXTRA_PARAMS: dict[str, dict] = {
-    "NCAAB": {"groups": "50"},
-}
-
-# Odds API sport keys for sports not on ESPN
-ODDS_API_KEYS: dict[str, str] = {
-    "Boxing": "boxing_boxing",
-}
-
-
-async def fetch_odds_api_scores(sport: str, date: str) -> list[dict]:
-    """
-    Fetch completed scores from the Odds API for a given sport and date (±1 day).
-    Only works within the last ~3 days on the free tier.
-    """
-    sport_key = ODDS_API_KEYS.get(sport)
-    if not sport_key:
-        return []
-    api_key = os.getenv("ODDS_API_KEY", "")
-    if not api_key:
-        return []
-    target = _date.fromisoformat(date)
-    async with httpx.AsyncClient(timeout=15) as http:
-        try:
-            r = await http.get(
-                f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores",
-                params={"apiKey": api_key, "daysFrom": 3},
-            )
-            r.raise_for_status()
-            events = r.json()
-            if not isinstance(events, list):
-                return []
-            results = []
-            for e in events:
-                if not e.get("completed"):
-                    continue
-                try:
-                    event_date = _d.fromisoformat(e.get("commence_time", "")[:10])
-                    if abs((event_date - target).days) <= 1:
-                        results.append(e)
-                except ValueError:
-                    pass
-            return results
-        except Exception as exc:
-            print(f"    [Odds API error] {sport} {date}: {exc}")
-            return []
-
-
-def odds_api_context(fighter: str, events: list[dict]) -> str:
-    """Format Odds API event data for a specific fighter."""
-    fighter_lower = fighter.lower().strip()
-    for e in events:
-        home = e.get("home_team", "")
-        away = e.get("away_team", "")
-        if not (_team_matches(fighter_lower, home.lower()) or _team_matches(fighter_lower, away.lower())):
-            continue
-        scores = e.get("scores") or []
-        score_str = "  ".join(f"{s['name']}: {s['score']}" for s in scores) if scores else "(no score data)"
-        return f"{home} vs {away}\n{score_str}"
-    return ""
-
-
-async def fetch_espn(sport: str, date: str) -> dict | None:
-    if sport not in ESPN_LEAGUES:
-        return None
-    category, league = ESPN_LEAGUES[sport]
-    url = f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/scoreboard"
-    params = {"dates": date.replace("-", ""), "limit": "200"}
-    params.update(SPORT_EXTRA_PARAMS.get(sport, {}))
-    async with httpx.AsyncClient(timeout=10) as http:
-        try:
-            r = await http.get(url, params=params)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            print(f"    [ESPN error] {sport} {date}: {e}")
-            return None
-
-
-async def fetch_tennis_match_context(player: str, date: str) -> str:
-    """
-    Search ESPN core API for a tennis match involving `player` on `date`.
-    Tries exact date first; falls back to ±1 day only if no exact match found.
-    Returns a formatted string with player names, set scores, and winner.
-    Returns CONTEXT_SKIP if not found.
-    """
-    from datetime import date as _d
-    player_lower = player.lower().strip()
-    date_nodash = date.replace("-", "")
-    pick_date_obj = _d.fromisoformat(date)
-
-    async def _search(max_days: int) -> str | None:
-        async with httpx.AsyncClient(timeout=20) as http:
-            for league in ("atp", "wta"):
-                try:
-                    r = await http.get(
-                        f"https://site.api.espn.com/apis/site/v2/sports/tennis/{league}/scoreboard",
-                        params={"dates": date_nodash},
-                    )
-                    r.raise_for_status()
-                except Exception:
-                    continue
-
-                events = r.json().get("events", [])
-                for event in events:
-                    event_id = event.get("id", "")
-                    base = f"https://sports.core.api.espn.com/v2/sports/tennis/leagues/{league}/events/{event_id}"
-
-                    page = 1
-                    while True:
-                        try:
-                            r2 = await http.get(f"{base}/competitions", params={"pageSize": 100, "page": page})
-                            r2.raise_for_status()
-                        except Exception:
-                            break
-                        data = r2.json()
-
-                        for comp in data.get("items", []):
-                            try:
-                                comp_date = _d.fromisoformat(comp.get("date", "")[:10])
-                                if abs((comp_date - pick_date_obj).days) > max_days:
-                                    continue
-                            except ValueError:
-                                continue
-                            comp_id = comp.get("id", "")
-                            competitors = comp.get("competitors", [])
-
-                            if not any(_team_matches(player_lower, c.get("name", "").lower()) for c in competitors):
-                                continue
-
-                            # Found the match — fetch set scores
-                            lines = [f"Tennis match on {comp_date.isoformat()} ({league.upper()}):"]
-                            for c in competitors:
-                                name = c.get("name", "?")
-                                winner = c.get("winner", False)
-                                athlete_id = c.get("id", "")
-                                try:
-                                    r3 = await http.get(f"{base}/competitions/{comp_id}/competitors/{athlete_id}/linescores")
-                                    r3.raise_for_status()
-                                    sets = r3.json().get("items", [])
-                                    set_str = " ".join(f"S{s['period']}={s['displayValue']}" for s in sets)
-                                except Exception:
-                                    set_str = "(no set data)"
-                                winner_flag = " [WINNER]" if winner else ""
-                                lines.append(f"  {name}: {set_str}{winner_flag}")
-                            return "\n".join(lines)
-
-                        if page >= data.get("pageCount", 1):
-                            break
-                        page += 1
-        return None
-
-    # Exact date first, then ±1 day fallback
-    result = await _search(max_days=0)
-    if result is None:
-        result = await _search(max_days=1)
-    return result or CONTEXT_SKIP
-
-
-async def fetch_espn_summary(sport: str, event_id: str) -> dict | None:
-    if sport not in ESPN_LEAGUES:
-        return None
-    category, league = ESPN_LEAGUES[sport]
-    url = f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/summary"
-    async with httpx.AsyncClient(timeout=15) as http:
-        try:
-            r = await http.get(url, params={"event": event_id})
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            print(f"    [ESPN summary error] {sport}/{event_id}: {e}")
-            return None
-
-
-def scoreboard_text(data: dict, sport: str) -> str:
-    """Format ESPN scoreboard as readable text for Claude."""
-    lines = []
-    for event in data.get("events", []):
-        all_comps = event.get("competitions", [])
-
-        if sport == "UFC":
-            # Each competition is a separate bout — include ALL of them
-            for comp in all_comps:
-                fighters = []
-                winner = "?"
-                status = comp.get("status", {}).get("type", {}).get("description", "")
-                for c in comp.get("competitors", []):
-                    name = c.get("athlete", {}).get("displayName", "?")
-                    fighters.append(name)
-                    if c.get("winner"):
-                        winner = name
-                if fighters:
-                    lines.append(f"{' vs '.join(fighters)} → Winner: {winner} [{status}]")
-        else:
-            comp = all_comps[0] if all_comps else {}
-            by_side = {c["homeAway"]: c for c in comp.get("competitors", [])}
-            away = by_side.get("away", {})
-            home = by_side.get("home", {})
-            away_name = away.get("team", {}).get("displayName", "?")
-            home_name = home.get("team", {}).get("displayName", "?")
-            away_score = away.get("score", "?")
-            home_score = home.get("score", "?")
-            status = event.get("status", {}).get("type", {}).get("description", "")
-            lines.append(f"{away_name} {away_score} at {home_name} {home_score} [{status}]")
-
-    return "\n".join(lines) or "No games found for this date"
-
-
-def line_scores_text(summary: dict) -> str:
-    """Format per-quarter/half scores from a game summary."""
-    header = summary.get("header", {})
-    comps = header.get("competitions", [{}])[0]
-    lines = []
-
-    for c in comps.get("competitors", []):
-        team = c.get("team", {}).get("displayName", "?")
-        ls = [x.get("displayValue", "?") for x in c.get("linescores", [])]
-        final = c.get("score", "?")
-
-        if len(ls) >= 4:
-            # Basketball: Q1 Q2 Q3 Q4 [OT...]
-            try:
-                h1 = str(int(ls[0]) + int(ls[1]))
-                h2 = str(int(ls[2]) + int(ls[3]))
-            except ValueError:
-                h1 = h2 = "?"
-            ot = f" OT={'|'.join(ls[4:])}" if len(ls) > 4 else ""
-            lines.append(f"{team}: Q1={ls[0]} Q2={ls[1]} H1={h1} | Q3={ls[2]} Q4={ls[3]} H2={h2}{ot} | Final={final}")
-        elif len(ls) >= 2:
-            lines.append(f"{team}: {' | '.join(f'P{i+1}={s}' for i, s in enumerate(ls))} | Final={final}")
-        else:
-            lines.append(f"{team}: Final={final}")
-
-    return "\n".join(lines) or "No line score data available"
-
-
-def box_score_text(summary: dict, player_hint: str = "") -> str:
-    """Format player stats from a game box score."""
-    lines = []
-    boxscore = summary.get("boxscore", {})
-
-    for team_data in boxscore.get("players", []):
-        team_name = team_data.get("team", {}).get("displayName", "?")
-
-        for stat_group in team_data.get("statistics", [])[:1]:
-            keys = stat_group.get("keys", [])
-
-            for athlete in stat_group.get("athletes", []):
-                name = athlete.get("athlete", {}).get("displayName", "?")
-                stats_raw = athlete.get("stats", [])
-
-                # If filtering to a specific player, skip non-matches
-                if player_hint:
-                    hint_words = [w for w in player_hint.lower().split() if len(w) > 2]
-                    name_lower = name.lower()
-                    if not any(w in name_lower for w in hint_words):
-                        continue
-
-                stats = dict(zip(keys, stats_raw))
-
-                # Basketball stat line
-                bball_keys = ["points", "rebounds", "assists", "steals", "blocks"]
-                bball = [f"{k[:3].upper()}={stats[k]}" for k in bball_keys if k in stats]
-
-                # Baseball stat line
-                bball2_keys = ["hits", "atBats", "runs", "RBIs", "homeRuns", "walks"]
-                baseball = [f"{k}={stats[k]}" for k in bball2_keys if k in stats]
-
-                stat_str = bball + baseball
-                if stat_str:
-                    lines.append(f"  {name} ({team_name}): {', '.join(stat_str)}")
-
-    return "\n".join(lines) or "No player stats found"
-
-
-# Words that, when following a matched term, indicate it's a different longer team name.
-# e.g., "Iowa" should not match "Iowa State Cyclones" because "State" follows "Iowa".
-_QUALIFIERS = {"state", "tech", "a&m", "am", "international"}
-
-
-def _team_matches(term: str, team_name: str) -> bool:
-    """Return True if term matches team_name, avoiding ambiguous prefix matches.
-
-    'Iowa' matches 'Iowa Hawkeyes' but NOT 'Iowa State Cyclones'
-    'Texas' matches 'Texas Longhorns' but NOT 'Texas Tech Red Raiders'
-    """
-    t = term.lower().strip()
-    n = team_name.lower().strip()
-    if not t or not n:
-        return False
-    if t not in n and n not in t:
-        return False
-    t_words = t.split()
-    n_words = n.split()
-    for i in range(len(n_words) - len(t_words) + 1):
-        if n_words[i: i + len(t_words)] == t_words:
-            next_idx = i + len(t_words)
-            if next_idx < len(n_words) and n_words[next_idx] in _QUALIFIERS:
-                return False  # e.g., "Iowa" before "State" → skip
-            return True
-    return True  # term contained in name but not as a clean word sequence
-
-
-def find_event_ids(events: list[dict], teams: list[str], player: str = "") -> list[str]:
-    """Find event IDs that match the given team names or player."""
-    matched = []
-    search_terms = [t.lower() for t in teams if t] + ([player.lower()] if player else [])
-    if not search_terms:
-        return [e.get("id") for e in events if e.get("id")]
-
-    for event in events:
-        # Check ALL competitions — UFC events have many bouts, each a separate competition
-        all_comps = event.get("competitions", [{}])
-        event_names = []
-        for comp in all_comps:
-            for c in comp.get("competitors", []):
-                n = (
-                    c.get("team", {}).get("displayName", "")
-                    or c.get("athlete", {}).get("displayName", "")
-                ).lower()
-                event_names.append(n)
-
-        if any(
-            any(_team_matches(term, en) for en in event_names)
-            for term in search_terms
-        ):
-            if event.get("id"):
-                matched.append(event["id"])
-
-    return matched
 
 
 # ─── Message parsing ──────────────────────────────────────────────────────────
@@ -432,259 +83,104 @@ def grade_matches_label(grade: str, label: str) -> bool:
     return (grade == "WIN" and label == "win") or (grade == "LOSS" and label == "loss")
 
 
-# ─── Claude prompts ───────────────────────────────────────────────────────────
+# ─── Emoji insertion ─────────────────────────────────────────────────────────
 
-_PARSE_PROMPT = """\
-Extract the sports betting pick(s) from this message. Ignore stats, records, and commentary.
-
-Return JSON (no markdown fences):
-{{
-  "sport": "NBA|NCAAB|MLB|NFL|NHL|UFL|Tennis|UFC|Boxing|Other",
-  "picks": [
-    {{
-      "description": "concise one-line summary of the exact bet",
-      "sport": null,
-      "bet_type": "spread|moneyline|total|team_total|prop",
-      "is_parlay_leg": false,
-      "period": "game|1h|2h|1q|2q|3q|4q",
-      "teams": ["Team or player name(s) in the bet"],
-      "player": "player name if this is a player prop, else null",
-      "prop_stat": "stat abbrev if prop (e.g. PTS, REB, AST, PTS+REB, HITS), else null",
-      "line": <number or null>,
-      "direction": "over|under|null"
-    }}
-  ]
-}}
-
-Classification rules:
-- NCAAB = college basketball. NCAAF = college football. The football season ends in January. In February, March, and April there is NO college football. Any college team name appearing in a Feb/Mar/Apr pick is ALWAYS NCAAB, never NCAAF. College team examples: Iowa, Ohio State, Indiana, Texas, Tennessee, Iowa State, Missouri, Florida, Arizona, Duke, Kentucky, UConn, Michigan, Auburn, Houston, Purdue, Illinois, Arkansas, St. Joseph's, New Mexico, Marquette, etc. Critically: bare city/state names like "Arizona", "Florida", "Michigan", "Texas" in a spread or moneyline context during Feb–Apr refer to their COLLEGE team (NCAAB), NOT the pro team (MLB/NFL/NHL). Only classify as a pro sport when the full pro team name is used (e.g. "Arizona Diamondbacks", "Florida Marlins", "Michigan none") or when context makes the pro team unambiguous.
-- This NCAAB rule applies to TEAM names only, NOT individual player props. If a pick names a single NBA/NHL/MLB player (e.g. Matas Buzelis, Stephon Castle, Tyler Herro), use their actual professional league (NBA, NHL, MLB, etc.), regardless of the month.
-- UFC/MMA: if the pick is on individual MMA/UFC fighter names with a moneyline, classify as UFC. Common fighters: Pereira, Gafurov, Souza, Anders, Sola, Murphy, Aswell, etc.
-- Boxing: if the pick involves known professional boxers (e.g. Ryan Garcia, Canelo, Fury, Usyk, Crawford, Beterbiev, etc.), classify as Boxing, not UFC. If a single surname could be a boxer (e.g. Garcia), prefer Boxing over UFC when no other context is available.
-- If a single surname with a moneyline has no clear sport context and is not a known boxer or MMA fighter, default to UFC.
-- For parlays: list each leg as a separate pick with its REAL bet_type (moneyline, spread, etc.) and set is_parlay_leg=true on each. Do NOT use bet_type="parlay". When players/teams are slash-separated (e.g. "FAA/Shapovalov MLP" or "SPURS/GARCIA MLP"), split them into ONE pick per player/team — do not put two teams in one pick's teams field.
-- Cross-sport parlays: if legs belong to different sports (e.g. one NBA team + one UFC fighter), set the pick-level "sport" field to override the top-level sport for that leg. Leave pick "sport" as null when it matches the top-level sport.
-- Period: 1h=first half, 2h=second half, 1q=first quarter, game=full game (default).
-
-Message:
-{text}"""
-
-_GRADE_PROMPT = """\
-Grade this sports betting pick. Show your calculation, then give the verdict.
-
-Pick: {pick}
-Date: {date}
-
-Game data:
-{context}
-
-Rules by bet type:
-- Spread (e.g. team -3.5 or team +3.5):
-    * Team listed as -X is the FAVORITE. WIN if that team wins by MORE than X. LOSS if they win by less or lose. PUSH if exactly X.
-    * Team listed as +X is the UNDERDOG. WIN if that team wins OUTRIGHT (regardless of margin) OR loses by LESS than X. LOSS if they lose by MORE than X. PUSH if they lose by exactly X.
-    * Example: Ohio State +8, Ohio State wins outright → WIN (dog won, cover guaranteed).
-- Moneyline: did the picked team/fighter win outright?
-- Total over/under (bet_type=total): ALWAYS add BOTH teams' scores regardless of how the pick is worded. score_A + score_B = combined. Compare combined to line. Even "Drake 1H Over 62.5" means the whole game's H1 combined, not just Drake's score — because bet_type is total, not team_total.
-- Team total (bet_type=team_total, e.g. "Hornets team total over 117.5"): use ONLY the named team's score, not combined.
-- Player prop: add the player's listed stats. Compare to line.
-- Period bets (1H, 1Q, 2H): use ONLY the scores for that period shown in the data.
-- UFC/MMA: use LAST NAME matching if the full name doesn't exactly match. "Alex Sola" matches "Axel Sola".
-- Boxing/UFC moneyline: fighter wins the bout → WIN. Loses → LOSS. Scores may show "W"/"L" or numeric points — use winner field or highest score.
-- Tennis set bet ("to win 2nd set", "to win a set"): use per-set scores (S1=, S2=, ...) from the data.
-  * "win Nth set": player's SN score > opponent's SN score → WIN.
-  * "win a set": player won at least one set (any SN) → WIN.
-- If game or player not found: UNKNOWN.
-
-Return JSON only (no markdown):
-{{"calc": "show the key numbers, e.g. 125+123=248 vs 237.5", "verdict": "WIN|LOSS|PUSH|UNKNOWN"}}"""
+_PICK_EMOJI = {k: v for k, v in VERDICT_EMOJI.items() if k in ("WIN", "LOSS", "PUSH")}
 
 
-# ─── Cost tracking ────────────────────────────────────────────────────────────
-# Sonnet 4.6: $3/MTok input, $15/MTok output
-_COST_PER_INPUT  = 3.0 / 1_000_000
-_COST_PER_OUTPUT = 15.0 / 1_000_000
+def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
+    """
+    Insert per-pick verdict emojis inline after each pick's line in the message.
+    Matches each pick to its line using team/player names, then appends the emoji.
+    Lines that can't be matched are left unchanged.
+    Returns the modified text (or original if nothing could be matched).
+    """
+    lines = text.rstrip().split("\n")
 
-_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+    for pick, verdict, _calc, _sport, *_ in verdicts:
+        emoji = _PICK_EMOJI.get(verdict)
+        if not emoji:
+            continue  # UNKNOWN / PENDING — leave line alone
+
+        teams  = pick.get("teams") or []
+        player = pick.get("player") or ""
+        # For player props, search by player name only — team names appear as game
+        # headers (e.g. "Pirates / Mets:") and would match the wrong line.
+        # For team bets, search by team names.
+        identifiers = [player] if player else teams
+        search_terms: list[str] = []
+        for t in identifiers:
+            tl = t.lower().strip()
+            if tl:
+                search_terms.append(tl)
+                search_terms.extend(w for w in tl.split() if len(w) > 3)
+
+        for i, line in enumerate(lines):
+            if any(ch in line for ch in _PICK_EMOJI.values()):
+                continue  # already has an emoji — skip
+            line_lower = line.lower()
+            if any(term in line_lower for term in search_terms):
+                lines[i] = f"{line.rstrip()}{emoji}"
+                break  # one match per pick
+
+    return "\n".join(lines)
+
+def _overall_verdict(verdicts: list[tuple]) -> str:
+    """
+    Collapse per-pick verdicts into a single message verdict.
+
+    Parlay legs: ALL must WIN → WIN; any LOSS → LOSS; any UNKNOWN → UNKNOWN.
+    Non-parlay:  all must agree (all WIN or all LOSS); mixed or any UNKNOWN → UNKNOWN.
+    """
+    if not verdicts:
+        return "UNKNOWN"
+    all_v = [v[1] for v in verdicts]
+    is_parlay = any(v[0].get("is_parlay_leg") for v in verdicts)
+    if is_parlay:
+        if "PENDING" in all_v:
+            return "PENDING"
+        if "UNKNOWN" in all_v:
+            return "UNKNOWN"
+        if "LOSS" in all_v:
+            return "LOSS"
+        if all(v == "WIN" for v in all_v):
+            return "WIN"
+        if "PUSH" in all_v:
+            return "PUSH"
+        return "UNKNOWN"
+    else:
+        unique = set(all_v) - {"PUSH"}
+        if "PENDING" in unique:
+            return "PENDING"
+        if "UNKNOWN" in unique or len(unique) > 1:
+            return "UNKNOWN"
+        return unique.pop() if unique else "PUSH"
 
 
-def _accum(usage: object) -> None:
-    _usage["input_tokens"]  += getattr(usage, "input_tokens",  0)
-    _usage["output_tokens"] += getattr(usage, "output_tokens", 0)
-
-
-def usage_cost() -> float:
-    return _usage["input_tokens"] * _COST_PER_INPUT + _usage["output_tokens"] * _COST_PER_OUTPUT
-
-
-async def _claude_create_with_retry(**kwargs) -> object:
-    """Call claude().messages.create with up to 4 retries on transient errors (500, 529)."""
-    for attempt in range(4):
-        try:
-            return await claude().messages.create(**kwargs)
-        except (anthropic.InternalServerError, anthropic.APIStatusError) as exc:
-            status = getattr(exc, "status_code", None)
-            if status not in (500, 529) or attempt == 3:
-                raise
-            await asyncio.sleep(2 ** attempt)
-
-
-async def claude_parse(text: str) -> dict | None:
-    resp = await _claude_create_with_retry(
-        model="claude-sonnet-4-6",
-        max_tokens=500,
-        messages=[{"role": "user", "content": _PARSE_PROMPT.format(text=text)}],
-    )
-    _accum(resp.usage)
-    raw = re.sub(r"^```(?:json)?\n?|```$", "", resp.content[0].text.strip(), flags=re.MULTILINE).strip()
+async def _bot_edit_message(
+    bot_token: str,
+    channel_id: int,
+    message_id: int,
+    new_text: str,
+    has_media: bool,
+) -> bool:
+    """Edit a message via Bot API. Returns True on success."""
+    method = "editMessageCaption" if has_media else "editMessageText"
+    field  = "caption"            if has_media else "text"
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-
-
-async def claude_grade(pick_desc: str, date: str, context: str) -> tuple[str, str]:
-    """Returns (verdict, calc)."""
-    resp = await _claude_create_with_retry(
-        model="claude-sonnet-4-6",
-        max_tokens=150,
-        messages=[{
-            "role": "user",
-            "content": _GRADE_PROMPT.format(pick=pick_desc, date=date, context=context),
-        }],
-    )
-    _accum(resp.usage)
-    raw = resp.content[0].text.strip()
-    # Try to parse JSON verdict first
-    calc = ""
-    try:
-        clean = re.sub(r"^```(?:json)?\n?|```$", "", raw, flags=re.MULTILINE).strip()
-        result = json.loads(clean)
-        verdict = result.get("verdict", "").strip().upper()
-        calc = result.get("calc", "")
-        if verdict in ("WIN", "LOSS", "PUSH", "UNKNOWN"):
-            # Sanity check: WIN/LOSS/PUSH must have numbers in calc (grader did math)
-            if verdict in ("WIN", "LOSS", "PUSH") and not re.search(r'\d', calc):
-                return "UNKNOWN", calc
-            return verdict, calc
-    except (json.JSONDecodeError, AttributeError):
-        pass
-    # Fallback: find first valid verdict word in response
-    for word in re.sub(r"[^A-Z\s]", "", raw.upper()).split():
-        if word in ("WIN", "LOSS", "PUSH", "UNKNOWN"):
-            return word, raw
-    return "UNKNOWN", raw
-
-
-# ─── Grade context builder ────────────────────────────────────────────────────
-
-def _completed_events(data: dict) -> list[dict]:
-    """Return only completed events from a scoreboard response."""
-    return [
-        e for e in data.get("events", [])
-        if e.get("status", {}).get("type", {}).get("completed", False)
-    ]
-
-
-async def build_context(
-    sport: str,
-    date: str,
-    pick: dict,
-    scoreboard: dict | None,
-    summary_cache: dict,
-) -> tuple[str, str]:
-    """Return (context_str, game_date) for grading this pick.
-    game_date is the actual date the game is/was played (may differ from pick date)."""
-    bet_type = pick.get("bet_type", "")
-    period = pick.get("period", "game")
-    player = pick.get("player") or ""
-    teams = pick.get("teams") or []
-    is_parlay_leg = pick.get("is_parlay_leg", False)
-
-    # Tennis: search ESPN core API for match result
-    if sport == "Tennis":
-        player_or_team = player or (teams[0] if teams else "")
-        if not player_or_team:
-            return CONTEXT_SKIP, date
-        return await fetch_tennis_match_context(player_or_team, date), date
-
-    # Boxing: Odds API scores (free tier = last ~3 days only)
-    if sport == "Boxing":
-        fighter = player or (teams[0] if teams else "")
-        if not fighter:
-            return CONTEXT_SKIP, date
-        events = await fetch_odds_api_scores("Boxing", date)
-        ctx = odds_api_context(fighter, events)
-        return (ctx if ctx else CONTEXT_SKIP), date
-
-    # Other unknown sports → skip
-    if sport not in ESPN_LEAGUES:
-        return CONTEXT_SKIP, date
-
-    # Props and period bets need game summaries
-    needs_summary = period != "game" or bet_type == "prop"
-
-    if needs_summary and scoreboard:
-        events = _completed_events(scoreboard)
-        event_ids = find_event_ids(events, teams, player)
-
-        # If no match by name, search all completed events
-        if not event_ids:
-            event_ids = [e.get("id") for e in events if e.get("id")]
-
-        parts = []
-        for eid in event_ids:
-            cache_key = (sport, eid)
-            if cache_key not in summary_cache:
-                summary_cache[cache_key] = await fetch_espn_summary(sport, eid)
-            summary = summary_cache[cache_key]
-            if not summary:
-                continue
-            if bet_type == "prop":
-                parts.append(box_score_text(summary, player))
-            else:
-                parts.append(line_scores_text(summary))
-
-        if parts:
-            return "\n\n".join(p for p in parts if p.strip()), date
-
-    # Default: scoreboard text — completed games only
-    if scoreboard:
-        if teams or player:
-            events = _completed_events(scoreboard)
-            relevant_ids = find_event_ids(events, teams, player)
-            if relevant_ids:
-                # UFC: show the full card so grader sees all bouts; others: filter to the game
-                display = scoreboard if sport == "UFC" else {"events": [e for e in events if e.get("id") in set(relevant_ids)]}
-                return scoreboard_text(display, sport), date
-            # No completed match — check if game/bout exists but hasn't started/finished yet
-            if find_event_ids(scoreboard.get("events", []), teams, player):
-                return CONTEXT_PENDING, date
-            # No match on exact date — try the previous day (handles "sent late" picks)
-            prev_date = (_date.fromisoformat(date) - timedelta(days=1)).isoformat()
-            prev_sb = await fetch_espn(sport, prev_date)
-            if prev_sb:
-                prev_events = _completed_events(prev_sb)
-                prev_ids = find_event_ids(prev_events, teams, player)
-                if prev_ids:
-                    display = prev_sb if sport == "UFC" else {"events": [e for e in prev_events if e.get("id") in set(prev_ids)]}
-                    return scoreboard_text(display, sport), prev_date
-                if find_event_ids(prev_sb.get("events", []), teams, player):
-                    return CONTEXT_PENDING, prev_date
-            # If the sport had NO completed games at all on the pick date (e.g. picks posted
-            # days before a weekend game), scan the next 3 days for a scheduled matchup.
-            if not _completed_events(scoreboard):
-                for offset in range(1, 4):
-                    future_date = (_date.fromisoformat(date) + timedelta(days=offset)).isoformat()
-                    future_sb = await fetch_espn(sport, future_date)
-                    if future_sb and find_event_ids(future_sb.get("events", []), teams, player):
-                        return CONTEXT_PENDING, future_date
-            return CONTEXT_SKIP, date
-        completed = _completed_events(scoreboard)
-        if not completed:
-            return CONTEXT_SKIP, date
-        return scoreboard_text({"events": completed}, sport), date
-
-    return CONTEXT_SKIP, date
+        async with httpx.AsyncClient(timeout=10) as http:
+            r = await http.post(
+                f"https://api.telegram.org/bot{bot_token}/{method}",
+                json={"chat_id": channel_id, "message_id": message_id,
+                      field: new_text, "parse_mode": "HTML"},
+            )
+            if not r.is_success:
+                print(f"    [bot edit error] {r.status_code}: {r.text[:120]}")
+                return False
+            return True
+    except Exception as exc:
+        print(f"    [bot edit error] {exc}")
+        return False
 
 
 # ─── Backtest ─────────────────────────────────────────────────────────────────
@@ -984,104 +480,6 @@ async def grade_one(text: str, date: str) -> None:
 
 # ─── Live mode ────────────────────────────────────────────────────────────────
 
-_PICK_EMOJI = {k: v for k, v in VERDICT_EMOJI.items() if k in ("WIN", "LOSS", "PUSH")}
-
-
-def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
-    """
-    Insert per-pick verdict emojis inline after each pick's line in the message.
-    Matches each pick to its line using team/player names, then appends the emoji.
-    Lines that can't be matched are left unchanged.
-    Returns the modified text (or original if nothing could be matched).
-    """
-    lines = text.rstrip().split("\n")
-
-    for pick, verdict, _calc, _sport, *_ in verdicts:
-        emoji = _PICK_EMOJI.get(verdict)
-        if not emoji:
-            continue  # UNKNOWN / PENDING — leave line alone
-
-        teams  = pick.get("teams") or []
-        player = pick.get("player") or ""
-        # For player props, search by player name only — team names appear as game
-        # headers (e.g. "Pirates / Mets:") and would match the wrong line.
-        # For team bets, search by team names.
-        identifiers = [player] if player else teams
-        search_terms: list[str] = []
-        for t in identifiers:
-            tl = t.lower().strip()
-            if tl:
-                search_terms.append(tl)
-                search_terms.extend(w for w in tl.split() if len(w) > 3)
-
-        for i, line in enumerate(lines):
-            if any(ch in line for ch in _PICK_EMOJI.values()):
-                continue  # already has an emoji — skip
-            line_lower = line.lower()
-            if any(term in line_lower for term in search_terms):
-                lines[i] = f"{line.rstrip()}{emoji}"
-                break  # one match per pick
-
-    return "\n".join(lines)
-
-def _overall_verdict(verdicts: list[tuple]) -> str:
-    """
-    Collapse per-pick verdicts into a single message verdict.
-
-    Parlay legs: ALL must WIN → WIN; any LOSS → LOSS; any UNKNOWN → UNKNOWN.
-    Non-parlay:  all must agree (all WIN or all LOSS); mixed or any UNKNOWN → UNKNOWN.
-    """
-    if not verdicts:
-        return "UNKNOWN"
-    all_v = [v[1] for v in verdicts]
-    is_parlay = any(v[0].get("is_parlay_leg") for v in verdicts)
-    if is_parlay:
-        if "PENDING" in all_v:
-            return "PENDING"
-        if "UNKNOWN" in all_v:
-            return "UNKNOWN"
-        if "LOSS" in all_v:
-            return "LOSS"
-        if all(v == "WIN" for v in all_v):
-            return "WIN"
-        if "PUSH" in all_v:
-            return "PUSH"
-        return "UNKNOWN"
-    else:
-        unique = set(all_v) - {"PUSH"}
-        if "PENDING" in unique:
-            return "PENDING"
-        if "UNKNOWN" in unique or len(unique) > 1:
-            return "UNKNOWN"
-        return unique.pop() if unique else "PUSH"
-
-
-async def _bot_edit_message(
-    bot_token: str,
-    channel_id: int,
-    message_id: int,
-    new_text: str,
-    has_media: bool,
-) -> bool:
-    """Edit a message via Bot API. Returns True on success."""
-    method = "editMessageCaption" if has_media else "editMessageText"
-    field  = "caption"            if has_media else "text"
-    try:
-        async with httpx.AsyncClient(timeout=10) as http:
-            r = await http.post(
-                f"https://api.telegram.org/bot{bot_token}/{method}",
-                json={"chat_id": channel_id, "message_id": message_id,
-                      field: new_text, "parse_mode": "HTML"},
-            )
-            if not r.is_success:
-                print(f"    [bot edit error] {r.status_code}: {r.text[:120]}")
-                return False
-            return True
-    except Exception as exc:
-        print(f"    [bot edit error] {exc}")
-        return False
-
-
 async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = None) -> None:
     import datetime as dt
     from telethon import TelegramClient
@@ -1143,7 +541,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 if not text.strip():
                     continue
                 # Skip already graded (check plain text)
-                if any(ch in text for ch in ("✅", "❌", "↩️")):
+                if any(ch in text for ch in ("\u2705", "\u274c", "\u21a9\ufe0f")):
                     continue
 
                 capper  = next((l.strip() for l in text.splitlines() if l.strip()), "")
