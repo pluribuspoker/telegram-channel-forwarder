@@ -38,7 +38,7 @@ CONTEXT_SKIP = "__SKIP__"
 CONTEXT_PENDING = "__PENDING__"
 
 # Cache of parsed-but-pending messages so we don't re-call Claude on every run
-_PENDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "pending_cache.json")
+_PENDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "parse_cache.json")
 
 
 def _load_pending_cache() -> dict:
