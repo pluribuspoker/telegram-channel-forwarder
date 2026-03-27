@@ -2,7 +2,7 @@
 
 Automatically re-posts messages from source Telegram channels/topics to destination channels. Messages appear as original posts with no "forwarded from" tag. Supports text, photos, documents, and photo albums.
 
-Also includes a **pick grader** (`tracker.py`) that nightly grades sports betting picks in destination channels by appending ✅/❌ to each pick line.
+Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades sports betting picks in destination channels, and appends ✅/❌ inline after each pick line.
 
 ---
 
@@ -11,9 +11,10 @@ Also includes a **pick grader** (`tracker.py`) that nightly grades sports bettin
 | File | Purpose |
 |---|---|
 | `listener.py` | Real-time forwarder — runs persistently as a systemd service |
-| `tracker.py` | Pick grader — runs nightly via systemd timer |
+| `tracker.py` | Pick grader — runs every 5 min via systemd timer |
 | `audit.py` | Audit log for tracker — writes to SQLite + Telegram audit channel |
-| `run_tracker.sh` | Nightly wrapper with retry logic and healthchecks.io signals |
+| `common.py` | Shared utilities (Anthropic client, OCR, channel parsing, emoji map) |
+| `run_tracker.sh` | Timer wrapper with retry logic and healthchecks.io signals |
 
 ---
 
@@ -82,17 +83,13 @@ python listener.py --test  # uses test_source/dest channels
 ```json
 "filter_pattern": "(?i)^[A-Za-z][A-Za-z ]*:[ ]*[(]"
 ```
-Example matches `STRAIGHT: (1 UNIT)`, `PARLAY: (2 UNITS)`.
 
-**`ocr_odds`** — when `true`, extracts American odds from a bet slip screenshot via Claude Haiku and appends to caption. Image is dropped on success; kept as fallback on failure.
+**`ocr_odds`** — extracts American odds from a bet slip screenshot via Claude Haiku and appends to caption. Image dropped on success; kept as fallback on failure. Requires `ANTHROPIC_API_KEY`.
 ```json
 "ocr_odds": true
 ```
-Requires `ANTHROPIC_API_KEY`. Output example: `STRAIGHT: (1 UNIT)\n\nUCLA +6.5 -146`
 
 **`source_topic_id`** — optional, for forum/topic channels only.
-
-**`test_source_channel` / `test_dest_channel`** — optional, used with `--test` flag.
 
 ### Logging
 ```
@@ -110,49 +107,51 @@ Requires `ANTHROPIC_API_KEY`. Output example: `STRAIGHT: (1 UNIT)\n\nUCLA +6.5 -
 **Sports supported:** NBA, NCAAB, MLB, NFL, NHL, NCAAF, UFC, UFL, Tennis (ESPN core API), Boxing (Odds API)
 
 **Verdict types:**
-- `✅ WIN` / `❌ LOSS` / `↩️ PUSH` — graded and edited in Telegram
-- `⏳ PENDING` — game found in ESPN but not yet played
+- `✅ WIN` / `❌ LOSS` / `↩️ PUSH` — graded, message edited in Telegram
+- `⏳ PENDING` — game found in ESPN but not yet completed
 - `❓ UNKNOWN` — game not found or sport not supported
 
 ### Usage
 
 ```bash
-# Grade picks from a Telegram export (backtest / accuracy check)
+# Grade picks from a Telegram JSON export (backtest)
 python tracker.py --backtest result.json
 
 # Grade a single pick interactively
 python tracker.py --grade "Hawks +3.5" --date 2026-03-26
 
 # Live mode — scan channels and edit messages
-python tracker.py --live --days 2              # last 2 days
-python tracker.py --live --days 365            # full backfill
-python tracker.py --live --dry-run --days 2    # preview without editing
-python tracker.py --live --channel -100xxx     # single channel only
+python tracker.py --live                          # last 1 day (default)
+python tracker.py --live --days 7                 # last 7 days
+python tracker.py --live --dry-run                # preview without editing
+python tracker.py --live --channel -100xxxxxxxxxx # single channel only
 ```
 
 ### Backtest accuracy
 
 | Channel | Accuracy | Skipped |
 |---|---|---|
-| DF | 97% (76/78) | 2 (UFC — ESPN data unavailable) |
+| DF | 97% (76/78) | 2 (UFC — ESPN data unavailable at test time) |
 | Cappers Lab | 100% (16/16) | 0 |
 
 ### Audit log
 
-Every grade action writes to `picks.db` (SQLite) and posts to a private Telegram audit channel (`AUDIT_CHANNEL_ID`). Audit messages show capper, channel, pick with verdict emoji, sport, game date, and calc — in HTML format.
+Every grade action writes to `picks.db` (SQLite) and posts to a private Telegram audit channel (`AUDIT_CHANNEL_ID`). Messages show capper, channel, pick with verdict emoji, sport, game date, and calc. Dry runs tagged `[DRY]`. PENDING picks written to DB only (not posted to audit channel).
 
-Dry runs are recorded with `dry_run=1` and tagged `[DRY]` in the audit channel.
+### Parse cache
 
-### Nightly cron (VPS)
+`parse_cache.json` caches `claude_parse` results for pending messages. Since the grader runs every 5 minutes, this avoids redundant Claude API calls for picks whose games haven't started yet. Evicted automatically when a pick is graded.
+
+### Production (VPS)
 
 `run_tracker.sh` wraps the grader with:
-- Up to 3 retry attempts (5 min apart) on failure
+- 2 retry attempts (60s apart) on failure
 - Healthchecks.io start/success/fail signals (`TRACKER_HEALTHCHECK_URL`)
 
-Deployed as a systemd timer firing at 3 AM ET. Manual runs via server aliases:
+Deployed as a systemd timer firing every 5 minutes. Manual runs via server aliases:
 ```bash
-grade       # live, last 2 days
-gradetest   # dry run, last 2 days
+grade      # live, last 1 day
+gradetest  # dry run, last 2 days
 ```
 
 ---
