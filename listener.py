@@ -111,10 +111,10 @@ async def main():
                     if not group:
                         return
                     if passes_filter(group, mapping):
-                        log_group(group, sent=True)
                         try:
-                            caption = await enrich_caption(group, mapping, client)
-                            await send_group(client, group, bot_dest_entity, sender=bot, caption_override=caption)
+                            caption, odds = await enrich_caption(group, mapping, client)
+                            log_group(group, sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None)
+                            await send_group(client, group, bot_dest_entity, sender=bot, caption_override=caption, text_only=bool(odds))
                         except Exception as e:
                             print(f"  ✗ Album send failed: {e}", file=sys.stderr)
                     else:
@@ -125,10 +125,10 @@ async def main():
                 if not passes_filter([msg], mapping):
                     log_group([msg], sent=False)
                     return
-                log_group([msg], sent=True)
                 try:
-                    caption = await enrich_caption([msg], mapping, client)
-                    await send_group(client, [msg], bot_dest_entity, sender=bot, caption_override=caption)
+                    caption, odds = await enrich_caption([msg], mapping, client)
+                    log_group([msg], sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None)
+                    await send_group(client, [msg], bot_dest_entity, sender=bot, caption_override=caption, text_only=bool(odds))
                 except Exception as e:
                     print(f"  ✗ Failed on message {msg.id}: {e}", file=sys.stderr)
 

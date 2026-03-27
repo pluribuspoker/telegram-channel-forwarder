@@ -44,8 +44,13 @@ def _group_summary(group):
     return preview, media_tag
 
 
-def log_group(group, sent):
-    """Print a single log line for a processed message group."""
+def log_group(group, sent, ocr_odds=None):
+    """Print a single log line for a processed message group.
+
+    ocr_odds=None  → no OCR attempted
+    ocr_odds=""    → OCR attempted but failed (falling back to image)
+    ocr_odds="-146"→ OCR succeeded; image dropped
+    """
     ts = datetime.datetime.now().strftime("%H:%M:%S")
     preview, media_tag = _group_summary(group)
 
@@ -54,7 +59,14 @@ def log_group(group, sent):
     else:
         badge = "· filtered"
 
-    body_parts = [p for p in [preview, media_tag] if p]
+    if ocr_odds is None:
+        tag = media_tag                          # no OCR — show [photo] / [album] as normal
+    elif ocr_odds:
+        tag = f"[ocr: {ocr_odds} ✓ no image]"  # success — image dropped
+    else:
+        tag = f"[ocr: failed → {media_tag}]"    # failed — image kept as fallback
+
+    body_parts = [p for p in [preview, tag] if p]
     body = "  ".join(body_parts) if body_parts else "(no content)"
 
     print(f" {ts}  {badge}  ┃  {body}")
@@ -107,21 +119,26 @@ async def extract_odds(image_bytes):
 
 
 async def enrich_caption(group, mapping, client):
-    """If ocr_odds is enabled, download the image and append odds to the caption.
-    Returns the enriched caption string, or None to leave text unchanged."""
+    """If ocr_odds is enabled, download the image and extract odds via Haiku.
+
+    Returns (caption, odds_str):
+      - odds_str non-empty → OCR succeeded; caller should send text-only, no image
+      - odds_str empty     → OCR failed or disabled; caller should send with image as normal
+      - caption is None when OCR is disabled or there is no media to read from
+    """
     if not mapping.get("ocr_odds"):
-        return None
+        return None, ""
     text = next((m.text for m in group if m.text), "")
     media_msg = next((m for m in group if m.media), None)
     if not media_msg:
-        return None
+        return None, ""
     image_bytes = await client.download_media(media_msg.media, file=bytes)
     if not image_bytes:
-        return None
+        return None, ""
     odds = await extract_odds(image_bytes)
     if odds:
-        return f"{text} {odds}".strip()
-    return None  # couldn't extract — leave original text alone
+        return f"{text} {odds}".strip(), odds  # success → text only
+    return None, ""                             # failed → keep image
 
 
 def parse_channel(raw):
@@ -140,11 +157,15 @@ def resolve_dest(mapping, use_test):
     return parse_channel(dest_raw)
 
 
-async def send_group(client, group, dest_entity, sender=None, caption_override=None):
+async def send_group(client, group, dest_entity, sender=None, caption_override=None, text_only=False):
     """Send a list of messages (album or single) to dest_entity, preserving formatting.
     Uses `sender` client for writing if provided, otherwise uses `client`.
-    Pass `caption_override` to replace the message text (e.g. after OCR enrichment)."""
+    caption_override replaces the message text (e.g. after OCR enrichment).
+    text_only=True skips all media and sends just the caption as a plain message."""
     sender = sender or client
+    if text_only and caption_override:
+        await sender.send_message(dest_entity, caption_override, silent=False)
+        return True
     if len(group) > 1:
         files = []
         caption = ""

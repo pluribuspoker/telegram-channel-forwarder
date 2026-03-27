@@ -105,11 +105,11 @@ async def forward_mapping(client, bot, mapping, state, limit, use_test):
             log_group(group, sent=False)
             continue
         try:
-            caption = await enrich_caption(group, mapping, client)
-            sent = await send_group(client, group, dest_entity, sender=bot, caption_override=caption)
+            caption, odds = await enrich_caption(group, mapping, client)
+            sent = await send_group(client, group, dest_entity, sender=bot, caption_override=caption, text_only=bool(odds))
             if not sent:
                 continue
-            log_group(group, sent=True)
+            log_group(group, sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None)
             forwarded += 1
         except Exception as e:
             print(f"  ✗ Failed on message {group[0].id}: {e}", file=sys.stderr)
