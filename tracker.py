@@ -408,8 +408,10 @@ async def run_backtest(filepath: str) -> None:
             print(f"  {reason}: {count}")
 
     # ── Write detail file ──
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    os.makedirs(data_dir, exist_ok=True)
     base = os.path.splitext(os.path.basename(filepath))[0]
-    out_path = f"backtest_{base}.txt"
+    out_path = os.path.join(data_dir, f"backtest_{base}.txt")
     _write_detail_file(out_path, filepath, results, graded, correct_list, skipped_list, wrong_list, cost)
     print(f"\nDetail file: {out_path}")
 
