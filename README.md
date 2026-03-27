@@ -116,8 +116,8 @@ python listener.py --test  # uses test_source/dest channels
 ### Usage
 
 ```bash
-# Grade picks from a Telegram JSON export (backtest)
-python tracker.py --backtest result.json
+# Grade picks from a Telegram JSON export (backtest — output goes to data/)
+python tracker.py --backtest data/result.json
 
 # Grade a single pick interactively
 python tracker.py --grade "Hawks +3.5" --date 2026-03-26

@@ -58,7 +58,7 @@ ship   # pushes to GitHub + runs deploy on server
 
 ```bash
 # Server only (as root)
-deploy   # git pull + restart + status + logs
+deploy   # git pull + source ~/.bashrc + restart + forwarder status + last tracker run + tail both logs
 ```
 
 ---
@@ -67,8 +67,10 @@ deploy   # git pull + restart + status + logs
 
 Runs every 5 minutes via systemd timer (`telegram-tracker.timer`).
 Grades sports picks in destination channels by appending ✅/❌ inline after each pick line.
-Audit log: `picks.db` (SQLite) + Telegram audit channel (`AUDIT_CHANNEL_ID`).
+Audit log: `picks.db` (SQLite) + Telegram audit channel (`AUDIT_CHANNEL_ID`). PENDING picks written to DB only, not posted to audit channel.
 Parse cache: `parse_cache.json` — avoids re-parsing pending picks on every run.
+Log colors: green=success, red=errors/[SKIP], yellow=pending, dim=noise.
+Summary line: `edited / pending / failed / errors`.
 
 ```bash
 journalctl -u telegram-tracker -n 50 --no-pager   # view recent tracker logs
