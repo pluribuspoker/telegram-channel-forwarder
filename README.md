@@ -41,20 +41,55 @@ MAPPINGS_CONFIG='[
     "source_topic_id": null,
     "dest_channel": -100xxxxxxxxxx,
     "test_source_channel": -100xxxxxxxxxx,
-    "test_dest_channel": -100xxxxxxxxxx,
-    "filter_pattern": "(?i)^[A-Za-z][A-Za-z ]*:[ ]*[(]",
-    "ocr_odds": true
+    "test_dest_channel": -100xxxxxxxxxx
   }
 ]'
 ```
 
 - `source_topic_id` — optional, for forum/topic channels only
 - `test_source_channel` / `test_dest_channel` — optional, used with `--test` flag
+- `ANTHROPIC_API_KEY` — only required if any mapping uses `ocr_odds`
 
 ### 4. Find channel IDs
 
 ```bash
 python list_channels.py
+```
+
+## Mapping options
+
+Each object in `MAPPINGS_CONFIG` supports these optional fields:
+
+### `filter_pattern`
+
+A regex applied to message text. Only messages (or albums) where at least one message matches are forwarded. Omit to forward everything.
+
+```json
+"filter_pattern": "(?i)^[A-Za-z][A-Za-z ]*:[ ]*[(]"
+```
+
+The example matches picks in the format `WORD(S): (anything)` — e.g. `STRAIGHT: (1 UNIT)`, `PARLAY: (2 UNITS)`.
+
+### `ocr_odds`
+
+When `true`, the attached image on a matched message is sent to Claude Haiku, which extracts the American odds (e.g. `-146`, `+220`) from the bet slip screenshot. If successful, the odds are appended to the caption and the image is dropped — the forwarded message is text only. If OCR fails, the original image is kept as a fallback.
+
+```json
+"ocr_odds": true
+```
+
+Requires `ANTHROPIC_API_KEY`.
+
+Example forwarded output: `STRAIGHT: (1 UNIT)\n\nUCLA +6.5 -146`
+
+## Logging
+
+Both scripts print a line per processed message group:
+
+```
+ 15:43:26  ✦ SENT     ┃  STRAIGHT: (1 UNIT)  UCLA +6.5  [ocr: -146]
+ 18:33:27  ✦ SENT     ┃  STRAIGHT: (1 UNIT)  NC STATE +11.5  [ocr: failed → [photo]]
+ 15:43:50  · filtered ┃  Putting half the OSU winnings on it
 ```
 
 ## Running locally
@@ -84,7 +119,7 @@ Runs `forwarder.py` on a 5-minute cron schedule.
 | `TELEGRAM_API_HASH` | From my.telegram.org |
 | `TELEGRAM_SESSION` | Telethon StringSession |
 | `BOT_TOKEN` | Bot token from BotFather |
-| `ANTHROPIC_API_KEY` | From console.anthropic.com — used for OCR odds extraction |
+| `ANTHROPIC_API_KEY` | From console.anthropic.com — required when using `ocr_odds` |
 | `MAPPINGS_CONFIG` | Minified JSON mappings array |
 
 ### Manual trigger options
