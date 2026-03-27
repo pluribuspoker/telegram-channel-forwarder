@@ -8,12 +8,13 @@
 ### Server aliases (root)
 
 ```bash
-logs       # prints Ctrl+C hint, then tails journal (Ctrl+C exits logs, service keeps running)
-start      # systemctl start telegram-forwarder
-stop       # systemctl stop telegram-forwarder
-restart    # systemctl restart telegram-forwarder + status
-status     # systemctl status telegram-forwarder
-deploy     # git pull + restart + status + logs
+flogs      # tail forwarder logs (Ctrl+C exits, service keeps running)
+tlogs      # tail tracker logs (last 50 lines + follow)
+start      # start forwarder + status
+stop       # stop forwarder + status
+restart    # restart forwarder + status
+status     # forwarder status
+deploy     # git pull + restart + status + flogs
 
 grade      # run pick grader live (last 1 day) — same as the 5-min timer
 gradetest  # dry run pick grader (last 2 days) — no edits, shows what would happen
