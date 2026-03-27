@@ -62,7 +62,7 @@ def log_group(group, sent, ocr_odds=None):
     if ocr_odds is None:
         tag = media_tag                          # no OCR — show [photo] / [album] as normal
     elif ocr_odds:
-        tag = f"[ocr: {ocr_odds} ✓ no image]"  # success — image dropped
+        tag = f"[ocr: {ocr_odds}]"               # success — image dropped
     else:
         tag = f"[ocr: failed → {media_tag}]"    # failed — image kept as fallback
 
