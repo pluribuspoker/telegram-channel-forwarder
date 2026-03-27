@@ -51,6 +51,8 @@ async def heartbeat():
             urllib.request.urlopen(url, timeout=10)
         except Exception:
             pass
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        print(f" {ts}  ♡ listening")
         await asyncio.sleep(240)
 
 
