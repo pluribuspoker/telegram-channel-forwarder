@@ -70,27 +70,33 @@ class AuditLog:
         self.bot_token = bot_token or os.getenv("BOT_TOKEN", "")
         raw_cid = audit_channel_id or os.getenv("AUDIT_CHANNEL_ID", "")
         self.audit_channel_id: int | None = int(raw_cid) if raw_cid else None
-        self._conn = sqlite3.connect(self.db_path)
-        self._conn.row_factory = sqlite3.Row
         self._init_db()
 
     # ── DB helpers ─────────────────────────────────────────────────────────────
 
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
     def _init_db(self) -> None:
-        self._conn.executescript(_SCHEMA)
-        try:
-            self._conn.execute(_MIGRATION)
-            self._conn.commit()
-        except Exception:
-            pass  # column already exists
+        with self._connect() as conn:
+            conn.executescript(_SCHEMA)
+            try:
+                conn.execute(_MIGRATION)
+                conn.commit()
+            except Exception:
+                pass  # column already exists
 
     def _insert(self, row: dict) -> None:
-        """Insert or replace a grade row (idempotent on channel_id+message_id)."""
+        """Insert or replace a grade row (idempotent on channel_id+message_id).
+        Opens its own connection because this runs in a background thread via asyncio.to_thread."""
         cols = ", ".join(row.keys())
         placeholders = ", ".join("?" for _ in row)
         sql = f"INSERT OR REPLACE INTO grades ({cols}) VALUES ({placeholders})"
-        self._conn.execute(sql, list(row.values()))
-        self._conn.commit()
+        with self._connect() as conn:
+            conn.execute(sql, list(row.values()))
+            conn.commit()
 
     # ── Core record method ─────────────────────────────────────────────────────
 
