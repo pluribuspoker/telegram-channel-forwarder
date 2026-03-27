@@ -4,19 +4,46 @@
 Y='\e[1;33m'  # bold yellow
 R='\e[0m'     # reset
 
-# Reformat journalctl 24h timestamps to 12h ET
-# Input:  Mar 27 19:16:15 pickbot ...
-# Output: Mar 27 7:16:15 PM ET pickbot ...
+# Format journalctl output: 12h ET timestamps + color coding
 _fmtlog() {
-    gawk '{
-        if (match($0, /^([A-Za-z]+ +[0-9]+ )([0-9]+):([0-9]+):([0-9]+)(.*)/, a)) {
-            h = a[2] + 0
-            ap = (h >= 12) ? "PM" : "AM"
-            h12 = h % 12; if (h12 == 0) h12 = 12
-            print a[1] h12 ":" a[3] ":" a[4] " " ap " ET" a[5]
+    gawk '
+    BEGIN {
+        RESET="\033[0m"; DIM="\033[2m"; BOLD="\033[1m"
+        GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; GREY="\033[90m"
+    }
+    {
+        line = $0
+
+        # Convert 24h timestamp to 12h ET
+        if (match(line, /^([A-Za-z]+ +[0-9]+ )([0-9]+):([0-9]+):([0-9]+)/, a)) {
+            h = a[2]+0; ap = (h>=12 ? "PM" : "AM")
+            h12 = h%12; if (h12==0) h12=12
+            ts = a[1] h12 ":" a[3] ":" a[4] " " ap " ET"
+            rest = substr(line, RLENGTH+1)
         } else {
-            print
+            ts = ""; rest = line
         }
+
+        # Separate syslog prefix from message content
+        if (match(rest, /^( [^ ]+ [^ ]+\[[0-9]+\]: *)(.*)/, b)) {
+            prefix = b[1]; msg = b[2]
+        } else {
+            prefix = rest; msg = ""
+        }
+
+        # Dim systemd lifecycle lines entirely
+        if (prefix ~ /systemd/) {
+            print DIM ts rest RESET; next
+        }
+
+        # Color message by content
+        if      (msg ~ /WIN|✅|\[EDIT\]|✦ SENT|Completed successfully|Connected/)  color = GREEN
+        else if (msg ~ /LOSS|❌|Crashed|Failed|errors: [1-9]/)                      color = RED
+        else if (msg ~ /PENDING|⏳|\[WAIT\]/)                                        color = YELLOW
+        else if (msg ~ /filtered|· filtered|\[SKIP\]|UNKNOWN|skipped/)              color = DIM
+        else                                                                          color = RESET
+
+        print DIM ts prefix RESET color msg RESET
     }'
 }
 
