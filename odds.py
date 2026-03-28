@@ -142,6 +142,7 @@ _STRUCTURAL_MISS_TYPES = {
     "no_total_data", "no_spread_data",
     "missing_line_or_direction",
     "no_line_in_pick",
+    "game_in_progress",
     "dry_run",
 }
 
@@ -204,7 +205,7 @@ class OddsResult:
 
         if self.match_type.startswith("proximity_") and self.api_line is not None and self.pick_line is not None:
             gap = abs((self.api_line or 0) - (self.pick_line or 0))
-            if gap >= 1.0:
+            if gap >= MAX_LINE_GAP:
                 return odds, f"odds from {gap:.1f}pt adjacent line ({self.api_line} vs pick {self.pick_line})"
 
         return odds, None
@@ -681,6 +682,18 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
         conn.close()
 
 
+def _event_already_started(event_list: list[dict], event_id: str) -> bool:
+    """Return True if the event's commence_time is in the past."""
+    event = next((e for e in event_list if e.get("id") == event_id), None)
+    if not event or not event.get("commence_time"):
+        return False
+    try:
+        commence = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
+        return commence < datetime.now(timezone.utc)
+    except ValueError:
+        return False
+
+
 async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> OddsResult:
     """
     Look up current (live pre-game) odds for a pick.
@@ -711,6 +724,8 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
             event_id   = _find_event_id(event_list, teams)
             if not event_id:
                 return OddsResult(match_type="no_game", pick_line=pick.get("line"))
+            if _event_already_started(event_list, event_id):
+                return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"))
             bookmakers = await _fetch_current_bookmakers(sport_key, event_id, prop_market, conn)
             r = _lookup_prop(bookmakers, pick.get("player") or "", prop_market,
                              pick.get("direction") or "over", float(pick.get("line") or 0.5))
@@ -736,6 +751,8 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
             event_list = await _fetch_current_event_list(sport_key, conn)
             event_id   = _find_event_id(event_list, teams)
             if event_id:
+                if _event_already_started(event_list, event_id):
+                    return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"))
                 bookmakers = await _fetch_current_bookmakers(sport_key, event_id, MARKETS_FULL, conn)
 
         r = lookup_pick_odds(sport, pick, bookmakers)
