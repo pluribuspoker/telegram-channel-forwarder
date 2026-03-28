@@ -88,6 +88,8 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.py --live --days 2 2>&1
 
 **UFC draws:** graded as PUSH. UFC picks posted the day *before* the card (common for multi-day message threads) are handled — the future-date scan checks bout-level completion, not just event-level.
 
+**UFC sport classification:** The parser receives the day of week as context. On Saturdays, single-surname moneyline picks with no other sport context default to UFC (UFC events are almost exclusively on Saturdays). Tennis is only classified when explicit indicators are present (tournament names, match format, known players) — never from a surname alone.
+
 ## Odds integration
 
 `odds.py` — production module. Fetches pre-game odds via Odds API and ESPN at first tracker encounter (live endpoint, no date param). Odds stored in `parse_cache.json` per pick and in `picks.db` (`grades.odds`). Never re-fetched once set.
@@ -96,11 +98,11 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.py --live --days 2 2>&1
 **Sports covered:** NBA, NCAAB, NFL, NCAAF, MLB, NHL, UFC, UFL
 **Coverage on recent picks:** ~91% (MLB F5 innings and small UFC cards are structural gaps)
 
-Odds are edited into the destination message as soon as fetched (while still PENDING), then preserved through the grading edit: `Hawks +3.5 [-115]✅`
+Odds are edited into the destination message on every tracker run (idempotent — tag not re-applied if already present). Single picks: odds appended inline after the pick line (`Hawks +3.5 [-115]✅`). Parlays: combined price on the parlay header line (`PARLAY: (.5 UNIT) [-162]`), no per-leg odds in the message.
 
 Tracker-fetched odds use **square brackets** `[-115]` to distinguish them from capper-written odds `(-115)`. Both appear in pick messages and broadcast results.
 
-If the game has already started when a pick is first encountered, odds fetch is skipped silently (`game_in_progress` structural miss — no audit warning).
+If the game has already started when a pick is first encountered, odds fetch is skipped silently (`game_in_progress` structural miss — no audit warning). To force a re-fetch (e.g. after manually restoring a cache entry), delete the `odds_by_pick` key from the relevant `parse_cache.json` entry — the next run will re-fetch and re-edit.
 
 Any unexpected odds failure posts **one** message to the audit channel — never repeated for the same pick.
 
@@ -125,8 +127,9 @@ After grading, the tracker posts a compact result message to a configured broadc
 - `--dry-run` routes to `test_broadcast_results_channel` for safe previewing
 - Descriptions are standardized: no odds, `ML` shorthand, `Team1/Team2 O/U` for game totals, `Team O/U` for team totals, period tags (`1H`, `2H`)
 - Capper name is a bold hyperlink back to the original pick message
-- Parlay legs grouped under one message; mixed-verdict multi-picks show per-pick emoji
-- Odds shown inline if available: `✅ Duke -4.5 [-153] · Capper`
+- Single picks: `✅ Duke -4.5 [-153] · Capper`
+- Parlays: combined price on header, no per-leg odds — `✅ Capper · Parlay [-162]` followed by bullet legs
+- Non-parlay multi-picks: per-pick emoji on each line
 
 **Testing workflow** (reset emojis and re-run locally):
 ```bash
