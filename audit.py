@@ -364,7 +364,7 @@ class AuditLog:
         picks = [(_format_pick(p), v, fmt_odds(o)) for p, v, o in resolved]
 
         def _pick_line(desc: str, verdict: str, odds_str: str) -> str:
-            odds_part = f" ({e(odds_str)})" if odds_str else ""
+            odds_part = f" [{e(odds_str)}]" if odds_str else ""
             return f"{VERDICT_EMOJI.get(verdict, '')} {e(desc)}{odds_part}"
 
         if len(picks) == 1:
@@ -378,7 +378,7 @@ class AuditLog:
                 overall_emoji = VERDICT_EMOJI["WIN"]
             else:
                 overall_emoji = VERDICT_EMOJI["PUSH"]
-            legs = "\n".join(f"• {e(d)}" + (f" ({e(o)})" if o else "") for d, _, o in picks)
+            legs = "\n".join(f"• {e(d)}" + (f" [{e(o)}]" if o else "") for d, _, o in picks)
             text = f"{overall_emoji} {capper_linked} · Parlay\n{legs}"
         else:
             # Non-parlay multi-pick: one emoji per pick
