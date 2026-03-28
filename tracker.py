@@ -652,17 +652,40 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
             summary_cache:   dict = {}
             edited = pending = failed = errors = 0
 
-            async for msg in client.iter_messages(channel_id):
+            visited_keys: set[str] = set()
+
+            async def _iter_with_catchup():
+                async for m in client.iter_messages(channel_id):
+                    mdate = m.date
+                    if mdate.tzinfo is None:
+                        mdate = mdate.replace(tzinfo=dt.timezone.utc)
+                    if mdate < cutoff:
+                        return      # regular scan done
+                    yield m
+                # After regular scan: yield any pending messages that weren't reached
+                stale_ids = [
+                    int(k.split(':')[1]) for k in pending_cache
+                    if k.startswith(f"{channel_id}:")
+                    and k not in visited_keys
+                    and isinstance(pending_cache.get(k), dict)
+                    and "parsed" in pending_cache.get(k, {})
+                ]
+                if stale_ids:
+                    fetched = await client.get_messages(channel_id, ids=stale_ids)
+                    for m in (fetched if isinstance(fetched, list) else [fetched]):
+                        if m:
+                            yield m
+
+            async for msg in _iter_with_catchup():
                 msg_date = msg.date
                 if msg_date.tzinfo is None:
                     msg_date = msg_date.replace(tzinfo=dt.timezone.utc)
-                if msg_date < cutoff:
-                    break
 
                 text = msg.text or ""
                 date_str = msg_date.strftime("%Y-%m-%d")
 
                 cache_key = f"{channel_id}:{msg.id}"
+                visited_keys.add(cache_key)
 
                 if not text.strip():
                     continue
@@ -806,15 +829,19 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         tag = "SKIP"
                 else:
                     tag = "DRY " if dry_run else "EDIT"
+                first_active = True
                 for i, (pick, verdict, calc, ps, gd, *_) in enumerate(verdicts):
+                    if i in already_broadcast_indices:
+                        continue          # already done — don't reprint every cycle
                     desc     = _trunc(pick.get("description", ""), _DESC_W)
                     emoji    = VERDICT_EMOJI.get(verdict, "")
                     d        = _date.fromisoformat(gd) if gd else _date.fromisoformat(date_str)
                     gd_short = f"{d.month}/{d.day}"
-                    tag_col  = f"[{tag}]" if i == 0 else " " * 6
-                    id_col   = str(msg.id) if i == 0 else ""
-                    cap_col  = _trunc(capper, _CAP_W) if i == 0 else ""
-                    prefix   = "\n" if i == 0 else ""
+                    tag_col  = f"[{tag}]" if first_active else " " * 6
+                    id_col   = str(msg.id) if first_active else ""
+                    cap_col  = _trunc(capper, _CAP_W) if first_active else ""
+                    prefix   = "\n" if first_active else ""
+                    first_active = False
                     print(f"{prefix}  {tag_col}  {id_col:<{_ID_W}}  {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}}  {ps:<{_SPORT_W}}  {gd_short:<5}  {emoji}")
                     if calc:
                         print(f"  {'':6}  {'':>{_ID_W}}  {'':>{_CAP_W}}  {calc[:_DESC_W + _SPORT_W + 8]}")
