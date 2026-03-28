@@ -628,7 +628,7 @@ async def grade_one(text: str, date: str) -> None:
 
 # Column widths for tabular pick output
 _ID_W    = 5   # message ID
-_CAP_W   = 18  # capper name
+_CAP_W   = 15  # capper name
 _DESC_W  = 28  # pick description
 _ODDS_W  = 7   # odds e.g. [-115]
 
