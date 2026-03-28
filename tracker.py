@@ -221,6 +221,48 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
 
     return "\n".join(lines)
 
+_ODDS_TAG_RE = re.compile(r'\s*\([+-]\d{3,4}\)')
+
+
+def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
+    """
+    Insert odds tags directly after each pick line, e.g. 'Duke -4.5 (-153)'.
+
+    Skips parlays (parlay price ≠ individual leg prices).
+    Idempotent — skips lines that already carry an odds tag.
+    Uses same search-term logic as _insert_emojis.
+    """
+    if any(p.get("is_parlay_leg") for p in picks):
+        return text
+
+    lines = text.rstrip().split("\n")
+
+    for idx, pick in enumerate(picks):
+        odds_val = odds_by_pick.get(str(idx), {}).get("odds")
+        if odds_val is None:
+            continue
+        odds_tag = f" ({'+' if odds_val > 0 else ''}{odds_val})"
+
+        teams  = pick.get("teams") or []
+        player = pick.get("player") or ""
+        identifiers = [player] if player else teams
+        search_terms: list[str] = []
+        for t in identifiers:
+            tl = t.lower().strip()
+            if tl:
+                search_terms.append(tl)
+                search_terms.extend(w for w in tl.split() if len(w) > 3)
+
+        for j, line in enumerate(lines):
+            if _ODDS_TAG_RE.search(line):
+                continue  # already has an odds tag — skip
+            if any(term in line.lower() for term in search_terms):
+                lines[j] = f"{line.rstrip()}{odds_tag}"
+                break
+
+    return "\n".join(lines)
+
+
 def _overall_verdict(verdicts: list[tuple]) -> str:
     """
     Collapse per-pick verdicts into a single message verdict.
@@ -775,6 +817,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # Only fetch once — if odds_by_pick is already in the cache, reuse it.
                 cached_entry = pending_cache.get(cache_key) if isinstance(pending_cache.get(cache_key), dict) else {}
                 odds_by_pick: dict = cached_entry.get("odds_by_pick", {})
+                odds_were_empty = not odds_by_pick
                 if not odds_by_pick:
                     for i, pick in enumerate(picks):
                         pick_sport = pick.get("sport") or sport
@@ -798,6 +841,20 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         odds_total += 1
                         if display_odds is not None:
                             odds_found += 1
+
+                # Immediately edit odds into the message so they appear while PENDING.
+                # Only on first fetch; grading edit will also include odds via _insert_odds.
+                if odds_were_empty and not dry_run and any(v.get("odds") is not None for v in odds_by_pick.values()):
+                    from telethon.extensions import html as tl_html
+                    _ht = tl_html.unparse(text, msg.entities or [])
+                    _ht = _ht.replace("<spoiler>", "<tg-spoiler>").replace("</spoiler>", "</tg-spoiler>")
+                    _odds_text = _insert_odds(_ht, picks, odds_by_pick)
+                    if _odds_text != _ht:
+                        await _bot_edit_message(bot_token, channel_id, msg.id, _odds_text, msg.media is not None)
+                        await asyncio.sleep(0.5)
+                        for linked_id in cached_entry.get("linked_message_ids", []):
+                            await _bot_edit_message(bot_token, channel_id, linked_id, _odds_text, msg.media is not None)
+                            await asyncio.sleep(0.5)
 
                 sb_key = (sport, date_str)
                 if sb_key not in scoreboard_cache:
@@ -834,7 +891,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             )
                     verdicts.append((pick, verdict, calc, pick_sport, game_date))
 
-                # Build edited text — per-pick emoji inserted inline after each pick's line
+                # Build edited text — odds then emoji inserted inline after each pick's line
                 # Convert to HTML to preserve original formatting entities
                 from telethon.extensions import html as tl_html
                 import html as _html
@@ -842,6 +899,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # Escape any HTML special chars that Telethon may have left as plain text
                 # (unparse already handles this, but sanitise spoiler tag for Bot API)
                 html_text = html_text.replace("<spoiler>", "<tg-spoiler>").replace("</spoiler>", "</tg-spoiler>")
+                html_text = _insert_odds(html_text, picks, odds_by_pick)
                 new_text = _insert_emojis(html_text, verdicts)
                 graded = [v for v in verdicts if v[1] in _PICK_EMOJI]
                 # Picks resolved this run that haven't been broadcast yet (keep index for odds lookup)
