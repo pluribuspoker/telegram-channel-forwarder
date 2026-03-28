@@ -66,71 +66,81 @@ parses picks via Claude, fetches closing odds from Odds API, outputs `data/odds_
 
 ---
 
+## What Has Been Built (continued)
+
+### `odds.py`
+
+Production module. Key exports:
+- `fetch_odds(sport, game_date, pick) -> OddsResult` — ESPN first, historical Odds API
+  fallback. SQLite cache in `picks.db` (tables: `odds_cache`, `events_cache`).
+- `OddsResult` — carries `match_type`, `odds`, `bookmaker`, `api_line`, `pick_line`.
+  `.validate_for_display()` runs sanity checks before Telegram output.
+  `.is_unexpected_miss` / `.is_structural_miss` for failure triage.
+  `.format()` → `"-110"` / `"+150"`.
+- `quota_used()` — Odds API units consumed this process.
+
+`audit_odds.py` imports all matching logic from `odds.py` (no duplication).
+
+---
+
 ## Next Steps (in order)
 
-### 1. Cost tracking: Odds API quota in run output (next item from `next` file)
+### 1. ~~Cost tracking~~ ✅ Done
 
-Print Odds API quota used per run (like Claude cost). Both costs should be printed
-clearly labelled after each tracker/grader run. Suggested approach: wrap the API call
-method so quota delta is tracked centrally, same pattern as `_accum()` for Claude tokens.
+### 2. ~~Build `odds.py` module~~ ✅ Done
 
-### 2. Build `odds.py` module
+### 3. Wire odds into tracker — fetch at first encounter, store in `picks.db`
 
-Standalone module with entry point:
+**Design: lazy fetch at first encounter using current (live) endpoint.**
+
+When the tracker first processes a PENDING pick (before it has a grade):
+- Call `fetch_odds_current(sport, pick)` — uses the non-historical Odds API endpoint
+  (`GET /sports/{sport}/events/{id}/odds`, no `date` param) to get live lines.
+- This is close enough to send-time since the tracker runs every 5 min.
+- Store the result in a new `grades.odds` column (add migration).
+- On subsequent tracker runs, use the stored value — never re-fetch once set.
+
+**`fetch_odds_current()` in `odds.py`:**
 ```python
-async def fetch_odds(sport: str, game_date: str, pick: dict) -> int | None
+async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> OddsResult
 ```
-Returns American odds integer or `None`. Reusable from both tracker and listener.
+Same matching logic as `fetch_odds()` but hits the live endpoint. Cache key is separate
+(`current_event_odds:{event_id}`) with a short TTL (e.g. evict after 2 days) since
+live odds change.
 
-Internally uses the same two-step per-event approach from `audit_odds.py`.
-Caches to `picks.db` table `odds_cache` (see schema below).
-
-### 3. `odds_cache` table in `picks.db`
-
+**Migration:**
 ```sql
-CREATE TABLE odds_cache (
-    sport       TEXT NOT NULL,
-    game_date   TEXT NOT NULL,
-    event_id    TEXT NOT NULL,
-    market      TEXT NOT NULL,   -- 'spreads', 'alternate_spreads', 'h2h', etc.
-    team        TEXT NOT NULL,
-    line        REAL,            -- NULL for moneyline
-    odds        INTEGER NOT NULL,
-    bookmaker   TEXT,
-    fetched_at  TEXT NOT NULL,
-    PRIMARY KEY (event_id, market, team, line)
-);
+ALTER TABLE grades ADD COLUMN odds INTEGER;
+ALTER TABLE grades ADD COLUMN odds_bookmaker TEXT;
+ALTER TABLE grades ADD COLUMN odds_match_type TEXT;
 ```
 
-Eviction: `DELETE FROM odds_cache WHERE game_date < date('now', '-60 days')` on each run.
+**Failure handling:**
+- `result.is_unexpected_miss` → print `[odds] unexpected miss: {match_type} — {desc}`,
+  increment `errors` counter in tracker summary line.
+- `result.is_structural_miss` → silent, store `odds=NULL`.
+- Sanity check failure → store `odds=NULL`, print warning.
+- Summary line gains `odds:X/Y` (found X out of Y picks attempted).
 
-### 4. Wire odds into tracker grading loop
+### 4. Show odds in broadcast
 
-After `claude_grade()` returns a verdict, call `fetch_odds(sport, game_date, pick)`.
-Store in `grades.odds` column (add migration).
-
-### 5. Show odds in broadcast
-
-In `audit.py` `broadcast_results()` / `_format_pick()`, append odds to each pick line:
+In `audit.py` `broadcast_results()` / `_format_pick()`, read `grades.odds` and append:
 ```
 ✅ Capper · Duke -4.5 (-153)
 ✅ Capper · Celtics ML (-130)
 ✅ Capper · Heat/Pistons O221.5 (-108)
 ```
-Show nothing if `odds IS NULL` (graceful degradation).
+Graceful degradation: show nothing if `odds IS NULL` or sanity check fails.
 
 ---
 
 ## Open Questions / Known Gaps
 
-- **UFL, Tennis, Boxing**: no Odds API coverage. UFL might be on a different provider.
-  Tennis and boxing need separate data sources (investigate later).
-- **Player props**: separate Odds API endpoint (`player_points_over_under` etc.) — not yet
-  implemented. Quota cost is higher; defer until after main spread/total/ML coverage is solid.
-- **Team totals**: not in standard Odds API markets; may need per-bookmaker scraping or skip.
-- **Live bet odds**: picks labelled "live bet" have no pre-game line; always `no_odds`.
-- **Pereira / Missouri matching anomalies**: occasionally wrong-game matched for fighters/teams
-  with common surnames. Low priority; affects <5% of picks.
-- **Odds at send time vs closing odds**: currently fetching closing (at grade time).
-  The audit script infrastructure can be reused for send-time odds by calling the current
-  (non-historical) endpoint when a pick arrives in `listener.py`.
+- **UFL, Tennis, Boxing**: UFL now covered. Tennis and boxing need separate data sources.
+- **Player props**: supported in `odds.py` for MLB/NBA/NHL/NFL via separate prop market
+  fetch. Quota cost is higher; covered at 78% on recent picks.
+- **Team totals**: not in standard Odds API markets — always `NULL`.
+- **Live bet odds**: picks labelled "live bet" have no pre-game line; always `NULL`.
+- **MLB First 5 Innings ML**: `h2h_1st5` not returned by Odds API — always `NULL`.
+- **Pereira / Missouri matching anomalies**: occasionally wrong-game matched for fighters
+  with common surnames. Low priority, affects <5% of picks.
