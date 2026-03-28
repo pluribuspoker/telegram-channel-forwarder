@@ -560,17 +560,25 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 snippet = " ".join(text.split())[:80]
                 cache_key = f"{channel_id}:{msg.id}"
                 msg_cost_before = usage_cost()
-                parsed = pending_cache.get(cache_key) or await claude_parse(text)
+                cached = pending_cache.get(cache_key)
+                # {"_failed": True} is stored after the first audit notification so we
+                # don't spam the audit channel — but we still re-try parsing each run
+                # so the fix landing automatically gets picked up.
+                already_notified = isinstance(cached, dict) and cached.get("_failed")
+                cached_parse = cached if (cached and not already_notified) else None
+                parsed = cached_parse or await claude_parse(text)
                 if not parsed:
                     failed += 1
                     print(f"\n  [SKIP] msg {msg.id}  {date_str}  parse failed")
                     print(f"         {snippet}")
-                    await audit.record(
-                        channel_id=channel_id, message_id=msg.id, date=date_str,
-                        sport="Other", pick_desc=snippet, bet_type="",
-                        verdict="UNKNOWN", calc="parse failed",
-                        prev_caption=text, dry_run=dry_run, channel_name=ch_name, capper_name=capper,
-                    )
+                    if not already_notified:
+                        await audit.record(
+                            channel_id=channel_id, message_id=msg.id, date=date_str,
+                            sport="Other", pick_desc=snippet, bet_type="",
+                            verdict="UNKNOWN", calc="parse failed",
+                            prev_caption=text, dry_run=dry_run, channel_name=ch_name, capper_name=capper,
+                        )
+                        pending_cache[cache_key] = {"_failed": True}
                     continue
                 sport = parsed.get("sport", "Other")
                 picks = parsed.get("picks", [])
@@ -578,12 +586,14 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     failed += 1
                     print(f"\n  [SKIP] msg {msg.id}  {date_str}  no picks extracted  ({sport})")
                     print(f"         {snippet}")
-                    await audit.record(
-                        channel_id=channel_id, message_id=msg.id, date=date_str,
-                        sport=sport, pick_desc=snippet, bet_type="",
-                        verdict="UNKNOWN", calc="no picks extracted",
-                        prev_caption=text, dry_run=dry_run, channel_name=ch_name, capper_name=capper,
-                    )
+                    if not already_notified:
+                        await audit.record(
+                            channel_id=channel_id, message_id=msg.id, date=date_str,
+                            sport=sport, pick_desc=snippet, bet_type="",
+                            verdict="UNKNOWN", calc="no picks extracted",
+                            prev_caption=text, dry_run=dry_run, channel_name=ch_name, capper_name=capper,
+                        )
+                        pending_cache[cache_key] = {"_failed": True}
                     continue
 
                 sb_key = (sport, date_str)
