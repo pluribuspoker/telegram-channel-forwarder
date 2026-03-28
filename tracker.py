@@ -699,6 +699,12 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 snippet = " ".join(text.split())[:80]
                 msg_cost_before = usage_cost()
                 cached = pending_cache.get(cache_key)
+                # {"_dupe": True} is stored when this message was identified as a duplicate
+                # so we can skip claude_parse on subsequent runs without re-paying.
+                if isinstance(cached, dict) and cached.get("_dupe"):
+                    dup_id = cached.get("primary_id", "?")
+                    print(f"\n  [DUPE] {msg.id:<{_ID_W}}  {_trunc(capper, _CAP_W):<{_CAP_W}}  → primary msg {dup_id}")
+                    continue
                 # {"_failed": True} is stored after the first audit notification so we
                 # don't spam the audit channel — but we still re-try parsing each run
                 # so the fix landing automatically gets picked up.
@@ -759,6 +765,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         linked = pending_cache[dup_key].setdefault("linked_message_ids", [])
                         if msg.id not in linked:
                             linked.append(msg.id)
+                        # Cache the dupe marker so we skip claude_parse on future runs
+                        pending_cache[cache_key] = {"_dupe": True, "primary_id": dup_id}
                         print(f"\n  [DUPE] {msg.id:<{_ID_W}}  {_trunc(capper, _CAP_W):<{_CAP_W}}  → primary msg {dup_id}")
                         continue
 
