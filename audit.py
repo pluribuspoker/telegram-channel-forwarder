@@ -306,6 +306,24 @@ class AuditLog:
             # Never crash the main flow because of audit failures
             print(f"[audit] Telegram post failed: {exc}")
 
+    async def warn(self, text: str) -> None:
+        """Post a plain warning message to the audit channel. Never raises."""
+        if not self.audit_channel_id or not self.bot_token:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=10) as http:
+                await http.post(
+                    f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
+                    json={
+                        "chat_id": self.audit_channel_id,
+                        "text": text,
+                        "parse_mode": "HTML",
+                        "disable_web_page_preview": True,
+                    },
+                )
+        except Exception as exc:
+            print(f"[audit] warn post failed: {exc}")
+
     # ── Broadcast results channel ──────────────────────────────────────────────
 
     async def broadcast_results(

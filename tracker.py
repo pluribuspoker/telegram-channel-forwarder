@@ -780,10 +780,15 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         pick_sport = pick.get("sport") or sport
                         result = await fetch_odds_current(pick_sport, pick)
                         display_odds, warn = result.validate_for_display()
+                        pick_desc = pick.get("description", "")
                         if result.is_unexpected_miss:
-                            print(f"  [odds] miss({result.match_type}) {pick.get('description', '')[:60]}")
-                        elif warn:
+                            msg = f"⚠️ <b>odds miss</b>: {result.match_type}\n{pick_desc} · {pick_sport} · {capper}"
+                            print(f"  [odds] miss({result.match_type}) {pick_desc[:60]}")
+                            await audit.warn(msg)
+                        elif warn and result.found:
+                            msg = f"⚠️ <b>odds sanity</b>: {warn}\n{pick_desc} · {pick_sport} · {capper}"
                             print(f"  [odds] sanity: {warn}")
+                            await audit.warn(msg)
                         odds_by_pick[str(i)] = {
                             "odds":       display_odds,
                             "bookmaker":  result.bookmaker,
