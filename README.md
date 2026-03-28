@@ -12,6 +12,7 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 |---|---|
 | `listener.py` | Real-time forwarder — runs persistently as a systemd service |
 | `tracker.py` | Pick grader entry point + orchestration (CLI, live mode, backtest, Telegram editing) |
+| `odds.py` | Odds lookup — fetches pre-game lines from Odds API, caches in `picks.db`, sanity checks |
 | `scores.py` | Sports data — ESPN / Odds API fetching, scoreboard formatting, team matching |
 | `ai.py` | Claude AI — pick parsing, grading, context building, cost tracking |
 | `audit.py` | Audit log — writes to SQLite + Telegram audit channel |
@@ -113,7 +114,7 @@ python listener.py --test  # uses test_source/dest channels
 
 `tracker.py` grades sports picks by fetching game results from ESPN and using Claude Sonnet to determine win/loss. Appends ✅/❌ inline after each pick line in the Telegram message, preserving original formatting.
 
-**Sports supported:** NBA, NCAAB, MLB, NFL, NHL, NCAAF, UFC, UFL, Tennis (ESPN core API), Boxing (Odds API)
+**Sports supported:** NBA, NCAAB, MLB, NFL, NHL, NCAAF, UFC, UFL, Tennis (ESPN core API)
 
 **Verdict types:**
 - `✅ WIN` / `❌ LOSS` / `↩️ PUSH` — graded, message edited in Telegram
@@ -143,18 +144,30 @@ python tracker.py --live --channel -100xxxxxxxxxx # single channel only
 | DF | 97% (76/78) | 2 (UFC — ESPN data unavailable at test time) |
 | Cappers Lab | 100% (16/16) | 0 |
 
+### Odds
+
+The tracker fetches pre-game lines from the Odds API at first encounter (live endpoint, ~5 min after pick arrives). Odds are:
+- Edited into the destination message immediately: `Hawks +3.5 (-115)`
+- Preserved through the grading edit: `Hawks +3.5 (-115)✅`
+- Included in broadcast messages: `✅ Hawks +3.5 (-115) · Capper`
+- Stored in `picks.db` (`grades.odds`) for audit
+
+Any failure to find odds posts one warning to the Telegram audit channel (never repeated for the same pick). Requires `ODDS_API_KEY` in `.env`.
+
+**Sports with odds coverage:** NBA, NCAAB, MLB, NFL, NHL, NCAAF, UFC, UFL (~91% of recent picks)
+
 ### Broadcast results
 
 After grading, the tracker posts a compact result message to the `broadcast_results_channel` configured in each mapping. Only WIN and LOSS verdicts are broadcast. Format:
 
 ```
-✅ Travy · Duke -4.5
-❌ NY Sharps · Calgary Flames ML
-✅ Smart Money Sports · Mariners/Guardians U7
+✅ Duke -4.5 (-153) · Travy
+❌ Calgary Flames ML (+113) · NY Sharps
+✅ Mariners/Guardians U7 (-108) · Smart Money Sports
 
 Andrew Cunningham
-✅ Birmingham Stallions ML
-❌ Birmingham Stallions -3.5
+✅ Birmingham Stallions ML (-175)
+❌ Birmingham Stallions -3.5 (-110)
 
 ✅ Cesar exclusive · Parlay
 • Hawks +10.5
@@ -162,7 +175,8 @@ Andrew Cunningham
 ```
 
 - Capper name is a bold hyperlink back to the original pick
-- Descriptions standardized: no odds, `ML` shorthand, `Team1/Team2 O/U` for game totals, `Team O/U` for team totals, period tags (`1H`, `2H`)
+- Odds shown inline when available; omitted gracefully if not found
+- Descriptions standardized: `ML` shorthand, `Team1/Team2 O/U` for game totals, period tags (`1H`, `2H`)
 - `--dry-run` routes to `test_broadcast_results_channel` for safe previewing
 
 **Reset emojis for re-testing:**

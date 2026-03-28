@@ -72,8 +72,26 @@ Runs every 5 minutes via systemd timer (`telegram-tracker.timer`).
 Grades sports picks in destination channels by appending ✅/❌ inline after each pick line.
 Audit log: `picks.db` (SQLite) + Telegram audit channel (`AUDIT_CHANNEL_ID`). PENDING picks written to DB only, not posted to audit channel.
 Parse cache: `parse_cache.json` — avoids re-parsing pending picks on every run.
-Summary line: `edited / pending / failed / errors`.
+Summary line: `edited / pending / failed / errors / odds:X/Y`.
 Healthchecks.io receives log output with each ping — last 20 lines on success, last 50 on failure (includes tracebacks).
+
+## Odds integration
+
+`odds.py` — production module. Fetches pre-game odds via Odds API and ESPN at first tracker encounter (live endpoint, no date param). Odds stored in `parse_cache.json` per pick and in `picks.db` (`grades.odds`). Never re-fetched once set.
+
+**Key env var:** `ODDS_API_KEY` in `.env`
+**Sports covered:** NBA, NCAAB, NFL, NCAAF, MLB, NHL, UFC, UFL
+**Coverage on recent picks:** ~91% (team totals, MLB F5 innings, and small UFC cards are structural gaps)
+
+Odds are edited into the destination message as soon as fetched (while still PENDING), then preserved through the grading edit: `Hawks +3.5 (-115)✅`
+
+Any odds failure (no match, invalid value, sanity warning) posts **one** message to the audit channel — never repeated for the same pick.
+
+**Backtest / audit:**
+```bash
+python scripts/audit_odds.py --days-back 7   # re-run odds audit for past week
+python scripts/audit_odds.py --dry-run       # parse only, no API calls
+```
 
 ## Broadcast results
 
@@ -91,6 +109,7 @@ After grading, the tracker posts a compact result message to a configured broadc
 - Descriptions are standardized: no odds, `ML` shorthand, `Team1/Team2 O/U` for game totals, `Team O/U` for team totals, period tags (`1H`, `2H`)
 - Capper name is a bold hyperlink back to the original pick message
 - Parlay legs grouped under one message; mixed-verdict multi-picks show per-pick emoji
+- Odds shown inline if available: `✅ Duke -4.5 (-153) · Capper`
 
 **Testing workflow** (reset emojis and re-run locally):
 ```bash
