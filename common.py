@@ -3,7 +3,6 @@ Shared utilities for the Telegram forwarder and pick tracker.
 """
 
 import base64
-import datetime
 import io
 import re
 import sys
@@ -59,7 +58,6 @@ def log_group(group, sent, ocr_odds=None):
     ocr_odds=""    → OCR attempted but failed (falling back to image)
     ocr_odds="-146"→ OCR succeeded; image dropped
     """
-    ts = datetime.datetime.now().strftime("%I:%M:%S %p ET").lstrip("0")
     preview, media_tag = _group_summary(group)
 
     if sent:
@@ -77,7 +75,7 @@ def log_group(group, sent, ocr_odds=None):
     body_parts = [p for p in [preview, tag] if p]
     body = "  ".join(body_parts) if body_parts else "(no content)"
 
-    print(f" {ts}  {badge}  ┃  {body}")
+    print(f" {badge}  ┃  {body}")
 
 
 def passes_filter(group, mapping):

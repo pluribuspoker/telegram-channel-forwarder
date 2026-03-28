@@ -7,7 +7,7 @@ APP_DIR="/home/forwarder/app"
 PYTHON="/home/forwarder/venv/bin/python"
 LOGFILE="/tmp/tracker_last_run.log"
 
-log() { echo "[$(date '+%m/%d %I:%M:%S %p ET')] $*"; }
+log() { echo "$*"; }
 
 ping_hc() {
     local suffix="${1:-}"
