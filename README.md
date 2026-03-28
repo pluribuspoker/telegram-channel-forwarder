@@ -53,7 +53,9 @@ MAPPINGS_CONFIG='[
     "source_topic_id": null,
     "dest_channel": -100xxxxxxxxxx,
     "test_source_channel": -100xxxxxxxxxx,
-    "test_dest_channel": -100xxxxxxxxxx
+    "test_dest_channel": -100xxxxxxxxxx,
+    "broadcast_results_channel": -100xxxxxxxxxx,
+    "test_broadcast_results_channel": -100xxxxxxxxxx
   }
 ]'
 GRADE_CHANNELS=[-100xxxxxxxxxx, -100xxxxxxxxxx]
@@ -135,6 +137,33 @@ python tracker.py --live --channel -100xxxxxxxxxx # single channel only
 |---|---|---|
 | DF | 97% (76/78) | 2 (UFC — ESPN data unavailable at test time) |
 | Cappers Lab | 100% (16/16) | 0 |
+
+### Broadcast results
+
+After grading, the tracker posts a compact result message to the `broadcast_results_channel` configured in each mapping. Only WIN and LOSS verdicts are broadcast. Format:
+
+```
+✅ Travy · Duke -4.5
+❌ NY Sharps · Calgary Flames ML
+
+Andrew Cunningham
+✅ Birmingham Stallions ML
+❌ Birmingham Stallions -3.5
+
+✅ Cesar exclusive · Parlay
+• Hawks +10.5
+• Raptors ML
+```
+
+- Capper name is a bold hyperlink back to the original pick
+- Descriptions standardized: no odds, `ML`/`O`/`U` shorthand, period tags (`1H`, `2H`)
+- `--dry-run` routes to `test_broadcast_results_channel` for safe previewing
+
+**Reset emojis for re-testing:**
+```bash
+python scripts/clear_emojis.py --channel -100xxxxxxxxxx  # today
+python scripts/clear_emojis.py --days 2                  # last 2 days
+```
 
 ### Audit log
 

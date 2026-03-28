@@ -62,3 +62,40 @@ Audit log: `picks.db` (SQLite) + Telegram audit channel (`AUDIT_CHANNEL_ID`). PE
 Parse cache: `parse_cache.json` — avoids re-parsing pending picks on every run.
 Summary line: `edited / pending / failed / errors`.
 Healthchecks.io receives log output with each ping — last 20 lines on success, last 50 on failure (includes tracebacks).
+
+## Broadcast results
+
+After grading, the tracker posts a compact result message to a configured broadcast channel (e.g. the members chat). Configured per-mapping in `MAPPINGS_CONFIG`:
+
+```json
+{
+  "broadcast_results_channel": -100xxxxxxxxxx,
+  "test_broadcast_results_channel": -100xxxxxxxxxx
+}
+```
+
+- Only WIN and LOSS verdicts broadcast (PENDING/PUSH/UNKNOWN skipped)
+- `--dry-run` routes to `test_broadcast_results_channel` for safe previewing
+- Descriptions are standardized: no odds, `ML` shorthand, `O`/`U` for totals, period tags (`1H`, `2H`)
+- Capper name is a bold hyperlink back to the original pick message
+- Parlay legs grouped under one message; mixed-verdict multi-picks show per-pick emoji
+
+**Testing workflow** (reset emojis and re-run locally):
+```bash
+python scripts/clear_emojis.py --channel -100xxxxxxxxxx  # strip emojis (today)
+python scripts/clear_emojis.py --days 2                  # last 2 days
+python tracker.py --live --channel -100xxxxxxxxxx        # re-grade + broadcast
+```
+
+## Deploy workflow
+
+`syncenv` runs **locally** to push `.env` to the VPS, then `deploy` runs **on the VPS** to pull code and restart services:
+
+```bash
+# Local
+syncenv
+git push
+
+# On VPS
+deploy
+```
