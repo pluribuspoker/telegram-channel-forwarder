@@ -3,6 +3,7 @@
 ## Preferences
 
 - When giving shell commands, chain related steps with `&&` on one line rather than separate lines.
+- Push to GitHub liberally without asking — rollback is easy and deploy is a separate manual step.
 
 ## VPS
 
