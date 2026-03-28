@@ -73,11 +73,20 @@ Colors and formatting are applied by `_fmtlog` in `/root/.server_aliases.sh` —
 ## Pick tracker
 
 Runs every 5 minutes via systemd timer (`telegram-tracker.timer`).
-Grades sports picks in destination channels by appending ✅/❌ inline after each pick line.
+Grades sports picks in destination channels by appending ✅/❌/♻️ inline after each pick line.
 Audit log: `picks.db` (SQLite) + Telegram audit channel (`AUDIT_CHANNEL_ID`). PENDING picks written to DB only, not posted to audit channel.
 Parse cache: `parse_cache.json` — avoids re-parsing pending picks on every run.
 Summary line: `edit:N pend:N fail:N err:N`.
 Healthchecks.io receives log output with each ping — last 20 lines on success, last 50 on failure (includes tracebacks).
+
+**Verdicts:** WIN → ✅, LOSS → ❌, PUSH → ♻️ (draw/no contest/refund). PUSH is not broadcast to the results channel.
+
+**`grade` alias uses `--days 1`** — picks posted more than ~24 hours ago won't be scanned. For older picks, run manually:
+```bash
+su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.py --live --days 2 2>&1"
+```
+
+**UFC draws:** graded as PUSH. UFC picks posted the day *before* the card (common for multi-day message threads) are handled — the future-date scan checks bout-level completion, not just event-level.
 
 ## Odds integration
 
