@@ -111,8 +111,18 @@ Format: `✅ Duke -4.5 (-153) · Capper`. Graceful degradation if NULL.
 
 - **Match rate**: ~91% on recent picks. Iterate on misses and sanity warnings as they
   surface in the audit channel.
-- **Team totals**: not in standard Odds API markets — always `NULL`.
 - **MLB First 5 Innings ML**: `h2h_1st5` not returned by Odds API — always `NULL`.
 - **Live bet odds**: picks labelled "live bet" have no pre-game line — always `NULL`.
 - **Tennis, Boxing**: no Odds API coverage — need separate data sources.
-- **Proximity sanity warnings**: review cases where adjacent-line adjustment fires.
+- **Game already started**: if the tracker first encounters a pick after game start,
+  odds are skipped silently (`game_in_progress` structural miss). Historical endpoint
+  could be used as fallback but adds quota cost.
+
+## Resolved
+
+- **Team totals**: ✅ now fetched via `team_totals` / `alternate_team_totals` markets.
+  ESPN skipped for team_total picks (ESPN doesn't carry these markets).
+- **In-game odds pollution**: ✅ `_event_already_started()` check prevents live
+  in-game spreads from being used as pre-game pick odds.
+- **Odds format**: ✅ tracker-fetched odds use square brackets `[-115]` to distinguish
+  from capper-written odds `(-115)`. Applied in pick message edits and broadcast results.
