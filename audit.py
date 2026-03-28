@@ -367,6 +367,16 @@ class AuditLog:
             odds_part = f" [{e(odds_str)}]" if odds_str else ""
             return f"{VERDICT_EMOJI.get(verdict, '')} {e(desc)}{odds_part}"
 
+        def _parlay_combined_odds(leg_odds: list[int | None]) -> int | None:
+            """Multiply individual American leg odds into a combined parlay price."""
+            valid = [o for o in leg_odds if o is not None]
+            if not valid:
+                return None
+            dec = 1.0
+            for o in valid:
+                dec *= (o / 100 + 1) if o > 0 else (100 / abs(o) + 1)
+            return round((dec - 1) * 100) if dec >= 2.0 else round(-100 / (dec - 1))
+
         if len(picks) == 1:
             desc, verdict, odds_str = picks[0]
             text = f"{_pick_line(desc, verdict, odds_str)} · {capper_linked}"
@@ -378,8 +388,10 @@ class AuditLog:
                 overall_emoji = VERDICT_EMOJI["WIN"]
             else:
                 overall_emoji = VERDICT_EMOJI["PUSH"]
-            legs = "\n".join(f"• {e(d)}" + (f" [{e(o)}]" if o else "") for d, _, o in picks)
-            text = f"{overall_emoji} {capper_linked} · Parlay\n{legs}"
+            combined = _parlay_combined_odds([o for _, _, o in resolved])
+            combined_part = f" [{e(fmt_odds(combined))}]" if combined is not None else ""
+            legs = "\n".join(f"• {e(d)}" for d, _, _ in picks)
+            text = f"{overall_emoji} {capper_linked} · Parlay{combined_part}\n{legs}"
         else:
             # Non-parlay multi-pick: one emoji per pick
             lines = [_pick_line(d, v, o) for d, v, o in picks]
