@@ -441,7 +441,7 @@ async def run_backtest(filepath: str) -> None:
         clean = strip_label(plain)
         date = msg["date"][:10]
 
-        parsed = await claude_parse(clean)
+        parsed = await claude_parse(clean, date)
         if not parsed:
             print(f"  [parse fail] msg {msg['id']}")
             continue
@@ -562,7 +562,7 @@ async def grade_one(text: str, date: str) -> None:
     label = extract_label(text)
     clean = strip_label(text)
 
-    parsed = await claude_parse(clean)
+    parsed = await claude_parse(clean, date)
     if not parsed:
         print("[parse fail]")
         return
@@ -773,7 +773,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     int(k) for k, v in cached_leg_verdicts.items()
                     if isinstance(v, dict) and v.get("broadcasted")
                 }
-                parsed = cached_parse or await claude_parse(text)
+                parsed = cached_parse or await claude_parse(text, date_str)
                 if not parsed:
                     failed += 1
                     print(f"\n{msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'parse failed':<{_DESC_W}} {int(date_str[5:7])}/{int(date_str[8:10])} ⚠")

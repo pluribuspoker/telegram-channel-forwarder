@@ -46,7 +46,7 @@ CONTEXT_ESPN_ERROR = "__ESPN_ERROR__"  # ESPN fetch failed (network/SSL); retry 
 
 _PARSE_PROMPT = """\
 Extract the sports betting pick(s) from this message. Ignore stats, records, and commentary.
-
+{date_context}
 Return JSON (no markdown fences):
 {{
   "sport": "NBA|NCAAB|MLB|NFL|NHL|UFL|Tennis|UFC|Boxing|Other",
@@ -69,7 +69,8 @@ Return JSON (no markdown fences):
 Classification rules:
 - NCAAB = college basketball. NCAAF = college football. The football season ends in January. In February, March, and April there is NO college football. Any college team name appearing in a Feb/Mar/Apr pick is ALWAYS NCAAB, never NCAAF. College team examples: Iowa, Ohio State, Indiana, Texas, Tennessee, Iowa State, Missouri, Florida, Arizona, Duke, Kentucky, UConn, Michigan, Auburn, Houston, Purdue, Illinois, Arkansas, St. Joseph's, New Mexico, Marquette, etc. Critically: bare city/state names like "Arizona", "Florida", "Michigan", "Texas" in a spread or moneyline context during Feb–Apr refer to their COLLEGE team (NCAAB), NOT the pro team (MLB/NFL/NHL). Only classify as a pro sport when the full pro team name is used (e.g. "Arizona Diamondbacks", "Florida Marlins", "Michigan none") or when context makes the pro team unambiguous.
 - This NCAAB rule applies to TEAM names only, NOT individual player props. If a pick names a single NBA/NHL/MLB player (e.g. Matas Buzelis, Stephon Castle, Tyler Herro), use their actual professional league (NBA, NHL, MLB, etc.), regardless of the month.
-- UFC/MMA: if the pick is on individual MMA/UFC fighter names with a moneyline, classify as UFC. Common fighters: Pereira, Gafurov, Souza, Anders, Sola, Murphy, Aswell, etc.
+- UFC/MMA: if the pick is on individual MMA/UFC fighter names with a moneyline, classify as UFC. Common fighters: Pereira, Gafurov, Souza, Anders, Sola, Murphy, Aswell, Hooper, Bahamondes, etc. UFC events are held almost exclusively on Saturdays — on Saturdays, single-surname moneyline picks with no clear sport context should be classified as UFC, not Tennis.
+- Tennis: ONLY classify as Tennis if the message contains explicit Tennis indicators — tournament names (Open, Slam, ATP, WTA, Masters, Wimbledon), match format words (sets, tiebreak, deuce), court surfaces, or well-known tennis players (Djokovic, Alcaraz, Sinner, Swiatek, Sabalenka, Medvedev, Zverev, Rune, etc.). Do NOT classify as Tennis based solely on a person's surname.
 - Boxing: if the pick involves known professional boxers (e.g. Ryan Garcia, Canelo, Fury, Usyk, Crawford, Beterbiev, etc.), classify as Boxing, not UFC. If a single surname could be a boxer (e.g. Garcia), prefer Boxing over UFC when no other context is available.
 - If a single surname with a moneyline has no clear sport context and is not a known boxer or MMA fighter, default to UFC.
 - For parlays: list each leg as a separate pick with its REAL bet_type (moneyline, spread, etc.) and set is_parlay_leg=true on each. Do NOT use bet_type="parlay". When players/teams are slash-separated (e.g. "FAA/Shapovalov MLP" or "SPURS/GARCIA MLP"), split them into ONE pick per player/team — do not put two teams in one pick's teams field.
@@ -150,11 +151,15 @@ async def _claude_create_with_retry(**kwargs) -> object:
             await asyncio.sleep(2 ** attempt)
 
 
-async def claude_parse(text: str) -> dict | None:
+async def claude_parse(text: str, date: str | None = None) -> dict | None:
+    from datetime import date as _d
+    d = _d.fromisoformat(date) if date else _d.today()
+    day_name = d.strftime("%A")
+    date_ctx = f"Context: Today is {day_name}.\n" if day_name else ""
     resp = await _claude_create_with_retry(
         model="claude-sonnet-4-6",
         max_tokens=500,
-        messages=[{"role": "user", "content": _PARSE_PROMPT.format(text=text)}],
+        messages=[{"role": "user", "content": _PARSE_PROMPT.format(text=text, date_context=date_ctx)}],
     )
     raw = re.sub(r"^```(?:json)?\n?|```$", "", resp.content[0].text.strip(), flags=re.MULTILINE).strip()
     try:
