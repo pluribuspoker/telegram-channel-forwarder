@@ -298,7 +298,12 @@ async def build_context(
             for offset in range(1, 4):
                 future_date = (_date.fromisoformat(date) + timedelta(days=offset)).isoformat()
                 future_sb = await fetch_espn(sport, future_date)
-                if future_sb and find_event_ids(future_sb.get("events", []), teams, player):
+                if not future_sb:
+                    continue
+                # UFC: if the specific bout is already completed on this future date, grade it now
+                if sport == "UFC" and _ufc_bout_completed(future_sb, teams, player):
+                    return scoreboard_text(future_sb, sport), future_date
+                if find_event_ids(future_sb.get("events", []), teams, player):
                     return CONTEXT_PENDING, future_date
             return CONTEXT_SKIP, date
         completed = _completed_events(scoreboard)
