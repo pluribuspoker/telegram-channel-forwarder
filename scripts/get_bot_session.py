@@ -1,14 +1,10 @@
 """
-Run this script ON THE VPS to generate a persistent bot session string.
-The session ties to the server IP so Telegram won't create a new login on each restart.
+Generate a persistent bot session string and save it to .env.local.
 
-Usage (on VPS):
-    su - forwarder
-    cd ~/app
-    ~/venv/bin/python scripts/get_bot_session.py
+Run locally for local dev. Run on the VPS for production (ties session to server IP).
 
-Then append the output to .env.local:
-    echo 'BOT_SESSION="<session string>"' >> /home/forwarder/app/.env.local
+Usage:
+    python scripts/get_bot_session.py
 """
 
 import os
@@ -26,8 +22,13 @@ API_HASH = os.environ["TELEGRAM_API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
 with TelegramClient(StringSession(), API_ID, API_HASH) as client:
-    client.start(bot_token=BOT_TOKEN)  # non-interactive when bot_token is provided
-    print("\nBot session string (copy this):\n")
-    print(client.session.save())
-    print()
+    client.start(bot_token=BOT_TOKEN)
+    session = client.session.save()
 
+env_local = _root / ".env.local"
+lines = env_local.read_text().splitlines() if env_local.exists() else []
+lines = [l for l in lines if not l.startswith("BOT_SESSION=")]
+lines.append(f'BOT_SESSION="{session}"')
+env_local.write_text("\n".join(lines) + "\n")
+
+print(f"Bot session saved to {env_local}")
