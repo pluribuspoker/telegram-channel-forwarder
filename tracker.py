@@ -590,7 +590,7 @@ async def grade_one(text: str, date: str) -> None:
 # Column widths for tabular pick output
 _ID_W    = 5   # message ID
 _CAP_W   = 9   # capper name
-_DESC_W  = 20  # pick description
+_DESC_W  = 13  # pick description
 
 _TAG_ICON = {"WAIT": "⏳", "EDIT": "✏", "DRY ": "🧪", "SKIP": "⚠", "ESPN": "📡"}
 
@@ -647,8 +647,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
             except Exception:
                 channel_names[cid] = str(cid)
 
-        print(f"Live grader — {mode} | {days}d | {', '.join(channel_names[c] for c in channel_ids)}")
-        print("=" * 50)
+        channels_str = ', '.join(channel_names[c] for c in channel_ids)
+        print(f"{mode} | {days}d | {channels_str}")
+        print("=" * 40)
 
         for channel_id in channel_ids:
             ch_name = channel_names[channel_id]
@@ -734,7 +735,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 parsed = cached_parse or await claude_parse(text)
                 if not parsed:
                     failed += 1
-                    print(f"\n⚠ {msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'parse failed':<{_DESC_W}}  {int(date_str[5:7])}/{int(date_str[8:10])}")
+                    print(f"\n⚠ {msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'parse failed':<{_DESC_W}} {int(date_str[5:7])}/{int(date_str[8:10])}")
                     if not already_notified:
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
@@ -748,7 +749,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 picks = parsed.get("picks", [])
                 if not picks:
                     failed += 1
-                    print(f"\n⚠ {msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'no picks':<{_DESC_W}}  {int(date_str[5:7])}/{int(date_str[8:10])}")
+                    print(f"\n⚠ {msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'no picks':<{_DESC_W}} {int(date_str[5:7])}/{int(date_str[8:10])}")
                     if not already_notified:
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
@@ -854,7 +855,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     prefix   = "\n" if first_active else ""
                     suffix   = dupe_note if first_active else ""
                     first_active = False
-                    print(f"{prefix}{tag_col} {id_col:<{_ID_W}} {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}}  {gd_short:<4} {emoji}{suffix}")
+                    print(f"{prefix}{tag_col} {id_col:<{_ID_W}} {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}} {gd_short} {emoji}{suffix}")
                     if calc:
                         print(f"   {'':>{_ID_W}} {'':>{_CAP_W}}  {calc[:_DESC_W + 8]}")
                 msg_cost = usage_cost() - msg_cost_before
@@ -955,7 +956,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         capper_name=capper,
                     )
 
-            print(f"  ─── edited: {edited} pending: {pending} failed: {failed} errors: {errors}")
+            print(f"  ─ ed:{edited} pnd:{pending} fl:{failed} er:{errors}")
 
     if not dry_run:
         _save_pending_cache(pending_cache)
