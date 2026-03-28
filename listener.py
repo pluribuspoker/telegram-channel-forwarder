@@ -68,6 +68,27 @@ async def connection_watchdog(client):
             raise RuntimeError(f"Watchdog: connection probe failed ({e})")
 
 
+async def channel_probe(client, channels):
+    """Every 5 min, log the latest message in each source channel only when it's new."""
+    await asyncio.sleep(60)
+    last_seen: dict = {}
+    while True:
+        await asyncio.sleep(300)
+        for source_entity, _, src_label, *_ in channels:
+            try:
+                msgs = await client.get_messages(source_entity, limit=1)
+                if not msgs:
+                    continue
+                msg = msgs[0]
+                if last_seen.get(source_entity.id) == msg.id:
+                    continue
+                last_seen[source_entity.id] = msg.id
+                age = datetime.datetime.now(datetime.timezone.utc) - msg.date
+                print(f"  ⊙ {src_label}: new msg id={msg.id} ({age.seconds//60}m ago)")
+            except Exception as e:
+                print(f"  ⊙ {src_label}: probe failed ({e})")
+
+
 async def main():
     client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
     await client.start()
@@ -174,6 +195,7 @@ async def main():
 
     print("✓ Listening for new messages (Ctrl+C to stop)...")
     asyncio.create_task(heartbeat())
+    asyncio.create_task(channel_probe(client, channels))
     watchdog = asyncio.create_task(connection_watchdog(client))
     try:
         await asyncio.gather(client.run_until_disconnected(), watchdog)
