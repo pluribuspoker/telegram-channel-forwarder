@@ -323,7 +323,6 @@ async def _fetch_event_list(sport_key: str, date: str, conn: sqlite3.Connection)
         )
     events: list[dict] = (data or {}).get("data", []) if isinstance(data, dict) else []
     _save_events(conn, sport_key, date, events)
-    print(f"[odds] events {sport_key} {date} → {len(events)} (quota: {_quota_remaining})")
     return events
 
 
@@ -346,8 +345,6 @@ async def _fetch_bookmakers(
     if isinstance(data, dict):
         bookmakers = data.get("data", {}).get("bookmakers", []) if "data" in data else data.get("bookmakers", [])
     _save_bookmakers(conn, sport_key, event_id, date, markets, bookmakers)
-    mkt_keys = {m["key"] for bk in bookmakers for m in bk.get("markets", [])}
-    print(f"[odds] event {event_id[:8]}.. markets={sorted(mkt_keys)} → {len(bookmakers)} books (quota: {_quota_remaining})")
     return bookmakers
 
 
@@ -850,7 +847,6 @@ async def _fetch_current_event_list(sport_key: str, conn: sqlite3.Connection) ->
         )
     events: list[dict] = data if isinstance(data, list) else []
     _save_events(conn, sport_key, "current", events)
-    print(f"[odds] current events {sport_key} → {len(events)} (quota: {_quota_remaining})")
     return events
 
 
@@ -870,8 +866,6 @@ async def _fetch_current_bookmakers(
         )
     bookmakers: list[dict] = data.get("bookmakers", []) if isinstance(data, dict) else []
     _save_bookmakers(conn, sport_key, event_id, "current", markets, bookmakers)
-    mkt_keys = {m["key"] for bk in bookmakers for m in bk.get("markets", [])}
-    print(f"[odds] current {event_id[:8]}.. → {len(bookmakers)} books, markets={sorted(mkt_keys)} (quota: {_quota_remaining})")
     return bookmakers
 
 
