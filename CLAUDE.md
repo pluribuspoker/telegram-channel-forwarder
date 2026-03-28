@@ -85,11 +85,15 @@ Healthchecks.io receives log output with each ping — last 20 lines on success,
 
 **Key env var:** `ODDS_API_KEY` in `.env`
 **Sports covered:** NBA, NCAAB, NFL, NCAAF, MLB, NHL, UFC, UFL
-**Coverage on recent picks:** ~91% (team totals, MLB F5 innings, and small UFC cards are structural gaps)
+**Coverage on recent picks:** ~91% (MLB F5 innings and small UFC cards are structural gaps)
 
-Odds are edited into the destination message as soon as fetched (while still PENDING), then preserved through the grading edit: `Hawks +3.5 (-115)✅`
+Odds are edited into the destination message as soon as fetched (while still PENDING), then preserved through the grading edit: `Hawks +3.5 [-115]✅`
 
-Any odds failure (no match, invalid value, sanity warning) posts **one** message to the audit channel — never repeated for the same pick.
+Tracker-fetched odds use **square brackets** `[-115]` to distinguish them from capper-written odds `(-115)`. Both appear in pick messages and broadcast results.
+
+If the game has already started when a pick is first encountered, odds fetch is skipped silently (`game_in_progress` structural miss — no audit warning).
+
+Any unexpected odds failure posts **one** message to the audit channel — never repeated for the same pick.
 
 **Backtest / audit:**
 ```bash
@@ -113,7 +117,7 @@ After grading, the tracker posts a compact result message to a configured broadc
 - Descriptions are standardized: no odds, `ML` shorthand, `Team1/Team2 O/U` for game totals, `Team O/U` for team totals, period tags (`1H`, `2H`)
 - Capper name is a bold hyperlink back to the original pick message
 - Parlay legs grouped under one message; mixed-verdict multi-picks show per-pick emoji
-- Odds shown inline if available: `✅ Duke -4.5 (-153) · Capper`
+- Odds shown inline if available: `✅ Duke -4.5 [-153] · Capper`
 
 **Testing workflow** (reset emojis and re-run locally):
 ```bash

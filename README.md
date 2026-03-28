@@ -147,27 +147,29 @@ python tracker.py --live --channel -100xxxxxxxxxx # single channel only
 ### Odds
 
 The tracker fetches pre-game lines from the Odds API at first encounter (live endpoint, ~5 min after pick arrives). Odds are:
-- Edited into the destination message immediately: `Hawks +3.5 (-115)`
-- Preserved through the grading edit: `Hawks +3.5 (-115)✅`
-- Included in broadcast messages: `✅ Hawks +3.5 (-115) · Capper`
+- Edited into the destination message immediately: `Hawks +3.5 [-115]`
+- Preserved through the grading edit: `Hawks +3.5 [-115]✅`
+- Included in broadcast messages: `✅ Hawks +3.5 [-115] · Capper`
 - Stored in `picks.db` (`grades.odds`) for audit
 
-Any failure to find odds posts one warning to the Telegram audit channel (never repeated for the same pick). Requires `ODDS_API_KEY` in `.env`.
+Tracker-fetched odds use **square brackets** `[-115]` to distinguish them from odds the capper wrote themselves `(-115)`. If the game has already started when the pick is first encountered, odds are skipped silently.
 
-**Sports with odds coverage:** NBA, NCAAB, MLB, NFL, NHL, NCAAF, UFC, UFL (~91% of recent picks)
+Any unexpected failure to find odds posts one warning to the Telegram audit channel (never repeated for the same pick). Requires `ODDS_API_KEY` in `.env`.
+
+**Sports with odds coverage:** NBA, NCAAB, MLB, NFL, NHL, NCAAF, UFC, UFL (~91% of recent picks; MLB F5 innings and small UFC cards are structural gaps)
 
 ### Broadcast results
 
 After grading, the tracker posts a compact result message to the `broadcast_results_channel` configured in each mapping. Only WIN and LOSS verdicts are broadcast. Format:
 
 ```
-✅ Duke -4.5 (-153) · Travy
-❌ Calgary Flames ML (+113) · NY Sharps
-✅ Mariners/Guardians U7 (-108) · Smart Money Sports
+✅ Duke -4.5 [-153] · Travy
+❌ Calgary Flames ML [+113] · NY Sharps
+✅ Mariners/Guardians U7 [-108] · Smart Money Sports
 
 Andrew Cunningham
-✅ Birmingham Stallions ML (-175)
-❌ Birmingham Stallions -3.5 (-110)
+✅ Birmingham Stallions ML [-175]
+❌ Birmingham Stallions -3.5 [-110]
 
 ✅ Cesar exclusive · Parlay
 • Hawks +10.5
