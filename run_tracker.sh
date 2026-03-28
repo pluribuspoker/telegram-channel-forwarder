@@ -29,12 +29,11 @@ log "Starting pick grader (days=$TRACKER_DAYS)"
 SUCCESS=0
 
 for attempt in 1 2; do
-    log "Attempt $attempt/2..."
+    [ "$attempt" -gt 1 ] && log "Retry (attempt 2/2)..."
     if $PYTHON tracker.py --live --days "$TRACKER_DAYS" 2>&1 | tee "$LOGFILE"; then
         SUCCESS=1
         break
     fi
-    log "Attempt $attempt failed"
     [ "$attempt" -lt 2 ] && sleep 60
 done
 
