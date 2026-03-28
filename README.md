@@ -145,6 +145,7 @@ After grading, the tracker posts a compact result message to the `broadcast_resu
 ```
 ✅ Travy · Duke -4.5
 ❌ NY Sharps · Calgary Flames ML
+✅ Smart Money Sports · Mariners/Guardians U7
 
 Andrew Cunningham
 ✅ Birmingham Stallions ML
@@ -156,7 +157,7 @@ Andrew Cunningham
 ```
 
 - Capper name is a bold hyperlink back to the original pick
-- Descriptions standardized: no odds, `ML`/`O`/`U` shorthand, period tags (`1H`, `2H`)
+- Descriptions standardized: no odds, `ML` shorthand, `Team1/Team2 O/U` for game totals, `Team O/U` for team totals, period tags (`1H`, `2H`)
 - `--dry-run` routes to `test_broadcast_results_channel` for safe previewing
 
 **Reset emojis for re-testing:**

@@ -76,7 +76,7 @@ After grading, the tracker posts a compact result message to a configured broadc
 
 - Only WIN and LOSS verdicts broadcast (PENDING/PUSH/UNKNOWN skipped)
 - `--dry-run` routes to `test_broadcast_results_channel` for safe previewing
-- Descriptions are standardized: no odds, `ML` shorthand, `O`/`U` for totals, period tags (`1H`, `2H`)
+- Descriptions are standardized: no odds, `ML` shorthand, `Team1/Team2 O/U` for game totals, `Team O/U` for team totals, period tags (`1H`, `2H`)
 - Capper name is a bold hyperlink back to the original pick message
 - Parlay legs grouped under one message; mixed-verdict multi-picks show per-pick emoji
 
