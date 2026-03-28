@@ -4,6 +4,7 @@
 
 - When giving shell commands, chain related steps with `&&` on one line rather than separate lines.
 - Push to GitHub liberally without asking — rollback is easy and deploy is a separate manual step.
+- Use git worktrees for parallel tasks (e.g. a second task while another Claude session is already working). Pattern: `git worktree add ../telegram-forwarder-<slug> -b <branch>`, work there, commit+push the branch, then merge to main from the main repo dir. Name the dir `../telegram-forwarder-<short-slug>`. Clean up with `git worktree remove ../telegram-forwarder-<slug>`.
 
 ## VPS
 
