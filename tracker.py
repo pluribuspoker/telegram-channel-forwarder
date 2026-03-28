@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 
 from common import VERDICT_EMOJI
 from scores import ESPN_LEAGUES, fetch_espn, scoreboard_text, odds_requests_used
+from odds import fetch_odds_current, quota_used as odds_quota_used
 from ai import (
     claude,
     claude_parse,
@@ -49,13 +50,15 @@ def _norm_desc(d: str) -> str:
     return re.sub(r'\s+', ' ', d).strip()
 
 
-def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict) -> dict:
-    """Build a pending-cache entry, preserving any linked_message_ids from the existing entry."""
+def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict, odds_by_pick: dict | None = None) -> dict:
+    """Build a pending-cache entry, preserving linked_message_ids and odds from the existing entry."""
     return {
-        "capper_name": capper,
-        "parsed": parsed,
-        "leg_verdicts": leg_verdicts,
+        "capper_name":        capper,
+        "parsed":             parsed,
+        "leg_verdicts":       leg_verdicts,
         "linked_message_ids": existing.get("linked_message_ids", []),
+        # Preserve fetched odds — once set, never overwritten with None
+        "odds_by_pick":       odds_by_pick if odds_by_pick is not None else existing.get("odds_by_pick", {}),
     }
 
 
@@ -653,6 +656,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
             scoreboard_cache: dict = {}
             summary_cache:   dict = {}
             edited = pending = failed = errors = 0
+            odds_found = odds_total = 0
 
             visited_keys: set[str] = set()
 
@@ -767,6 +771,28 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     pending_cache[cache_key] = {"_dupe": True, "primary_id": dup_id}
                     continue  # primary row carries the +N dup annotation
 
+                # ── Fetch odds at first encounter ─────────────────────────────
+                # Only fetch once — if odds_by_pick is already in the cache, reuse it.
+                cached_entry = pending_cache.get(cache_key) if isinstance(pending_cache.get(cache_key), dict) else {}
+                odds_by_pick: dict = cached_entry.get("odds_by_pick", {})
+                if not odds_by_pick:
+                    for i, pick in enumerate(picks):
+                        pick_sport = pick.get("sport") or sport
+                        result = await fetch_odds_current(pick_sport, pick)
+                        display_odds, warn = result.validate_for_display()
+                        if result.is_unexpected_miss:
+                            print(f"  [odds] miss({result.match_type}) {pick.get('description', '')[:60]}")
+                        elif warn:
+                            print(f"  [odds] sanity: {warn}")
+                        odds_by_pick[str(i)] = {
+                            "odds":       display_odds,
+                            "bookmaker":  result.bookmaker,
+                            "match_type": result.match_type,
+                        }
+                        odds_total += 1
+                        if display_odds is not None:
+                            odds_found += 1
+
                 sb_key = (sport, date_str)
                 if sb_key not in scoreboard_cache:
                     scoreboard_cache[sb_key] = await fetch_espn(sport, date_str)
@@ -812,11 +838,12 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 html_text = html_text.replace("<spoiler>", "<tg-spoiler>").replace("</spoiler>", "</tg-spoiler>")
                 new_text = _insert_emojis(html_text, verdicts)
                 graded = [v for v in verdicts if v[1] in _PICK_EMOJI]
-                # Picks resolved this run that haven't been broadcast yet
-                newly_resolved = [
-                    v for j, v in enumerate(verdicts)
+                # Picks resolved this run that haven't been broadcast yet (keep index for odds lookup)
+                newly_resolved_indexed = [
+                    (j, v) for j, v in enumerate(verdicts)
                     if v[1] in _PICK_EMOJI and j not in already_broadcast_indices
                 ]
+                newly_resolved = [v for _, v in newly_resolved_indexed]
                 overall = _overall_verdict(verdicts)
                 is_parlay = any(v[0].get("is_parlay_leg") for v in verdicts)
                 # For parlays, don't edit until ALL legs are resolved — a LOSS
@@ -863,7 +890,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                 "verdict": lverdict, "calc": lcalc,
                                 "sport": lps, "game_date": lgd or date_str,
                             }
-                    pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}))
+                    pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
 
                 # Nothing new to grade this run — log and skip
                 if not newly_resolved or parlay_pending:
@@ -875,6 +902,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         f"{v[1]}: {v[0].get('description', '')}|{v[3]}|{v[4]}|{v[2]}" for v in verdicts
                     )
                     first_pick, _, first_calc, first_sport, first_game_date = verdicts[0]
+                    first_odds = odds_by_pick.get("0", {})
                     if not has_espn_error:
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
@@ -883,6 +911,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             bet_type=first_pick.get("bet_type", ""),
                             verdict=overall, calc=first_calc,
                             prev_caption=text, dry_run=dry_run, channel_name=ch_name, capper_name=capper,
+                            odds=first_odds.get("odds"), odds_bookmaker=first_odds.get("bookmaker"),
+                            odds_match_type=first_odds.get("match_type"),
                         )
                     continue
 
@@ -915,7 +945,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                 "sport": lps, "game_date": lgd or date_str,
                                 "broadcasted": True,   # prevent double-broadcast next run
                             }
-                    pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}))
+                    pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
                 else:
                     pending_cache.pop(cache_key, None)  # fully graded — evict from pending cache
                 all_descs = "\n".join(
@@ -924,6 +954,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 all_calcs = "  ·  ".join(
                     v[2] for v in verdicts if v[1] in _PICK_EMOJI and v[2]
                 )
+                first_odds = odds_by_pick.get("0", {})
                 await audit.record(
                     channel_id=channel_id,
                     message_id=msg.id,
@@ -938,24 +969,31 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     dry_run=dry_run,
                     channel_name=ch_name,
                     capper_name=capper,
+                    odds=first_odds.get("odds"), odds_bookmaker=first_odds.get("bookmaker"),
+                    odds_match_type=first_odds.get("match_type"),
                 )
                 if newly_resolved:
                     await audit.broadcast_results(
                         channel_id=channel_id,
                         message_id=msg.id,
-                        pick_results=[(v[0], v[1]) for v in newly_resolved],
+                        pick_results=[
+                            (v[0], v[1], odds_by_pick.get(str(j), {}).get("odds"))
+                            for j, v in newly_resolved_indexed
+                        ],
                         capper_name=capper,
                     )
 
-            print(f"  ─ edit:{edited} pend:{pending} fail:{failed} err:{errors}")
+            print(f"  ─ edit:{edited} pend:{pending} fail:{failed} err:{errors}" +
+                  (f" odds:{odds_found}/{odds_total}" if odds_total else ""))
 
     if not dry_run:
         _save_pending_cache(pending_cache)
 
     run_type = "dry_run" if dry_run else "live"
-    print(f"\n[Claude total] {fmt_cost(usage_cost())}  |  [Odds API] {odds_requests_used()} requests used")
+    total_odds_quota = odds_requests_used() + odds_quota_used()
+    print(f"\n[Claude total] {fmt_cost(usage_cost())}  |  [Odds API] {total_odds_quota} requests used")
     from audit import log_api_costs
-    log_api_costs(run_type, usage_cost(), odds_requests_used())
+    log_api_costs(run_type, usage_cost(), total_odds_quota)
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────

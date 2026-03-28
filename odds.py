@@ -241,8 +241,10 @@ def _init_db(conn: sqlite3.Connection) -> None:
 
 
 def _evict_old(conn: sqlite3.Connection) -> None:
-    conn.execute("DELETE FROM odds_cache  WHERE game_date < date('now', '-60 days')")
-    conn.execute("DELETE FROM events_cache WHERE game_date < date('now', '-60 days')")
+    conn.execute("DELETE FROM odds_cache   WHERE game_date != 'current' AND game_date < date('now', '-60 days')")
+    conn.execute("DELETE FROM odds_cache   WHERE game_date  = 'current' AND fetched_at < datetime('now', '-2 days')")
+    conn.execute("DELETE FROM events_cache WHERE game_date != 'current' AND game_date < date('now', '-60 days')")
+    conn.execute("DELETE FROM events_cache WHERE game_date  = 'current' AND fetched_at < datetime('now', '-30 minutes')")
     conn.commit()
 
 
@@ -677,6 +679,115 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
 
     finally:
         conn.close()
+
+
+async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> OddsResult:
+    """
+    Look up current (live pre-game) odds for a pick.
+
+    Uses the non-historical Odds API endpoint — no date parameter.
+    Intended to be called at pick-receive time (first tracker encounter).
+    Results cached in picks.db under game_date='current' with a short TTL.
+    """
+    sport_key = SPORT_KEYS.get(sport)
+    if not sport_key:
+        return OddsResult(match_type=f"sport_unsupported({sport})", pick_line=pick.get("line"))
+
+    conn = sqlite3.connect(db_path)
+    try:
+        _init_db(conn)
+        _evict_old(conn)
+
+        teams    = pick.get("teams") or []
+        bet_type = pick.get("bet_type", "")
+
+        # ── Player props: separate endpoint ───────────────────────────────────
+        if bet_type == "prop":
+            prop_stat   = (pick.get("prop_stat") or "").upper()
+            prop_market = PROP_STAT_MARKETS.get(sport, {}).get(prop_stat)
+            if not prop_market:
+                return OddsResult(match_type=f"prop_stat_unsupported({prop_stat})", pick_line=pick.get("line"))
+            event_list = await _fetch_current_event_list(sport_key, conn)
+            event_id   = _find_event_id(event_list, teams)
+            if not event_id:
+                return OddsResult(match_type="no_game", pick_line=pick.get("line"))
+            bookmakers = await _fetch_current_bookmakers(sport_key, event_id, prop_market, conn)
+            r = _lookup_prop(bookmakers, pick.get("player") or "", prop_market,
+                             pick.get("direction") or "over", float(pick.get("line") or 0.5))
+            return OddsResult(
+                match_type = r["match_type"],
+                odds       = r["adjusted_odds"],
+                bookmaker  = r["bookmaker"],
+                api_line   = r["api_line"],
+                pick_line  = r["pick_line"],
+            )
+
+        # ── All other bet types ───────────────────────────────────────────────
+        bookmakers: list[dict] = []
+
+        # ESPN first (free, only has pre-game odds)
+        if sport in ESPN_LEAGUES:
+            from datetime import date as _d
+            espn_data = await fetch_espn(sport, _d.today().isoformat())
+            if espn_data:
+                bookmakers = espn_bookmakers_for_teams(espn_data, teams)
+
+        if not bookmakers:
+            event_list = await _fetch_current_event_list(sport_key, conn)
+            event_id   = _find_event_id(event_list, teams)
+            if event_id:
+                bookmakers = await _fetch_current_bookmakers(sport_key, event_id, MARKETS_FULL, conn)
+
+        r = lookup_pick_odds(sport, pick, bookmakers)
+        return OddsResult(
+            match_type = r["match_type"],
+            odds       = r["adjusted_odds"],
+            bookmaker  = r["bookmaker"],
+            api_line   = r["api_line"],
+            pick_line  = r["pick_line"],
+        )
+
+    finally:
+        conn.close()
+
+
+async def _fetch_current_event_list(sport_key: str, conn: sqlite3.Connection) -> list[dict]:
+    """Fetch upcoming events (live endpoint, no date param). Cached for 30 min."""
+    cached = _get_events(conn, sport_key, "current")
+    if cached is not None:
+        return cached
+    if not ODDS_API_KEY:
+        return []
+    async with httpx.AsyncClient(timeout=20) as http:
+        data = await _api_get(http,
+            f"{ODDS_API_BASE}/sports/{sport_key}/events",
+            {"apiKey": ODDS_API_KEY},
+        )
+    events: list[dict] = data if isinstance(data, list) else []
+    _save_events(conn, sport_key, "current", events)
+    print(f"[odds] current events {sport_key} → {len(events)} (quota: {_quota_remaining})")
+    return events
+
+
+async def _fetch_current_bookmakers(
+    sport_key: str, event_id: str, markets: str, conn: sqlite3.Connection
+) -> list[dict]:
+    """Fetch current odds for one event (live endpoint). Cached for 2 days."""
+    cached = _get_bookmakers(conn, event_id, "current", markets)
+    if cached is not None:
+        return cached
+    if not ODDS_API_KEY:
+        return []
+    async with httpx.AsyncClient(timeout=20) as http:
+        data = await _api_get(http,
+            f"{ODDS_API_BASE}/sports/{sport_key}/events/{event_id}/odds",
+            {"apiKey": ODDS_API_KEY, "regions": "us", "markets": markets, "oddsFormat": "american"},
+        )
+    bookmakers: list[dict] = data.get("bookmakers", []) if isinstance(data, dict) else []
+    _save_bookmakers(conn, sport_key, event_id, "current", markets, bookmakers)
+    mkt_keys = {m["key"] for bk in bookmakers for m in bk.get("markets", [])}
+    print(f"[odds] current {event_id[:8]}.. → {len(bookmakers)} books, markets={sorted(mkt_keys)} (quota: {_quota_remaining})")
+    return bookmakers
 
 
 def quota_used() -> int:

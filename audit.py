@@ -111,7 +111,12 @@ CREATE TABLE IF NOT EXISTS api_costs (
 );
 """
 
-_MIGRATION = "ALTER TABLE grades ADD COLUMN capper_name TEXT"
+_MIGRATIONS = [
+    "ALTER TABLE grades ADD COLUMN capper_name TEXT",
+    "ALTER TABLE grades ADD COLUMN odds INTEGER",
+    "ALTER TABLE grades ADD COLUMN odds_bookmaker TEXT",
+    "ALTER TABLE grades ADD COLUMN odds_match_type TEXT",
+]
 
 
 
@@ -148,11 +153,12 @@ class AuditLog:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
             conn.executescript(_SCHEMA_API_COSTS)
-            try:
-                conn.execute(_MIGRATION)
-                conn.commit()
-            except Exception:
-                pass  # column already exists
+            for mig in _MIGRATIONS:
+                try:
+                    conn.execute(mig)
+                    conn.commit()
+                except Exception:
+                    pass  # column already exists
 
     def _insert(self, row: dict) -> None:
         """Insert or replace a grade row (idempotent on channel_id+message_id).
@@ -182,25 +188,31 @@ class AuditLog:
         dry_run: bool = False,
         channel_name: str = "",
         capper_name: str = "",
+        odds: int | None = None,
+        odds_bookmaker: str | None = None,
+        odds_match_type: str | None = None,
     ) -> None:
         """
         Write to DB and post an audit Telegram message.
         Safe to call from an async context — SQLite work runs in a thread.
         """
         row = {
-            "graded_at":    datetime.now(timezone.utc).isoformat(),
-            "channel_id":   channel_id,
-            "message_id":   message_id,
-            "date":         date,
-            "sport":        sport,
-            "capper_name":  capper_name,
-            "pick_desc":    pick_desc,
-            "bet_type":     bet_type,
-            "verdict":      verdict,
-            "calc":         calc or "",
-            "prev_caption": prev_caption,
-            "new_caption":  new_caption,
-            "dry_run":      1 if dry_run else 0,
+            "graded_at":       datetime.now(timezone.utc).isoformat(),
+            "channel_id":      channel_id,
+            "message_id":      message_id,
+            "date":            date,
+            "sport":           sport,
+            "capper_name":     capper_name,
+            "pick_desc":       pick_desc,
+            "bet_type":        bet_type,
+            "verdict":         verdict,
+            "calc":            calc or "",
+            "prev_caption":    prev_caption,
+            "new_caption":     new_caption,
+            "dry_run":         1 if dry_run else 0,
+            "odds":            odds,
+            "odds_bookmaker":  odds_bookmaker,
+            "odds_match_type": odds_match_type,
         }
         await asyncio.to_thread(self._insert, row)
         await self._post_telegram(row, channel_name=channel_name, capper_name=capper_name)
@@ -301,7 +313,7 @@ class AuditLog:
         *,
         channel_id: int,
         message_id: int,
-        pick_results: list[tuple[dict, str]],  # (pick_dict, verdict) per pick
+        pick_results: list[tuple[dict, str, int | None]],  # (pick_dict, verdict, odds) per pick
         capper_name: str = "",
     ) -> None:
         """Post a compact result message to the broadcast results channel for this source channel."""
@@ -310,8 +322,8 @@ class AuditLog:
             return
 
         # Only keep resolved picks; require at least one WIN or LOSS to broadcast
-        resolved = [(p, v) for p, v in pick_results if v in ("WIN", "LOSS", "PUSH")]
-        if not any(v in ("WIN", "LOSS") for _, v in resolved):
+        resolved = [(p, v, o) for p, v, o in pick_results if v in ("WIN", "LOSS", "PUSH")]
+        if not any(v in ("WIN", "LOSS") for _, v, _ in resolved):
             return
 
         import html as _html
@@ -319,32 +331,40 @@ class AuditLog:
         def e(s: str) -> str:
             return _html.escape(str(s))
 
+        def fmt_odds(o: int | None) -> str:
+            if o is None:
+                return ""
+            return f"+{o}" if o > 0 else str(o)
+
         channel_bare = str(abs(channel_id))[3:]
         link = f"https://t.me/c/{channel_bare}/{message_id}"
 
         # Capper name is the link; bold if present, plain link if not
         capper_linked = f'<b><a href="{link}">{e(capper_name)}</a></b>' if capper_name else f'<a href="{link}">view</a>'
 
-        is_parlay = any(p.get("is_parlay_leg") for p, _ in resolved)
-        picks = [(_format_pick(p), v) for p, v in resolved]
+        is_parlay = any(p.get("is_parlay_leg") for p, _, _o in resolved)
+        picks = [(_format_pick(p), v, fmt_odds(o)) for p, v, o in resolved]
+
+        def _pick_line(desc: str, verdict: str, odds_str: str) -> str:
+            odds_part = f" ({e(odds_str)})" if odds_str else ""
+            return f"{VERDICT_EMOJI.get(verdict, '')} {e(desc)}{odds_part}"
 
         if len(picks) == 1:
-            desc, verdict = picks[0]
-            emoji = VERDICT_EMOJI.get(verdict, "")
-            text = f"{emoji} {capper_linked} · {e(desc)}"
+            desc, verdict, odds_str = picks[0]
+            text = f"{_pick_line(desc, verdict, odds_str)} · {capper_linked}"
         elif is_parlay:
-            verdicts_only = [v for _, v in picks]
+            verdicts_only = [v for _, v, _ in picks]
             if "LOSS" in verdicts_only:
                 overall_emoji = VERDICT_EMOJI["LOSS"]
             elif all(v == "WIN" for v in verdicts_only):
                 overall_emoji = VERDICT_EMOJI["WIN"]
             else:
                 overall_emoji = VERDICT_EMOJI["PUSH"]
-            legs = "\n".join(f"• {e(d)}" for d, _ in picks)
+            legs = "\n".join(f"• {e(d)}" + (f" ({e(o)})" if o else "") for d, _, o in picks)
             text = f"{overall_emoji} {capper_linked} · Parlay\n{legs}"
         else:
             # Non-parlay multi-pick: one emoji per pick
-            lines = [f"{VERDICT_EMOJI.get(v, '')} {e(d)}" for d, v in picks]
+            lines = [_pick_line(d, v, o) for d, v, o in picks]
             text = capper_linked + "\n" + "\n".join(lines)
 
         try:
