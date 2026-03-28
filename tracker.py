@@ -276,9 +276,9 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 search_terms.extend(w for w in tl.split() if len(w) > 3)
 
         for j, line in enumerate(lines):
-            if _ODDS_TAG_RE.search(line):
-                continue  # already has an odds tag — skip
             if any(term in line.lower() for term in search_terms):
+                if _ODDS_TAG_RE.search(line):
+                    break  # already tagged — idempotent
                 lines[j] = f"{line.rstrip()}{odds_tag}"
                 break
 
