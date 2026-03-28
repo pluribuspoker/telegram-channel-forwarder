@@ -419,7 +419,7 @@ async def run_backtest(filepath: str) -> None:
             })
         msg_cost = usage_cost() - msg_cost_before
         if msg_cost > 0:
-            print(f"       $ {fmt_cost(msg_cost)}")
+            print(f"       {fmt_cost(msg_cost)}")
 
     # ── Summary ──
     graded = [r for r in results if not r["skipped"]]
@@ -733,7 +733,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         print(f"  {'':6}  {'':>{_ID_W}}  {'':>{_CAP_W}}  {calc[:_DESC_W + _SPORT_W + 8]}")
                 msg_cost = usage_cost() - msg_cost_before
                 if msg_cost > 0:
-                    print(f"  {'':6}  {'':>{_ID_W}}  {'':>{_CAP_W}}  $ {fmt_cost(msg_cost)}")
+                    print(f"  {'':6}  {'':>{_ID_W}}  {'':>{_CAP_W}}  {fmt_cost(msg_cost)}")
 
                 # Cache the parse result and any resolved leg verdicts to avoid re-calling
                 # Claude on subsequent runs for legs that are already graded.
