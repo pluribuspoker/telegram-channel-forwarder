@@ -869,7 +869,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         continue          # already done — don't reprint every cycle
                     pick_odds = odds_by_pick.get(str(i), {}).get("odds")
                     odds_tag  = f" ({'+' if pick_odds > 0 else ''}{pick_odds})" if pick_odds is not None else ""
-                    desc     = _trunc(pick.get("description", ""), _DESC_W)
+                    desc     = _trunc(pick.get("description", "") + odds_tag, _DESC_W)
                     emoji    = VERDICT_EMOJI.get(verdict, "")
                     d        = _date.fromisoformat(gd) if gd else _date.fromisoformat(date_str)
                     gd_short = f"{d.month}/{d.day}"
@@ -878,7 +878,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     prefix   = "\n" if first_active else ""
                     suffix   = dupe_note if first_active else ""
                     first_active = False
-                    print(f"{prefix}{id_col:<{_ID_W}} {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}} {gd_short} {emoji}{odds_tag}{suffix}")
+                    print(f"{prefix}{id_col:<{_ID_W}} {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}} {gd_short} {emoji}{suffix}")
                     if calc:
                         print(f"{'':>{_ID_W}} {'':>{_CAP_W}}  {calc[:_DESC_W + 8]}")
 
