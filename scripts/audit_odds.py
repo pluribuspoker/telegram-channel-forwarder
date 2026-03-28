@@ -43,7 +43,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from ai import claude_parse
-from scores import _team_matches
+from scores import _team_matches, fetch_espn, espn_bookmakers_for_teams, ESPN_LEAGUES
 
 load_dotenv(ROOT / ".env")
 load_dotenv(ROOT / ".env.local", override=True)
@@ -599,6 +599,7 @@ async def main(
             notes = "" if sport_key else f"sport_unsupported({pick_sport})"
 
             bookmakers: list[dict] = []
+            espn_fallback = False
             if not dry_run and sport_key:
                 # Step 1: get event list for this sport+date (cheap, cached)
                 event_list = await fetch_event_list(sport_key, msg["date"])
@@ -606,6 +607,13 @@ async def main(
                 event_id = _find_event_id(event_list, pick.get("teams") or [])
                 if event_id:
                     bookmakers = await fetch_event_odds(sport_key, event_id, msg["date"])
+
+                # ESPN fallback: free, works pre-game only (odds cleared after completion)
+                if not bookmakers and pick_sport in ESPN_LEAGUES:
+                    espn_data = await fetch_espn(pick_sport, msg["date"])
+                    if espn_data:
+                        bookmakers = espn_bookmakers_for_teams(espn_data, pick.get("teams") or [])
+                        espn_fallback = bool(bookmakers)
 
             result = (
                 lookup_pick_odds(pick_sport, pick, bookmakers)
@@ -637,7 +645,7 @@ async def main(
                 "match_type":    result.get("match_type", ""),
                 "bookmaker":     result.get("bookmaker", ""),
                 "game_found":    result.get("game_found", False),
-                "notes":         notes,
+                "notes":         ("espn_odds" if espn_fallback else "") or notes,
             })
 
     # Output CSV

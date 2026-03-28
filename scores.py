@@ -360,3 +360,119 @@ def _completed_events(data: dict) -> list[dict]:
         e for e in data.get("events", [])
         if e.get("status", {}).get("type", {}).get("completed", False)
     ]
+
+
+def extract_espn_bookmaker(competition: dict) -> dict | None:
+    """Convert ESPN competition.odds[0] into a single Odds-API-style bookmaker dict.
+
+    Returns None if no odds data is present (completed games have empty odds).
+    Only covers main spread, total, and moneyline — no alternate lines.
+    """
+    import re as _re
+    odds_list = competition.get("odds", [])
+    if not odds_list:
+        return None
+    o = odds_list[0]
+
+    home_name = o.get("homeTeamOdds", {}).get("team", {}).get("displayName", "")
+    away_name = o.get("awayTeamOdds", {}).get("team", {}).get("displayName", "")
+    if not home_name or not away_name:
+        # Fall back to competitors list
+        for c in competition.get("competitors", []):
+            name = c.get("team", {}).get("displayName", "")
+            if c.get("homeAway") == "home":
+                home_name = home_name or name
+            else:
+                away_name = away_name or name
+
+    markets: list[dict] = []
+
+    # Moneyline
+    ml = o.get("moneyline", {})
+    home_ml = ml.get("home", {}).get("close", {}).get("odds") or ml.get("home", {}).get("open", {}).get("odds")
+    away_ml = ml.get("away", {}).get("close", {}).get("odds") or ml.get("away", {}).get("open", {}).get("odds")
+    if home_ml and away_ml and home_name and away_name:
+        try:
+            markets.append({"key": "h2h", "outcomes": [
+                {"name": home_name, "price": int(home_ml)},
+                {"name": away_name, "price": int(away_ml)},
+            ]})
+        except (ValueError, TypeError):
+            pass
+
+    # Spread
+    ps = o.get("pointSpread", {})
+    home_line = ps.get("home", {}).get("close", {}).get("line") or ps.get("home", {}).get("open", {}).get("line")
+    home_odds = ps.get("home", {}).get("close", {}).get("odds") or ps.get("home", {}).get("open", {}).get("odds")
+    away_line = ps.get("away", {}).get("close", {}).get("line") or ps.get("away", {}).get("open", {}).get("odds")
+    away_odds = ps.get("away", {}).get("close", {}).get("odds") or ps.get("away", {}).get("open", {}).get("odds")
+    # Also try top-level spread field (abs value) + details string for sign
+    if not home_line:
+        spread_abs = o.get("spread")
+        details = o.get("details", "")       # e.g. "ILL -6.5" — favorite listed first
+        fav_abbr = details.split()[0] if details else ""
+        if spread_abs is not None and home_name and away_name:
+            # Determine which team is the favourite from details abbreviation
+            home_is_fav = fav_abbr and home_name.upper().startswith(fav_abbr.upper())
+            if home_is_fav:
+                home_line, away_line = f"-{spread_abs}", f"+{spread_abs}"
+            else:
+                home_line, away_line = f"+{spread_abs}", f"-{spread_abs}"
+            home_odds = away_odds = "-110"   # ESPN doesn't expose vig at this level
+
+    if home_line and home_odds and away_line and away_odds and home_name and away_name:
+        try:
+            markets.append({"key": "spreads", "outcomes": [
+                {"name": home_name, "point": float(home_line), "price": int(home_odds)},
+                {"name": away_name, "point": float(away_line), "price": int(away_odds)},
+            ]})
+        except (ValueError, TypeError):
+            pass
+
+    # Total
+    tot = o.get("total", {})
+    over_line  = tot.get("over",  {}).get("close", {}).get("line")  or tot.get("over",  {}).get("open", {}).get("line")
+    over_odds  = tot.get("over",  {}).get("close", {}).get("odds")  or tot.get("over",  {}).get("open", {}).get("odds")
+    under_line = tot.get("under", {}).get("close", {}).get("line")  or tot.get("under", {}).get("open", {}).get("line")
+    under_odds = tot.get("under", {}).get("close", {}).get("odds")  or tot.get("under", {}).get("open", {}).get("odds")
+    # Fallback: top-level overUnder field
+    if not over_line:
+        ou = o.get("overUnder")
+        if ou is not None:
+            over_line = under_line = str(ou)
+            over_odds = under_odds = "-110"
+    if over_line and over_odds:
+        try:
+            # Strip leading o/u prefix  ("o221.5" → 221.5)
+            ov = float(_re.sub(r'^[a-zA-Z]+', '', over_line))
+            uv = float(_re.sub(r'^[a-zA-Z]+', '', under_line)) if under_line else ov
+            markets.append({"key": "totals", "outcomes": [
+                {"name": "Over",  "point": ov, "price": int(over_odds)},
+                {"name": "Under", "point": uv, "price": int(under_odds) if under_odds else int(over_odds)},
+            ]})
+        except (ValueError, TypeError):
+            pass
+
+    if not markets:
+        return None
+    return {"key": "espn_draftkings", "markets": markets}
+
+
+def espn_bookmakers_for_teams(espn_data: dict, teams: list[str]) -> list[dict]:
+    """Find the event matching teams in ESPN scoreboard data and return its bookmaker list.
+
+    Returns [] if no event found or no odds available.
+    Only works pre-game (ESPN clears odds once games are completed).
+    """
+    if not espn_data or not teams:
+        return []
+    for event in espn_data.get("events", []):
+        for comp in event.get("competitions", []):
+            comp_names = [
+                c.get("team", {}).get("displayName", "").lower()
+                for c in comp.get("competitors", [])
+            ]
+            if any(_team_matches(t.lower(), cn) for t in teams for cn in comp_names):
+                bk = extract_espn_bookmaker(comp)
+                return [bk] if bk else []
+    return []
