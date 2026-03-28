@@ -299,7 +299,7 @@ def box_score_text(summary: dict, player_hint: str = "") -> str:
 
 # Words that, when following a matched term, indicate it's a different longer team name.
 # e.g., "Iowa" should not match "Iowa State Cyclones" because "State" follows "Iowa".
-_QUALIFIERS = {"state", "tech", "a&m", "am", "international"}
+_QUALIFIERS = {"state", "tech", "a&m", "am", "international", "st"}  # "st" = abbrev for State/Saint disambiguation
 
 
 def _team_matches(term: str, team_name: str) -> bool:
