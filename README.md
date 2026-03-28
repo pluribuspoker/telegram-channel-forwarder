@@ -29,7 +29,6 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 **Prerequisites:**
 - Python 3.11+
 - Telegram API credentials from [my.telegram.org](https://my.telegram.org)
-- A Telethon `StringSession` — run `python scripts/get_session.py` to generate
 - A bot token from [@BotFather](https://t.me/botfather) — add bot as admin to destination channels
 
 **Install:**
@@ -42,7 +41,6 @@ pip install -r requirements.txt
 # Telegram API
 TELEGRAM_API_ID=your_api_id
 TELEGRAM_API_HASH=your_api_hash
-TELEGRAM_SESSION=your_session_string
 BOT_TOKEN=your_bot_token
 
 # Channel config
@@ -69,6 +67,13 @@ ODDS_API_KEY=your_key
 LISTENER_HEALTHCHECK_URL=https://hc-ping.com/your-uuid
 TRACKER_HEALTHCHECK_URL=https://hc-ping.com/your-uuid
 ```
+
+**Generate session strings (writes to `.env.local` automatically):**
+```bash
+python scripts/get_session.py      # TELEGRAM_SESSION — user account
+python scripts/get_bot_session.py  # BOT_SESSION — bot account
+```
+Run these on each machine separately (local and VPS) — sessions are tied to the IP.
 
 **Find channel IDs:**
 ```bash

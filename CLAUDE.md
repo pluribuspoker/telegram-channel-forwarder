@@ -27,22 +27,28 @@ start
 
 ### Environment files
 
-Two-file split to protect the VPS Telegram session from `syncenv`:
+Two-file split to protect sessions from `syncenv`:
 
 | File | Where | Synced | Contains |
 |---|---|---|---|
-| `.env` | local + server | ✅ `syncenv` copies this | all config except `TELEGRAM_SESSION` |
-| `.env.local` | **server only** | ❌ never touched | `TELEGRAM_SESSION` (VPS session string) |
+| `.env` | local + server | ✅ `syncenv` copies this | all config except session strings |
+| `.env.local` | local + server (separately) | ❌ never touched | `TELEGRAM_SESSION`, `BOT_SESSION` |
 
 `syncenv` is safe to run freely. `.env.local` is loaded after `.env` in both Python code and systemd, so it always wins.
 
-**Creating `.env.local` on a new server:**
+**Setting up `.env.local` (first time, on each machine):**
+
+Run each script — they authenticate interactively and write the session directly to `.env.local`:
 ```bash
-echo 'TELEGRAM_SESSION="<run get_session.py on the VPS>"' > /home/forwarder/app/.env.local
-chmod 600 /home/forwarder/app/.env.local
-chown forwarder:forwarder /home/forwarder/app/.env.local
+python scripts/get_session.py      # generates TELEGRAM_SESSION
+python scripts/get_bot_session.py  # generates BOT_SESSION
 ```
-Generate the session string by running `scripts/get_session.py` **on the VPS** (not locally) so Telegram ties the session to `209.38.51.86`.
+Run these **on the VPS** to tie the VPS sessions to `209.38.51.86`. Run **locally** for local dev sessions. Each machine keeps its own `.env.local` with its own session strings.
+
+**After writing `.env.local` on the VPS, fix permissions:**
+```bash
+chmod 600 /home/forwarder/app/.env.local && chown forwarder:forwarder /home/forwarder/app/.env.local
+```
 
 **Updating live systemd services after first deploy of this change:**
 ```bash
