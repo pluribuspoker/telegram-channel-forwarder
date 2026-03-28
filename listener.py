@@ -74,18 +74,21 @@ async def channel_probe(client, channels):
     last_seen: dict = {}
     while True:
         await asyncio.sleep(300)
-        for source_entity, _, src_label, *_ in channels:
+        for source_entity, _, src_label, _, topic_id, _ in channels:
             try:
-                msgs = await client.get_messages(source_entity, limit=1)
+                kwargs = {"reply_to": topic_id} if topic_id else {}
+                msgs = await client.get_messages(source_entity, limit=1, **kwargs)
                 if not msgs:
                     continue
                 msg = msgs[0]
-                if last_seen.get(source_entity.id) == msg.id:
+                probe_key = (source_entity.id, topic_id)
+                if last_seen.get(probe_key) == msg.id:
                     print(f"\033[2m  ⊙ {src_label}: no new msg\033[0m")
                     continue
-                last_seen[source_entity.id] = msg.id
+                last_seen[probe_key] = msg.id
                 age = datetime.datetime.now(datetime.timezone.utc) - msg.date
-                print(f"  ⊙ {src_label}: new msg id={msg.id} ({age.seconds//60}m ago)")
+                preview = (msg.text or "[media]").replace("\n", " ")[:60]
+                print(f"  ⊙ {src_label}: new msg ({age.seconds//60}m ago) {preview!r}")
             except Exception as e:
                 print(f"  ⊙ {src_label}: probe failed ({e})")
 
