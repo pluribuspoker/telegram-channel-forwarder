@@ -43,73 +43,26 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from ai import claude_parse
-from scores import _team_matches, fetch_espn, espn_bookmakers_for_teams, ESPN_LEAGUES
+from scores import fetch_espn, espn_bookmakers_for_teams, ESPN_LEAGUES
+from odds import (
+    ODDS_API_KEY, ODDS_API_BASE,
+    SPORT_KEYS, PROP_STAT_MARKETS, MARKETS_FULL, PREFERRED_BOOKS,
+    MAX_LINE_GAP, HALF_POINT_COST, _PERIOD_RE,
+    _pick_best, _collect_outcomes, _find_event_id,
+    _lookup_moneyline, _lookup_spread, _lookup_total, _lookup_prop,
+    lookup_pick_odds,
+)
 
 load_dotenv(ROOT / ".env")
 load_dotenv(ROOT / ".env.local", override=True)
 
-# ── Config ───────────────────────────────────────────────────────────────────
-
-ODDS_API_KEY  = os.getenv("ODDS_API_KEY", "")
-ODDS_API_BASE = "https://api.the-odds-api.com/v4"
-
-# Our sport names → Odds API sport keys
-SPORT_KEYS: dict[str, str] = {
-    "NBA":   "basketball_nba",
-    "NCAAB": "basketball_ncaab",
-    "NFL":   "americanfootball_nfl",
-    "NCAAF": "americanfootball_ncaaf",
-    "MLB":   "baseball_mlb",
-    "NHL":   "icehockey_nhl",
-    "UFC":   "mma_mixed_martial_arts",
-}
-
-# Markets to fetch per event (per-event endpoint supports all of these)
-MARKETS_FULL = (
-    "h2h,spreads,totals,"
-    "alternate_spreads,alternate_totals,"
-    "h2h_h1,spreads_h1,totals_h1,"
-    "h2h_h2,spreads_h2,totals_h2,"
-    "h2h_q1,spreads_q1,totals_q1"
-)
-
-# Preferred bookmakers in priority order
-PREFERRED_BOOKS = [
-    "draftkings", "fanduel", "betmgm", "caesars",
-    "pointsbet", "williamhill_us", "barstool",
-]
-
-# Proximity: max gap in pts before we give up
-MAX_LINE_GAP = 1.5
-
-# Implied probability cost per half-point of line movement.
-# Calibrated so that 1 half-point ≈ 10 cents of juice at standard -110 pricing.
-# (-110 implied prob = 52.38%; -120 = 54.55%; delta ≈ 0.022 per half pt)
-# NFL key numbers (3, 7) cost 2-3x more to cross but we use the flat rate here.
-HALF_POINT_COST: dict[str, float] = {
-    "NFL":   0.022,
-    "NCAAF": 0.020,
-    "NBA":   0.022,
-    "NCAAB": 0.020,
-    "MLB":   0.020,
-    "NHL":   0.020,
-    "UFC":   0.000,  # moneyline only, no line gap
-}
-
-# Regex to detect period-specific bets (1H, 2H, Q1, etc.) in description
-_PERIOD_RE = re.compile(
-    r'\b(1h|2h|1st half|2nd half|first half|second half|'
-    r'1q|2q|3q|4q|1st quarter|2nd quarter|3rd quarter|4th quarter)\b',
-    re.IGNORECASE,
-)
-
-# ── Paths ────────────────────────────────────────────────────────────────────
+# ── Paths ─────────────────────────────────────────────────────────────────────
 
 DATA_DIR         = ROOT / "data"
 ODDS_CACHE_FILE  = DATA_DIR / "odds_api_cache.json"
 PARSE_CACHE_FILE = DATA_DIR / "audit_parse_cache.json"
 
-# ── Text helpers ─────────────────────────────────────────────────────────────
+# ── Text helpers ──────────────────────────────────────────────────────────────
 
 EMOJI_VERDICT = {"✅": "WIN", "❌": "LOSS"}
 
@@ -129,7 +82,6 @@ def _extract_verdict(text: str) -> str | None:
 
 
 def _extract_stated_odds(text: str) -> str | None:
-    """Extract first American odds string from text, e.g. -145, +220."""
     m = re.search(r'([+-]\d{3,4})(?:\s|$|\n|✅|❌)', text)
     return m.group(1) if m else None
 
@@ -138,50 +90,7 @@ def _text_hash(text: str) -> str:
     return hashlib.md5(text.encode()).hexdigest()[:12]
 
 
-# ── Price adjustment ──────────────────────────────────────────────────────────
-
-def _american_to_prob(odds: int) -> float:
-    """Convert American odds to implied probability (no vig)."""
-    if odds > 0:
-        return 100 / (odds + 100)
-    return abs(odds) / (abs(odds) + 100)
-
-
-def _prob_to_american(prob: float) -> int:
-    """Convert implied probability to American odds."""
-    prob = max(0.01, min(0.99, prob))
-    if prob >= 0.5:
-        return round(-(prob / (1 - prob)) * 100)
-    return round((1 - prob) / prob * 100)
-
-
-def _adjust_for_gap(sport: str, base_odds: int, pick_line: float, api_line: float, gap: float) -> int:
-    """
-    Estimate what the capper likely paid for their line given the main-line price.
-
-    Higher numerical line is always better for the bettor regardless of sign:
-      - Underdog: +3 > +2.5  (easier to cover)
-      - Favorite: -9.5 > -11.5  (less points to cover; -9.5 is the higher number)
-
-    If capper has the better number → they bought points → pay more juice (prob goes up).
-    If capper has the worse number  → they sold points → pay less juice (prob goes down).
-
-    gap: absolute pts difference between pick_line and api_line.
-    """
-    cost = HALF_POINT_COST.get(sport, 0.022)
-    n_half_pts = gap / 0.5
-    prob = _american_to_prob(base_odds)
-
-    capper_got_better = pick_line > api_line
-    if capper_got_better:
-        adjusted = prob + n_half_pts * cost   # paid more juice for better number
-    else:
-        adjusted = prob - n_half_pts * cost   # got better juice for worse number
-
-    return _prob_to_american(adjusted)
-
-
-# ── Odds API ─────────────────────────────────────────────────────────────────
+# ── Odds API (JSON file cache for backtest) ───────────────────────────────────
 
 _odds_cache: dict = {}
 _quota_remaining: str | None = None
@@ -198,7 +107,6 @@ def _save_odds_cache() -> None:
 
 
 async def _api_get(http: httpx.AsyncClient, url: str, params: dict) -> dict | list | None:
-    """Single GET with error handling; updates quota counter."""
     global _quota_remaining
     try:
         r = await http.get(url, params=params)
@@ -214,24 +122,16 @@ async def _api_get(http: httpx.AsyncClient, url: str, params: dict) -> dict | li
 
 
 async def fetch_event_list(sport_key: str, date: str) -> list[dict]:
-    """Fetch the list of events for sport_key on date (step 1, cheap).
-
-    Returns list of {id, home_team, away_team, commence_time}.
-    Cached by (sport_key, date).
-    """
     cache_key = f"events:{sport_key}:{date}"
     if cache_key in _odds_cache:
         return _odds_cache[cache_key]
-
     if not ODDS_API_KEY:
         return []
-
     async with httpx.AsyncClient(timeout=20) as http:
         data = await _api_get(http,
             f"{ODDS_API_BASE}/historical/sports/{sport_key}/events",
             {"apiKey": ODDS_API_KEY, "date": f"{date}T18:00:00Z"},
         )
-
     events: list[dict] = (data or {}).get("data", []) if isinstance(data, dict) else []
     _odds_cache[cache_key] = events
     _save_odds_cache()
@@ -240,34 +140,20 @@ async def fetch_event_list(sport_key: str, date: str) -> list[dict]:
 
 
 async def fetch_event_odds(sport_key: str, event_id: str, date: str) -> list[dict]:
-    """Fetch full odds (including alternate lines + period markets) for one event (step 2).
-
-    Returns the bookmakers list for that event.
-    Cached by event_id.
-    """
     cache_key = f"event_odds:{event_id}:{date}"
     if cache_key in _odds_cache:
         return _odds_cache[cache_key]
-
     if not ODDS_API_KEY:
         return []
-
     async with httpx.AsyncClient(timeout=20) as http:
         data = await _api_get(http,
             f"{ODDS_API_BASE}/historical/sports/{sport_key}/events/{event_id}/odds",
-            {
-                "apiKey":     ODDS_API_KEY,
-                "regions":    "us",
-                "markets":    MARKETS_FULL,
-                "date":       f"{date}T18:00:00Z",
-                "oddsFormat": "american",
-            },
+            {"apiKey": ODDS_API_KEY, "regions": "us", "markets": MARKETS_FULL,
+             "date": f"{date}T18:00:00Z", "oddsFormat": "american"},
         )
-
     bookmakers: list[dict] = []
     if isinstance(data, dict):
         bookmakers = data.get("data", {}).get("bookmakers", []) if "data" in data else data.get("bookmakers", [])
-
     _odds_cache[cache_key] = bookmakers
     _save_odds_cache()
     mkt_keys = {m["key"] for bk in bookmakers for m in bk.get("markets", [])}
@@ -275,218 +161,25 @@ async def fetch_event_odds(sport_key: str, event_id: str, date: str) -> list[dic
     return bookmakers
 
 
-# ── Odds matching helpers ─────────────────────────────────────────────────────
-
-def _pick_best(candidates: list[tuple[int, str]]) -> tuple[int | None, str | None]:
-    if not candidates:
-        return None, None
-    for preferred in PREFERRED_BOOKS:
-        for odds, bk in candidates:
-            if bk == preferred:
-                return odds, bk
-    return candidates[0]
-
-
-def _collect_outcomes(
-    bookmakers: list[dict],
-    market_key: str,
-    name_filter: str | None = None,
-    line_filter: float | None = None,
-) -> list[tuple[float | None, int, str]]:
-    """Collect (point, price, bookmaker) from a market across all bookmakers."""
-    results: list[tuple[float | None, int, str]] = []
-    for bk in bookmakers:
-        bk_key = bk.get("key", "")
-        for mkt in bk.get("markets", []):
-            if mkt.get("key") != market_key:
-                continue
-            for outcome in mkt.get("outcomes", []):
-                name  = outcome.get("name", "")
-                price = outcome.get("price")
-                pt    = outcome.get("point")
-
-                if name_filter and not _team_matches(name_filter.lower(), name.lower()):
-                    continue
-                if line_filter is not None and pt is not None:
-                    if abs(float(pt) - line_filter) > 0.01:
-                        continue
-                if price is not None:
-                    results.append((float(pt) if pt is not None else None, int(price), bk_key))
-    return results
-
-
-def _find_event_id(event_list: list[dict], teams: list[str]) -> str | None:
-    """Find the best-matching event ID from an event list for the given team names.
-
-    Prefers shorter team names (more specific match) to avoid 'Tennessee' matching
-    'Tennessee St Tigers' before 'Tennessee Volunteers'.
-    """
-    scored: list[tuple[int, str]] = []  # (score, event_id)
-    for term in teams:
-        t_lower = term.lower()
-        for event in event_list:
-            home = event.get("home_team", "")
-            away = event.get("away_team", "")
-            for side in (home, away):
-                if _team_matches(t_lower, side.lower()):
-                    scored.append((-len(side), event["id"]))
-                    break
-    if not scored:
-        return None
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[0][1]
-
-
-# Period → market key suffix mapping
-_PERIOD_SUFFIX: dict[str, str] = {
-    "1h": "_h1", "2h": "_h2",
-    "1q": "_q1", "2q": "_q2", "3q": "_q3", "4q": "_q4",
-}
-
-
-def _lookup_moneyline(bookmakers: list[dict], team: str, period: str = "game") -> dict:
-    mkt = "h2h" + _PERIOD_SUFFIX.get(period, "")
-    candidates = [(price, bk) for _, price, bk in _collect_outcomes(bookmakers, mkt, name_filter=team)]
-    odds, book = _pick_best(candidates)
-    return {
-        "game_found":    True,
-        "match_type":    "exact" if odds is not None else f"no_{mkt}_data",
-        "pick_line":     None,
-        "api_line":      None,
-        "computed_odds": odds,
-        "adjusted_odds": odds,
-        "bookmaker":     book,
-    }
-
-
-def _lookup_spread(sport: str, bookmakers: list[dict], team: str, pick_line: float, period: str = "game") -> dict:
-    suffix = _PERIOD_SUFFIX.get(period, "")
-    main_mkt = "spreads" + suffix
-    alt_mkt  = "alternate_spreads" if not suffix else None  # alt markets only for full game
-
-    _empty = {"game_found": True, "match_type": f"no_spread_data", "pick_line": pick_line,
-              "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
-
-    # Exact match in main, then alternate
-    for mkt in filter(None, [main_mkt, alt_mkt]):
-        hits = _collect_outcomes(bookmakers, mkt, name_filter=team, line_filter=pick_line)
-        if hits:
-            odds, book = _pick_best([(price, bk) for _, price, bk in hits])
-            label = "exact" if mkt == main_mkt else "exact_alt"
-            return {"game_found": True, "match_type": label, "pick_line": pick_line,
-                    "api_line": pick_line, "computed_odds": odds, "adjusted_odds": odds, "bookmaker": book}
-
-    # Gather all available lines (same-sign filter to avoid matching opponent)
-    all_lines: list[tuple[float, int, str]] = []
-    for mkt in filter(None, [alt_mkt, main_mkt]):
-        for pt, price, bk in _collect_outcomes(bookmakers, mkt, name_filter=team):
-            if pt is None:
-                continue
-            if pick_line != 0 and (pick_line < 0) != (pt < 0):
-                continue
-            all_lines.append((pt, price, bk))
-
-    if not all_lines:
-        return _empty
-
-    closest = min(all_lines, key=lambda x: abs(x[0] - pick_line))
-    gap = abs(closest[0] - pick_line)
-
-    if gap > MAX_LINE_GAP:
-        return {"game_found": True, "match_type": f"alt_line_gap_{gap:.1f}pts", "pick_line": pick_line,
-                "api_line": closest[0], "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
-
-    adjusted = _adjust_for_gap(sport, closest[1], pick_line, closest[0], gap)
-    return {"game_found": True, "match_type": f"proximity_{gap:.1f}pts", "pick_line": pick_line,
-            "api_line": closest[0], "computed_odds": closest[1], "adjusted_odds": adjusted, "bookmaker": closest[2]}
-
-
-def _lookup_total(sport: str, bookmakers: list[dict], direction: str, pick_line: float, period: str = "game") -> dict:
-    suffix = _PERIOD_SUFFIX.get(period, "")
-    main_mkt = "totals" + suffix
-    alt_mkt  = "alternate_totals" if not suffix else None
-    outcome_name = "Over" if direction == "over" else "Under"
-
-    _empty = {"game_found": True, "match_type": "no_total_data", "pick_line": pick_line,
-              "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
-
-    for mkt in filter(None, [main_mkt, alt_mkt]):
-        hits = _collect_outcomes(bookmakers, mkt, name_filter=outcome_name, line_filter=pick_line)
-        if hits:
-            odds, book = _pick_best([(price, bk) for _, price, bk in hits])
-            label = "exact" if mkt == main_mkt else "exact_alt"
-            return {"game_found": True, "match_type": label, "pick_line": pick_line,
-                    "api_line": pick_line, "computed_odds": odds, "adjusted_odds": odds, "bookmaker": book}
-
-    all_lines: list[tuple[float, int, str]] = []
-    for mkt in filter(None, [alt_mkt, main_mkt]):
-        for pt, price, bk in _collect_outcomes(bookmakers, mkt, name_filter=outcome_name):
-            if pt is not None:
-                all_lines.append((pt, price, bk))
-
-    if not all_lines:
-        return _empty
-
-    closest = min(all_lines, key=lambda x: abs(x[0] - pick_line))
-    gap = abs(closest[0] - pick_line)
-
-    if gap > MAX_LINE_GAP:
-        return {"game_found": True, "match_type": f"alt_line_gap_{gap:.1f}pts", "pick_line": pick_line,
-                "api_line": closest[0], "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
-
-    signed_pick = -pick_line if direction == "over" else pick_line
-    signed_api  = -closest[0] if direction == "over" else closest[0]
-    adjusted = _adjust_for_gap(sport, closest[1], signed_pick, signed_api, gap)
-    return {"game_found": True, "match_type": f"proximity_{gap:.1f}pts", "pick_line": pick_line,
-            "api_line": closest[0], "computed_odds": closest[1], "adjusted_odds": adjusted, "bookmaker": closest[2]}
-
-
-def lookup_pick_odds(sport: str, pick: dict, bookmakers: list[dict]) -> dict:
-    """Given a parsed pick and the event's bookmakers list, find the best odds match."""
-    teams     = pick.get("teams") or []
-    bet_type  = pick.get("bet_type", "")
-    line      = pick.get("line")
-    direction = pick.get("direction")
-    period    = pick.get("period", "game")
-    desc      = pick.get("description", "")
-
-    _no_game = {"game_found": False, "match_type": "no_game",
-                "pick_line": line, "api_line": None,
-                "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
-
-    # Props: player_props endpoint not fetched here
-    if bet_type == "prop":
-        return {**_no_game, "game_found": True, "match_type": "player_prop_unavailable"}
-
-    # Team totals: not in standard totals market
-    if bet_type == "team_total":
-        return {**_no_game, "game_found": True, "match_type": "team_total_unavailable"}
-
-    # Normalise period from pick field + description regex
-    if period == "game" and _PERIOD_RE.search(desc):
-        m = _PERIOD_RE.search(desc)
-        raw = m.group(1).lower().replace(" ", "").replace("st", "").replace("nd", "").replace("rd", "").replace("th", "")
-        period = {"half": "1h", "1half": "1h", "2half": "2h",
-                  "firsthalf": "1h", "secondhalf": "2h",
-                  "quarter": "1q", "1quarter": "1q"}.get(raw, raw)
-
-    if not bookmakers:
-        return _no_game
-
-    if bet_type == "moneyline":
-        return _lookup_moneyline(bookmakers, teams[0] if teams else "", period)
-
-    if bet_type == "spread":
-        if line is None:
-            return {**_no_game, "game_found": True, "match_type": "no_line_in_pick"}
-        return _lookup_spread(sport, bookmakers, teams[0] if teams else "", float(line), period)
-
-    if bet_type == "total":
-        if line is None or not direction:
-            return {**_no_game, "game_found": True, "match_type": "missing_line_or_direction"}
-        return _lookup_total(sport, bookmakers, direction, float(line), period)
-
-    return {**_no_game, "game_found": True, "match_type": f"unsupported_bet_type({bet_type})"}
+async def fetch_event_prop_odds(sport_key: str, event_id: str, date: str, prop_market: str) -> list[dict]:
+    cache_key = f"event_prop_odds:{event_id}:{date}:{prop_market}"
+    if cache_key in _odds_cache:
+        return _odds_cache[cache_key]
+    if not ODDS_API_KEY:
+        return []
+    async with httpx.AsyncClient(timeout=20) as http:
+        data = await _api_get(http,
+            f"{ODDS_API_BASE}/historical/sports/{sport_key}/events/{event_id}/odds",
+            {"apiKey": ODDS_API_KEY, "regions": "us", "markets": prop_market,
+             "date": f"{date}T18:00:00Z", "oddsFormat": "american"},
+        )
+    bookmakers: list[dict] = []
+    if isinstance(data, dict):
+        bookmakers = data.get("data", {}).get("bookmakers", []) if "data" in data else data.get("bookmakers", [])
+    _odds_cache[cache_key] = bookmakers
+    _save_odds_cache()
+    print(f"  [prop_odds] {event_id[:8]}.. {prop_market} -> {len(bookmakers)} books  (quota: {_quota_remaining})", file=sys.stderr)
+    return bookmakers
 
 
 # ── Parse cache ───────────────────────────────────────────────────────────────
@@ -599,35 +292,65 @@ async def main(
             notes = "" if sport_key else f"sport_unsupported({pick_sport})"
 
             bookmakers: list[dict] = []
-            espn_fallback = False
+            espn_used = False
+            event_id: str | None = None
+            bet_type = pick.get("bet_type", "")
+
             if not dry_run and sport_key:
-                # Step 1: get event list for this sport+date (cheap, cached)
-                event_list = await fetch_event_list(sport_key, msg["date"])
-                # Step 2: find matching event, fetch its full odds (per-event, cached)
-                event_id = _find_event_id(event_list, pick.get("teams") or [])
-                if event_id:
-                    bookmakers = await fetch_event_odds(sport_key, event_id, msg["date"])
+                # Props: skip ESPN (no prop data), go straight to Odds API for event_id
+                if bet_type == "prop":
+                    event_list = await fetch_event_list(sport_key, msg["date"])
+                    event_id = _find_event_id(event_list, pick.get("teams") or [])
+                else:
+                    # Step 1: ESPN first (free, works pre-game; odds cleared after completion)
+                    if pick_sport in ESPN_LEAGUES:
+                        espn_data = await fetch_espn(pick_sport, msg["date"])
+                        if espn_data:
+                            bookmakers = espn_bookmakers_for_teams(espn_data, pick.get("teams") or [])
+                            espn_used = bool(bookmakers)
 
-                # ESPN fallback: free, works pre-game only (odds cleared after completion)
-                if not bookmakers and pick_sport in ESPN_LEAGUES:
-                    espn_data = await fetch_espn(pick_sport, msg["date"])
-                    if espn_data:
-                        bookmakers = espn_bookmakers_for_teams(espn_data, pick.get("teams") or [])
-                        espn_fallback = bool(bookmakers)
+                    # Step 2: Odds API fallback (unlocks alternate lines + period markets)
+                    if not bookmakers:
+                        event_list = await fetch_event_list(sport_key, msg["date"])
+                        event_id = _find_event_id(event_list, pick.get("teams") or [])
+                        if event_id:
+                            bookmakers = await fetch_event_odds(sport_key, event_id, msg["date"])
 
-            result = (
-                lookup_pick_odds(pick_sport, pick, bookmakers)
-                if (bookmakers or (sport_key and not dry_run))
-                else {
-                    "game_found":    False,
-                    "match_type":    "dry_run" if dry_run else ("sport_unsupported" if not sport_key else "no_game"),
-                    "pick_line":     pick.get("line"),
-                    "api_line":      None,
-                    "computed_odds": None,
-                    "adjusted_odds": None,
-                    "bookmaker":     None,
-                }
-            )
+            # Player props: separate fetch + lookup by player name
+            if bet_type == "prop" and not dry_run and sport_key:
+                prop_stat   = (pick.get("prop_stat") or "").upper()
+                prop_market = PROP_STAT_MARKETS.get(pick_sport, {}).get(prop_stat, "")
+                if prop_market and event_id:
+                    prop_bookmakers = await fetch_event_prop_odds(sport_key, event_id, msg["date"], prop_market)
+                    result = _lookup_prop(
+                        prop_bookmakers,
+                        pick.get("player") or "",
+                        prop_market,
+                        pick.get("direction") or "over",
+                        float(pick.get("line") or 0.5),
+                    )
+                elif not prop_market:
+                    result = {"game_found": True, "match_type": f"prop_stat_unsupported({prop_stat})",
+                              "pick_line": pick.get("line"), "api_line": None,
+                              "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
+                else:
+                    result = {"game_found": False, "match_type": "no_game",
+                              "pick_line": pick.get("line"), "api_line": None,
+                              "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
+            else:
+                result = (
+                    lookup_pick_odds(pick_sport, pick, bookmakers)
+                    if (bookmakers or (sport_key and not dry_run and bet_type != "prop"))
+                    else {
+                        "game_found":    False,
+                        "match_type":    "dry_run" if dry_run else ("sport_unsupported" if not sport_key else "no_game"),
+                        "pick_line":     pick.get("line"),
+                        "api_line":      None,
+                        "computed_odds": None,
+                        "adjusted_odds": None,
+                        "bookmaker":     None,
+                    }
+                )
 
             rows.append({
                 "source_file":   msg["source_file"],
@@ -645,7 +368,7 @@ async def main(
                 "match_type":    result.get("match_type", ""),
                 "bookmaker":     result.get("bookmaker", ""),
                 "game_found":    result.get("game_found", False),
-                "notes":         ("espn_odds" if espn_fallback else "") or notes,
+                "notes":         ("espn_odds" if espn_used else "") or notes,
             })
 
     # Output CSV
@@ -655,20 +378,20 @@ async def main(
         writer.writerows(rows)
 
     # Summary
-    total = len(rows)
-    found = sum(1 for r in rows if r.get("computed_odds") not in ("", None))
-    exact = sum(1 for r in rows if str(r.get("match_type", "")).startswith("exact"))
-    prox  = sum(1 for r in rows if str(r.get("match_type", "")).startswith("proximity"))
-    unavail = sum(1 for r in rows if "unavailable" in str(r.get("match_type", "")))
-    alt_gap = sum(1 for r in rows if str(r.get("match_type", "")).startswith("alt_line_gap"))
+    total      = len(rows)
+    found      = sum(1 for r in rows if r.get("computed_odds") not in ("", None))
+    exact_main = sum(1 for r in rows if r.get("match_type") == "exact")
+    exact_alt  = sum(1 for r in rows if r.get("match_type") == "exact_alt")
+    prox       = sum(1 for r in rows if str(r.get("match_type", "")).startswith("proximity"))
+    alt_gap    = sum(1 for r in rows if str(r.get("match_type", "")).startswith("alt_line_gap"))
+    prop_unavail = sum(1 for r in rows if "prop_unavailable" in str(r.get("match_type", "")))
 
     print(file=sys.stderr)
-    prop_unavail = sum(1 for r in rows if "prop_unavailable" in str(r.get("match_type", "")))
     print("--- Coverage summary -----------------------------------------", file=sys.stderr)
     print(f"  Total picks:                {total}", file=sys.stderr)
     print(f"  Odds found:                 {found}  ({100*found//total if total else 0}%)", file=sys.stderr)
-    print(f"    exact:                    {exact}", file=sys.stderr)
-    print(f"    exact_alt (alt line):     {sum(1 for r in rows if r.get('match_type') == 'exact_alt')}", file=sys.stderr)
+    print(f"    exact (main line):        {exact_main}", file=sys.stderr)
+    print(f"    exact (alt line):         {exact_alt}", file=sys.stderr)
     print(f"    proximity w/ adjustment:  {prox}", file=sys.stderr)
     print(f"  Alt line gap > {MAX_LINE_GAP}pts:          {alt_gap}", file=sys.stderr)
     print(f"  Player props (unavailable): {prop_unavail}", file=sys.stderr)
