@@ -37,6 +37,7 @@ API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
 SESSION = os.environ["TELEGRAM_SESSION"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
+BOT_SESSION = os.environ.get("BOT_SESSION", "")
 MAPPINGS = json.loads(os.environ["MAPPINGS_CONFIG"])
 
 # How long to wait for album messages to arrive before sending as a group
@@ -98,7 +99,7 @@ async def main():
     await client.start()
     print("✓ Connected to Telegram (user)")
 
-    bot = TelegramClient(StringSession(), API_ID, API_HASH)
+    bot = TelegramClient(StringSession(BOT_SESSION), API_ID, API_HASH)
     await bot.start(bot_token=BOT_TOKEN)
     print("✓ Connected to Telegram (bot)")
 

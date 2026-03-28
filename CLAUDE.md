@@ -1,5 +1,9 @@
 # Telegram Channel Forwarder
 
+## Preferences
+
+- When giving shell commands, chain related steps with `&&` on one line rather than separate lines.
+
 ## VPS
 
 - **Reserved IP:** `209.38.51.86` (always use this, not the droplet IP)
