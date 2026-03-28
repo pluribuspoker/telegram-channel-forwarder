@@ -38,6 +38,7 @@ def claude() -> anthropic.AsyncAnthropic:
 # Sentinels returned by build_context to signal "no game data" vs "game not yet played"
 CONTEXT_SKIP = "__SKIP__"
 CONTEXT_PENDING = "__PENDING__"
+CONTEXT_ESPN_ERROR = "__ESPN_ERROR__"  # ESPN fetch failed (network/SSL); retry next run
 
 
 # ─── Claude prompts ───────────────────────────────────────────────────────────
@@ -290,4 +291,5 @@ async def build_context(
             return CONTEXT_SKIP, date
         return scoreboard_text({"events": completed}, sport), date
 
-    return CONTEXT_SKIP, date
+    # scoreboard is None — ESPN fetch failed (network/SSL error)
+    return CONTEXT_ESPN_ERROR, date

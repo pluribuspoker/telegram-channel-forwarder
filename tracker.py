@@ -28,6 +28,7 @@ from ai import (
     build_context,
     CONTEXT_SKIP,
     CONTEXT_PENDING,
+    CONTEXT_ESPN_ERROR,
     usage_cost,
     fmt_cost,
     _usage,
@@ -387,8 +388,10 @@ async def run_backtest(filepath: str) -> None:
 
             context, _game_date = await build_context(pick_sport, date, pick, pick_scoreboard, summary_cache)
 
-            if context == CONTEXT_SKIP:
+            if context in (CONTEXT_SKIP, CONTEXT_ESPN_ERROR):
                 grade, calc = "UNKNOWN", ""
+            elif context == CONTEXT_PENDING:
+                grade, calc = "PENDING", ""
             else:
                 grade, calc = await claude_grade(pick_desc, date, context)
 
@@ -688,6 +691,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     scoreboard_cache[sb_key] = await fetch_espn(sport, date_str)
 
                 verdicts = []
+                has_espn_error = False
                 for i, pick in enumerate(picks):
                     cached_leg = cached_leg_verdicts.get(str(i))
                     if cached_leg and cached_leg.get("verdict") in ("WIN", "LOSS", "PUSH"):
@@ -705,7 +709,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             pick_sport, date_str, pick,
                             scoreboard_cache[ps_key], summary_cache,
                         )
-                        if context == CONTEXT_PENDING:
+                        if context in (CONTEXT_ESPN_ERROR, CONTEXT_PENDING):
+                            if context == CONTEXT_ESPN_ERROR:
+                                has_espn_error = True
                             verdict, calc = "PENDING", ""
                         elif context == CONTEXT_SKIP:
                             verdict, calc = "UNKNOWN", ""
@@ -739,7 +745,12 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # Print all picks with their individual verdicts
                 has_pending = any(v[1] == "PENDING" for v in verdicts)
                 if not newly_resolved or parlay_pending:
-                    tag = "WAIT" if (has_pending or parlay_pending) else "SKIP"
+                    if has_espn_error and (has_pending or parlay_pending):
+                        tag = "ESPN"
+                    elif has_pending or parlay_pending:
+                        tag = "WAIT"
+                    else:
+                        tag = "SKIP"
                 else:
                     tag = "DRY " if dry_run else "EDIT"
                 for i, (pick, verdict, calc, ps, gd, *_) in enumerate(verdicts):
@@ -780,14 +791,15 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         f"{v[1]}: {v[0].get('description', '')}|{v[3]}|{v[4]}|{v[2]}" for v in verdicts
                     )
                     first_pick, _, first_calc, first_sport, first_game_date = verdicts[0]
-                    await audit.record(
-                        channel_id=channel_id, message_id=msg.id, date=date_str,
-                        sport=first_sport,
-                        pick_desc=all_descs,
-                        bet_type=first_pick.get("bet_type", ""),
-                        verdict=overall, calc=first_calc,
-                        prev_caption=text, dry_run=dry_run, channel_name=ch_name, capper_name=capper,
-                    )
+                    if not has_espn_error:
+                        await audit.record(
+                            channel_id=channel_id, message_id=msg.id, date=date_str,
+                            sport=first_sport,
+                            pick_desc=all_descs,
+                            bet_type=first_pick.get("bet_type", ""),
+                            verdict=overall, calc=first_calc,
+                            prev_caption=text, dry_run=dry_run, channel_name=ch_name, capper_name=capper,
+                        )
                     continue
 
                 first_pick, _, first_calc, first_sport, first_game_date = verdicts[0]
