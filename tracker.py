@@ -34,6 +34,7 @@ from ai import (
 )
 
 load_dotenv()
+load_dotenv(".env.local", override=True)  # VPS-specific overrides (never synced)
 
 # Cache of parsed-but-pending messages so we don't re-call Claude on every run
 _PENDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "parse_cache.json")

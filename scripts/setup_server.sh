@@ -20,6 +20,7 @@ Type=oneshot
 User=forwarder
 WorkingDirectory=/home/forwarder/app
 EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
 ExecStart=/home/forwarder/app/run_tracker.sh
 StandardOutput=journal
 StandardError=journal

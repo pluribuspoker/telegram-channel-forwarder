@@ -36,12 +36,38 @@ exit
 start
 ```
 
+### Environment files
+
+Two-file split to protect the VPS Telegram session from `syncenv`:
+
+| File | Where | Synced | Contains |
+|---|---|---|---|
+| `.env` | local + server | ✅ `syncenv` copies this | all config except `TELEGRAM_SESSION` |
+| `.env.local` | **server only** | ❌ never touched | `TELEGRAM_SESSION` (VPS session string) |
+
+`syncenv` is safe to run freely. `.env.local` is loaded after `.env` in both Python code and systemd, so it always wins.
+
+**Creating `.env.local` on a new server:**
+```bash
+echo 'TELEGRAM_SESSION="<run get_session.py on the VPS>"' > /home/forwarder/app/.env.local
+chmod 600 /home/forwarder/app/.env.local
+chown forwarder:forwarder /home/forwarder/app/.env.local
+```
+Generate the session string by running `scripts/get_session.py` **on the VPS** (not locally) so Telegram ties the session to `209.38.51.86`.
+
+**Updating live systemd services after first deploy of this change:**
+```bash
+# Run once on VPS as root
+sed -i '/EnvironmentFile=.*\.env$/a EnvironmentFile=-/home/forwarder/app/.env.local' /etc/systemd/system/telegram-forwarder.service
+sed -i '/EnvironmentFile=.*\.env$/a EnvironmentFile=-/home/forwarder/app/.env.local' /etc/systemd/system/telegram-tracker.service
+systemctl daemon-reload
+```
+
 ### Local PowerShell aliases
 
 ```powershell
 vps      # ssh root@209.38.51.86
-syncenv  # scp local .env to server
-ship     # git push + deploy on server
+syncenv  # scp local .env to server (safe — never touches .env.local)
 ```
 
 ### Important
@@ -50,14 +76,8 @@ ship     # git push + deploy on server
 
 ### Deploy workflow
 
-```powershell
-# Local (PowerShell) — commit, push, and deploy to server in one step
-git add -A && git commit -m "..."
-ship   # pushes to GitHub + runs deploy on server
-```
-
 ```bash
-# Server only (as root)
+# Server (as root)
 deploy   # git pull + source ~/.bashrc + restart + forwarder status + last tracker run + tail both logs
 ```
 

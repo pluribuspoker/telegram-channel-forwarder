@@ -31,6 +31,7 @@ from telethon.sessions import StringSession
 from common import enrich_caption, log_group, parse_channel, passes_filter, resolve_dest, send_group
 
 load_dotenv(override=True)
+load_dotenv(".env.local", override=True)  # VPS-specific overrides (never synced)
 
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
@@ -54,6 +55,17 @@ async def heartbeat():
             pass
         print(f" ♡ listening")
         await asyncio.sleep(240)
+
+
+async def connection_watchdog(client):
+    """Probe Telegram every 60s with a real round-trip. Raises on failure to trigger restart."""
+    await asyncio.sleep(60)  # let startup settle
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await asyncio.wait_for(client.get_me(), timeout=15)
+        except Exception as e:
+            raise RuntimeError(f"Watchdog: connection probe failed ({e})")
 
 
 async def main():
@@ -150,9 +162,11 @@ async def main():
 
     print("\n✓ Listening for new messages (Ctrl+C to stop)...")
     asyncio.create_task(heartbeat())
+    watchdog = asyncio.create_task(connection_watchdog(client))
     try:
-        await client.run_until_disconnected()
+        await asyncio.gather(client.run_until_disconnected(), watchdog)
     finally:
+        watchdog.cancel()
         await bot.disconnect()
 
 
