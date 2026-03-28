@@ -98,6 +98,7 @@ PROP_STAT_MARKETS: dict[str, dict[str, str]] = {
 MARKETS_FULL = (
     "h2h,spreads,totals,"
     "alternate_spreads,alternate_totals,"
+    "team_totals,alternate_team_totals,"
     "h2h_h1,spreads_h1,totals_h1,"
     "h2h_h2,spreads_h2,totals_h2,"
     "h2h_q1,spreads_q1,totals_q1"
@@ -523,6 +524,71 @@ def _lookup_total(sport: str, bookmakers: list[dict], direction: str, pick_line:
             "api_line": closest[0], "computed_odds": closest[1], "adjusted_odds": adjusted, "bookmaker": closest[2]}
 
 
+def _lookup_team_total(sport: str, bookmakers: list[dict], team: str, direction: str, pick_line: float) -> dict:
+    """Look up team total odds (team_totals / alternate_team_totals markets).
+
+    These markets use `description` for the team name and `name` for Over/Under,
+    unlike game totals which use `name` for the outcome label only.
+    """
+    outcome_name = "Over" if direction == "over" else "Under"
+    _empty = {"match_type": "team_total_unavailable", "pick_line": pick_line,
+              "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
+
+    def _collect_team_total(mkt_key: str, line_filter: float | None = None):
+        results = []
+        for bk in bookmakers:
+            bk_key = bk.get("key", "")
+            for mkt in bk.get("markets", []):
+                if mkt.get("key") != mkt_key:
+                    continue
+                for outcome in mkt.get("outcomes", []):
+                    desc  = outcome.get("description", "")
+                    name  = outcome.get("name", "")
+                    pt    = outcome.get("point")
+                    price = outcome.get("price")
+                    if not _team_matches(team.lower(), desc.lower()):
+                        continue
+                    if name != outcome_name:
+                        continue
+                    if line_filter is not None and pt is not None:
+                        if abs(float(pt) - line_filter) > 0.01:
+                            continue
+                    if price is not None:
+                        results.append((float(pt) if pt is not None else None, int(price), bk_key))
+        return results
+
+    # Exact match on main market, then alternate
+    for mkt_key, label in [("team_totals", "exact"), ("alternate_team_totals", "exact_alt")]:
+        hits = _collect_team_total(mkt_key, line_filter=pick_line)
+        if hits:
+            odds, book = _pick_best([(price, bk) for _, price, bk in hits])
+            return {"match_type": label, "pick_line": pick_line,
+                    "api_line": pick_line, "computed_odds": odds, "adjusted_odds": odds, "bookmaker": book}
+
+    # Proximity: gather all lines from both markets
+    all_lines = []
+    for mkt_key in ("alternate_team_totals", "team_totals"):
+        for pt, price, bk in _collect_team_total(mkt_key):
+            if pt is not None:
+                all_lines.append((pt, price, bk))
+
+    if not all_lines:
+        return _empty
+
+    closest = min(all_lines, key=lambda x: abs(x[0] - pick_line))
+    gap = abs(closest[0] - pick_line)
+
+    if gap > MAX_LINE_GAP:
+        return {"match_type": f"alt_line_gap_{gap:.1f}pts", "pick_line": pick_line,
+                "api_line": closest[0], "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
+
+    signed_pick = -pick_line if direction == "over" else pick_line
+    signed_api  = -closest[0] if direction == "over" else closest[0]
+    adjusted = _adjust_for_gap(sport, closest[1], signed_pick, signed_api, gap)
+    return {"match_type": f"proximity_{gap:.1f}pts", "pick_line": pick_line,
+            "api_line": closest[0], "computed_odds": closest[1], "adjusted_odds": adjusted, "bookmaker": closest[2]}
+
+
 def _lookup_prop(bookmakers: list[dict], player: str, prop_market: str, direction: str, line: float) -> dict:
     outcome_name = "Over" if direction == "over" else "Under"
     candidates: list[tuple[int, str]] = []
@@ -569,8 +635,10 @@ def lookup_pick_odds(sport: str, pick: dict, bookmakers: list[dict]) -> dict:
                 "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
     if bet_type == "team_total":
-        return {"match_type": "team_total_unavailable", "pick_line": line,
-                "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
+        if line is None or not direction:
+            return {"match_type": "missing_line_or_direction", "pick_line": line,
+                    "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
+        return _lookup_team_total(sport, bookmakers, teams[0] if teams else "", direction, float(line))
 
     if period == "game" and _PERIOD_RE.search(desc):
         m = _PERIOD_RE.search(desc)
