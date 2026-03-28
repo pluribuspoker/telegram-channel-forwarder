@@ -64,11 +64,14 @@ def _find_duplicate_cache_key(
     channel_id: int,
     capper_name: str,
     new_picks: list[dict],
+    exclude_key: str | None = None,
 ) -> str | None:
     """Return the cache key of a pending entry that matches this capper+picks, else None."""
     norm_new = sorted(_norm_desc(p.get("description", "")) for p in new_picks)
     capper_lower = capper_name.lower()
     for key, entry in pending_cache.items():
+        if key == exclude_key:
+            continue
         if int(key.split(':')[0]) != channel_id:
             continue
         if entry.get("capper_name", "").lower() != capper_lower:
@@ -702,9 +705,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # {"_dupe": True} is stored when this message was identified as a duplicate
                 # so we can skip claude_parse on subsequent runs without re-paying.
                 if isinstance(cached, dict) and cached.get("_dupe"):
-                    dup_id = cached.get("primary_id", "?")
-                    print(f"\n  [DUPE] {msg.id:<{_ID_W}}  {_trunc(capper, _CAP_W):<{_CAP_W}}  → primary msg {dup_id}")
-                    continue
+                    continue  # primary row carries the +N dup annotation
                 # {"_failed": True} is stored after the first audit notification so we
                 # don't spam the audit channel — but we still re-try parsing each run
                 # so the fix landing automatically gets picked up.
@@ -756,19 +757,17 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         pending_cache[cache_key] = {"_failed": True}
                     continue
 
-                if not cached_parse:
-                    dup_key = _find_duplicate_cache_key(
-                        pending_cache, channel_id, capper, picks
-                    )
-                    if dup_key:
-                        dup_id = int(dup_key.split(':')[1])
-                        linked = pending_cache[dup_key].setdefault("linked_message_ids", [])
-                        if msg.id not in linked:
-                            linked.append(msg.id)
-                        # Cache the dupe marker so we skip claude_parse on future runs
-                        pending_cache[cache_key] = {"_dupe": True, "primary_id": dup_id}
-                        print(f"\n  [DUPE] {msg.id:<{_ID_W}}  {_trunc(capper, _CAP_W):<{_CAP_W}}  → primary msg {dup_id}")
-                        continue
+                dup_key = _find_duplicate_cache_key(
+                    pending_cache, channel_id, capper, picks, exclude_key=cache_key
+                )
+                if dup_key:
+                    dup_id = int(dup_key.split(':')[1])
+                    linked = pending_cache[dup_key].setdefault("linked_message_ids", [])
+                    if msg.id not in linked:
+                        linked.append(msg.id)
+                    # Cache the dupe marker so we skip claude_parse on future runs
+                    pending_cache[cache_key] = {"_dupe": True, "primary_id": dup_id}
+                    continue  # primary row carries the +N dup annotation
 
                 sb_key = (sport, date_str)
                 if sb_key not in scoreboard_cache:
@@ -837,6 +836,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         tag = "SKIP"
                 else:
                     tag = "DRY " if dry_run else "EDIT"
+                dupe_ids = pending_cache.get(cache_key, {}).get("linked_message_ids", [])
+                dupe_note = f"  +{len(dupe_ids)} dup" if dupe_ids else ""
                 first_active = True
                 for i, (pick, verdict, calc, ps, gd, *_) in enumerate(verdicts):
                     if i in already_broadcast_indices:
@@ -849,8 +850,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     id_col   = str(msg.id) if first_active else ""
                     cap_col  = _trunc(capper, _CAP_W) if first_active else ""
                     prefix   = "\n" if first_active else ""
+                    suffix   = dupe_note if first_active else ""
                     first_active = False
-                    print(f"{prefix}  {tag_col}  {id_col:<{_ID_W}}  {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}}  {ps:<{_SPORT_W}}  {gd_short:<5}  {emoji}")
+                    print(f"{prefix}  {tag_col}  {id_col:<{_ID_W}}  {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}}  {ps:<{_SPORT_W}}  {gd_short:<5}  {emoji}{suffix}")
                     if calc:
                         print(f"  {'':6}  {'':>{_ID_W}}  {'':>{_CAP_W}}  {calc[:_DESC_W + _SPORT_W + 8]}")
                 msg_cost = usage_cost() - msg_cost_before
