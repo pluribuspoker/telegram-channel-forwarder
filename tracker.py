@@ -589,8 +589,8 @@ async def grade_one(text: str, date: str) -> None:
 
 # Column widths for tabular pick output
 _ID_W    = 5   # message ID
-_CAP_W   = 18  # capper name
-_DESC_W  = 44  # pick description
+_CAP_W   = 12  # capper name
+_DESC_W  = 24  # pick description
 _SPORT_W = 5   # sport (NCAAB is widest)
 
 
@@ -646,8 +646,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
             except Exception:
                 channel_names[cid] = str(cid)
 
-        print(f"\nLive grader — {mode}  |  last {days} days  |  channels: {[channel_names[c] for c in channel_ids]}")
-        print("=" * 72)
+        print(f"Live grader — {mode} | {days}d | {', '.join(channel_names[c] for c in channel_ids)}")
+        print("=" * 50)
 
         for channel_id in channel_ids:
             ch_name = channel_names[channel_id]
@@ -733,7 +733,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 parsed = cached_parse or await claude_parse(text)
                 if not parsed:
                     failed += 1
-                    print(f"\n  [SKIP]  {msg.id:<{_ID_W}}  {_trunc(capper, _CAP_W):<{_CAP_W}}  {'parse failed':<{_DESC_W}}  {'':>{_SPORT_W}}  {int(date_str[5:7])}/{int(date_str[8:10])}")
+                    print(f"\n [SKIP] {msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'parse failed':<{_DESC_W}}  {'':>{_SPORT_W}} {int(date_str[5:7])}/{int(date_str[8:10])}")
                     if not already_notified:
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
@@ -747,7 +747,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 picks = parsed.get("picks", [])
                 if not picks:
                     failed += 1
-                    print(f"\n  [SKIP]  {msg.id:<{_ID_W}}  {_trunc(capper, _CAP_W):<{_CAP_W}}  {'no picks':<{_DESC_W}}  {_trunc(sport, _SPORT_W):<{_SPORT_W}}  {int(date_str[5:7])}/{int(date_str[8:10])}")
+                    print(f"\n [SKIP] {msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'no picks':<{_DESC_W}}  {_trunc(sport, _SPORT_W):<{_SPORT_W}} {int(date_str[5:7])}/{int(date_str[8:10])}")
                     if not already_notified:
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
@@ -853,12 +853,12 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     prefix   = "\n" if first_active else ""
                     suffix   = dupe_note if first_active else ""
                     first_active = False
-                    print(f"{prefix}  {tag_col}  {id_col:<{_ID_W}}  {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}}  {ps:<{_SPORT_W}}  {gd_short:<5}  {emoji}{suffix}")
+                    print(f"{prefix} {tag_col} {id_col:<{_ID_W}} {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}}  {ps:<{_SPORT_W}} {gd_short:<4} {emoji}{suffix}")
                     if calc:
-                        print(f"  {'':6}  {'':>{_ID_W}}  {'':>{_CAP_W}}  {calc[:_DESC_W + _SPORT_W + 8]}")
+                        print(f" {'':6} {'':>{_ID_W}} {'':>{_CAP_W}}  {calc[:_DESC_W + _SPORT_W + 8]}")
                 msg_cost = usage_cost() - msg_cost_before
                 if msg_cost > 0:
-                    print(f"  {'':6}  {'':>{_ID_W}}  {'':>{_CAP_W}}  {fmt_cost(msg_cost)}")
+                    print(f" {'':6} {'':>{_ID_W}} {'':>{_CAP_W}}  {fmt_cost(msg_cost)}")
 
                 # Cache the parse result and any resolved leg verdicts to avoid re-calling
                 # Claude on subsequent runs for legs that are already graded.
@@ -954,7 +954,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         capper_name=capper,
                     )
 
-            print(f"\n  ─── edited: {edited}  pending: {pending}  failed: {failed}  errors: {errors}")
+            print(f"  ─── edited: {edited} pending: {pending} failed: {failed} errors: {errors}")
 
     if not dry_run:
         _save_pending_cache(pending_cache)
