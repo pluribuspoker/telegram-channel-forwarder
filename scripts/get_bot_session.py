@@ -12,19 +12,22 @@ Then append the output to .env.local:
 """
 
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
 
-load_dotenv()
-load_dotenv(".env.local", override=True)
+_root = Path(__file__).parent.parent
+load_dotenv(_root / ".env")
+load_dotenv(_root / ".env.local", override=True)
 
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
 with TelegramClient(StringSession(), API_ID, API_HASH) as client:
-    client.start(bot_token=BOT_TOKEN)
+    client.start(bot_token=BOT_TOKEN)  # non-interactive when bot_token is provided
     print("\nBot session string (copy this):\n")
     print(client.session.save())
     print()
+
