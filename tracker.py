@@ -781,14 +781,14 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         result = await fetch_odds_current(pick_sport, pick)
                         display_odds, warn = result.validate_for_display()
                         pick_desc = pick.get("description", "")
-                        if result.is_unexpected_miss:
-                            msg = f"⚠️ <b>odds miss</b>: {result.match_type}\n{pick_desc} · {pick_sport} · {capper}"
+                        if display_odds is None:
+                            # Any failure to show odds → one audit warning per pick, never repeated
+                            reason = warn or result.match_type
                             print(f"  [odds] miss({result.match_type}) {pick_desc[:60]}")
-                            await audit.warn(msg)
-                        elif warn and result.found:
-                            msg = f"⚠️ <b>odds sanity</b>: {warn}\n{pick_desc} · {pick_sport} · {capper}"
+                            await audit.warn(f"⚠️ <b>odds miss</b>: {reason}\n{pick_desc} · {pick_sport} · {capper}")
+                        elif warn:
+                            # Odds found but soft sanity flag — log only, odds still shown
                             print(f"  [odds] sanity: {warn}")
-                            await audit.warn(msg)
                         odds_by_pick[str(i)] = {
                             "odds":       display_odds,
                             "bookmaker":  result.bookmaker,
