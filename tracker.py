@@ -589,9 +589,10 @@ async def grade_one(text: str, date: str) -> None:
 
 # Column widths for tabular pick output
 _ID_W    = 5   # message ID
-_CAP_W   = 12  # capper name
-_DESC_W  = 24  # pick description
-_SPORT_W = 5   # sport (NCAAB is widest)
+_CAP_W   = 9   # capper name
+_DESC_W  = 20  # pick description
+
+_TAG_ICON = {"WAIT": "⏳", "EDIT": "✏", "DRY ": "🧪", "SKIP": "⚠", "ESPN": "📡"}
 
 
 def _trunc(s: str, w: int) -> str:
@@ -733,7 +734,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 parsed = cached_parse or await claude_parse(text)
                 if not parsed:
                     failed += 1
-                    print(f"\n [SKIP] {msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'parse failed':<{_DESC_W}}  {'':>{_SPORT_W}} {int(date_str[5:7])}/{int(date_str[8:10])}")
+                    print(f"\n⚠ {msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'parse failed':<{_DESC_W}}  {int(date_str[5:7])}/{int(date_str[8:10])}")
                     if not already_notified:
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
@@ -747,7 +748,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 picks = parsed.get("picks", [])
                 if not picks:
                     failed += 1
-                    print(f"\n [SKIP] {msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'no picks':<{_DESC_W}}  {_trunc(sport, _SPORT_W):<{_SPORT_W}} {int(date_str[5:7])}/{int(date_str[8:10])}")
+                    print(f"\n⚠ {msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'no picks':<{_DESC_W}}  {int(date_str[5:7])}/{int(date_str[8:10])}")
                     if not already_notified:
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
@@ -838,7 +839,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 else:
                     tag = "DRY " if dry_run else "EDIT"
                 dupe_ids = pending_cache.get(cache_key, {}).get("linked_message_ids", [])
-                dupe_note = f"  +{len(dupe_ids)} dup" if dupe_ids else ""
+                dupe_note = f" {'🔁' if len(dupe_ids) == 1 else str(len(dupe_ids)) + '🔁'}" if dupe_ids else ""
                 first_active = True
                 for i, (pick, verdict, calc, ps, gd, *_) in enumerate(verdicts):
                     if i in already_broadcast_indices:
@@ -847,18 +848,18 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     emoji    = VERDICT_EMOJI.get(verdict, "")
                     d        = _date.fromisoformat(gd) if gd else _date.fromisoformat(date_str)
                     gd_short = f"{d.month}/{d.day}"
-                    tag_col  = f"[{tag}]" if first_active else " " * 6
+                    tag_col  = _TAG_ICON.get(tag, "?") if first_active else "  "
                     id_col   = str(msg.id) if first_active else ""
                     cap_col  = _trunc(capper, _CAP_W) if first_active else ""
                     prefix   = "\n" if first_active else ""
                     suffix   = dupe_note if first_active else ""
                     first_active = False
-                    print(f"{prefix} {tag_col} {id_col:<{_ID_W}} {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}}  {ps:<{_SPORT_W}} {gd_short:<4} {emoji}{suffix}")
+                    print(f"{prefix}{tag_col} {id_col:<{_ID_W}} {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}}  {gd_short:<4} {emoji}{suffix}")
                     if calc:
-                        print(f" {'':6} {'':>{_ID_W}} {'':>{_CAP_W}}  {calc[:_DESC_W + _SPORT_W + 8]}")
+                        print(f"   {'':>{_ID_W}} {'':>{_CAP_W}}  {calc[:_DESC_W + 8]}")
                 msg_cost = usage_cost() - msg_cost_before
                 if msg_cost > 0:
-                    print(f" {'':6} {'':>{_ID_W}} {'':>{_CAP_W}}  {fmt_cost(msg_cost)}")
+                    print(f"   {'':>{_ID_W}} {'':>{_CAP_W}}  {fmt_cost(msg_cost)}")
 
                 # Cache the parse result and any resolved leg verdicts to avoid re-calling
                 # Claude on subsequent runs for legs that are already graded.
