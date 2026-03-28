@@ -590,7 +590,7 @@ async def grade_one(text: str, date: str) -> None:
 # Column widths for tabular pick output
 _ID_W    = 5   # message ID
 _CAP_W   = 9   # capper name
-_DESC_W  = 13  # pick description
+_DESC_W  = 11  # pick description
 
 _TAG_ICON = {"WAIT": "⏳", "EDIT": "✏", "DRY ": "🧪", "SKIP": "⚠", "ESPN": "📡"}
 
@@ -956,7 +956,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         capper_name=capper,
                     )
 
-            print(f"  ─ ed:{edited} pnd:{pending} fl:{failed} er:{errors}")
+            print(f"  ─ edit:{edited} pend:{pending} fail:{failed} err:{errors}")
 
     if not dry_run:
         _save_pending_cache(pending_cache)
