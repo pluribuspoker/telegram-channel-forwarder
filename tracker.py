@@ -499,6 +499,9 @@ _CAP_W   = 18  # capper name
 _DESC_W  = 44  # pick description
 _SPORT_W = 5   # sport (NCAAB is widest)
 
+_WARM = "\033[38;2;255;220;150m"  # warm amber-white, easy on dark-mode eyes
+_RST  = "\033[0m"
+
 def _trunc(s: str, w: int) -> str:
     """Truncate string to width w, appending … if trimmed."""
     return s if len(s) <= w else s[:w - 1] + "…"
@@ -580,7 +583,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 parsed = cached_parse or await claude_parse(text)
                 if not parsed:
                     failed += 1
-                    print(f"\n  [SKIP]  {msg.id:<{_ID_W}}  {_trunc(capper, _CAP_W):<{_CAP_W}}  {'parse failed':<{_DESC_W}}  {'':>{_SPORT_W}}  {int(date_str[5:7])}/{int(date_str[8:10])}")
+                    print(f"\n{_WARM}  [SKIP]  {msg.id:<{_ID_W}}  {_trunc(capper, _CAP_W):<{_CAP_W}}  {'parse failed':<{_DESC_W}}  {'':>{_SPORT_W}}  {int(date_str[5:7])}/{int(date_str[8:10])}{_RST}")
                     if not already_notified:
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
@@ -594,7 +597,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 picks = parsed.get("picks", [])
                 if not picks:
                     failed += 1
-                    print(f"\n  [SKIP]  {msg.id:<{_ID_W}}  {_trunc(capper, _CAP_W):<{_CAP_W}}  {'no picks':<{_DESC_W}}  {_trunc(sport, _SPORT_W):<{_SPORT_W}}  {int(date_str[5:7])}/{int(date_str[8:10])}")
+                    print(f"\n{_WARM}  [SKIP]  {msg.id:<{_ID_W}}  {_trunc(capper, _CAP_W):<{_CAP_W}}  {'no picks':<{_DESC_W}}  {_trunc(sport, _SPORT_W):<{_SPORT_W}}  {int(date_str[5:7])}/{int(date_str[8:10])}{_RST}")
                     if not already_notified:
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
@@ -656,12 +659,12 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     id_col   = str(msg.id) if i == 0 else ""
                     cap_col  = _trunc(capper, _CAP_W) if i == 0 else ""
                     prefix   = "\n" if i == 0 else ""
-                    print(f"{prefix}  {tag_col}  {id_col:<{_ID_W}}  {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}}  {ps:<{_SPORT_W}}  {gd_short:<5}  {emoji}")
+                    print(f"{prefix}{_WARM}  {tag_col}  {id_col:<{_ID_W}}  {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}}  {ps:<{_SPORT_W}}  {gd_short:<5}  {emoji}{_RST}")
                     if calc:
-                        print(f"  {'':6}  {'':>{_ID_W}}  {'':>{_CAP_W}}  {calc[:_DESC_W + _SPORT_W + 8]}")
+                        print(f"{_WARM}  {'':6}  {'':>{_ID_W}}  {'':>{_CAP_W}}  {calc[:_DESC_W + _SPORT_W + 8]}{_RST}")
                 msg_cost = usage_cost() - msg_cost_before
                 if msg_cost > 0:
-                    print(f"  {'':6}  {'':>{_ID_W}}  {'':>{_CAP_W}}  $ {fmt_cost(msg_cost)}")
+                    print(f"{_WARM}  {'':6}  {'':>{_ID_W}}  {'':>{_CAP_W}}  $ {fmt_cost(msg_cost)}{_RST}")
 
                 # Cache the parse result for pending messages to avoid re-parsing on next run
                 if not graded:

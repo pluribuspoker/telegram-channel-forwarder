@@ -63,7 +63,7 @@ async def connection_watchdog(client):
         await asyncio.sleep(60)
         try:
             await asyncio.wait_for(client.get_me(), timeout=15)
-            print("  ⇌ probe")
+            print("  ⇌")
         except Exception as e:
             raise RuntimeError(f"Watchdog: connection probe failed ({e})")
 
@@ -81,12 +81,13 @@ async def channel_probe(client, channels):
                     continue
                 msg = msgs[0]
                 if last_seen.get(source_entity.id) == msg.id:
+                    print(f"\033[2m  ⊙ {src_label}: no new msg\033[0m")
                     continue
                 last_seen[source_entity.id] = msg.id
                 age = datetime.datetime.now(datetime.timezone.utc) - msg.date
                 print(f"\033[32m  ⊙ {src_label}: new msg id={msg.id} ({age.seconds//60}m ago)\033[0m")
             except Exception as e:
-                print(f"  ⊙ {src_label}: probe failed ({e})")
+                print(f"\033[31m  ⊙ {src_label}: probe failed ({e})\033[0m")
 
 
 async def main():
