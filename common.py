@@ -15,7 +15,7 @@ _anth_client = None
 VERDICT_EMOJI = {
     "WIN":     "✅",
     "LOSS":    "❌",
-    "PUSH":    "↩️",
+    "PUSH":    "♻️",
     "UNKNOWN": "❓",
     "PENDING": "⏳",
 }
