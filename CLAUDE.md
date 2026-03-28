@@ -83,18 +83,23 @@ deploy   # git pull + source ~/.bashrc + restart + forwarder status + last track
 
 ---
 
-## Pick tracker
+## Log colors
 
-Runs every 5 minutes via systemd timer (`telegram-tracker.timer`).
-Grades sports picks in destination channels by appending ✅/❌ inline after each pick line.
-Audit log: `picks.db` (SQLite) + Telegram audit channel (`AUDIT_CHANNEL_ID`). PENDING picks written to DB only, not posted to audit channel.
-Parse cache: `parse_cache.json` — avoids re-parsing pending picks on every run.
 Log colors are applied entirely by the `_fmtlog` awk function in `/root/.server_aliases.sh` — **do not add ANSI codes to Python print statements**. The awk colors by message content (checked in this order):
 - **Cyan**: channel name headers — any line containing `(-<number>):` (e.g. `DF (-100...):`) — checked first so it always wins
 - **Green**: ✦ SENT, [EDIT], ✅, Connected, Completed successfully
 - **Red**: [SKIP], ❌, Crashed, Failed, errors/failed > 0
 - **Dim**: · filtered, ⇌ watchdog, Cost line, systemd lifecycle lines
 - **Warm amber**: everything else ([WAIT], PENDING, startup block, separators, probe lines)
+
+---
+
+## Pick tracker
+
+Runs every 5 minutes via systemd timer (`telegram-tracker.timer`).
+Grades sports picks in destination channels by appending ✅/❌ inline after each pick line.
+Audit log: `picks.db` (SQLite) + Telegram audit channel (`AUDIT_CHANNEL_ID`). PENDING picks written to DB only, not posted to audit channel.
+Parse cache: `parse_cache.json` — avoids re-parsing pending picks on every run.
 Summary line: `edited / pending / failed / errors`.
 
 ```bash
