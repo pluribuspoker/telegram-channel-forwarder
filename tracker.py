@@ -44,8 +44,9 @@ _PENDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "parse_cache.json"
 def _norm_desc(d: str) -> str:
     """Normalise a pick description for duplicate comparison."""
     d = d.lower().strip()
-    d = re.sub(r'\([+-]?\d+\)', '', d)    # strip odds e.g. (-170)
-    d = re.sub(r'\d+(\.\d+)?u\b', '', d)  # strip units e.g. 1.5u
+    d = re.sub(r'\([+-]?\d+\)', '', d)               # strip parenthesized odds e.g. (-170)
+    d = re.sub(r'(?<=\s)[+-]?\d{3,}(?=\s|$)', '', d) # strip bare American odds e.g. -170, +110
+    d = re.sub(r'\d+(\.\d+)?u\b', '', d)              # strip units e.g. 1.5u
     return re.sub(r'\s+', ' ', d).strip()
 
 
