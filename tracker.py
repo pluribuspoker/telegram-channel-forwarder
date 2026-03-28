@@ -92,13 +92,59 @@ _PICK_EMOJI = {k: v for k, v in VERDICT_EMOJI.items() if k in ("WIN", "LOSS", "P
 
 def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
     """
-    Insert per-pick verdict emojis inline after each pick's line in the message.
-    Matches each pick to its line using team/player names, then appends the emoji.
+    Insert verdict emoji(s) into the message text.
+
+    Parlay messages: add a single overall verdict emoji on the "Parlay:" header
+    line (or after the last leg if no header found).  Per-leg emojis are NOT
+    inserted — the parlay is a single bet.
+
+    Non-parlay messages: insert per-pick verdict emojis inline after each
+    pick's line, matched by team/player name.
+
     Lines that can't be matched are left unchanged.
     Returns the modified text (or original if nothing could be matched).
     """
     lines = text.rstrip().split("\n")
 
+    is_parlay = any(v[0].get("is_parlay_leg") for v in verdicts)
+
+    if is_parlay:
+        overall = _overall_verdict(verdicts)
+        emoji = _PICK_EMOJI.get(overall)
+        if not emoji:
+            return text  # PENDING / UNKNOWN — nothing to insert yet
+
+        # Prefer appending to the "Parlay:" header line
+        for i, line in enumerate(lines):
+            if "parlay" in line.lower() and not any(ch in line for ch in _PICK_EMOJI.values()):
+                lines[i] = f"{line.rstrip()}{emoji}"
+                return "\n".join(lines)
+
+        # Fallback: find the last leg line and append there
+        last_idx = -1
+        for pick, _verdict, _calc, _sport, *_ in verdicts:
+            if not pick.get("is_parlay_leg"):
+                continue
+            teams  = pick.get("teams") or []
+            player = pick.get("player") or ""
+            identifiers = [player] if player else teams
+            search_terms: list[str] = []
+            for t in identifiers:
+                tl = t.lower().strip()
+                if tl:
+                    search_terms.append(tl)
+                    search_terms.extend(w for w in tl.split() if len(w) > 3)
+            for i, line in enumerate(lines):
+                if any(term in line.lower() for term in search_terms):
+                    last_idx = max(last_idx, i)
+
+        if last_idx >= 0 and not any(ch in lines[last_idx] for ch in _PICK_EMOJI.values()):
+            lines[last_idx] = f"{lines[last_idx].rstrip()}{emoji}"
+        else:
+            lines.append(emoji)
+        return "\n".join(lines)
+
+    # ── Non-parlay: per-pick emoji ────────────────────────────────────────────
     for pick, verdict, _calc, _sport, *_ in verdicts:
         emoji = _PICK_EMOJI.get(verdict)
         if not emoji:
@@ -641,11 +687,15 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 new_text = _insert_emojis(html_text, verdicts)
                 graded = [v for v in verdicts if v[1] in _PICK_EMOJI]
                 overall = _overall_verdict(verdicts)
+                is_parlay = any(v[0].get("is_parlay_leg") for v in verdicts)
+                # For parlays, don't edit until ALL legs are resolved — a LOSS
+                # resolves the parlay immediately, but PENDING means we must wait.
+                parlay_pending = is_parlay and overall == "PENDING"
 
                 # Print all picks with their individual verdicts
                 has_pending = any(v[1] == "PENDING" for v in verdicts)
-                if not graded:
-                    tag = "WAIT" if has_pending else "SKIP"
+                if not graded or parlay_pending:
+                    tag = "WAIT" if (has_pending or parlay_pending) else "SKIP"
                 else:
                     tag = "DRY " if dry_run else "EDIT"
                 for i, (pick, verdict, calc, ps, gd, *_) in enumerate(verdicts):
@@ -665,12 +715,12 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     print(f"  {'':6}  {'':>{_ID_W}}  {'':>{_CAP_W}}  $ {fmt_cost(msg_cost)}")
 
                 # Cache the parse result for pending messages to avoid re-parsing on next run
-                if not graded:
+                if not graded or parlay_pending:
                     pending_cache[cache_key] = parsed
 
                 # Nothing gradeable — log and skip
-                if not graded:
-                    if overall == "PENDING":
+                if not graded or parlay_pending:
+                    if overall == "PENDING" or parlay_pending:
                         pending += 1
                     else:
                         failed += 1
