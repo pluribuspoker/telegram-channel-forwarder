@@ -221,7 +221,7 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
 
     return "\n".join(lines)
 
-_ODDS_TAG_RE = re.compile(r'\s*\([+-]\d{3,4}\)')
+_ODDS_TAG_RE = re.compile(r'\s*[\(\[][+-]\d{3,4}[\)\]]')
 
 
 def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
@@ -241,7 +241,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         odds_val = odds_by_pick.get(str(idx), {}).get("odds")
         if odds_val is None:
             continue
-        odds_tag = f" 💧({'+' if odds_val > 0 else ''}{odds_val})"
+        odds_tag = f" [{'+' if odds_val > 0 else ''}{odds_val}]"
 
         teams  = pick.get("teams") or []
         player = pick.get("player") or ""
