@@ -806,7 +806,8 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
         bookmakers: list[dict] = []
 
         # ESPN first (free, only has pre-game odds)
-        if sport in ESPN_LEAGUES:
+        # Skip ESPN for team_total picks — ESPN doesn't carry team_total markets
+        if sport in ESPN_LEAGUES and bet_type != "team_total":
             from datetime import date as _d
             espn_data = await fetch_espn(sport, _d.today().isoformat())
             if espn_data:
