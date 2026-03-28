@@ -109,7 +109,7 @@ PREFERRED_BOOKS = [
     "pointsbet", "williamhill_us", "barstool",
 ]
 
-MAX_LINE_GAP = 1.5
+MAX_LINE_GAP = 5
 
 HALF_POINT_COST: dict[str, float] = {
     "NFL":   0.022,
