@@ -370,7 +370,7 @@ class AuditLog:
         def _parlay_combined_odds(leg_odds: list[int | None]) -> int | None:
             """Multiply individual American leg odds into a combined parlay price."""
             valid = [o for o in leg_odds if o is not None]
-            if not valid:
+            if len(valid) != len(leg_odds):
                 return None
             dec = 1.0
             for o in valid:

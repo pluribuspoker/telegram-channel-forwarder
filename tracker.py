@@ -237,8 +237,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     if any(p.get("is_parlay_leg") for p in picks):
         _leg_odds = [odds_by_pick.get(str(i), {}).get("odds") for i in range(len(picks))]
         _valid = [o for o in _leg_odds if o is not None]
-        if not _valid:
-            return text
+        if len(_valid) != len(_leg_odds):
+            return text  # partial odds — don't show misleading combined price
         _dec = 1.0
         for _o in _valid:
             _dec *= (_o / 100 + 1) if _o > 0 else (100 / abs(_o) + 1)
@@ -955,7 +955,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 if is_parlay:
                     _leg_odds = [odds_by_pick.get(str(i), {}).get("odds") for i in range(len(verdicts))]
                     _valid = [o for o in _leg_odds if o is not None]
-                    if _valid:
+                    if _valid and len(_valid) == len(_leg_odds):
                         _dec = 1.0
                         for _o in _valid:
                             _dec *= (_o / 100 + 1) if _o > 0 else (100 / abs(_o) + 1)
