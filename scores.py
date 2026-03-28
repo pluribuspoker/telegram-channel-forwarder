@@ -223,15 +223,22 @@ def scoreboard_text(data: dict, sport: str) -> str:
             # Each competition is a separate bout — include ALL of them
             for comp in all_comps:
                 fighters = []
-                winner = "?"
+                winner = None
                 status = comp.get("status", {}).get("type", {}).get("description", "")
+                completed = comp.get("status", {}).get("type", {}).get("completed", False)
                 for c in comp.get("competitors", []):
                     name = c.get("athlete", {}).get("displayName", "?")
                     fighters.append(name)
                     if c.get("winner"):
                         winner = name
                 if fighters:
-                    lines.append(f"{' vs '.join(fighters)} → Winner: {winner} [{status}]")
+                    if winner:
+                        result_str = f"Winner: {winner}"
+                    elif completed:
+                        result_str = "Winner: DRAW"
+                    else:
+                        result_str = "Winner: ?"
+                    lines.append(f"{' vs '.join(fighters)} → {result_str} [{status}]")
         else:
             comp = all_comps[0] if all_comps else {}
             by_side = {c["homeAway"]: c for c in comp.get("competitors", [])}
@@ -377,6 +384,29 @@ def _completed_events(data: dict) -> list[dict]:
         e for e in data.get("events", [])
         if e.get("status", {}).get("type", {}).get("completed", False)
     ]
+
+
+def _ufc_bout_completed(data: dict, teams: list[str], player: str = "") -> bool:
+    """Return True if the specific UFC bout (identified by fighter names) is
+    marked Final/completed at the competition level, even if the overall
+    event is still In Progress (other bouts on the card are ongoing)."""
+    search_terms = [t.lower() for t in teams if t] + ([player.lower()] if player else [])
+    if not search_terms:
+        return False
+    for event in data.get("events", []):
+        for comp in event.get("competitions", []):
+            if not comp.get("status", {}).get("type", {}).get("completed", False):
+                continue
+            comp_names = [
+                c.get("athlete", {}).get("displayName", "").lower()
+                for c in comp.get("competitors", [])
+            ]
+            if any(
+                any(_team_matches(term, cn) for cn in comp_names)
+                for term in search_terms
+            ):
+                return True
+    return False
 
 
 def extract_espn_bookmaker(competition: dict) -> dict | None:

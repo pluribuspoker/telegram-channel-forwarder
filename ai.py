@@ -22,6 +22,7 @@ from scores import (
     box_score_text,
     find_event_ids,
     _completed_events,
+    _ufc_bout_completed,
 )
 
 
@@ -98,7 +99,7 @@ Rules by bet type:
 - Player prop: add the player's listed stats. Compare to line.
 - Period bets (1H, 1Q, 2H): use ONLY the scores for that period shown in the data.
 - UFC/MMA: use LAST NAME matching if the full name doesn't exactly match. "Alex Sola" matches "Axel Sola".
-- Boxing/UFC moneyline: fighter wins the bout → WIN. Loses → LOSS. Scores may show "W"/"L" or numeric points — use winner field or highest score.
+- Boxing/UFC moneyline: fighter wins the bout → WIN. Loses → LOSS. Scores may show "W"/"L" or numeric points — use winner field or highest score. Draw or No Contest → PUSH.
 - Tennis set bet ("to win 2nd set", "to win a set"): use per-set scores (S1=, S2=, ...) from the data.
   * "win Nth set": player's SN score > opponent's SN score → WIN.
   * "win a set": player won at least one set (any SN) → WIN.
@@ -265,7 +266,10 @@ async def build_context(
         if teams or player:
             events = _completed_events(scoreboard)
             relevant_ids = find_event_ids(events, teams, player)
-            if relevant_ids:
+            # UFC: a bout may be completed even while the event card is still in progress.
+            # Fall through to the scoreboard display if the specific bout is done.
+            ufc_bout_done = sport == "UFC" and not relevant_ids and _ufc_bout_completed(scoreboard, teams, player)
+            if relevant_ids or ufc_bout_done:
                 # UFC: show the full card so grader sees all bouts; others: filter to the game
                 display = scoreboard if sport == "UFC" else {"events": [e for e in events if e.get("id") in set(relevant_ids)]}
                 return scoreboard_text(display, sport), date
@@ -278,7 +282,8 @@ async def build_context(
             if prev_sb:
                 prev_events = _completed_events(prev_sb)
                 prev_ids = find_event_ids(prev_events, teams, player)
-                if prev_ids:
+                prev_ufc_done = sport == "UFC" and not prev_ids and _ufc_bout_completed(prev_sb, teams, player)
+                if prev_ids or prev_ufc_done:
                     display = prev_sb if sport == "UFC" else {"events": [e for e in prev_events if e.get("id") in set(prev_ids)]}
                     return scoreboard_text(display, sport), prev_date
                 if find_event_ids(prev_sb.get("events", []), teams, player):
