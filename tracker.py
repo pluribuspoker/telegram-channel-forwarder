@@ -787,8 +787,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             print(f"  [odds] miss({result.match_type}) {pick_desc[:60]}")
                             await audit.warn(f"⚠️ <b>odds miss</b>: {reason}\n{pick_desc} · {pick_sport} · {capper}")
                         elif warn:
-                            # Odds found but soft sanity flag — log only, odds still shown
+                            # Odds found but soft sanity flag — log + one audit warning
                             print(f"  [odds] sanity: {warn}")
+                            await audit.warn(f"⚠️ <b>odds sanity</b>: {warn}\n{pick_desc} · {pick_sport} · {capper}")
                         odds_by_pick[str(i)] = {
                             "odds":       display_odds,
                             "bookmaker":  result.bookmaker,
