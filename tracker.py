@@ -241,7 +241,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         odds_val = odds_by_pick.get(str(idx), {}).get("odds")
         if odds_val is None:
             continue
-        odds_tag = f" ({'+' if odds_val > 0 else ''}{odds_val})"
+        odds_tag = f" 💧({'+' if odds_val > 0 else ''}{odds_val})"
 
         teams  = pick.get("teams") or []
         player = pick.get("player") or ""
