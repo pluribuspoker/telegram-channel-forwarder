@@ -221,7 +221,7 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
 
     return "\n".join(lines)
 
-_ODDS_TAG_RE = re.compile(r'\s*[\(\[][+-]\d{3,4}[\)\]]')
+_ODDS_TAG_RE = re.compile(r'\s*\[[+-]\d{3,4}\]')
 
 
 def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
