@@ -53,7 +53,6 @@ async def heartbeat():
             urllib.request.urlopen(url, timeout=10)
         except Exception:
             pass
-        print(f" ♡")
         await asyncio.sleep(240)
 
 
