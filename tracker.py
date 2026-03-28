@@ -41,6 +41,47 @@ load_dotenv(".env.local", override=True)  # VPS-specific overrides (never synced
 _PENDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "parse_cache.json")
 
 
+def _norm_desc(d: str) -> str:
+    """Normalise a pick description for duplicate comparison."""
+    d = d.lower().strip()
+    d = re.sub(r'\([+-]?\d+\)', '', d)    # strip odds e.g. (-170)
+    d = re.sub(r'\d+(\.\d+)?u\b', '', d)  # strip units e.g. 1.5u
+    return re.sub(r'\s+', ' ', d).strip()
+
+
+def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict) -> dict:
+    """Build a pending-cache entry, preserving any linked_message_ids from the existing entry."""
+    return {
+        "capper_name": capper,
+        "parsed": parsed,
+        "leg_verdicts": leg_verdicts,
+        "linked_message_ids": existing.get("linked_message_ids", []),
+    }
+
+
+def _find_duplicate_cache_key(
+    pending_cache: dict,
+    channel_id: int,
+    capper_name: str,
+    new_picks: list[dict],
+) -> str | None:
+    """Return the cache key of a pending entry that matches this capper+picks, else None."""
+    norm_new = sorted(_norm_desc(p.get("description", "")) for p in new_picks)
+    capper_lower = capper_name.lower()
+    for key, entry in pending_cache.items():
+        if int(key.split(':')[0]) != channel_id:
+            continue
+        if entry.get("capper_name", "").lower() != capper_lower:
+            continue
+        existing_picks = entry.get("parsed", {}).get("picks", [])
+        if not existing_picks:
+            continue
+        norm_existing = sorted(_norm_desc(p.get("description", "")) for p in existing_picks)
+        if norm_existing == norm_new:
+            return key
+    return None
+
+
 def _load_pending_cache() -> dict:
     try:
         with open(_PENDING_CACHE_PATH) as f:
@@ -686,6 +727,18 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         pending_cache[cache_key] = {"_failed": True}
                     continue
 
+                if not cached_parse:
+                    dup_key = _find_duplicate_cache_key(
+                        pending_cache, channel_id, capper, picks
+                    )
+                    if dup_key:
+                        dup_id = int(dup_key.split(':')[1])
+                        linked = pending_cache[dup_key].setdefault("linked_message_ids", [])
+                        if msg.id not in linked:
+                            linked.append(msg.id)
+                        print(f"\n  [DUPE] {msg.id:<{_ID_W}}  {_trunc(capper, _CAP_W):<{_CAP_W}}  → primary msg {dup_id}")
+                        continue
+
                 sb_key = (sport, date_str)
                 if sb_key not in scoreboard_cache:
                     scoreboard_cache[sb_key] = await fetch_espn(sport, date_str)
@@ -779,7 +832,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                 "verdict": lverdict, "calc": lcalc,
                                 "sport": lps, "game_date": lgd or date_str,
                             }
-                    pending_cache[cache_key] = {"parsed": parsed, "leg_verdicts": new_leg_verdicts}
+                    pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}))
 
                 # Nothing new to grade this run — log and skip
                 if not newly_resolved or parlay_pending:
@@ -812,6 +865,11 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         errors += 1
                         continue
                     await asyncio.sleep(0.5)   # stay under Telegram flood limit
+                    for linked_id in pending_cache.get(cache_key, {}).get("linked_message_ids", []):
+                        await _bot_edit_message(
+                            bot_token, channel_id, linked_id, new_text, msg.media is not None,
+                        )
+                        await asyncio.sleep(0.5)
 
                 edited += 1
                 # If some picks are still pending, keep the cache entry (with broadcasted
@@ -826,7 +884,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                 "sport": lps, "game_date": lgd or date_str,
                                 "broadcasted": True,   # prevent double-broadcast next run
                             }
-                    pending_cache[cache_key] = {"parsed": parsed, "leg_verdicts": new_leg_verdicts}
+                    pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}))
                 else:
                     pending_cache.pop(cache_key, None)  # fully graded — evict from pending cache
                 all_descs = "\n".join(
