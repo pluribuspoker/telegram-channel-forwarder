@@ -499,6 +499,10 @@ _CAP_W   = 18  # capper name
 _DESC_W  = 44  # pick description
 _SPORT_W = 5   # sport (NCAAB is widest)
 
+def _trunc(s: str, w: int) -> str:
+    """Truncate string to width w, appending … if trimmed."""
+    return s if len(s) <= w else s[:w - 1] + "…"
+
 async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = None) -> None:
     import datetime as dt
     from telethon import TelegramClient
@@ -576,7 +580,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 parsed = cached_parse or await claude_parse(text)
                 if not parsed:
                     failed += 1
-                    print(f"\n  [SKIP]  {msg.id:<{_ID_W}}  {capper[:_CAP_W]:<{_CAP_W}}  {'parse failed':<{_DESC_W}}  {'':>{_SPORT_W}}  {int(date_str[5:7])}/{int(date_str[8:10])}")
+                    print(f"\n  [SKIP]  {msg.id:<{_ID_W}}  {_trunc(capper, _CAP_W):<{_CAP_W}}  {'parse failed':<{_DESC_W}}  {'':>{_SPORT_W}}  {int(date_str[5:7])}/{int(date_str[8:10])}")
                     if not already_notified:
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
@@ -590,7 +594,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 picks = parsed.get("picks", [])
                 if not picks:
                     failed += 1
-                    print(f"\n  [SKIP]  {msg.id:<{_ID_W}}  {capper[:_CAP_W]:<{_CAP_W}}  {'no picks':<{_DESC_W}}  {sport[:_SPORT_W]:<{_SPORT_W}}  {int(date_str[5:7])}/{int(date_str[8:10])}")
+                    print(f"\n  [SKIP]  {msg.id:<{_ID_W}}  {_trunc(capper, _CAP_W):<{_CAP_W}}  {'no picks':<{_DESC_W}}  {_trunc(sport, _SPORT_W):<{_SPORT_W}}  {int(date_str[5:7])}/{int(date_str[8:10])}")
                     if not already_notified:
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
@@ -644,13 +648,13 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 else:
                     tag = "DRY " if dry_run else "EDIT"
                 for i, (pick, verdict, calc, ps, gd, *_) in enumerate(verdicts):
-                    desc     = pick.get("description", "")[:_DESC_W]
+                    desc     = _trunc(pick.get("description", ""), _DESC_W)
                     emoji    = VERDICT_EMOJI.get(verdict, "")
                     d        = _date.fromisoformat(gd) if gd else _date.fromisoformat(date_str)
                     gd_short = f"{d.month}/{d.day}"
                     tag_col  = f"[{tag}]" if i == 0 else " " * 6
                     id_col   = str(msg.id) if i == 0 else ""
-                    cap_col  = capper[:_CAP_W] if i == 0 else ""
+                    cap_col  = _trunc(capper, _CAP_W) if i == 0 else ""
                     prefix   = "\n" if i == 0 else ""
                     print(f"{prefix}  {tag_col}  {id_col:<{_ID_W}}  {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}}  {ps:<{_SPORT_W}}  {gd_short:<5}  {emoji}")
                     if calc:
