@@ -53,7 +53,7 @@ async def heartbeat():
             urllib.request.urlopen(url, timeout=10)
         except Exception:
             pass
-        print(f" ♡ listening")
+        print(f" ♡")
         await asyncio.sleep(240)
 
 
@@ -64,6 +64,7 @@ async def connection_watchdog(client):
         await asyncio.sleep(60)
         try:
             await asyncio.wait_for(client.get_me(), timeout=15)
+            print("  ⇌ probe")
         except Exception as e:
             raise RuntimeError(f"Watchdog: connection probe failed ({e})")
 
@@ -81,9 +82,11 @@ async def main():
     album_buffer: dict = {}
 
     use_test = "--test" in sys.argv
-    print(f"  Mode: {'TEST' if use_test else 'REAL'}")
+    _SEP = "  " + "─" * 55
 
-    registered = set()  # track (source_id, dest_id) pairs to avoid duplicate handlers
+    # ── Resolve channels ──────────────────────────────────────────────────────
+    registered = set()
+    channels = []  # (source_entity, bot_dest_entity, src_label, dst_label, topic_id, mapping)
 
     for mapping in MAPPINGS:
         source_raw = mapping.get("test_source_channel") if use_test else None
@@ -99,15 +102,25 @@ async def main():
 
         pair = (source_entity.id, dest_entity.id)
         if pair in registered:
-            print(f"  Skipped duplicate: {mapping['id']}")
             continue
         registered.add(pair)
 
-        source_label = getattr(source_entity, 'title', source)
+        src_label = getattr(source_entity, 'title', source)
         if topic_id:
-            source_label += f" #{topic_id}"
-        print(f"  Listening: {source_label} → {getattr(dest_entity, 'title', dest_entity)}")
+            src_label += f" #{topic_id}"
+        dst_label = getattr(dest_entity, 'title', dest_entity)
+        channels.append((source_entity, bot_dest_entity, src_label, dst_label, topic_id, mapping))
 
+    # ── Print startup block ───────────────────────────────────────────────────
+    print(f"\n{_SEP}")
+    print(f"  Mode: {'TEST' if use_test else 'REAL'}  |  {len(channels)} channel mapping(s)")
+    src_w = max((len(c[2]) for c in channels), default=0)
+    for _, _, src_lbl, dst_lbl, _, _ in channels:
+        print(f"  Listening:  {src_lbl:<{src_w}}  →  {dst_lbl}")
+    print(f"{_SEP}\n")
+
+    # ── Register event handlers ───────────────────────────────────────────────
+    for source_entity, bot_dest_entity, _, _, topic_id, mapping in channels:
         @client.on(events.NewMessage(chats=source_entity))
         async def handler(event, bot_dest_entity=bot_dest_entity, topic_id=topic_id, mapping=mapping):
             msg = event.message
@@ -160,7 +173,7 @@ async def main():
                 except Exception as e:
                     print(f"  ✗ Failed on message {msg.id}: {e}", file=sys.stderr)
 
-    print("\n✓ Listening for new messages (Ctrl+C to stop)...")
+    print("✓ Listening for new messages (Ctrl+C to stop)...")
     asyncio.create_task(heartbeat())
     watchdog = asyncio.create_task(connection_watchdog(client))
     try:
