@@ -40,9 +40,6 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 BOT_SESSION = os.environ.get("BOT_SESSION", "")
 MAPPINGS = json.loads(os.environ["MAPPINGS_CONFIG"])
 
-# How long to wait for album messages to arrive before sending as a group
-ALBUM_WAIT = 5.0
-
 
 async def heartbeat():
     """Ping healthchecks.io every 4 minutes to signal the service is alive."""
@@ -103,9 +100,6 @@ async def main():
     await bot.start(bot_token=BOT_TOKEN)
     print("✓ Connected to Telegram (bot)")
 
-    # album buffer: grouped_id -> (list of messages, flush task)
-    album_buffer: dict = {}
-
     use_test = "--test" in sys.argv
     _SEP = "  " + "─" * 55
 
@@ -146,57 +140,48 @@ async def main():
 
     # ── Register event handlers ───────────────────────────────────────────────
     for source_entity, bot_dest_entity, _, _, topic_id, mapping in channels:
+
+        def _topic_ok(msg, topic_id=topic_id):
+            """Return True if the message belongs to the configured topic (or no topic filter)."""
+            if not topic_id:
+                return True
+            reply_to = msg.reply_to
+            if not reply_to:
+                return False
+            msg_topic = getattr(reply_to, "reply_to_top_id", None) or getattr(reply_to, "reply_to_msg_id", None)
+            return msg_topic == topic_id
+
         @client.on(events.NewMessage(chats=source_entity))
-        async def handler(event, bot_dest_entity=bot_dest_entity, topic_id=topic_id, mapping=mapping):
+        async def handler(event, bot_dest_entity=bot_dest_entity, mapping=mapping, _topic_ok=_topic_ok):
             msg = event.message
-
-            # Filter by topic if needed
-            if topic_id:
-                reply_to = msg.reply_to
-                if not reply_to:
-                    return
-                msg_topic = getattr(reply_to, "reply_to_top_id", None) or getattr(reply_to, "reply_to_msg_id", None)
-                if msg_topic != topic_id:
-                    return
-
             if msg.grouped_id:
-                gid = msg.grouped_id
-                if gid not in album_buffer:
-                    album_buffer[gid] = []
-                album_buffer[gid].append(msg)
+                return  # handled by album_handler below
+            if not _topic_ok(msg):
+                return
+            if not passes_filter([msg], mapping):
+                log_group([msg], sent=False)
+                return
+            try:
+                caption, odds = await enrich_caption([msg], mapping, client)
+                log_group([msg], sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None)
+                await send_group(client, [msg], bot_dest_entity, sender=bot, caption_override=caption, text_only=bool(odds))
+            except Exception as e:
+                print(f"  ✗ Failed on message {msg.id}: {e}", file=sys.stderr)
 
-                # Cancel existing flush and reset timer
-                existing = album_buffer.get(f"{gid}_task")
-                if existing:
-                    existing.cancel()
-
-                async def flush_album(gid=gid, bot_dest_entity=bot_dest_entity, mapping=mapping):
-                    await asyncio.sleep(ALBUM_WAIT)
-                    group = sorted(album_buffer.pop(gid, []), key=lambda m: m.id)
-                    album_buffer.pop(f"{gid}_task", None)
-                    if not group:
-                        return
-                    if passes_filter(group, mapping):
-                        try:
-                            caption, odds = await enrich_caption(group, mapping, client)
-                            log_group(group, sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None)
-                            await send_group(client, group, bot_dest_entity, sender=bot, caption_override=caption, text_only=bool(odds))
-                        except Exception as e:
-                            print(f"  ✗ Album send failed: {e}", file=sys.stderr)
-                    else:
-                        log_group(group, sent=False)
-
-                album_buffer[f"{gid}_task"] = asyncio.create_task(flush_album())
-            else:
-                if not passes_filter([msg], mapping):
-                    log_group([msg], sent=False)
-                    return
+        @client.on(events.Album(chats=source_entity))
+        async def album_handler(event, bot_dest_entity=bot_dest_entity, mapping=mapping, _topic_ok=_topic_ok):
+            group = sorted(event.messages, key=lambda m: m.id)
+            if not _topic_ok(group[0]):
+                return
+            if passes_filter(group, mapping):
                 try:
-                    caption, odds = await enrich_caption([msg], mapping, client)
-                    log_group([msg], sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None)
-                    await send_group(client, [msg], bot_dest_entity, sender=bot, caption_override=caption, text_only=bool(odds))
+                    caption, odds = await enrich_caption(group, mapping, client)
+                    log_group(group, sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None)
+                    await send_group(client, group, bot_dest_entity, sender=bot, caption_override=caption, text_only=bool(odds))
                 except Exception as e:
-                    print(f"  ✗ Failed on message {msg.id}: {e}", file=sys.stderr)
+                    print(f"  ✗ Album send failed: {e}", file=sys.stderr)
+            else:
+                log_group(group, sent=False)
 
     print("✓ Listening for new messages (Ctrl+C to stop)...")
     asyncio.create_task(heartbeat())
