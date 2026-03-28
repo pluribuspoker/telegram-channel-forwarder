@@ -17,12 +17,58 @@ Usage (from other modules):
 
 import asyncio
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 
 import httpx
 
 from common import VERDICT_EMOJI
+
+
+def _clean_desc(desc: str) -> str:
+    """Fallback: strip odds and normalize wording from a raw description string."""
+    desc = re.sub(r'\s*\([+-]?\d+\)', '', desc)          # (-125), (+110)
+    desc = re.sub(r'\s+[+-]\d{3,4}$', '', desc)           # trailing +113 / -138
+    desc = re.sub(r'\bMoneyline\b', 'ML', desc, re.IGNORECASE)
+    desc = re.sub(r'\s+vs\s+\S.*$', '', desc)             # " vs Arkansas" on spread lines
+    return desc.strip()
+
+
+def _format_pick(pick: dict) -> str:
+    """Build a standardized, odds-free pick description from structured Claude parse fields."""
+    bet_type  = pick.get("bet_type", "")
+    teams     = pick.get("teams") or []
+    line      = pick.get("line")
+    direction = pick.get("direction") or ""
+    period    = pick.get("period") or "game"
+    player    = pick.get("player") or ""
+    prop_stat = pick.get("prop_stat") or ""
+
+    period_tag = f" {period.upper()}" if period and period != "game" else ""
+    team = teams[0] if teams else ""
+
+    if bet_type == "spread" and team and line is not None:
+        sign = "+" if line > 0 else ""
+        return f"{team}{period_tag} {sign}{line:g}"
+
+    if bet_type == "moneyline" and team:
+        return f"{team}{period_tag} ML"
+
+    if bet_type in ("total", "team_total") and line is not None:
+        d = "O" if direction == "over" else "U" if direction == "under" else ""
+        prefix = f"{team} " if bet_type == "team_total" and team else ""
+        return f"{prefix}{d}{line:g}"
+
+    if bet_type == "prop" and player:
+        if line is not None and direction:
+            d = "O" if direction == "over" else "U"
+            stat = f" {prop_stat}" if prop_stat else ""
+            return f"{player} {d}{line:g}{stat}"
+        return player
+
+    # Fallback to cleaned description string
+    return _clean_desc(pick.get("description", ""))
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "picks.db")
 
@@ -65,11 +111,13 @@ class AuditLog:
         db_path: str = DB_PATH,
         bot_token: str | None = None,
         audit_channel_id: str | int | None = None,
+        broadcast_results_mappings: dict[int, int] | None = None,
     ):
         self.db_path = db_path
         self.bot_token = bot_token or os.getenv("BOT_TOKEN", "")
         raw_cid = audit_channel_id or os.getenv("AUDIT_CHANNEL_ID", "")
         self.audit_channel_id: int | None = int(raw_cid) if raw_cid else None
+        self.broadcast_results_mappings: dict[int, int] = broadcast_results_mappings or {}
         self._init_db()
 
     # ── DB helpers ─────────────────────────────────────────────────────────────
@@ -227,4 +275,71 @@ class AuditLog:
         except Exception as exc:
             # Never crash the main flow because of audit failures
             print(f"[audit] Telegram post failed: {exc}")
+
+    # ── Broadcast results channel ──────────────────────────────────────────────
+
+    async def broadcast_results(
+        self,
+        *,
+        channel_id: int,
+        message_id: int,
+        pick_results: list[tuple[dict, str]],  # (pick_dict, verdict) per pick
+        capper_name: str = "",
+    ) -> None:
+        """Post a compact result message to the broadcast results channel for this source channel."""
+        target = self.broadcast_results_mappings.get(channel_id)
+        if not target or not self.bot_token:
+            return
+
+        # Only keep resolved picks; require at least one WIN or LOSS to broadcast
+        resolved = [(p, v) for p, v in pick_results if v in ("WIN", "LOSS", "PUSH")]
+        if not any(v in ("WIN", "LOSS") for _, v in resolved):
+            return
+
+        import html as _html
+
+        def e(s: str) -> str:
+            return _html.escape(str(s))
+
+        channel_bare = str(abs(channel_id))[3:]
+        link = f"https://t.me/c/{channel_bare}/{message_id}"
+
+        # Capper name is the link; bold if present, plain link if not
+        capper_linked = f'<b><a href="{link}">{e(capper_name)}</a></b>' if capper_name else f'<a href="{link}">view</a>'
+
+        is_parlay = any(p.get("is_parlay_leg") for p, _ in resolved)
+        picks = [(_format_pick(p), v) for p, v in resolved]
+
+        if len(picks) == 1:
+            desc, verdict = picks[0]
+            emoji = VERDICT_EMOJI.get(verdict, "")
+            text = f"{emoji} {capper_linked} · {e(desc)}"
+        elif is_parlay:
+            verdicts_only = [v for _, v in picks]
+            if "LOSS" in verdicts_only:
+                overall_emoji = VERDICT_EMOJI["LOSS"]
+            elif all(v == "WIN" for v in verdicts_only):
+                overall_emoji = VERDICT_EMOJI["WIN"]
+            else:
+                overall_emoji = VERDICT_EMOJI["PUSH"]
+            legs = "\n".join(f"• {e(d)}" for d, _ in picks)
+            text = f"{overall_emoji} {capper_linked} · Parlay\n{legs}"
+        else:
+            # Non-parlay multi-pick: one emoji per pick
+            lines = [f"{VERDICT_EMOJI.get(v, '')} {e(d)}" for d, v in picks]
+            text = capper_linked + "\n" + "\n".join(lines)
+
+        try:
+            async with httpx.AsyncClient(timeout=10) as http:
+                await http.post(
+                    f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
+                    json={
+                        "chat_id": target,
+                        "text": text,
+                        "parse_mode": "HTML",
+                        "disable_web_page_preview": True,
+                    },
+                )
+        except Exception as exc:
+            print(f"[broadcast_results] Telegram post failed: {exc}")
 

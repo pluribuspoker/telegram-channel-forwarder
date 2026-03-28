@@ -573,7 +573,17 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
     if channel is not None:
         channel_ids = [channel]
 
-    audit         = AuditLog()
+    # Build broadcast results map from MAPPINGS_CONFIG: graded dest_channel → broadcast_results_channel.
+    # In dry-run, route to test_broadcast_results_channel so results can be previewed safely.
+    broadcast_results_map: dict[int, int] = {}
+    for m in json.loads(os.getenv("MAPPINGS_CONFIG", "[]")):
+        dest = m.get("dest_channel")
+        bc_key = "test_broadcast_results_channel" if dry_run else "broadcast_results_channel"
+        bc = m.get(bc_key)
+        if dest and bc:
+            broadcast_results_map[dest] = bc
+
+    audit         = AuditLog(broadcast_results_mappings=broadcast_results_map)
     pending_cache = _load_pending_cache()
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
     mode   = "DRY RUN" if dry_run else "LIVE"
@@ -799,6 +809,12 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     new_caption=new_text if not dry_run else "",
                     dry_run=dry_run,
                     channel_name=ch_name,
+                    capper_name=capper,
+                )
+                await audit.broadcast_results(
+                    channel_id=channel_id,
+                    message_id=msg.id,
+                    pick_results=[(v[0], v[1]) for v in verdicts],
                     capper_name=capper,
                 )
 
