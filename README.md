@@ -88,7 +88,7 @@ python listener.py --test  # uses test_source/dest channels
 
 ### Mapping options
 
-**`filter_pattern`** — regex applied to message text; only matching messages are forwarded. Omit to forward everything.
+**`filter_pattern`** — regex applied to message text; only matching messages are forwarded. Omit to forward everything. Bypassed in `--test` mode so any message triggers a forward.
 ```json
 "filter_pattern": "(?i)^[A-Za-z][A-Za-z ]*:[ ]*[(]"
 ```

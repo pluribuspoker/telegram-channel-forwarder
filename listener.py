@@ -158,7 +158,7 @@ async def main():
                 return  # handled by album_handler below
             if not _topic_ok(msg):
                 return
-            if not passes_filter([msg], mapping):
+            if not use_test and not passes_filter([msg], mapping):
                 log_group([msg], sent=False)
                 return
             try:
@@ -173,7 +173,7 @@ async def main():
             group = sorted(event.messages, key=lambda m: m.id)
             if not _topic_ok(group[0]):
                 return
-            if passes_filter(group, mapping):
+            if use_test or passes_filter(group, mapping):
                 try:
                     caption, odds = await enrich_caption(group, mapping, client)
                     log_group(group, sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None)
