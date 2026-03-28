@@ -618,15 +618,18 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 text = msg.text or ""
                 date_str = msg_date.strftime("%Y-%m-%d")
 
+                cache_key = f"{channel_id}:{msg.id}"
+
                 if not text.strip():
                     continue
-                # Skip already graded (check plain text)
+                # Skip already graded (check plain text) — but allow re-entry for
+                # partially-graded messages that still have a pending-cache entry.
                 if any(ch in text for ch in ("\u2705", "\u274c", "\u21a9\ufe0f")):
-                    continue
+                    if cache_key not in pending_cache:
+                        continue
 
                 capper  = next((l.strip() for l in text.splitlines() if l.strip()), "")
                 snippet = " ".join(text.split())[:80]
-                cache_key = f"{channel_id}:{msg.id}"
                 msg_cost_before = usage_cost()
                 cached = pending_cache.get(cache_key)
                 # {"_failed": True} is stored after the first audit notification so we
@@ -647,6 +650,11 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 else:
                     cached_parse = None
                     cached_leg_verdicts = {}
+                # Leg indices that were already broadcast in a previous partial edit
+                already_broadcast_indices = {
+                    int(k) for k, v in cached_leg_verdicts.items()
+                    if isinstance(v, dict) and v.get("broadcasted")
+                }
                 parsed = cached_parse or await claude_parse(text)
                 if not parsed:
                     failed += 1
@@ -717,6 +725,11 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 html_text = html_text.replace("<spoiler>", "<tg-spoiler>").replace("</spoiler>", "</tg-spoiler>")
                 new_text = _insert_emojis(html_text, verdicts)
                 graded = [v for v in verdicts if v[1] in _PICK_EMOJI]
+                # Picks resolved this run that haven't been broadcast yet
+                newly_resolved = [
+                    v for j, v in enumerate(verdicts)
+                    if v[1] in _PICK_EMOJI and j not in already_broadcast_indices
+                ]
                 overall = _overall_verdict(verdicts)
                 is_parlay = any(v[0].get("is_parlay_leg") for v in verdicts)
                 # For parlays, don't edit until ALL legs are resolved — a LOSS
@@ -725,7 +738,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
                 # Print all picks with their individual verdicts
                 has_pending = any(v[1] == "PENDING" for v in verdicts)
-                if not graded or parlay_pending:
+                if not newly_resolved or parlay_pending:
                     tag = "WAIT" if (has_pending or parlay_pending) else "SKIP"
                 else:
                     tag = "DRY " if dry_run else "EDIT"
@@ -757,8 +770,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             }
                     pending_cache[cache_key] = {"parsed": parsed, "leg_verdicts": new_leg_verdicts}
 
-                # Nothing gradeable — log and skip
-                if not graded or parlay_pending:
+                # Nothing new to grade this run — log and skip
+                if not newly_resolved or parlay_pending:
                     if overall == "PENDING" or parlay_pending:
                         pending += 1
                     else:
@@ -789,7 +802,21 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     await asyncio.sleep(0.5)   # stay under Telegram flood limit
 
                 edited += 1
-                pending_cache.pop(cache_key, None)  # graded — evict from pending cache
+                # If some picks are still pending, keep the cache entry (with broadcasted
+                # markers) so we can re-enter this message next run; otherwise evict.
+                still_pending = any(v[1] == "PENDING" for v in verdicts)
+                if still_pending:
+                    new_leg_verdicts = dict(cached_leg_verdicts)
+                    for j, (lpick, lverdict, lcalc, lps, lgd, *_) in enumerate(verdicts):
+                        if lverdict in ("WIN", "LOSS", "PUSH"):
+                            new_leg_verdicts[str(j)] = {
+                                "verdict": lverdict, "calc": lcalc,
+                                "sport": lps, "game_date": lgd or date_str,
+                                "broadcasted": True,   # prevent double-broadcast next run
+                            }
+                    pending_cache[cache_key] = {"parsed": parsed, "leg_verdicts": new_leg_verdicts}
+                else:
+                    pending_cache.pop(cache_key, None)  # fully graded — evict from pending cache
                 all_descs = "\n".join(
                     f"{v[0].get('description', '')}|{v[3]}|{v[4]}|{v[2]}" for v in verdicts if v[1] in _PICK_EMOJI
                 )
@@ -811,12 +838,13 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     channel_name=ch_name,
                     capper_name=capper,
                 )
-                await audit.broadcast_results(
-                    channel_id=channel_id,
-                    message_id=msg.id,
-                    pick_results=[(v[0], v[1]) for v in verdicts],
-                    capper_name=capper,
-                )
+                if newly_resolved:
+                    await audit.broadcast_results(
+                        channel_id=channel_id,
+                        message_id=msg.id,
+                        pick_results=[(v[0], v[1]) for v in newly_resolved],
+                        capper_name=capper,
+                    )
 
             print(f"\n  ─── edited: {edited}  pending: {pending}  failed: {failed}  errors: {errors}")
 
