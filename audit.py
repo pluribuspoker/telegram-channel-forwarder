@@ -57,7 +57,14 @@ def _format_pick(pick: dict) -> str:
 
     if bet_type in ("total", "team_total") and line is not None:
         d = "O" if direction == "over" else "U" if direction == "under" else ""
-        prefix = f"{team} " if bet_type == "team_total" and team else ""
+        if bet_type == "team_total" and team:
+            prefix = f"{team} "
+        elif len(teams) >= 2:
+            prefix = f"{teams[0]}/{teams[1]} "
+        elif team:
+            prefix = f"{team} "
+        else:
+            prefix = ""
         return f"{prefix}{d}{line:g}"
 
     if bet_type == "prop" and player:
