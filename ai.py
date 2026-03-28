@@ -131,10 +131,17 @@ def fmt_cost(cost: float) -> str:
 
 
 async def _claude_create_with_retry(**kwargs) -> object:
-    """Call claude().messages.create with up to 4 retries on transient errors (500, 529)."""
+    """Call claude().messages.create with up to 4 retries on transient errors (500, 529).
+    Accumulates token usage and prints the per-call cost."""
     for attempt in range(4):
         try:
-            return await claude().messages.create(**kwargs)
+            resp = await claude().messages.create(**kwargs)
+            before = usage_cost()
+            _accum(resp.usage)
+            delta = usage_cost() - before
+            if delta > 0:
+                print(f"    [Claude] {fmt_cost(delta)}")
+            return resp
         except (anthropic.InternalServerError, anthropic.APIStatusError) as exc:
             status = getattr(exc, "status_code", None)
             if status not in (500, 529) or attempt == 3:
@@ -148,7 +155,6 @@ async def claude_parse(text: str) -> dict | None:
         max_tokens=500,
         messages=[{"role": "user", "content": _PARSE_PROMPT.format(text=text)}],
     )
-    _accum(resp.usage)
     raw = re.sub(r"^```(?:json)?\n?|```$", "", resp.content[0].text.strip(), flags=re.MULTILINE).strip()
     try:
         return json.loads(raw)
@@ -166,7 +172,6 @@ async def claude_grade(pick_desc: str, date: str, context: str) -> tuple[str, st
             "content": _GRADE_PROMPT.format(pick=pick_desc, date=date, context=context),
         }],
     )
-    _accum(resp.usage)
     raw = resp.content[0].text.strip()
     # Try to parse JSON verdict first
     calc = ""

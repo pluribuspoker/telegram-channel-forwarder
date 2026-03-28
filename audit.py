@@ -101,6 +101,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS grades_msg
     ON grades (channel_id, message_id);
 """
 
+_SCHEMA_API_COSTS = """
+CREATE TABLE IF NOT EXISTS api_costs (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    logged_at            TEXT    NOT NULL,
+    run_type             TEXT,
+    claude_cost          REAL,
+    odds_requests_used   INTEGER
+);
+"""
+
 _MIGRATION = "ALTER TABLE grades ADD COLUMN capper_name TEXT"
 
 
@@ -137,6 +147,7 @@ class AuditLog:
     def _init_db(self) -> None:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            conn.executescript(_SCHEMA_API_COSTS)
             try:
                 conn.execute(_MIGRATION)
                 conn.commit()
@@ -350,3 +361,16 @@ class AuditLog:
         except Exception as exc:
             print(f"[broadcast_results] Telegram post failed: {exc}")
 
+
+def log_api_costs(run_type: str, claude_cost: float, odds_requests: int, db_path: str = DB_PATH) -> None:
+    """Write a run-level API cost row to picks.db. Safe to call without an AuditLog instance."""
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO api_costs (logged_at, run_type, claude_cost, odds_requests_used) VALUES (?, ?, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), run_type, claude_cost, odds_requests),
+        )
+        conn.commit()
+    finally:
+        conn.close()

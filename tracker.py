@@ -20,7 +20,7 @@ import httpx
 from dotenv import load_dotenv
 
 from common import VERDICT_EMOJI
-from scores import ESPN_LEAGUES, fetch_espn, scoreboard_text
+from scores import ESPN_LEAGUES, fetch_espn, scoreboard_text, odds_requests_used
 from ai import (
     claude,
     claude_parse,
@@ -31,7 +31,6 @@ from ai import (
     CONTEXT_ESPN_ERROR,
     usage_cost,
     fmt_cost,
-    _usage,
 )
 
 load_dotenv()
@@ -309,7 +308,7 @@ def _write_detail_file(path: str, source: str, results: list, graded: list,
         if graded:
             pct = round(100 * len(correct_list) / len(graded))
             w(f"Accuracy: {len(correct_list)}/{len(graded)} ({pct}%)")
-        w(f"Cost   : {fmt_cost(cost)}")
+        w(f"[Claude total] {fmt_cost(cost)}")
         w(sep)
 
         for r in results:
@@ -397,7 +396,6 @@ async def run_backtest(filepath: str) -> None:
         clean = strip_label(plain)
         date = msg["date"][:10]
 
-        msg_cost_before = usage_cost()
         parsed = await claude_parse(clean)
         if not parsed:
             print(f"  [parse fail] msg {msg['id']}")
@@ -465,9 +463,6 @@ async def run_backtest(filepath: str) -> None:
                 "context": context,
                 "raw_text": msg_plain_text(msg),
             })
-        msg_cost = usage_cost() - msg_cost_before
-        if msg_cost > 0:
-            print(f"       {fmt_cost(msg_cost)}")
 
     # ── Summary ──
     graded = [r for r in results if not r["skipped"]]
@@ -484,7 +479,7 @@ async def run_backtest(filepath: str) -> None:
         print(f"Accuracy : N/A  |  skipped: {len(skipped_list)}/{total}")
 
     cost = usage_cost()
-    print(f"Cost     : {fmt_cost(cost)}")
+    print(f"[Claude total] {fmt_cost(cost)}")
 
     if wrong_list:
         print("\nIncorrect grades:")
@@ -510,6 +505,8 @@ async def run_backtest(filepath: str) -> None:
     out_path = os.path.join(data_dir, f"backtest_{base}.txt")
     _write_detail_file(out_path, filepath, results, graded, correct_list, skipped_list, wrong_list, cost)
     print(f"\nDetail file: {out_path}")
+    from audit import log_api_costs
+    log_api_costs("backtest", cost, odds_requests_used())
 
 
 async def grade_one(text: str, date: str) -> None:
@@ -520,7 +517,6 @@ async def grade_one(text: str, date: str) -> None:
     label = extract_label(text)
     clean = strip_label(text)
 
-    msg_cost_before = usage_cost()
     parsed = await claude_parse(clean)
     if not parsed:
         print("[parse fail]")
@@ -577,12 +573,10 @@ async def grade_one(text: str, date: str) -> None:
             print(f"  LABEL : {label.upper()}  →  {'OK' if correct else ('--' if grade in ('PUSH','UNKNOWN') else 'XX')}")
         print()
 
-    msg_cost = usage_cost() - msg_cost_before
-    if msg_cost > 0:
-        print(f"$ {fmt_cost(msg_cost)}")
     print()
-    cost = usage_cost()
-    print(f"Total cost: {fmt_cost(cost)}")
+    print(f"[Claude total] {fmt_cost(usage_cost())}  |  [Odds API] {odds_requests_used()} requests used")
+    from audit import log_api_costs
+    log_api_costs("debug", usage_cost(), odds_requests_used())
 
 
 # ─── Live mode ────────────────────────────────────────────────────────────────
@@ -703,7 +697,6 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
                 capper  = next((l.strip() for l in text.splitlines() if l.strip()), "")
                 snippet = " ".join(text.split())[:80]
-                msg_cost_before = usage_cost()
                 cached = pending_cache.get(cache_key)
                 # {"_dupe": True} is stored when this message was identified as a duplicate
                 # so we can skip claude_parse on subsequent runs without re-paying.
@@ -858,9 +851,6 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     print(f"{prefix}{tag_col} {id_col:<{_ID_W}} {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}} {gd_short} {emoji}{suffix}")
                     if calc:
                         print(f"   {'':>{_ID_W}} {'':>{_CAP_W}}  {calc[:_DESC_W + 8]}")
-                msg_cost = usage_cost() - msg_cost_before
-                if msg_cost > 0:
-                    print(f"   {'':>{_ID_W}} {'':>{_CAP_W}}  {fmt_cost(msg_cost)}")
 
                 # Cache the parse result and any resolved leg verdicts to avoid re-calling
                 # Claude on subsequent runs for legs that are already graded.
@@ -961,8 +951,10 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
     if not dry_run:
         _save_pending_cache(pending_cache)
 
-    cost = usage_cost()
-    print(f"\nCost: {fmt_cost(cost)}")
+    run_type = "dry_run" if dry_run else "live"
+    print(f"\n[Claude total] {fmt_cost(usage_cost())}  |  [Odds API] {odds_requests_used()} requests used")
+    from audit import log_api_costs
+    log_api_costs(run_type, usage_cost(), odds_requests_used())
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────

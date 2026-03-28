@@ -31,12 +31,24 @@ ODDS_API_KEYS: dict[str, str] = {
     "Boxing": "boxing_boxing",
 }
 
+_odds_requests_remaining: str | None = None
+_odds_requests_used: int = 0
+
+
+def odds_requests_used() -> int:
+    return _odds_requests_used
+
+
+def odds_requests_remaining() -> str | None:
+    return _odds_requests_remaining
+
 
 async def fetch_odds_api_scores(sport: str, date: str) -> list[dict]:
     """
     Fetch completed scores from the Odds API for a given sport and date (±1 day).
     Only works within the last ~3 days on the free tier.
     """
+    global _odds_requests_remaining, _odds_requests_used
     sport_key = ODDS_API_KEYS.get(sport)
     if not sport_key:
         return []
@@ -51,6 +63,11 @@ async def fetch_odds_api_scores(sport: str, date: str) -> list[dict]:
                 params={"apiKey": api_key, "daysFrom": 3},
             )
             r.raise_for_status()
+            _odds_requests_remaining = r.headers.get("x-requests-remaining", _odds_requests_remaining)
+            used = r.headers.get("x-requests-used")
+            if used:
+                _odds_requests_used = int(used)
+            print(f"    [Odds API] quota remaining: {_odds_requests_remaining}")
             events = r.json()
             if not isinstance(events, list):
                 return []
@@ -59,7 +76,7 @@ async def fetch_odds_api_scores(sport: str, date: str) -> list[dict]:
                 if not e.get("completed"):
                     continue
                 try:
-                    event_date = _d.fromisoformat(e.get("commence_time", "")[:10])
+                    event_date = _date.fromisoformat(e.get("commence_time", "")[:10])
                     if abs((event_date - target).days) <= 1:
                         results.append(e)
                 except ValueError:
