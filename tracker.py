@@ -623,7 +623,20 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # don't spam the audit channel — but we still re-try parsing each run
                 # so the fix landing automatically gets picked up.
                 already_notified = isinstance(cached, dict) and cached.get("_failed")
-                cached_parse = cached if (cached and not already_notified) else None
+                # Support both old format (bare parsed dict) and new format (with leg_verdicts)
+                if cached and not already_notified:
+                    if isinstance(cached, dict) and "parsed" in cached:  # new format
+                        cached_parse = cached["parsed"]
+                        cached_leg_verdicts = cached.get("leg_verdicts", {})
+                    elif isinstance(cached, dict) and "picks" in cached:  # old format
+                        cached_parse = cached
+                        cached_leg_verdicts = {}
+                    else:
+                        cached_parse = None
+                        cached_leg_verdicts = {}
+                else:
+                    cached_parse = None
+                    cached_leg_verdicts = {}
                 parsed = cached_parse or await claude_parse(text)
                 if not parsed:
                     failed += 1
@@ -657,23 +670,31 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     scoreboard_cache[sb_key] = await fetch_espn(sport, date_str)
 
                 verdicts = []
-                for pick in picks:
-                    pick_sport = pick.get("sport") or sport
-                    ps_key = (pick_sport, date_str)
-                    if ps_key not in scoreboard_cache:
-                        scoreboard_cache[ps_key] = await fetch_espn(pick_sport, date_str)
-                    context, game_date = await build_context(
-                        pick_sport, date_str, pick,
-                        scoreboard_cache[ps_key], summary_cache,
-                    )
-                    if context == CONTEXT_PENDING:
-                        verdict, calc = "PENDING", ""
-                    elif context == CONTEXT_SKIP:
-                        verdict, calc = "UNKNOWN", ""
+                for i, pick in enumerate(picks):
+                    cached_leg = cached_leg_verdicts.get(str(i))
+                    if cached_leg and cached_leg.get("verdict") in ("WIN", "LOSS", "PUSH"):
+                        # Resolved leg — use cached verdict, skip ESPN + Claude calls
+                        verdict   = cached_leg["verdict"]
+                        calc      = cached_leg["calc"]
+                        pick_sport = cached_leg.get("sport", pick.get("sport") or sport)
+                        game_date  = cached_leg.get("game_date", date_str)
                     else:
-                        verdict, calc = await claude_grade(
-                            pick.get("description", text[:80]), date_str, context,
+                        pick_sport = pick.get("sport") or sport
+                        ps_key = (pick_sport, date_str)
+                        if ps_key not in scoreboard_cache:
+                            scoreboard_cache[ps_key] = await fetch_espn(pick_sport, date_str)
+                        context, game_date = await build_context(
+                            pick_sport, date_str, pick,
+                            scoreboard_cache[ps_key], summary_cache,
                         )
+                        if context == CONTEXT_PENDING:
+                            verdict, calc = "PENDING", ""
+                        elif context == CONTEXT_SKIP:
+                            verdict, calc = "UNKNOWN", ""
+                        else:
+                            verdict, calc = await claude_grade(
+                                pick.get("description", text[:80]), date_str, context,
+                            )
                     verdicts.append((pick, verdict, calc, pick_sport, game_date))
 
                 # Build edited text — per-pick emoji inserted inline after each pick's line
@@ -714,9 +735,17 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 if msg_cost > 0:
                     print(f"  {'':6}  {'':>{_ID_W}}  {'':>{_CAP_W}}  $ {fmt_cost(msg_cost)}")
 
-                # Cache the parse result for pending messages to avoid re-parsing on next run
+                # Cache the parse result and any resolved leg verdicts to avoid re-calling
+                # Claude on subsequent runs for legs that are already graded.
                 if not graded or parlay_pending:
-                    pending_cache[cache_key] = parsed
+                    new_leg_verdicts = dict(cached_leg_verdicts)  # preserve previously cached
+                    for j, (lpick, lverdict, lcalc, lps, lgd, *_) in enumerate(verdicts):
+                        if lverdict in ("WIN", "LOSS", "PUSH"):
+                            new_leg_verdicts[str(j)] = {
+                                "verdict": lverdict, "calc": lcalc,
+                                "sport": lps, "game_date": lgd or date_str,
+                            }
+                    pending_cache[cache_key] = {"parsed": parsed, "leg_verdicts": new_leg_verdicts}
 
                 # Nothing gradeable — log and skip
                 if not graded or parlay_pending:
