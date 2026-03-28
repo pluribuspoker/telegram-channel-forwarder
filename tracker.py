@@ -583,8 +583,8 @@ async def grade_one(text: str, date: str) -> None:
 
 # Column widths for tabular pick output
 _ID_W    = 5   # message ID
-_CAP_W   = 9   # capper name
-_DESC_W  = 11  # pick description
+_CAP_W   = 15  # capper name
+_DESC_W  = 22  # pick description
 
 _TAG_ICON = {"WAIT": "⏳", "EDIT": "✏", "DRY ": "🧪", "SKIP": "⚠", "ESPN": "📡"}
 

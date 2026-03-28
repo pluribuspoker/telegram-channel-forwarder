@@ -183,7 +183,6 @@ async def main():
             else:
                 log_group(group, sent=False)
 
-    print("✓ Listening for new messages (Ctrl+C to stop)...")
     asyncio.create_task(heartbeat())
     asyncio.create_task(channel_probe(client, channels))
     watchdog = asyncio.create_task(connection_watchdog(client))
