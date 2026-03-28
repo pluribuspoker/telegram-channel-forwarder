@@ -583,8 +583,8 @@ async def grade_one(text: str, date: str) -> None:
 
 # Column widths for tabular pick output
 _ID_W    = 5   # message ID
-_CAP_W   = 15  # capper name
-_DESC_W  = 22  # pick description
+_CAP_W   = 18  # capper name
+_DESC_W  = 28  # pick description
 
 _TAG_ICON = {"WAIT": "⏳", "EDIT": "✏", "DRY ": "🧪", "SKIP": "⚠", "ESPN": "📡"}
 
@@ -648,6 +648,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
         for channel_id in channel_ids:
             ch_name = channel_names[channel_id]
             print(f"\n{ch_name}  ({channel_id}):")
+            print(f"{'ID':<{_ID_W}} {'Capper':<{_CAP_W}}  {'Pick':<{_DESC_W}} Date")
+            print(f"{'─'*_ID_W} {'─'*_CAP_W}  {'─'*_DESC_W} ────")
             scoreboard_cache: dict = {}
             summary_cache:   dict = {}
             edited = pending = failed = errors = 0
@@ -728,7 +730,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 parsed = cached_parse or await claude_parse(text)
                 if not parsed:
                     failed += 1
-                    print(f"\n⚠ {msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'parse failed':<{_DESC_W}} {int(date_str[5:7])}/{int(date_str[8:10])}")
+                    print(f"\n{msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'parse failed':<{_DESC_W}} {int(date_str[5:7])}/{int(date_str[8:10])} ⚠")
                     if not already_notified:
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
@@ -742,7 +744,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 picks = parsed.get("picks", [])
                 if not picks:
                     failed += 1
-                    print(f"\n⚠ {msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'no picks':<{_DESC_W}} {int(date_str[5:7])}/{int(date_str[8:10])}")
+                    print(f"\n{msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'no picks':<{_DESC_W}} {int(date_str[5:7])}/{int(date_str[8:10])} ⚠")
                     if not already_notified:
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
@@ -842,15 +844,14 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     emoji    = VERDICT_EMOJI.get(verdict, "")
                     d        = _date.fromisoformat(gd) if gd else _date.fromisoformat(date_str)
                     gd_short = f"{d.month}/{d.day}"
-                    tag_col  = _TAG_ICON.get(tag, "?") if first_active else "  "
                     id_col   = str(msg.id) if first_active else ""
                     cap_col  = _trunc(capper, _CAP_W) if first_active else ""
                     prefix   = "\n" if first_active else ""
                     suffix   = dupe_note if first_active else ""
                     first_active = False
-                    print(f"{prefix}{tag_col} {id_col:<{_ID_W}} {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}} {gd_short} {emoji}{suffix}")
+                    print(f"{prefix}{id_col:<{_ID_W}} {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}} {gd_short} {emoji}{suffix}")
                     if calc:
-                        print(f"   {'':>{_ID_W}} {'':>{_CAP_W}}  {calc[:_DESC_W + 8]}")
+                        print(f"{'':>{_ID_W}} {'':>{_CAP_W}}  {calc[:_DESC_W + 8]}")
 
                 # Cache the parse result and any resolved leg verdicts to avoid re-calling
                 # Claude on subsequent runs for legs that are already graded.
