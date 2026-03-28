@@ -84,7 +84,7 @@ async def channel_probe(client, channels):
                     continue
                 last_seen[source_entity.id] = msg.id
                 age = datetime.datetime.now(datetime.timezone.utc) - msg.date
-                print(f"  ⊙ {src_label}: new msg id={msg.id} ({age.seconds//60}m ago)")
+                print(f"\033[32m  ⊙ {src_label}: new msg id={msg.id} ({age.seconds//60}m ago)\033[0m")
             except Exception as e:
                 print(f"  ⊙ {src_label}: probe failed ({e})")
 
