@@ -228,11 +228,33 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     """
     Insert odds tags directly after each pick line, e.g. 'Duke -4.5 (-153)'.
 
-    Skips parlays (parlay price ≠ individual leg prices).
+    For parlays: inserts combined parlay price on the header line (the line
+    containing "parlay" that isn't a leg bullet). Individual leg prices are
+    not shown — only the combined payout odds.
     Idempotent — skips lines that already carry an odds tag.
     Uses same search-term logic as _insert_emojis.
     """
     if any(p.get("is_parlay_leg") for p in picks):
+        _leg_odds = [odds_by_pick.get(str(i), {}).get("odds") for i in range(len(picks))]
+        _valid = [o for o in _leg_odds if o is not None]
+        if not _valid:
+            return text
+        _dec = 1.0
+        for _o in _valid:
+            _dec *= (_o / 100 + 1) if _o > 0 else (100 / abs(_o) + 1)
+        _comb = round((_dec - 1) * 100) if _dec >= 2.0 else round(-100 / (_dec - 1))
+        combined_tag = f" [{'+' if _comb > 0 else ''}{_comb}]"
+        lines = text.rstrip().split("\n")
+        for j, line in enumerate(lines):
+            ll = line.lower().lstrip()
+            if ll.startswith("•") or ll.startswith("-"):
+                continue  # skip leg bullet lines
+            if "parlay" not in ll:
+                continue
+            if _ODDS_TAG_RE.search(line):
+                return text  # already tagged — idempotent
+            lines[j] = f"{line.rstrip()}{combined_tag}"
+            return "\n".join(lines)
         return text
 
     lines = text.rstrip().split("\n")
