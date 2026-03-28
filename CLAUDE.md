@@ -85,12 +85,7 @@ deploy   # git pull + source ~/.bashrc + restart + forwarder status + last track
 
 ## Log colors
 
-Log colors are applied entirely by the `_fmtlog` awk function in `/root/.server_aliases.sh` — **do not add ANSI codes to Python print statements**. To update colors, SSH in and edit `/root/.server_aliases.sh` directly (no service restart needed, but any active `tlogs`/`logs` tail must be restarted to pick up the change). The awk colors by message content (checked in this order):
-- **Cyan**: channel name headers — any line containing `(-<number>):` (e.g. `DF (-100...):`) — checked first so it always wins
-- **Green**: ✦ SENT, [EDIT], ✅, Connected, Completed successfully
-- **Red**: [SKIP], ❌, Crashed, Failed, errors/failed > 0
-- **Dim**: · filtered, ⇌ watchdog, Cost line, systemd lifecycle lines
-- **Warm amber**: everything else ([WAIT], PENDING, startup block, separators, probe lines)
+Colors are applied by `_fmtlog` in `/root/.server_aliases.sh` — **do not add ANSI codes to Python print statements**. To update: SSH in and edit that file directly (no service restart needed; re-run the tail alias to pick up changes).
 
 ---
 
