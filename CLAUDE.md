@@ -4,7 +4,7 @@
 
 - **Reserved IP:** `209.38.51.86` (always use this, not the droplet IP)
 - **Hostname:** `pickbot`
-- **SSH:** `vps` (PowerShell alias → `ssh root@209.38.51.86`)
+- **SSH:** `ssh root@209.38.51.86`
 
 ### Server aliases (root)
 
