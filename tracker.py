@@ -928,6 +928,17 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     tag = "DRY " if dry_run else "EDIT"
                 dupe_ids = pending_cache.get(cache_key, {}).get("linked_message_ids", [])
                 dupe_note = f" {'🔁' if len(dupe_ids) == 1 else str(len(dupe_ids)) + '🔁'}" if dupe_ids else ""
+                # Compute combined parlay odds for log display
+                parlay_combined_str = ""
+                if is_parlay:
+                    _leg_odds = [odds_by_pick.get(str(i), {}).get("odds") for i in range(len(verdicts))]
+                    _valid = [o for o in _leg_odds if o is not None]
+                    if _valid:
+                        _dec = 1.0
+                        for _o in _valid:
+                            _dec *= (_o / 100 + 1) if _o > 0 else (100 / abs(_o) + 1)
+                        _comb = round((_dec - 1) * 100) if _dec >= 2.0 else round(-100 / (_dec - 1))
+                        parlay_combined_str = f"[{'+' if _comb > 0 else ''}{_comb}]"
                 first_active = True
                 for i, (pick, verdict, calc, ps, gd, *_) in enumerate(verdicts):
                     if i in already_broadcast_indices:
@@ -946,6 +957,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     print(f"{prefix}{id_col:<{_ID_W}} {cap_col:<{_CAP_W}}  {desc:<{_DESC_W}} {odds_col:<{_ODDS_W}} {gd_short} {emoji}{suffix}")
                     if calc:
                         print(f"{'':>{_ID_W}} {'':>{_CAP_W}}  {calc[:_DESC_W + 8]}")
+                if parlay_combined_str:
+                    print(f"{'':>{_ID_W}} {'':>{_CAP_W}}  {'→ parlay':<{_DESC_W}} {parlay_combined_str}")
 
                 # Cache the parse result and any resolved leg verdicts to avoid re-calling
                 # Claude on subsequent runs for legs that are already graded.
