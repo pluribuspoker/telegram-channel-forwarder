@@ -62,7 +62,11 @@ systemctl daemon-reload
 
 ## Log colors
 
-Colors are applied by `_fmtlog` in `/root/.server_aliases.sh` — **do not add ANSI codes to Python print statements**. To update: SSH in and edit that file directly (no service restart needed; re-run the tail alias to pick up changes).
+Colors and formatting are applied by `_fmtlog` in `/root/.server_aliases.sh` — **do not add ANSI codes to Python print statements**. To update: SSH in and edit that file directly (no service restart needed; re-run the tail alias to pick up changes).
+
+**Current format:** `3/28 5:00PM ET 📋  <message>` — compact M/D timestamp (no seconds), service icon instead of hostname+PID (`📋` tracker, `📡` listener/forwarder, `⚙` systemd dimmed).
+
+**`_fmtlog` regex gotcha:** the message capture must use `\]: (.*)` (single space, not `\]: *(.*)`). The `*` variant strips all leading whitespace from the message, which breaks indentation of parlay continuation rows in the pick table.
 
 ---
 
@@ -72,7 +76,7 @@ Runs every 5 minutes via systemd timer (`telegram-tracker.timer`).
 Grades sports picks in destination channels by appending ✅/❌ inline after each pick line.
 Audit log: `picks.db` (SQLite) + Telegram audit channel (`AUDIT_CHANNEL_ID`). PENDING picks written to DB only, not posted to audit channel.
 Parse cache: `parse_cache.json` — avoids re-parsing pending picks on every run.
-Summary line: `edited / pending / failed / errors / odds:X/Y`.
+Summary line: `edit:N pend:N fail:N err:N`.
 Healthchecks.io receives log output with each ping — last 20 lines on success, last 50 on failure (includes tracebacks).
 
 ## Odds integration
