@@ -865,9 +865,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         if display_odds is not None:
                             odds_found += 1
 
-                # Immediately edit odds into the message so they appear while PENDING.
-                # Only on first fetch; grading edit will also include odds via _insert_odds.
-                if odds_were_empty and not dry_run and any(v.get("odds") is not None for v in odds_by_pick.values()):
+                # Edit odds into the message so they appear while PENDING.
+                # Idempotent — _insert_odds won't re-add if tag already present.
+                if not dry_run and any(v.get("odds") is not None for v in odds_by_pick.values()):
                     from telethon.extensions import html as tl_html
                     _ht = tl_html.unparse(text, msg.entities or [])
                     _ht = _ht.replace("<spoiler>", "<tg-spoiler>").replace("</spoiler>", "</tg-spoiler>")
