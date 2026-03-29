@@ -37,6 +37,7 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
+from common import is_regulation_ml
 from scores import _team_matches, fetch_espn, espn_bookmakers_for_teams, ESPN_LEAGUES
 
 ROOT = Path(__file__).resolve().parent
@@ -96,7 +97,7 @@ PROP_STAT_MARKETS: dict[str, dict[str, str]] = {
 }
 
 MARKETS_FULL = (
-    "h2h,spreads,totals,"
+    "h2h,h2h_3_way,spreads,totals,"
     "alternate_spreads,alternate_totals,"
     "team_totals,alternate_team_totals,"
     "h2h_h1,spreads_h1,totals_h1,"
@@ -139,6 +140,7 @@ _PERIOD_SUFFIX: dict[str, str] = {
 _STRUCTURAL_MISS_TYPES = {
     "team_total_unavailable",
     "player_prop_unavailable",
+    "no_h2h_data", "no_h2h_3_way_data",
     "no_h2h_h1_data", "no_h2h_h2_data", "no_h2h_q1_data",
     "no_total_data", "no_spread_data",
     "missing_line_or_direction",
@@ -427,8 +429,8 @@ def _find_event_id(event_list: list[dict], teams: list[str]) -> str | None:
     return scored[0][1]
 
 
-def _lookup_moneyline(bookmakers: list[dict], team: str, period: str = "game") -> dict:
-    mkt = "h2h" + _PERIOD_SUFFIX.get(period, "")
+def _lookup_moneyline(bookmakers: list[dict], team: str, period: str = "game", market: str = "h2h") -> dict:
+    mkt = market + _PERIOD_SUFFIX.get(period, "")
     candidates = [(price, bk) for _, price, bk in _collect_outcomes(bookmakers, mkt, name_filter=team)]
     odds, book = _pick_best(candidates)
     return {
@@ -649,7 +651,8 @@ def lookup_pick_odds(sport: str, pick: dict, bookmakers: list[dict]) -> dict:
                 "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
     if bet_type == "moneyline":
-        return _lookup_moneyline(bookmakers, teams[0] if teams else "", period)
+        market = "h2h_3_way" if sport == "NHL" and is_regulation_ml(desc) else "h2h"
+        return _lookup_moneyline(bookmakers, teams[0] if teams else "", period, market)
 
     if bet_type == "spread":
         if line is None:
