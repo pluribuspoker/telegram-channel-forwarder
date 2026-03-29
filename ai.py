@@ -95,6 +95,7 @@ Rules by bet type:
     * Team listed as +X is the UNDERDOG. WIN if that team wins OUTRIGHT (regardless of margin) OR loses by LESS than X. LOSS if they lose by MORE than X. PUSH if they lose by exactly X.
     * Example: Ohio State +8, Ohio State wins outright → WIN (dog won, cover guaranteed).
 - Moneyline: did the picked team/fighter win outright?
+- NHL 3-way moneyline (pick description contains "3-way" or "3 way"): team must win in REGULATION only. Check the period scores — if P4 or more periods appear in the data, the game went to overtime and the pick is a LOSS regardless of who won in OT.
 - Total over/under (bet_type=total): ALWAYS add BOTH teams' scores regardless of how the pick is worded. score_A + score_B = combined. Compare combined to line. Even "Drake 1H Over 62.5" means the whole game's H1 combined, not just Drake's score — because bet_type is total, not team_total.
 - Team total (bet_type=team_total, e.g. "Hornets team total over 117.5"): use ONLY the named team's score, not combined.
 - Player prop: add the player's listed stats. Compare to line.
