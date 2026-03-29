@@ -653,6 +653,7 @@ _ID_W    = 5   # message ID
 _CAP_W   = 15  # capper name
 _DESC_W  = 28  # pick description
 _ODDS_W  = 7   # odds e.g. [-115]
+_TBL_W   = _ID_W + 1 + _CAP_W + 2 + _DESC_W + 1 + _ODDS_W + 1 + 4  # total table width
 
 _TAG_ICON = {"WAIT": "⏳", "EDIT": "✏", "DRY ": "🧪", "SKIP": "⚠", "ESPN": "📡"}
 
@@ -713,15 +714,17 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
         print(f"{mode} | {days}d | {channels_str}")
         print("=" * 40)
 
+        edited = pending = failed = errors = 0
+        odds_found = odds_total = 0
+
         for channel_id in channel_ids:
             ch_name = channel_names[channel_id]
-            print(f"\n{ch_name}  ({channel_id}):")
+            _hdr = f"{ch_name}  ({channel_id}):"
+            print(f"\n{_hdr:^{_TBL_W}}")
             print(f"{'ID':<{_ID_W}} {'Capper':<{_CAP_W}}  {'Pick':<{_DESC_W}} {'Odds':<{_ODDS_W}} Date")
             print(f"{'─'*_ID_W} {'─'*_CAP_W}  {'─'*_DESC_W} {'─'*_ODDS_W} ────")
             scoreboard_cache: dict = {}
             summary_cache:   dict = {}
-            edited = pending = failed = errors = 0
-            odds_found = odds_total = 0
 
             visited_keys: set[str] = set()
 
@@ -1086,8 +1089,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         capper_name=capper,
                     )
 
-            print(f"  ─ edit:{edited} pend:{pending} fail:{failed} err:{errors}" +
-                  (f" odds:{odds_found}/{odds_total}" if odds_total else ""))
+        print(f"  ─ edit:{edited} pend:{pending} fail:{failed} err:{errors}" +
+              (f" odds:{odds_found}/{odds_total}" if odds_total else ""))
 
     if not dry_run:
         _save_pending_cache(pending_cache)
