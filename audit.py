@@ -53,7 +53,9 @@ def _format_pick(pick: dict) -> str:
         return f"{team}{period_tag} {sign}{line:g}"
 
     if bet_type == "moneyline" and team:
-        return f"{team}{period_tag} ML"
+        desc_lower = (pick.get("description") or "").lower()
+        suffix = " 3-way ML" if ("3-way" in desc_lower or "3 way" in desc_lower) else " ML"
+        return f"{team}{period_tag}{suffix}"
 
     if bet_type in ("total", "team_total") and line is not None:
         d = "O" if direction == "over" else "U" if direction == "under" else ""
