@@ -15,6 +15,7 @@ import datetime
 import json
 import logging
 import os
+import sqlite3
 import sys
 import urllib.request
 
@@ -66,10 +67,44 @@ async def connection_watchdog(client):
             raise RuntimeError(f"Watchdog: connection probe failed ({e})")
 
 
+_DB_PATH = os.path.join(os.path.dirname(__file__), "picks.db")
+
+
+def _probe_db_load() -> dict:
+    """Load last-seen message IDs from picks.db. Returns {(channel_id, topic_id): msg_id}."""
+    try:
+        conn = sqlite3.connect(_DB_PATH)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS listener_probe_state"
+            " (channel_id INTEGER NOT NULL, topic_id INTEGER, last_msg_id INTEGER NOT NULL,"
+            " PRIMARY KEY (channel_id, topic_id))"
+        )
+        conn.commit()
+        rows = conn.execute("SELECT channel_id, topic_id, last_msg_id FROM listener_probe_state").fetchall()
+        conn.close()
+        return {(r[0], r[1]): r[2] for r in rows}
+    except Exception:
+        return {}
+
+
+def _probe_db_save(channel_id: int, topic_id, msg_id: int) -> None:
+    """Persist a last-seen message ID to picks.db."""
+    try:
+        conn = sqlite3.connect(_DB_PATH)
+        conn.execute(
+            "INSERT OR REPLACE INTO listener_probe_state (channel_id, topic_id, last_msg_id) VALUES (?,?,?)",
+            (channel_id, topic_id, msg_id),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
 async def channel_probe(client, channels):
     """Every 5 min, log the latest message in each source channel only when it's new."""
     await asyncio.sleep(60)
-    last_seen: dict = {}
+    last_seen: dict = _probe_db_load()
     while True:
         await asyncio.sleep(300)
         for source_entity, _, src_label, _, topic_id, _ in channels:
@@ -84,6 +119,7 @@ async def channel_probe(client, channels):
                     print(f"\033[2m  ⊙ {src_label}: no new msg\033[0m")
                     continue
                 last_seen[probe_key] = msg.id
+                _probe_db_save(source_entity.id, topic_id, msg.id)
                 age = datetime.datetime.now(datetime.timezone.utc) - msg.date
                 preview = (msg.text or "[media]").replace("\n", " ")[:28]
                 print(f"  ⊙ {src_label}: new msg ({age.seconds//60}m ago) {preview!r}")
