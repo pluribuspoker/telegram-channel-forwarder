@@ -224,6 +224,20 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
 _ODDS_TAG_RE = re.compile(r'\s*\[[+-]\d{3,4}\]')
 
 
+def _fmt_odds_audit(pick: dict, sport: str, capper: str, result) -> str:
+    fmt  = result.format() or "?"
+    desc = pick.get("description", "")
+    bk   = result.bookmaker or "?"
+    lines = [
+        f"📊 <b>odds</b>: {desc} → [{fmt}]",
+        f"{result.match_type} · {bk}",
+    ]
+    if result.api_line is not None and result.pick_line is not None and result.api_line != result.pick_line:
+        lines.append(f"api_line: {result.api_line} | pick_line: {result.pick_line}")
+    lines.append(f"{sport} · {capper}")
+    return "\n".join(lines)
+
+
 def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     """
     Insert odds tags directly after each pick line, e.g. 'Duke -4.5 (-153)'.
@@ -858,7 +872,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         elif warn:
                             # Odds found but soft sanity flag — log + one audit warning
                             print(f"  [odds] sanity: {warn}")
-                            await audit.warn(f"⚠️ <b>odds sanity</b>: {warn}\n{pick_desc} · {pick_sport} · {capper}")
+                            await audit.warn(f"⚠️ <b>odds sanity</b>: {warn}\n" + _fmt_odds_audit(pick, pick_sport, capper, result))
+                        else:
+                            await audit.warn(_fmt_odds_audit(pick, pick_sport, capper, result))
                         odds_by_pick[str(i)] = {
                             "odds":       display_odds,
                             "bookmaker":  result.bookmaker,
