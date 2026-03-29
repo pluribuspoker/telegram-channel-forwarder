@@ -20,6 +20,19 @@ VERDICT_EMOJI = {
     "PENDING": "⏳",
 }
 
+# Matches any phrasing that means "must win in regulation / 60 min only"
+# e.g. "3-way", "3 way", "3way", "60 min", "60-min", "60 minutes",
+#      "regulation", "reg ML", "reg moneyline", "to win in regulation"
+_REGULATION_ML_RE = re.compile(
+    r"\b(3.?way|60.?min(utes?)?|regulation|reg\s+(ml|moneyline)|to win in reg)\b",
+    re.IGNORECASE,
+)
+
+
+def is_regulation_ml(description: str) -> bool:
+    """Return True if the pick description indicates a 3-way / regulation moneyline."""
+    return bool(_REGULATION_ML_RE.search(description or ""))
+
 
 def _anthropic():
     global _anth_client

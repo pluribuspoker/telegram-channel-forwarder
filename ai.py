@@ -10,6 +10,7 @@ from datetime import date as _date, timedelta
 
 import anthropic
 
+from common import is_regulation_ml
 from scores import (
     ESPN_LEAGUES,
     fetch_espn,
@@ -95,7 +96,7 @@ Rules by bet type:
     * Team listed as +X is the UNDERDOG. WIN if that team wins OUTRIGHT (regardless of margin) OR loses by LESS than X. LOSS if they lose by MORE than X. PUSH if they lose by exactly X.
     * Example: Ohio State +8, Ohio State wins outright → WIN (dog won, cover guaranteed).
 - Moneyline: did the picked team/fighter win outright?
-- NHL 3-way moneyline (pick description contains "3-way" or "3 way"): team must win in REGULATION only. If the score data shows OT=1 (or any OT column with a non-zero value), or P4 or more periods, the game went to overtime — the pick is a LOSS regardless of who won in OT.
+- NHL regulation/3-way moneyline (pick description contains "3-way", "60 min", "regulation", "reg ML", etc.): team must win in REGULATION only. If the score data shows OT=1 (or any OT column with a non-zero value), or P4 or more periods, the game went to overtime — the pick is a LOSS regardless of who won in OT.
 - Total over/under (bet_type=total): ALWAYS add BOTH teams' scores regardless of how the pick is worded. score_A + score_B = combined. Compare combined to line. Even "Drake 1H Over 62.5" means the whole game's H1 combined, not just Drake's score — because bet_type is total, not team_total.
 - Team total (bet_type=team_total, e.g. "Hornets team total over 117.5"): use ONLY the named team's score, not combined.
 - Player prop: add the player's listed stats. Compare to line.
@@ -240,10 +241,9 @@ async def build_context(
         return CONTEXT_SKIP, date
 
     # Props and period bets need game summaries.
-    # NHL 3-way moneylines also need line scores to detect OT periods.
-    desc_lower = (pick.get("description") or "").lower()
-    is_3way_ml = sport == "NHL" and ("3-way" in desc_lower or "3 way" in desc_lower)
-    needs_summary = period != "game" or bet_type == "prop" or is_3way_ml
+    # NHL regulation/3-way moneylines also need line scores to detect OT periods.
+    is_reg_ml = sport == "NHL" and is_regulation_ml(pick.get("description", ""))
+    needs_summary = period != "game" or bet_type == "prop" or is_reg_ml
 
     if needs_summary and scoreboard:
         events = _completed_events(scoreboard)

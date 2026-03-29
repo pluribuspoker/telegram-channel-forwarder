@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from common import VERDICT_EMOJI
+from common import VERDICT_EMOJI, is_regulation_ml
 
 
 def _clean_desc(desc: str) -> str:
@@ -53,8 +53,7 @@ def _format_pick(pick: dict) -> str:
         return f"{team}{period_tag} {sign}{line:g}"
 
     if bet_type == "moneyline" and team:
-        desc_lower = (pick.get("description") or "").lower()
-        suffix = " 3-way ML" if ("3-way" in desc_lower or "3 way" in desc_lower) else " ML"
+        suffix = " 3-way ML" if is_regulation_ml(pick.get("description", "")) else " ML"
         return f"{team}{period_tag}{suffix}"
 
     if bet_type in ("total", "team_total") and line is not None:
