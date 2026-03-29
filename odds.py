@@ -698,6 +698,11 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
         teams    = pick.get("teams") or []
         bet_type = pick.get("bet_type", "")
 
+        # Defensive: for moneylines, if teams is empty but player is set (parse
+        # misclassified a UFC/Boxing fighter into player), treat player as the team.
+        if bet_type == "moneyline" and not teams and pick.get("player"):
+            teams = [pick["player"]]
+
         # ── Player props: separate endpoint ───────────────────────────────────
         if bet_type == "prop":
             prop_stat   = (pick.get("prop_stat") or "").upper()
@@ -781,6 +786,11 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
 
         teams    = pick.get("teams") or []
         bet_type = pick.get("bet_type", "")
+
+        # Defensive: for moneylines, if teams is empty but player is set (parse
+        # misclassified a UFC/Boxing fighter into player), treat player as the team.
+        if bet_type == "moneyline" and not teams and pick.get("player"):
+            teams = [pick["player"]]
 
         # ── Player props: separate endpoint ───────────────────────────────────
         if bet_type == "prop":
