@@ -816,13 +816,25 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
             if espn_data:
                 bookmakers = espn_bookmakers_for_teams(espn_data, teams)
 
-        if not bookmakers:
+        # If ESPN line is >1.5 pts from the pick, fall back to Odds API which carries
+        # alternate lines (ESPN only has main-line totals/spreads).
+        needs_odds_api = not bookmakers
+        if bookmakers and pick.get("line") is not None:
+            espn_r = lookup_pick_odds(sport, pick, bookmakers)
+            api_line = espn_r.get("api_line")
+            if api_line is not None and abs(float(api_line) - float(pick["line"])) > 1.5:
+                needs_odds_api = True
+
+        if needs_odds_api:
             event_list = await _fetch_current_event_list(sport_key, conn)
             event_id   = _find_event_id(event_list, teams)
             if event_id:
                 if _event_already_started(event_list, event_id):
-                    return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"))
-                bookmakers = await _fetch_current_bookmakers(sport_key, event_id, MARKETS_FULL, conn)
+                    if not bookmakers:
+                        return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"))
+                    # Game started but ESPN had main-line odds — use those as fallback
+                else:
+                    bookmakers = await _fetch_current_bookmakers(sport_key, event_id, MARKETS_FULL, conn)
 
         r = lookup_pick_odds(sport, pick, bookmakers)
         return OddsResult(
