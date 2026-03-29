@@ -16,7 +16,7 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 | `scores.py` | Sports data — ESPN / Odds API fetching, scoreboard formatting, team matching |
 | `ai.py` | Claude AI — pick parsing, grading, context building, cost tracking |
 | `audit.py` | Audit log — writes to SQLite + Telegram audit channel |
-| `common.py` | Shared utilities (Anthropic client, OCR, channel parsing, emoji map) |
+| `common.py` | Shared utilities (Anthropic client, OCR, channel parsing, emoji map, regulation ML detection) |
 | `run_tracker.sh` | Timer wrapper with retry logic and healthchecks.io signals |
 
 ---
@@ -178,7 +178,7 @@ Andrew Cunningham
 
 - Capper name is a bold hyperlink back to the original pick
 - Odds shown inline when available; omitted gracefully if not found
-- Descriptions standardized: `ML` shorthand, `Team1/Team2 O/U` for game totals, period tags (`1H`, `2H`)
+- Descriptions standardized: `ML` shorthand (`3-way ML` for regulation/3-way moneylines), `Team1/Team2 O/U` for game totals, period tags (`1H`, `2H`)
 - `--dry-run` routes to `test_broadcast_results_channel` for safe previewing
 
 **Reset emojis for re-testing:**
