@@ -105,11 +105,6 @@ MARKETS_FULL = (
     "h2h_q1,spreads_q1,totals_q1"
 )
 
-PREFERRED_BOOKS = [
-    "draftkings", "fanduel", "betmgm", "caesars",
-    "pointsbet", "williamhill_us", "barstool",
-]
-
 MAX_LINE_GAP = 5
 
 HALF_POINT_COST: dict[str, float] = {
@@ -379,11 +374,7 @@ def _adjust_for_gap(sport: str, base_odds: int, pick_line: float, api_line: floa
 def _pick_best(candidates: list[tuple[int, str]]) -> tuple[int | None, str | None]:
     if not candidates:
         return None, None
-    for preferred in PREFERRED_BOOKS:
-        for odds, bk in candidates:
-            if bk == preferred:
-                return odds, bk
-    return candidates[0]
+    return max(candidates, key=lambda x: x[0])
 
 
 def _collect_outcomes(
@@ -471,16 +462,18 @@ def _lookup_spread(sport: str, bookmakers: list[dict], team: str, pick_line: flo
     if not all_lines:
         return _empty
 
-    closest = min(all_lines, key=lambda x: abs(x[0] - pick_line))
-    gap = abs(closest[0] - pick_line)
+    min_gap = min(abs(x[0] - pick_line) for x in all_lines)
+    at_closest = [(pt, price, bk) for pt, price, bk in all_lines if abs(pt - pick_line) <= min_gap + 0.01]
+    best_pt, best_price, best_bk = max(at_closest, key=lambda x: x[1])
+    gap = abs(best_pt - pick_line)
 
     if gap > MAX_LINE_GAP:
         return {"match_type": f"alt_line_gap_{gap:.1f}pts", "pick_line": pick_line,
-                "api_line": closest[0], "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
+                "api_line": best_pt, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
-    adjusted = _adjust_for_gap(sport, closest[1], pick_line, closest[0], gap)
+    adjusted = _adjust_for_gap(sport, best_price, pick_line, best_pt, gap)
     return {"match_type": f"proximity_{gap:.1f}pts", "pick_line": pick_line,
-            "api_line": closest[0], "computed_odds": closest[1], "adjusted_odds": adjusted, "bookmaker": closest[2]}
+            "api_line": best_pt, "computed_odds": best_price, "adjusted_odds": adjusted, "bookmaker": best_bk}
 
 
 def _lookup_total(sport: str, bookmakers: list[dict], direction: str, pick_line: float, period: str = "game") -> dict:
@@ -509,18 +502,20 @@ def _lookup_total(sport: str, bookmakers: list[dict], direction: str, pick_line:
     if not all_lines:
         return _empty
 
-    closest = min(all_lines, key=lambda x: abs(x[0] - pick_line))
-    gap = abs(closest[0] - pick_line)
+    min_gap = min(abs(x[0] - pick_line) for x in all_lines)
+    at_closest = [(pt, price, bk) for pt, price, bk in all_lines if abs(pt - pick_line) <= min_gap + 0.01]
+    best_pt, best_price, best_bk = max(at_closest, key=lambda x: x[1])
+    gap = abs(best_pt - pick_line)
 
     if gap > MAX_LINE_GAP:
         return {"match_type": f"alt_line_gap_{gap:.1f}pts", "pick_line": pick_line,
-                "api_line": closest[0], "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
+                "api_line": best_pt, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
     signed_pick = -pick_line if direction == "over" else pick_line
-    signed_api  = -closest[0] if direction == "over" else closest[0]
-    adjusted = _adjust_for_gap(sport, closest[1], signed_pick, signed_api, gap)
+    signed_api  = -best_pt if direction == "over" else best_pt
+    adjusted = _adjust_for_gap(sport, best_price, signed_pick, signed_api, gap)
     return {"match_type": f"proximity_{gap:.1f}pts", "pick_line": pick_line,
-            "api_line": closest[0], "computed_odds": closest[1], "adjusted_odds": adjusted, "bookmaker": closest[2]}
+            "api_line": best_pt, "computed_odds": best_price, "adjusted_odds": adjusted, "bookmaker": best_bk}
 
 
 def _lookup_team_total(sport: str, bookmakers: list[dict], team: str, direction: str, pick_line: float) -> dict:
@@ -574,18 +569,20 @@ def _lookup_team_total(sport: str, bookmakers: list[dict], team: str, direction:
     if not all_lines:
         return _empty
 
-    closest = min(all_lines, key=lambda x: abs(x[0] - pick_line))
-    gap = abs(closest[0] - pick_line)
+    min_gap = min(abs(x[0] - pick_line) for x in all_lines)
+    at_closest = [(pt, price, bk) for pt, price, bk in all_lines if abs(pt - pick_line) <= min_gap + 0.01]
+    best_pt, best_price, best_bk = max(at_closest, key=lambda x: x[1])
+    gap = abs(best_pt - pick_line)
 
     if gap > MAX_LINE_GAP:
         return {"match_type": f"alt_line_gap_{gap:.1f}pts", "pick_line": pick_line,
-                "api_line": closest[0], "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
+                "api_line": best_pt, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
     signed_pick = -pick_line if direction == "over" else pick_line
-    signed_api  = -closest[0] if direction == "over" else closest[0]
-    adjusted = _adjust_for_gap(sport, closest[1], signed_pick, signed_api, gap)
+    signed_api  = -best_pt if direction == "over" else best_pt
+    adjusted = _adjust_for_gap(sport, best_price, signed_pick, signed_api, gap)
     return {"match_type": f"proximity_{gap:.1f}pts", "pick_line": pick_line,
-            "api_line": closest[0], "computed_odds": closest[1], "adjusted_odds": adjusted, "bookmaker": closest[2]}
+            "api_line": best_pt, "computed_odds": best_price, "adjusted_odds": adjusted, "bookmaker": best_bk}
 
 
 def _lookup_prop(bookmakers: list[dict], player: str, prop_market: str, direction: str, line: float) -> dict:

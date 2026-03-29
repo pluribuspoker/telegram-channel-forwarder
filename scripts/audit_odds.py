@@ -46,7 +46,7 @@ from ai import claude_parse
 from scores import fetch_espn, espn_bookmakers_for_teams, ESPN_LEAGUES
 from odds import (
     ODDS_API_KEY, ODDS_API_BASE,
-    SPORT_KEYS, PROP_STAT_MARKETS, MARKETS_FULL, PREFERRED_BOOKS,
+    SPORT_KEYS, PROP_STAT_MARKETS, MARKETS_FULL,
     MAX_LINE_GAP, HALF_POINT_COST, _PERIOD_RE,
     _pick_best, _collect_outcomes, _find_event_id,
     _lookup_moneyline, _lookup_spread, _lookup_total, _lookup_prop,
