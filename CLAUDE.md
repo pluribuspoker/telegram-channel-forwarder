@@ -90,7 +90,7 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.py --live --days 2 2>&1
 
 **UFC sport classification:** The parser receives the day of week as context. On Saturdays, single-surname moneyline picks with no other sport context default to UFC (UFC events are almost exclusively on Saturdays). Tennis is only classified when explicit indicators are present (tournament names, match format, known players) — never from a surname alone.
 
-**NHL 3-way / regulation moneyline:** Picks phrased as "3-way", "3 way", "60 min", "regulation", "reg ML", etc. must win in regulation — a game going to OT is graded LOSS. Detection is centralized in `is_regulation_ml()` (`common.py`), which is used by the grade prompt, `build_context` (fetches period-level line scores so OT is visible), odds lookup (uses `h2h_3_way` market instead of `h2h`), and broadcast description formatter (shows `3-way ML` instead of `ML`).
+**NHL 3-way / regulation moneyline:** Must win in regulation — OT = LOSS. Detection centralized in `is_regulation_ml()` (`common.py`).
 
 ## Odds integration
 
