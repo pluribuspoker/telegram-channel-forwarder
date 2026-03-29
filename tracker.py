@@ -503,7 +503,7 @@ async def run_backtest(filepath: str) -> None:
             elif context == CONTEXT_PENDING:
                 grade, calc = "PENDING", ""
             else:
-                grade, calc = await claude_grade(pick_desc, date, context)
+                grade, calc = await claude_grade(pick_desc, date, context, bet_type)
 
             correct = grade_matches_label(grade, label)
             skipped = grade in ("PUSH", "UNKNOWN")
@@ -628,7 +628,7 @@ async def grade_one(text: str, date: str) -> None:
         print()
 
         if context != CONTEXT_SKIP:
-            grade, calc = await claude_grade(pick_desc, date, context)
+            grade, calc = await claude_grade(pick_desc, date, context, pick.get("bet_type", ""))
             print(f"  GRADE : {grade}")
             print(f"  CALC  : {calc}")
         else:
@@ -911,6 +911,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         else:
                             verdict, calc = await claude_grade(
                                 pick.get("description", text[:80]), date_str, context,
+                                pick.get("bet_type", ""),
                             )
                     verdicts.append((pick, verdict, calc, pick_sport, game_date))
 

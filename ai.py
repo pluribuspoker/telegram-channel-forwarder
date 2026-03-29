@@ -168,7 +168,7 @@ async def claude_parse(text: str, date: str | None = None) -> dict | None:
         return None
 
 
-async def claude_grade(pick_desc: str, date: str, context: str) -> tuple[str, str]:
+async def claude_grade(pick_desc: str, date: str, context: str, bet_type: str = "") -> tuple[str, str]:
     """Returns (verdict, calc)."""
     resp = await _claude_create_with_retry(
         model="claude-sonnet-4-6",
@@ -187,8 +187,9 @@ async def claude_grade(pick_desc: str, date: str, context: str) -> tuple[str, st
         verdict = result.get("verdict", "").strip().upper()
         calc = result.get("calc", "")
         if verdict in ("WIN", "LOSS", "PUSH", "UNKNOWN"):
-            # Sanity check: WIN/LOSS/PUSH must have numbers in calc (grader did math)
-            if verdict in ("WIN", "LOSS", "PUSH") and not re.search(r'\d', calc):
+            # Sanity check: WIN/LOSS/PUSH must have numbers in calc (grader did math).
+            # Moneylines have no score to cite, so skip the digit check for them.
+            if verdict in ("WIN", "LOSS", "PUSH") and bet_type != "moneyline" and not re.search(r'\d', calc):
                 return "UNKNOWN", calc
             return verdict, calc
     except (json.JSONDecodeError, AttributeError):
