@@ -101,6 +101,28 @@ def _probe_db_save(channel_id: int, topic_id, msg_id: int) -> None:
         pass
 
 
+async def _trigger_tracker_soon():
+    """Fire a quick tracker run ~3s after a pick is forwarded to get odds into the message fast."""
+    await asyncio.sleep(3)
+    for attempt in range(2):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "tracker.py", "--live", "--days", "0.1",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+            if proc.returncode != 0 and attempt == 0:
+                print(f"[trigger] tracker quick-run exited {proc.returncode}, retrying in 5s")
+                await asyncio.sleep(5)
+                continue
+        except Exception as e:
+            print(f"[trigger] tracker quick-run failed: {e}")
+            return
+        if attempt == 0:
+            await asyncio.sleep(5)  # second pass: catches "message not yet in window" edge case
+
+
 async def channel_probe(client, channels):
     """Every 5 min, log the latest message in each source channel only when it's new."""
     await asyncio.sleep(60)
@@ -201,6 +223,8 @@ async def main():
                 caption, odds = await enrich_caption([msg], mapping, client)
                 log_group([msg], sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None)
                 await send_group(client, [msg], bot_dest_entity, sender=bot, caption_override=caption, text_only=bool(odds))
+                if not use_test:
+                    asyncio.create_task(_trigger_tracker_soon())
             except Exception as e:
                 print(f"  ✗ Failed on message {msg.id}: {e}", file=sys.stderr)
 
@@ -214,6 +238,8 @@ async def main():
                     caption, odds = await enrich_caption(group, mapping, client)
                     log_group(group, sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None)
                     await send_group(client, group, bot_dest_entity, sender=bot, caption_override=caption, text_only=bool(odds))
+                    if not use_test:
+                        asyncio.create_task(_trigger_tracker_soon())
                 except Exception as e:
                     print(f"  ✗ Album send failed: {e}", file=sys.stderr)
             else:
