@@ -8,6 +8,7 @@ Usage:
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -804,9 +805,19 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 if isinstance(cached, dict) and cached.get("_dupe"):
                     continue  # primary row carries the +N dup annotation
                 # {"_failed": True} is stored after the first audit notification so we
-                # don't spam the audit channel — but we still re-try parsing each run
-                # so the fix landing automatically gets picked up.
+                # don't spam the audit channel. We only re-try parsing if the message
+                # text has changed (i.e. the capper edited it) — otherwise skip Claude.
                 already_notified = isinstance(cached, dict) and cached.get("_failed")
+                if already_notified:
+                    _cur_hash = hashlib.md5(text.encode()).hexdigest()
+                    if cached.get("text_hash") == _cur_hash:
+                        # Text unchanged — skip Claude, just show the warning
+                        failed += 1
+                        print(f"\n{msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'no picks':<{_DESC_W}} {'':<{_ODDS_W}} {int(date_str[5:7])}/{int(date_str[8:10])} ⚠")
+                        continue
+                    else:
+                        # Message was edited — retry fresh (re-fire audit notification too)
+                        already_notified = False
                 # Support both old format (bare parsed dict) and new format (with leg_verdicts)
                 if cached and not already_notified:
                     if isinstance(cached, dict) and "parsed" in cached:  # new format
@@ -837,7 +848,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             verdict="UNKNOWN", calc="parse failed",
                             prev_caption=text, dry_run=dry_run, channel_name=ch_name, capper_name=capper,
                         )
-                        pending_cache[cache_key] = {"_failed": True}
+                        pending_cache[cache_key] = {"_failed": True, "text_hash": hashlib.md5(text.encode()).hexdigest()}
                     continue
                 sport = parsed.get("sport", "Other")
                 picks = parsed.get("picks", [])
@@ -851,7 +862,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             verdict="UNKNOWN", calc="no picks extracted",
                             prev_caption=text, dry_run=dry_run, channel_name=ch_name, capper_name=capper,
                         )
-                        pending_cache[cache_key] = {"_failed": True}
+                        pending_cache[cache_key] = {"_failed": True, "text_hash": hashlib.md5(text.encode()).hexdigest()}
                     continue
 
                 dup_key = _find_duplicate_cache_key(
