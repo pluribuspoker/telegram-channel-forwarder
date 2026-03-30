@@ -606,7 +606,7 @@ async def run_backtest(filepath: str) -> None:
 async def grade_one(text: str, date: str) -> None:
     """Parse and grade a single pick message, printing full detail."""
     import sys
-    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 
     label = extract_label(text)
     clean = strip_label(text)
@@ -1144,7 +1144,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
 async def main() -> None:
     import sys
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     parser = argparse.ArgumentParser(description="Grade sports betting picks")
     parser.add_argument("--backtest", metavar="FILE", help="JSON export file to backtest")
     parser.add_argument("--grade",    metavar="TEXT", help="Grade a single pick message")
