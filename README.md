@@ -146,7 +146,7 @@ python tracker.py --live --channel -100xxxxxxxxxx # single channel only
 
 ### Odds
 
-The tracker fetches odds from the Odds API at first encounter (~5 min after pick arrives). Odds are:
+The tracker fetches odds from the Odds API at first encounter. `listener.py` triggers a tracker run ~3 seconds after forwarding each pick, so odds typically appear within 15–30 seconds. The regular 5-minute systemd run serves as a backstop. Odds are:
 - Edited into the destination message immediately: `Hawks +3.5 [-115]`
 - Preserved through the grading edit: `Hawks +3.5 [-115]✅`
 - Included in broadcast messages: `✅ Hawks +3.5 [-115] · Capper`
