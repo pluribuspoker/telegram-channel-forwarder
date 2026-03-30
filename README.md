@@ -146,13 +146,19 @@ python tracker.py --live --channel -100xxxxxxxxxx # single channel only
 
 ### Odds
 
-The tracker fetches pre-game lines from the Odds API at first encounter (live endpoint, ~5 min after pick arrives). Odds are:
+The tracker fetches odds from the Odds API at first encounter (~5 min after pick arrives). Odds are:
 - Edited into the destination message immediately: `Hawks +3.5 [-115]`
 - Preserved through the grading edit: `Hawks +3.5 [-115]✅`
 - Included in broadcast messages: `✅ Hawks +3.5 [-115] · Capper`
 - Stored in `picks.db` (`grades.odds`) for audit
 
-Tracker-fetched odds use **square brackets** `[-115]` to distinguish them from odds the capper wrote themselves `(-115)`. If the game has already started when the pick is first encountered, odds are skipped silently.
+Tracker-fetched odds use **square brackets** `[-115]` to distinguish them from odds the capper wrote themselves `(-115)`.
+
+**When a game is already in progress** at tracking time, the tracker fetches both:
+- **Live odds** — current in-game line from the Odds API (updates with a 5-min cache): `[-120 live]`
+- **Pre-game closing line** — historical snapshot at game start time: `[-130 pre]`
+
+Both are shown together when available: `Stars/Flyers U5.5 [-120 live · -130 pre]`. Falls back to pre-game only (`[-130 pre]`) if live odds are unavailable, or to a silent miss if neither is found.
 
 Any unexpected failure to find odds posts one warning to the Telegram audit channel (never repeated for the same pick). Requires `ODDS_API_KEY` in `.env`.
 
