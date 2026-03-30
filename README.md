@@ -201,6 +201,8 @@ Every grade action writes to `picks.db` (SQLite) and posts to a private Telegram
 
 `parse_cache.json` caches `claude_parse` results for pending messages. Since the grader runs every 5 minutes, this avoids redundant Claude API calls for picks whose games haven't started yet. Evicted automatically when a pick is graded.
 
+Messages that parse successfully but contain no picks (e.g. "sorry, no picks today") are cached with `{"_failed": True, "text_hash": ...}`. Subsequent runs skip Claude entirely for these and just show a `⚠` warning — no repeated API cost. If the capper edits the message, the hash changes and Claude retries automatically.
+
 ### Production (VPS)
 
 `run_tracker.sh` wraps the grader with:
