@@ -1161,7 +1161,7 @@ async def main() -> None:
     parser.add_argument("--grade",    metavar="TEXT", help="Grade a single pick message")
     parser.add_argument("--live",     action="store_true", help="Grade live Telegram channels")
     parser.add_argument("--date",     metavar="YYYY-MM-DD", help="Date for --grade (default: today)")
-    parser.add_argument("--days",     type=int, default=7,
+    parser.add_argument("--days",     type=float, default=7,
                         help="Days back to scan in --live mode (default: 7)")
     parser.add_argument("--channel",  type=int, metavar="ID",
                         help="Limit --live to a single channel ID (overrides GRADE_CHANNELS)")
