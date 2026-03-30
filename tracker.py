@@ -221,7 +221,7 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
 
     return "\n".join(lines)
 
-_ODDS_TAG_RE = re.compile(r'\s*\[[+-]\d{3,4}\]')
+_ODDS_TAG_RE = re.compile(r'\s*\[[+-]\d{3,4}[^\]]*\]')
 
 
 def _fmt_odds_audit(pick: dict, sport: str, capper: str, result) -> str:
@@ -273,11 +273,24 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
 
     lines = text.rstrip().split("\n")
 
+    def _fmt(v: int) -> str:
+        return f"+{v}" if v > 0 else str(v)
+
     for idx, pick in enumerate(picks):
         odds_val = odds_by_pick.get(str(idx), {}).get("odds")
         if odds_val is None:
             continue
-        odds_tag = f" [{'+' if odds_val > 0 else ''}{odds_val}]"
+        match_type  = odds_by_pick.get(str(idx), {}).get("match_type", "")
+        pregame_val = odds_by_pick.get(str(idx), {}).get("pregame_odds")
+        if match_type.startswith("live_"):
+            if pregame_val is not None:
+                odds_tag = f" [{_fmt(odds_val)} live · {_fmt(pregame_val)} pre]"
+            else:
+                odds_tag = f" [{_fmt(odds_val)} live]"
+        elif match_type.startswith("pregame_"):
+            odds_tag = f" [{_fmt(odds_val)} pre]"
+        else:
+            odds_tag = f" [{_fmt(odds_val)}]"
 
         teams  = pick.get("teams") or []
         player = pick.get("player") or ""
@@ -874,11 +887,20 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             print(f"  [odds] sanity: {warn}")
                             await audit.warn(f"⚠️ <b>odds sanity</b>: {warn}\n" + _fmt_odds_audit(pick, pick_sport, capper, result))
                         else:
-                            await audit.warn(_fmt_odds_audit(pick, pick_sport, capper, result))
+                            if result.match_type.startswith("live_"):
+                                prefix = "🟢 "
+                            elif result.match_type.startswith("pregame_"):
+                                prefix = "📅 "
+                            else:
+                                prefix = ""
+                            await audit.warn(prefix + _fmt_odds_audit(pick, pick_sport, capper, result))
                         odds_by_pick[str(i)] = {
-                            "odds":       display_odds,
-                            "bookmaker":  result.bookmaker,
-                            "match_type": result.match_type,
+                            "odds":               display_odds,
+                            "bookmaker":          result.bookmaker,
+                            "match_type":         result.match_type,
+                            "pregame_odds":       result.pregame_odds,
+                            "pregame_bookmaker":  result.pregame_bookmaker,
+                            "pregame_match_type": result.pregame_match_type,
                         }
                         odds_total += 1
                         if display_odds is not None:

@@ -152,6 +152,10 @@ class OddsResult:
     bookmaker:   str | None   = None
     api_line:    float | None = None
     pick_line:   float | None = None
+    # Populated for in-progress games when historical pre-game odds are also available:
+    pregame_odds:       int | None = None
+    pregame_bookmaker:  str | None = None
+    pregame_match_type: str | None = None
 
     @property
     def found(self) -> bool:
@@ -240,8 +244,9 @@ def _init_db(conn: sqlite3.Connection) -> None:
 
 
 def _evict_old(conn: sqlite3.Connection) -> None:
-    conn.execute("DELETE FROM odds_cache   WHERE game_date != 'current' AND game_date < date('now', '-60 days')")
+    conn.execute("DELETE FROM odds_cache   WHERE game_date != 'current' AND game_date != 'live' AND game_date < date('now', '-60 days')")
     conn.execute("DELETE FROM odds_cache   WHERE game_date  = 'current' AND fetched_at < datetime('now', '-2 days')")
+    conn.execute("DELETE FROM odds_cache   WHERE game_date  = 'live'    AND fetched_at < datetime('now', '-5 minutes')")
     conn.execute("DELETE FROM events_cache WHERE game_date != 'current' AND game_date < date('now', '-60 days')")
     conn.execute("DELETE FROM events_cache WHERE game_date  = 'current' AND fetched_at < datetime('now', '-30 minutes')")
     conn.commit()
@@ -764,6 +769,80 @@ def _event_already_started(event_list: list[dict], event_id: str) -> bool:
         return False
 
 
+def _get_event_date(event_list: list[dict], event_id: str) -> str | None:
+    """Return YYYY-MM-DD from an event's commence_time, or None."""
+    event = next((e for e in event_list if e.get("id") == event_id), None)
+    ct = (event or {}).get("commence_time", "")
+    return ct[:10] if len(ct) >= 10 else None
+
+
+async def _try_pregame(
+    sport: str, sport_key: str, event_list: list[dict], event_id: str,
+    pick: dict, db_path: str,
+) -> "OddsResult | None":
+    """
+    Fetch historical closing odds (at game start) for an in-progress game.
+
+    Uses commence_time as the API snapshot so we get the closing line, not a
+    mid-day snapshot. Cached under 'pregame_YYYY-MM-DD' to avoid conflicting
+    with the regular T18:00:00Z historical cache.
+    """
+    event = next((e for e in event_list if e.get("id") == event_id), None)
+    if not event:
+        return None
+    commence_time = event.get("commence_time", "")
+    if not commence_time or len(commence_time) < 10:
+        return None
+    game_date  = commence_time[:10]
+    cache_date = f"pregame_{game_date}"
+
+    bet_type = pick.get("bet_type", "")
+    if bet_type == "prop":
+        prop_stat   = (pick.get("prop_stat") or "").upper()
+        prop_market = PROP_STAT_MARKETS.get(sport, {}).get(prop_stat)
+        if not prop_market:
+            return None
+        markets = prop_market
+    else:
+        markets = MARKETS_FULL
+
+    conn = sqlite3.connect(db_path)
+    try:
+        bookmakers = _get_bookmakers(conn, event_id, cache_date, markets)
+        if bookmakers is None:
+            if not ODDS_API_KEY:
+                return None
+            async with httpx.AsyncClient(timeout=20) as http:
+                data = await _api_get(http,
+                    f"{ODDS_API_BASE}/historical/sports/{sport_key}/events/{event_id}/odds",
+                    {"apiKey": ODDS_API_KEY, "regions": "us", "markets": markets,
+                     "date": commence_time, "oddsFormat": "american"},
+                )
+            if isinstance(data, dict):
+                bookmakers = data.get("data", {}).get("bookmakers", []) if "data" in data else data.get("bookmakers", [])
+            else:
+                bookmakers = []
+            _save_bookmakers(conn, sport_key, event_id, cache_date, markets, bookmakers)
+    finally:
+        conn.close()
+
+    if not bookmakers:
+        return None
+
+    if bet_type == "prop":
+        r = _lookup_prop(bookmakers, pick.get("player") or "", prop_market,
+                         pick.get("direction") or "over", float(pick.get("line") or 0.5))
+    else:
+        r = lookup_pick_odds(sport, pick, bookmakers)
+
+    if r.get("adjusted_odds") is None:
+        return None
+    return OddsResult(
+        match_type=r["match_type"], odds=r["adjusted_odds"],
+        bookmaker=r["bookmaker"], api_line=r["api_line"], pick_line=r["pick_line"],
+    )
+
+
 async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> OddsResult:
     """
     Look up current (live pre-game) odds for a pick.
@@ -800,6 +879,23 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
             if not event_id:
                 return OddsResult(match_type="no_game", pick_line=pick.get("line"))
             if _event_already_started(event_list, event_id):
+                live_bk = await _fetch_current_bookmakers(sport_key, event_id, prop_market, conn, live=True)
+                pregame = await _try_pregame(sport, sport_key, event_list, event_id, pick, db_path)
+                if live_bk:
+                    r = _lookup_prop(live_bk, pick.get("player") or "", prop_market,
+                                     pick.get("direction") or "over", float(pick.get("line") or 0.5))
+                    if r.get("adjusted_odds") is not None:
+                        return OddsResult(
+                            match_type=f"live_{r['match_type']}", odds=r["adjusted_odds"],
+                            bookmaker=r["bookmaker"], api_line=r["api_line"], pick_line=r["pick_line"],
+                            pregame_odds=pregame.odds if pregame else None,
+                            pregame_bookmaker=pregame.bookmaker if pregame else None,
+                            pregame_match_type=f"pregame_{pregame.match_type}" if pregame else None,
+                        )
+                if pregame:
+                    return OddsResult(match_type=f"pregame_{pregame.match_type}", odds=pregame.odds,
+                                      bookmaker=pregame.bookmaker, api_line=pregame.api_line,
+                                      pick_line=pregame.pick_line)
                 return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"))
             bookmakers = await _fetch_current_bookmakers(sport_key, event_id, prop_market, conn)
             r = _lookup_prop(bookmakers, pick.get("player") or "", prop_market,
@@ -838,6 +934,22 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
             if event_id:
                 if _event_already_started(event_list, event_id):
                     if not bookmakers:
+                        live_bk = await _fetch_current_bookmakers(sport_key, event_id, MARKETS_FULL, conn, live=True)
+                        pregame = await _try_pregame(sport, sport_key, event_list, event_id, pick, db_path)
+                        if live_bk:
+                            r = lookup_pick_odds(sport, pick, live_bk)
+                            if r.get("adjusted_odds") is not None:
+                                return OddsResult(
+                                    match_type=f"live_{r['match_type']}", odds=r["adjusted_odds"],
+                                    bookmaker=r["bookmaker"], api_line=r["api_line"], pick_line=r["pick_line"],
+                                    pregame_odds=pregame.odds if pregame else None,
+                                    pregame_bookmaker=pregame.bookmaker if pregame else None,
+                                    pregame_match_type=f"pregame_{pregame.match_type}" if pregame else None,
+                                )
+                        if pregame:
+                            return OddsResult(match_type=f"pregame_{pregame.match_type}", odds=pregame.odds,
+                                              bookmaker=pregame.bookmaker, api_line=pregame.api_line,
+                                              pick_line=pregame.pick_line)
                         return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"))
                     # Game started but ESPN had main-line odds — use those as fallback
                 else:
@@ -874,10 +986,12 @@ async def _fetch_current_event_list(sport_key: str, conn: sqlite3.Connection) ->
 
 
 async def _fetch_current_bookmakers(
-    sport_key: str, event_id: str, markets: str, conn: sqlite3.Connection
+    sport_key: str, event_id: str, markets: str, conn: sqlite3.Connection,
+    *, live: bool = False,
 ) -> list[dict]:
-    """Fetch current odds for one event (live endpoint). Cached for 2 days."""
-    cached = _get_bookmakers(conn, event_id, "current", markets)
+    """Fetch current odds for one event. live=True uses 5-min cache for in-progress games."""
+    cache_key = "live" if live else "current"
+    cached = _get_bookmakers(conn, event_id, cache_key, markets)
     if cached is not None:
         return cached
     if not ODDS_API_KEY:
@@ -888,7 +1002,7 @@ async def _fetch_current_bookmakers(
             {"apiKey": ODDS_API_KEY, "regions": "us", "markets": markets, "oddsFormat": "american"},
         )
     bookmakers: list[dict] = data.get("bookmakers", []) if isinstance(data, dict) else []
-    _save_bookmakers(conn, sport_key, event_id, "current", markets, bookmakers)
+    _save_bookmakers(conn, sport_key, event_id, cache_key, markets, bookmakers)
     return bookmakers
 
 
