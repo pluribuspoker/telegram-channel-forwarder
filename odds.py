@@ -105,6 +105,13 @@ MARKETS_FULL = (
     "h2h_q1,spreads_q1,totals_q1"
 )
 
+MARKETS_BY_TYPE: dict[str, str] = {
+    "moneyline":  "h2h,h2h_3_way,h2h_h1,h2h_h2,h2h_q1",
+    "spread":     "spreads,alternate_spreads,spreads_h1,spreads_h2,spreads_q1",
+    "total":      "totals,alternate_totals,totals_h1,totals_h2,totals_q1",
+    "team_total": "team_totals,alternate_team_totals",
+}
+
 MAX_LINE_GAP = 5
 
 HALF_POINT_COST: dict[str, float] = {
@@ -672,6 +679,11 @@ def lookup_pick_odds(sport: str, pick: dict, bookmakers: list[dict]) -> dict:
             "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
 
+def _markets_for_pick(pick: dict) -> str:
+    """Minimal markets string for this pick's bet_type. Falls back to MARKETS_FULL."""
+    return MARKETS_BY_TYPE.get(pick.get("bet_type", ""), MARKETS_FULL)
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_PATH) -> OddsResult:
@@ -742,7 +754,7 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
             event_list = await _fetch_event_list(sport_key, game_date, conn)
             event_id   = _find_event_id(event_list, teams)
             if event_id:
-                bookmakers = await _fetch_bookmakers(sport_key, event_id, game_date, MARKETS_FULL, conn)
+                bookmakers = await _fetch_bookmakers(sport_key, event_id, game_date, _markets_for_pick(pick), conn)
 
         r = lookup_pick_odds(sport, pick, bookmakers)
         return OddsResult(
@@ -804,7 +816,7 @@ async def _try_pregame(
             return None
         markets = prop_market
     else:
-        markets = MARKETS_FULL
+        markets = _markets_for_pick(pick)
 
     conn = sqlite3.connect(db_path)
     try:
@@ -934,7 +946,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
             if event_id:
                 if _event_already_started(event_list, event_id):
                     if not bookmakers:
-                        live_bk = await _fetch_current_bookmakers(sport_key, event_id, MARKETS_FULL, conn, live=True)
+                        live_bk = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick), conn, live=True)
                         pregame = await _try_pregame(sport, sport_key, event_list, event_id, pick, db_path)
                         if live_bk:
                             r = lookup_pick_odds(sport, pick, live_bk)
@@ -953,7 +965,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
                         return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"))
                     # Game started but ESPN had main-line odds — use those as fallback
                 else:
-                    bookmakers = await _fetch_current_bookmakers(sport_key, event_id, MARKETS_FULL, conn)
+                    bookmakers = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick), conn)
 
         r = lookup_pick_odds(sport, pick, bookmakers)
         return OddsResult(
