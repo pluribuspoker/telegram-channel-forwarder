@@ -303,12 +303,25 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 search_terms.append(tl)
                 search_terms.extend(w for w in tl.split() if len(w) > 3)
 
-        for j, line in enumerate(lines):
-            if any(term in line.lower() for term in search_terms):
-                if _ODDS_TAG_RE.search(line):
-                    break  # already tagged — idempotent
-                lines[j] = f"{line.rstrip()}{odds_tag}"
-                break
+        # Try description first: more specific than team/player fragments and avoids
+        # false matches on game-info header lines (e.g. "Defenders @ Aviators / 8:00 PM").
+        desc = (pick.get("description") or "").lower().strip()
+        desc_matched = False
+        if desc:
+            for j, line in enumerate(lines):
+                if desc in line.lower():
+                    if not _ODDS_TAG_RE.search(line):
+                        lines[j] = f"{line.rstrip()}{odds_tag}"
+                    desc_matched = True
+                    break
+
+        if not desc_matched:
+            for j, line in enumerate(lines):
+                if any(term in line.lower() for term in search_terms):
+                    if _ODDS_TAG_RE.search(line):
+                        break  # already tagged — idempotent
+                    lines[j] = f"{line.rstrip()}{odds_tag}"
+                    break
 
     return "\n".join(lines)
 
