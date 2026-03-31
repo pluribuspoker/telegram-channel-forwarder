@@ -146,7 +146,7 @@ python tracker.py --live --channel -100xxxxxxxxxx # single channel only
 
 ### Odds
 
-The tracker fetches odds from the Odds API at first encounter. `listener.py` triggers a tracker run ~3 seconds after forwarding each pick, so odds typically appear within 15–30 seconds. The regular 5-minute systemd run serves as a backstop. Odds are:
+The tracker fetches odds at first encounter. `listener.py` triggers a tracker run ~3 seconds after forwarding each pick, so odds typically appear within 15–30 seconds. The regular 5-minute systemd run serves as a backstop. Odds are:
 - Edited into the destination message immediately: `Hawks +3.5 [-115]`
 - Preserved through the grading edit: `Hawks +3.5 [-115]✅`
 - Included in broadcast messages: `✅ Hawks +3.5 [-115] · Capper`
@@ -154,13 +154,15 @@ The tracker fetches odds from the Odds API at first encounter. `listener.py` tri
 
 Tracker-fetched odds use **square brackets** `[-115]` to distinguish them from odds the capper wrote themselves `(-115)`.
 
+**Source priority:** The Odds API is tried first — it covers alternate lines and returns prices from multiple books (DraftKings, FanDuel, BetMGM, Caesars, etc.); the best-priced book is selected automatically. ESPN is used as a fallback only if the Odds API returns no result. Requires `ODDS_API_KEY` in `.env`.
+
 **When a game is already in progress** at tracking time, the tracker fetches both:
-- **Live odds** — current in-game line from the Odds API (updates with a 5-min cache): `[-120 live]`
+- **Live odds** — current in-game line (updates with a 5-min cache): `[-120 live]`
 - **Pre-game closing line** — historical snapshot at game start time: `[-130 pre]`
 
 Both are shown together when available: `Stars/Flyers U5.5 [-120 live · -130 pre]`. Falls back to pre-game only (`[-130 pre]`) if live odds are unavailable, or to a silent miss if neither is found.
 
-Any unexpected failure to find odds posts one warning to the Telegram audit channel (never repeated for the same pick). Requires `ODDS_API_KEY` in `.env`.
+Any unexpected failure to find odds posts one warning to the Telegram audit channel (never repeated for the same pick).
 
 **Sports with odds coverage:** NBA, NCAAB, MLB, NFL, NHL, NCAAF, UFC, UFL (~91% of recent picks; MLB F5 innings and small UFC cards are structural gaps)
 
