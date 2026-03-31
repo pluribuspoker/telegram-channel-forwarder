@@ -305,7 +305,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
 
         # Try description first: more specific than team/player fragments and avoids
         # false matches on game-info header lines (e.g. "Defenders @ Aviators / 8:00 PM").
-        desc = (pick.get("description") or "").lower().strip()
+        # Normalise "moneyline" → "ml" so AI-expanded descriptions match message abbreviations.
+        desc = (pick.get("description") or "").lower().strip().replace("moneyline", "ml")
         desc_matched = False
         if desc:
             for j, line in enumerate(lines):
@@ -317,6 +318,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
 
         if not desc_matched:
             for j, line in enumerate(lines):
+                if " @ " in line:  # skip game-info header (e.g. "Team A @ Team B / 8:00 PM")
+                    continue
                 if any(term in line.lower() for term in search_terms):
                     if _ODDS_TAG_RE.search(line):
                         break  # already tagged — idempotent
