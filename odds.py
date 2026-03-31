@@ -743,20 +743,22 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
         # ── All other bet types ───────────────────────────────────────────────
         bookmakers: list[dict] = []
 
-        # ESPN first (free, pre-game only — odds cleared after game completion)
-        if sport in ESPN_LEAGUES:
-            espn_data = await fetch_espn(sport, game_date)
-            if espn_data:
-                bookmakers = espn_bookmakers_for_teams(espn_data, teams)
-
-        # Odds API fallback (historical closing odds + alternate lines)
-        if not bookmakers:
-            event_list = await _fetch_event_list(sport_key, game_date, conn)
-            event_id   = _find_event_id(event_list, teams)
-            if event_id:
-                bookmakers = await _fetch_bookmakers(sport_key, event_id, game_date, _markets_for_pick(pick), conn)
+        # Odds API first (historical closing odds + alternate lines)
+        event_list = await _fetch_event_list(sport_key, game_date, conn)
+        event_id   = _find_event_id(event_list, teams)
+        if event_id:
+            bookmakers = await _fetch_bookmakers(sport_key, event_id, game_date, _markets_for_pick(pick), conn)
 
         r = lookup_pick_odds(sport, pick, bookmakers)
+
+        # ESPN fallback (pre-game only — odds cleared after game completion)
+        if r.get("adjusted_odds") is None and sport in ESPN_LEAGUES:
+            espn_data = await fetch_espn(sport, game_date)
+            if espn_data:
+                espn_bk = espn_bookmakers_for_teams(espn_data, teams)
+                if espn_bk:
+                    r = lookup_pick_odds(sport, pick, espn_bk)
+
         return OddsResult(
             match_type  = r["match_type"],
             odds        = r["adjusted_odds"],
@@ -923,51 +925,42 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
         # ── All other bet types ───────────────────────────────────────────────
         bookmakers: list[dict] = []
 
-        # ESPN first (free, only has pre-game odds)
-        # Skip ESPN for team_total picks — ESPN doesn't carry team_total markets
-        if sport in ESPN_LEAGUES and bet_type != "team_total":
+        # Odds API first (current pre-game and live)
+        event_list = await _fetch_current_event_list(sport_key, conn)
+        event_id   = _find_event_id(event_list, teams)
+        if event_id:
+            if _event_already_started(event_list, event_id):
+                live_bk = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick), conn, live=True)
+                pregame = await _try_pregame(sport, sport_key, event_list, event_id, pick, db_path)
+                if live_bk:
+                    r = lookup_pick_odds(sport, pick, live_bk)
+                    if r.get("adjusted_odds") is not None:
+                        return OddsResult(
+                            match_type=f"live_{r['match_type']}", odds=r["adjusted_odds"],
+                            bookmaker=r["bookmaker"], api_line=r["api_line"], pick_line=r["pick_line"],
+                            pregame_odds=pregame.odds if pregame else None,
+                            pregame_bookmaker=pregame.bookmaker if pregame else None,
+                            pregame_match_type=f"pregame_{pregame.match_type}" if pregame else None,
+                        )
+                if pregame:
+                    return OddsResult(match_type=f"pregame_{pregame.match_type}", odds=pregame.odds,
+                                      bookmaker=pregame.bookmaker, api_line=pregame.api_line,
+                                      pick_line=pregame.pick_line)
+                return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"))
+            else:
+                bookmakers = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick), conn)
+
+        r = lookup_pick_odds(sport, pick, bookmakers)
+
+        # ESPN fallback (pre-game only, skip for team_total — ESPN lacks that market)
+        if r.get("adjusted_odds") is None and sport in ESPN_LEAGUES and bet_type != "team_total":
             from datetime import date as _d
             espn_data = await fetch_espn(sport, _d.today().isoformat())
             if espn_data:
-                bookmakers = espn_bookmakers_for_teams(espn_data, teams)
+                espn_bk = espn_bookmakers_for_teams(espn_data, teams)
+                if espn_bk:
+                    r = lookup_pick_odds(sport, pick, espn_bk)
 
-        # If ESPN line is >1.5 pts from the pick, fall back to Odds API which carries
-        # alternate lines (ESPN only has main-line totals/spreads).
-        needs_odds_api = not bookmakers
-        if bookmakers and pick.get("line") is not None:
-            espn_r = lookup_pick_odds(sport, pick, bookmakers)
-            api_line = espn_r.get("api_line")
-            if api_line is not None and abs(float(api_line) - float(pick["line"])) > 1.5:
-                needs_odds_api = True
-
-        if needs_odds_api:
-            event_list = await _fetch_current_event_list(sport_key, conn)
-            event_id   = _find_event_id(event_list, teams)
-            if event_id:
-                if _event_already_started(event_list, event_id):
-                    if not bookmakers:
-                        live_bk = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick), conn, live=True)
-                        pregame = await _try_pregame(sport, sport_key, event_list, event_id, pick, db_path)
-                        if live_bk:
-                            r = lookup_pick_odds(sport, pick, live_bk)
-                            if r.get("adjusted_odds") is not None:
-                                return OddsResult(
-                                    match_type=f"live_{r['match_type']}", odds=r["adjusted_odds"],
-                                    bookmaker=r["bookmaker"], api_line=r["api_line"], pick_line=r["pick_line"],
-                                    pregame_odds=pregame.odds if pregame else None,
-                                    pregame_bookmaker=pregame.bookmaker if pregame else None,
-                                    pregame_match_type=f"pregame_{pregame.match_type}" if pregame else None,
-                                )
-                        if pregame:
-                            return OddsResult(match_type=f"pregame_{pregame.match_type}", odds=pregame.odds,
-                                              bookmaker=pregame.bookmaker, api_line=pregame.api_line,
-                                              pick_line=pregame.pick_line)
-                        return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"))
-                    # Game started but ESPN had main-line odds — use those as fallback
-                else:
-                    bookmakers = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick), conn)
-
-        r = lookup_pick_odds(sport, pick, bookmakers)
         return OddsResult(
             match_type = r["match_type"],
             odds       = r["adjusted_odds"],
