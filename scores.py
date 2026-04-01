@@ -128,8 +128,14 @@ async def fetch_kbo_scores(date: str, completed_only: bool = True) -> list[dict]
                 )
                 r.raise_for_status()
                 raw = r.text
-                game_start = raw.index('{"game":')
-                data = json.loads(raw[game_start:])
+                # Response is JSON; some environments prepend a status blob,
+                # so try direct parse first, then fall back to finding {"game":
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    game_start = raw.index('"game":')
+                    data = json.loads(raw[max(0, raw.rfind('{', 0, game_start)):])
+
                 for g in data.get("game", []):
                     gid = g.get("G_ID", "")
                     if gid in seen:
