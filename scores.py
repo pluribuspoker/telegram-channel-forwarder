@@ -29,6 +29,7 @@ SPORT_EXTRA_PARAMS: dict[str, dict] = {
 # Odds API sport keys for sports not on ESPN
 ODDS_API_KEYS: dict[str, str] = {
     "Boxing": "boxing_boxing",
+    "KBO":    "baseball_kbo",
 }
 
 _odds_requests_remaining: str | None = None
