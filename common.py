@@ -4,6 +4,7 @@ Shared utilities for the Telegram forwarder and pick tracker.
 
 import base64
 import io
+import copy
 import re
 import sys
 
@@ -192,14 +193,13 @@ def strip_collapsed_blockquotes(text, entities):
     for e in collapsed:
         del text[e.offset:e.offset + e.length]
     text = "".join(text)
-    # Rebuild surviving entities with adjusted offsets
     removed_ranges = [(e.offset, e.offset + e.length) for e in collapsed]
     surviving = []
     for e in entities:
         if isinstance(e, MessageEntityBlockquote) and e.collapsed:
             continue
-        # Shift offset down by total chars removed before this entity's start
         shift = sum(end - start for start, end in removed_ranges if start < e.offset)
+        e = copy.copy(e)
         e.offset -= shift
         surviving.append(e)
     return text, surviving or None
@@ -230,8 +230,6 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
             caption = caption_override
             caption_entities = None
         # Telegram enforces a 1024-char limit for album captions (SendMultiMediaRequest).
-        # First try stripping collapsed blockquotes (long "read more" sections) to fit.
-        # Fallback: send first photo only with full caption (up to 4096).
         if len(caption) > 1024:
             caption, caption_entities = strip_collapsed_blockquotes(caption, caption_entities)
         if len(caption) > 1024:
