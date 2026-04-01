@@ -166,9 +166,18 @@ async def claude_parse(text: str, date: str | None = None) -> dict | None:
     )
     raw = re.sub(r"^```(?:json)?\n?|```$", "", resp.content[0].text.strip(), flags=re.MULTILINE).strip()
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
     except json.JSONDecodeError:
         return None
+
+    # Deterministic post-parse sport corrections based on raw message text.
+    # Claude sometimes annotates the description (e.g. "(KBO)") but leaves sport="Other".
+    if parsed and parsed.get("sport") == "Other":
+        text_lower = text.lower()
+        if "kbo" in text_lower:
+            parsed["sport"] = "KBO"
+
+    return parsed
 
 
 async def claude_grade(pick_desc: str, date: str, context: str, bet_type: str = "") -> tuple[str, str]:
