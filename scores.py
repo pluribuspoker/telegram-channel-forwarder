@@ -128,13 +128,9 @@ async def fetch_kbo_scores(date: str, completed_only: bool = True) -> list[dict]
                 )
                 r.raise_for_status()
                 raw = r.text
-                # Response is JSON; some environments prepend a status blob,
-                # so try direct parse first, then fall back to finding {"game":
-                try:
-                    data = json.loads(raw)
-                except json.JSONDecodeError:
-                    game_start = raw.index('"game":')
-                    data = json.loads(raw[max(0, raw.rfind('{', 0, game_start)):])
+                # The response is valid JSON followed by a .NET HTML error page —
+                # raw_decode stops at the end of the JSON and ignores the trailing HTML.
+                data, _ = json.JSONDecoder().raw_decode(raw)
 
                 for g in data.get("game", []):
                     gid = g.get("G_ID", "")
