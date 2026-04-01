@@ -8,7 +8,7 @@ import re
 import sys
 
 import anthropic
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
+from telethon.tl.types import MessageEntityBlockquote, MessageMediaDocument, MessageMediaPhoto
 
 _anth_client = None
 
@@ -177,6 +177,34 @@ def resolve_dest(mapping, use_test):
     return parse_channel(dest_raw)
 
 
+def strip_collapsed_blockquotes(text, entities):
+    """Remove collapsed blockquote ranges from text and adjust remaining entity offsets."""
+    if not entities:
+        return text, entities
+    collapsed = sorted(
+        [e for e in entities if isinstance(e, MessageEntityBlockquote) and e.collapsed],
+        key=lambda e: e.offset,
+        reverse=True,  # remove from end so offsets stay valid
+    )
+    if not collapsed:
+        return text, entities
+    text = list(text)
+    for e in collapsed:
+        del text[e.offset:e.offset + e.length]
+    text = "".join(text)
+    # Rebuild surviving entities with adjusted offsets
+    removed_ranges = [(e.offset, e.offset + e.length) for e in collapsed]
+    surviving = []
+    for e in entities:
+        if isinstance(e, MessageEntityBlockquote) and e.collapsed:
+            continue
+        # Shift offset down by total chars removed before this entity's start
+        shift = sum(end - start for start, end in removed_ranges if start < e.offset)
+        e.offset -= shift
+        surviving.append(e)
+    return text, surviving or None
+
+
 async def send_group(client, group, dest_entity, sender=None, caption_override=None, text_only=False):
     """Send a list of messages (album or single) to dest_entity, preserving formatting.
     Uses `sender` client for writing if provided, otherwise uses `client`.
@@ -202,8 +230,10 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
             caption = caption_override
             caption_entities = None
         # Telegram enforces a 1024-char limit for album captions (SendMultiMediaRequest).
-        # When the caption is too long, send the first photo alone with the full caption,
-        # then the remaining photos as a follow-up album (no caption lost, no photos lost).
+        # First try stripping collapsed blockquotes (long "read more" sections) to fit.
+        # Fallback: send first photo only with full caption (up to 4096).
+        if len(caption) > 1024:
+            caption, caption_entities = strip_collapsed_blockquotes(caption, caption_entities)
         if len(caption) > 1024:
             await sender.send_file(dest_entity, files[0], caption=caption, formatting_entities=caption_entities, silent=False)
         else:
