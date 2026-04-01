@@ -16,6 +16,12 @@
 
 ### Switching to test mode
 
+**Locally** (no stop/start needed — uses local `.env.local` sessions):
+```bash
+python listener.py --test
+```
+
+**On VPS** (must stop the live service first):
 ```bash
 stop
 su - forwarder
@@ -25,6 +31,12 @@ cd ~/app
 exit
 start
 ```
+
+In both cases, `test_source_channel` → `test_dest_channel` from `MAPPINGS_CONFIG`, and all `filter_pattern` checks are bypassed.
+
+### Service name
+
+The systemd unit is `telegram-forwarder.service`. Use `flogs` / `tlogs` aliases for logs on the VPS, or `journalctl -u telegram-forwarder` for raw access.
 
 ### Environment files
 
