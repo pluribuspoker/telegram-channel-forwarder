@@ -206,8 +206,6 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
         # then the remaining photos as a follow-up album (no caption lost, no photos lost).
         if len(caption) > 1024:
             await sender.send_file(dest_entity, files[0], caption=caption, formatting_entities=caption_entities, silent=False)
-            if len(files) > 1:
-                await sender.send_file(dest_entity, files[1:], caption="", silent=False)
         else:
             await sender.send_file(dest_entity, files, caption=caption, formatting_entities=caption_entities, silent=False)
     else:
