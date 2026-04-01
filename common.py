@@ -194,15 +194,16 @@ def strip_collapsed_blockquotes(text, entities):
         del text[e.offset:e.offset + e.length]
     text = "".join(text)
     removed_ranges = [(e.offset, e.offset + e.length) for e in collapsed]
+    collapsed_ids = frozenset(id(e) for e in collapsed)
     surviving = []
     for e in entities:
-        if isinstance(e, MessageEntityBlockquote) and e.collapsed:
+        if id(e) in collapsed_ids:
             continue
         shift = sum(end - start for start, end in removed_ranges if start < e.offset)
         e = copy.copy(e)
         e.offset -= shift
         surviving.append(e)
-    return text, surviving or None
+    return text, surviving
 
 
 async def send_group(client, group, dest_entity, sender=None, caption_override=None, text_only=False):
