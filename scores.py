@@ -44,10 +44,11 @@ def odds_requests_remaining() -> str | None:
     return _odds_requests_remaining
 
 
-async def fetch_odds_api_scores(sport: str, date: str) -> list[dict]:
+async def fetch_odds_api_scores(sport: str, date: str, completed_only: bool = True) -> list[dict]:
     """
-    Fetch completed scores from the Odds API for a given sport and date (±1 day).
+    Fetch scores from the Odds API for a given sport and date (±1 day).
     Only works within the last ~3 days on the free tier.
+    Set completed_only=False to also return scheduled/in-progress games.
     """
     global _odds_requests_remaining, _odds_requests_used
     sport_key = ODDS_API_KEYS.get(sport)
@@ -74,7 +75,7 @@ async def fetch_odds_api_scores(sport: str, date: str) -> list[dict]:
                 return []
             results = []
             for e in events:
-                if not e.get("completed"):
+                if completed_only and not e.get("completed"):
                     continue
                 try:
                     event_date = _date.fromisoformat(e.get("commence_time", "")[:10])

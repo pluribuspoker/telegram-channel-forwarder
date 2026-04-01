@@ -253,7 +253,16 @@ async def build_context(
             return CONTEXT_SKIP, date
         events = await fetch_odds_api_scores("KBO", date)
         ctx = odds_api_context(team, events)
-        return (ctx if ctx else CONTEXT_SKIP), date
+        if ctx:
+            return ctx, date
+        # No completed result — check if a matching game is scheduled/in-progress
+        all_events = await fetch_odds_api_scores("KBO", date, completed_only=False)
+        from scores import _team_matches
+        for e in all_events:
+            if (_team_matches(team.lower(), e.get("home_team", "").lower()) or
+                    _team_matches(team.lower(), e.get("away_team", "").lower())):
+                return CONTEXT_PENDING, date
+        return CONTEXT_SKIP, date
 
     # Other unknown sports → skip
     if sport not in ESPN_LEAGUES:

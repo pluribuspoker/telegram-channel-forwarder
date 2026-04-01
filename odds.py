@@ -60,6 +60,7 @@ SPORT_KEYS: dict[str, str] = {
     "NHL":   "icehockey_nhl",
     "UFC":   "mma_mixed_martial_arts",
     "UFL":   "americanfootball_ufl",
+    "KBO":   "baseball_kbo",
 }
 
 PROP_STAT_MARKETS: dict[str, dict[str, str]] = {
