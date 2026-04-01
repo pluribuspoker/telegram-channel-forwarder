@@ -201,11 +201,15 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
         if caption_override is not None:
             caption = caption_override
             caption_entities = None
-        # Telegram enforces a 1024-char limit for album captions (SendMultiMediaRequest)
+        # Telegram enforces a 1024-char limit for album captions (SendMultiMediaRequest).
+        # When the caption is too long, send the first photo alone with the full caption,
+        # then the remaining photos as a follow-up album (no caption lost, no photos lost).
         if len(caption) > 1024:
-            caption = caption[:1021] + "..."
-            caption_entities = None
-        await sender.send_file(dest_entity, files, caption=caption, formatting_entities=caption_entities, silent=False)
+            await sender.send_file(dest_entity, files[0], caption=caption, formatting_entities=caption_entities, silent=False)
+            if len(files) > 1:
+                await sender.send_file(dest_entity, files[1:], caption="", silent=False)
+        else:
+            await sender.send_file(dest_entity, files, caption=caption, formatting_entities=caption_entities, silent=False)
     else:
         msg = group[0]
         cap = caption_override if caption_override is not None else (msg.text or "")
