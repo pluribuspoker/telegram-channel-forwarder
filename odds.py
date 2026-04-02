@@ -110,7 +110,7 @@ MARKETS_BY_TYPE: dict[str, str] = {
     "moneyline":  "h2h,h2h_3_way,h2h_h1,h2h_h2,h2h_q1",
     "spread":     "spreads,alternate_spreads,spreads_h1,spreads_h2,spreads_q1",
     "total":      "totals,alternate_totals,totals_h1,totals_h2,totals_q1",
-    "team_total": "team_totals,alternate_team_totals",
+    "team_total": "team_totals,alternate_team_totals,team_totals_h1,alternate_team_totals_h1,team_totals_h2,alternate_team_totals_h2",
 }
 
 MAX_LINE_GAP = 5
@@ -531,13 +531,14 @@ def _lookup_total(sport: str, bookmakers: list[dict], direction: str, pick_line:
             "api_line": best_pt, "computed_odds": best_price, "adjusted_odds": adjusted, "bookmaker": best_bk}
 
 
-def _lookup_team_total(sport: str, bookmakers: list[dict], team: str, direction: str, pick_line: float) -> dict:
+def _lookup_team_total(sport: str, bookmakers: list[dict], team: str, direction: str, pick_line: float, period: str = "game") -> dict:
     """Look up team total odds (team_totals / alternate_team_totals markets).
 
     These markets use `description` for the team name and `name` for Over/Under,
     unlike game totals which use `name` for the outcome label only.
     """
     outcome_name = "Over" if direction == "over" else "Under"
+    suffix = _PERIOD_SUFFIX.get(period, "")
     _empty = {"match_type": "team_total_unavailable", "pick_line": pick_line,
               "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
@@ -564,17 +565,21 @@ def _lookup_team_total(sport: str, bookmakers: list[dict], team: str, direction:
                         results.append((float(pt) if pt is not None else None, int(price), bk_key))
         return results
 
+    main_mkt = "team_totals" + suffix
+    alt_mkt  = "alternate_team_totals" + suffix
+
     # Exact match on main market, then alternate
-    for mkt_key, label in [("team_totals", "exact"), ("alternate_team_totals", "exact_alt")]:
+    for mkt_key, label in [(main_mkt, "exact"), (alt_mkt, "exact_alt")]:
         hits = _collect_team_total(mkt_key, line_filter=pick_line)
         if hits:
             odds, book = _pick_best([(price, bk) for _, price, bk in hits])
             return {"match_type": label, "pick_line": pick_line,
                     "api_line": pick_line, "computed_odds": odds, "adjusted_odds": odds, "bookmaker": book}
 
-    # Proximity: gather all lines from both markets
+    # Proximity: gather all lines from period-specific markets only.
+    # Do NOT fall back to full-game markets for period picks — the line scales are incompatible.
     all_lines = []
-    for mkt_key in ("alternate_team_totals", "team_totals"):
+    for mkt_key in (alt_mkt, main_mkt):
         for pt, price, bk in _collect_team_total(mkt_key):
             if pt is not None:
                 all_lines.append((pt, price, bk))
@@ -639,6 +644,13 @@ def lookup_pick_odds(sport: str, pick: dict, bookmakers: list[dict]) -> dict:
     period    = pick.get("period", "game")
     desc      = pick.get("description", "")
 
+    if period == "game" and _PERIOD_RE.search(desc):
+        m = _PERIOD_RE.search(desc)
+        raw = m.group(1).lower().replace(" ", "").replace("st", "").replace("nd", "").replace("rd", "").replace("th", "")
+        period = {"half": "1h", "1half": "1h", "2half": "2h",
+                  "firsthalf": "1h", "secondhalf": "2h",
+                  "quarter": "1q", "1quarter": "1q"}.get(raw, raw)
+
     if bet_type == "prop":
         return {"match_type": "player_prop_unavailable", "pick_line": line,
                 "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
@@ -647,14 +659,7 @@ def lookup_pick_odds(sport: str, pick: dict, bookmakers: list[dict]) -> dict:
         if line is None or not direction:
             return {"match_type": "missing_line_or_direction", "pick_line": line,
                     "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
-        return _lookup_team_total(sport, bookmakers, teams[0] if teams else "", direction, float(line))
-
-    if period == "game" and _PERIOD_RE.search(desc):
-        m = _PERIOD_RE.search(desc)
-        raw = m.group(1).lower().replace(" ", "").replace("st", "").replace("nd", "").replace("rd", "").replace("th", "")
-        period = {"half": "1h", "1half": "1h", "2half": "2h",
-                  "firsthalf": "1h", "secondhalf": "2h",
-                  "quarter": "1q", "1quarter": "1q"}.get(raw, raw)
+        return _lookup_team_total(sport, bookmakers, teams[0] if teams else "", direction, float(line), period)
 
     if not bookmakers:
         return {"match_type": "no_game", "pick_line": line,
