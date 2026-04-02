@@ -2,7 +2,6 @@
 scores.py — Sports data layer: ESPN, Odds API, and score formatting.
 """
 
-import json
 import os
 
 import httpx
@@ -30,7 +29,6 @@ SPORT_EXTRA_PARAMS: dict[str, dict] = {
 # Odds API sport keys for sports not on ESPN
 ODDS_API_KEYS: dict[str, str] = {
     "Boxing": "boxing_boxing",
-    "KBO":    "baseball_kbo",
 }
 
 _odds_requests_remaining: str | None = None
@@ -45,11 +43,10 @@ def odds_requests_remaining() -> str | None:
     return _odds_requests_remaining
 
 
-async def fetch_odds_api_scores(sport: str, date: str, completed_only: bool = True) -> list[dict]:
+async def fetch_odds_api_scores(sport: str, date: str) -> list[dict]:
     """
-    Fetch scores from the Odds API for a given sport and date (±1 day).
+    Fetch completed scores from the Odds API for a given sport and date (±1 day).
     Only works within the last ~3 days on the free tier.
-    Set completed_only=False to also return scheduled/in-progress games.
     """
     global _odds_requests_remaining, _odds_requests_used
     sport_key = ODDS_API_KEYS.get(sport)
@@ -76,7 +73,7 @@ async def fetch_odds_api_scores(sport: str, date: str, completed_only: bool = Tr
                 return []
             results = []
             for e in events:
-                if completed_only and not e.get("completed"):
+                if not e.get("completed"):
                     continue
                 try:
                     event_date = _date.fromisoformat(e.get("commence_time", "")[:10])
@@ -88,77 +85,6 @@ async def fetch_odds_api_scores(sport: str, date: str, completed_only: bool = Tr
         except Exception as exc:
             print(f"    [Odds API error] {sport} {date}: {exc}")
             return []
-
-
-# ─── KBO (koreabaseball.com) ──────────────────────────────────────────────────
-
-# Maps the short team ID used by koreabaseball.com to the English team name.
-KBO_TEAM_IDS: dict[str, str] = {
-    "KT": "KT Wiz",
-    "HH": "Hanwha Eagles",
-    "LG": "LG Twins",
-    "HT": "KIA Tigers",
-    "SK": "SSG Landers",
-    "WO": "Kiwoom Heroes",
-    "OB": "Doosan Bears",
-    "SS": "Samsung Lions",
-    "LT": "Lotte Giants",
-    "NC": "NC Dinos",
-}
-
-
-async def fetch_kbo_scores(date: str, completed_only: bool = True) -> list[dict]:
-    """
-    Fetch KBO game scores from koreabaseball.com for a given date (±1 day).
-    Returns events in Odds-API-compatible format (home_team, away_team, scores, completed).
-    The KBO website uses KST dates in YYYYMMDD format.
-    """
-    target = _date.fromisoformat(date)
-    seen: set[str] = set()
-    results: list[dict] = []
-    async with httpx.AsyncClient(timeout=15) as http:
-        for delta in (0, -1, 1):
-            d = target + timedelta(days=delta)
-            date_str = d.strftime("%Y%m%d")
-            try:
-                r = await http.post(
-                    "https://www.koreabaseball.com/ws/Main.asmx/GetKboGameList",
-                    json={"leId": "1", "srId": "0,1,3,4,5,7,8,9", "date": date_str},
-                    headers={"Content-Type": "application/json"},
-                )
-                r.raise_for_status()
-                raw = r.text
-                # The response is valid JSON followed by a .NET HTML error page —
-                # raw_decode stops at the end of the JSON and ignores the trailing HTML.
-                data, _ = json.JSONDecoder().raw_decode(raw)
-
-                for g in data.get("game", []):
-                    gid = g.get("G_ID", "")
-                    if gid in seen:
-                        continue
-                    seen.add(gid)
-                    completed = g.get("GAME_RESULT_CK") == 1
-                    if completed_only and not completed:
-                        continue
-                    home_id = g.get("HOME_ID", "")
-                    away_id = g.get("AWAY_ID", "")
-                    home_name = KBO_TEAM_IDS.get(home_id, home_id)
-                    away_name = KBO_TEAM_IDS.get(away_id, away_id)
-                    results.append({
-                        "home_team": home_name,
-                        "away_team": away_name,
-                        "completed": completed,
-                        "scores": (
-                            [
-                                {"name": away_name, "score": g.get("T_SCORE_CN", "")},
-                                {"name": home_name, "score": g.get("B_SCORE_CN", "")},
-                            ]
-                            if completed else None
-                        ),
-                    })
-            except Exception as exc:
-                print(f"    [KBO error] {date_str}: {exc}")
-    return results
 
 
 def odds_api_context(fighter: str, events: list[dict]) -> str:

@@ -15,7 +15,6 @@ from scores import (
     ESPN_LEAGUES,
     fetch_espn,
     fetch_espn_summary,
-    fetch_kbo_scores,
     fetch_odds_api_scores,
     fetch_tennis_match_context,
     odds_api_context,
@@ -51,7 +50,7 @@ Extract the sports betting pick(s) from this message. Ignore stats, records, and
 {date_context}
 Return JSON (no markdown fences):
 {{
-  "sport": "NBA|NCAAB|MLB|NFL|NHL|UFL|Tennis|UFC|Boxing|KBO|Other",
+  "sport": "NBA|NCAAB|MLB|NFL|NHL|UFL|Tennis|UFC|Boxing|Other",
   "picks": [
     {{
       "description": "concise one-line summary of the exact bet",
@@ -74,7 +73,6 @@ Classification rules:
 - UFC/MMA: if the pick is on individual MMA/UFC fighter names with a moneyline, classify as UFC. Common fighters: Pereira, Gafurov, Souza, Anders, Sola, Murphy, Aswell, Hooper, Bahamondes, Adesanya, etc. UFC events are held almost exclusively on Saturdays — on Saturdays, single-surname moneyline picks with no clear sport context should be classified as UFC, not Tennis. For UFC/Boxing moneylines, put the fighter name in "teams" (NOT "player") — "player" is only for player props (e.g. points over/under).
 - Tennis: ONLY classify as Tennis if the message contains explicit Tennis indicators — tournament names (Open, Slam, ATP, WTA, Masters, Wimbledon), match format words (sets, tiebreak, deuce), court surfaces, or well-known tennis players (Djokovic, Alcaraz, Sinner, Swiatek, Sabalenka, Medvedev, Zverev, Rune, etc.). Do NOT classify as Tennis based solely on a person's surname.
 - Boxing: if the pick involves known professional boxers (e.g. Ryan Garcia, Canelo, Fury, Usyk, Crawford, Beterbiev, etc.), classify as Boxing, not UFC. If a single surname could be a boxer (e.g. Garcia), prefer Boxing over UFC when no other context is available.
-- KBO = Korean Baseball Organization. Classify as KBO if the pick involves KBO team names (e.g. KT Wiz, Samsung Lions, LG Twins, Doosan Bears, Lotte Giants, NC Dinos, Kia Tigers, SSG Landers, Hanwha Eagles, KIA Tigers) or explicit KBO context.
 - If a single surname with a moneyline has no clear sport context and is not a known boxer or MMA fighter, default to UFC.
 - For parlays: list each leg as a separate pick with its REAL bet_type (moneyline, spread, etc.) and set is_parlay_leg=true on each. Do NOT use bet_type="parlay". When players/teams are slash-separated (e.g. "FAA/Shapovalov MLP" or "SPURS/GARCIA MLP"), split them into ONE pick per player/team — do not put two teams in one pick's teams field.
 - Cross-sport parlays: if legs belong to different sports (e.g. one NBA team + one UFC fighter), set the pick-level "sport" field to override the top-level sport for that leg. Leave pick "sport" as null when it matches the top-level sport.
@@ -167,18 +165,9 @@ async def claude_parse(text: str, date: str | None = None) -> dict | None:
     )
     raw = re.sub(r"^```(?:json)?\n?|```$", "", resp.content[0].text.strip(), flags=re.MULTILINE).strip()
     try:
-        parsed = json.loads(raw)
+        return json.loads(raw)
     except json.JSONDecodeError:
         return None
-
-    # Deterministic post-parse sport corrections based on raw message text.
-    # Claude sometimes annotates the description (e.g. "(KBO)") but leaves sport="Other".
-    if parsed and parsed.get("sport") == "Other":
-        text_lower = text.lower()
-        if "kbo" in text_lower:
-            parsed["sport"] = "KBO"
-
-    return parsed
 
 
 async def claude_grade(pick_desc: str, date: str, context: str, bet_type: str = "") -> tuple[str, str]:
@@ -246,21 +235,6 @@ async def build_context(
         events = await fetch_odds_api_scores("Boxing", date)
         ctx = odds_api_context(fighter, events)
         return (ctx if ctx else CONTEXT_SKIP), date
-
-    # KBO: koreabaseball.com official scores (Odds API doesn't update KBO results)
-    if sport == "KBO":
-        team = teams[0] if teams else ""
-        if not team:
-            return CONTEXT_SKIP, date
-        events = await fetch_kbo_scores(date)
-        ctx = odds_api_context(team, events)
-        if ctx:
-            return ctx, date
-        # No completed result — check if a matching game is scheduled/in-progress
-        all_events = await fetch_kbo_scores(date, completed_only=False)
-        if odds_api_context(team, all_events):
-            return CONTEXT_PENDING, date
-        return CONTEXT_SKIP, date
 
     # Other unknown sports → skip
     if sport not in ESPN_LEAGUES:
