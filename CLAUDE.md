@@ -79,6 +79,8 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.py --live --days 2 2>&1
 
 **NHL 3-way / regulation moneyline:** Must win in regulation — OT = LOSS. Detection centralized in `is_regulation_ml()` (`common.py`).
 
+**KBO (Korean Baseball):** Graded via `the-odds-api.com` scores endpoint (`baseball_kbo`). The Odds API has KBO games pre-listed as upcoming events and should mark them `completed=true` with scores after they finish. Team name map is in `ODDS_API_KEYS` / `SPORT_KEYS` (`scores.py`, `odds.py`). If a pick re-parses as `sport: "Other"` despite the message containing "kbo", the post-parse correction in `claude_parse` (`ai.py`) should catch it — check that the raw message text actually contains the string "kbo" (case-insensitive).
+
 ## Odds integration
 
 To force a re-fetch after manually restoring a cache entry: delete the `odds_by_pick` key from the relevant `parse_cache.json` entry — the next run will re-fetch and re-edit.

@@ -29,6 +29,7 @@ SPORT_EXTRA_PARAMS: dict[str, dict] = {
 # Odds API sport keys for sports not on ESPN
 ODDS_API_KEYS: dict[str, str] = {
     "Boxing": "boxing_boxing",
+    "KBO":    "baseball_kbo",
 }
 
 _odds_requests_remaining: str | None = None
@@ -43,7 +44,7 @@ def odds_requests_remaining() -> str | None:
     return _odds_requests_remaining
 
 
-async def fetch_odds_api_scores(sport: str, date: str) -> list[dict]:
+async def fetch_odds_api_scores(sport: str, date: str, completed_only: bool = True) -> list[dict]:
     """
     Fetch completed scores from the Odds API for a given sport and date (±1 day).
     Only works within the last ~3 days on the free tier.
@@ -73,7 +74,7 @@ async def fetch_odds_api_scores(sport: str, date: str) -> list[dict]:
                 return []
             results = []
             for e in events:
-                if not e.get("completed"):
+                if completed_only and not e.get("completed"):
                     continue
                 try:
                     event_date = _date.fromisoformat(e.get("commence_time", "")[:10])
