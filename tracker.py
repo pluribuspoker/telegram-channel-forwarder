@@ -324,7 +324,29 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                     if _ODDS_TAG_RE.search(line):
                         break  # already tagged — idempotent
                     lines[j] = f"{line.rstrip()}{odds_tag}"
+                    desc_matched = True
                     break
+
+        # Third fallback: strip team/player names from desc and search for the remainder.
+        # Catches abbreviations like "Dbacks ML (2 units)" when AI parsed "Arizona Diamondbacks ML".
+        if not desc_matched and desc:
+            team_words = set()
+            for t in identifiers:
+                for w in t.lower().split():
+                    if len(w) > 3:
+                        team_words.add(w)
+            desc_stripped = desc
+            for w in team_words:
+                desc_stripped = desc_stripped.replace(w, "")
+            desc_stripped = " ".join(desc_stripped.split())  # collapse whitespace
+            if len(desc_stripped) >= 4:
+                for j, line in enumerate(lines):
+                    if " @ " in line:
+                        continue
+                    if desc_stripped in line.lower():
+                        if not _ODDS_TAG_RE.search(line):
+                            lines[j] = f"{line.rstrip()}{odds_tag}"
+                        break
 
     return "\n".join(lines)
 
