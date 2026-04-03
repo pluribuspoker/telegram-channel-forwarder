@@ -455,12 +455,34 @@ def _lookup_spread(sport: str, bookmakers: list[dict], team: str, pick_line: flo
     _empty = {"match_type": "no_spread_data", "pick_line": pick_line,
               "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
-    for mkt in filter(None, [main_mkt, alt_mkt]):
-        hits = _collect_outcomes(bookmakers, mkt, name_filter=team, line_filter=pick_line)
-        if hits:
-            odds, book = _pick_best([(price, bk) for _, price, bk in hits])
-            label = "exact" if mkt == main_mkt else "exact_alt"
-            return {"match_type": label, "pick_line": pick_line,
+    # Check main market first — exact match wins unconditionally.
+    main_hits = _collect_outcomes(bookmakers, main_mkt, name_filter=team, line_filter=pick_line)
+    if main_hits:
+        odds, book = _pick_best([(price, bk) for _, price, bk in main_hits])
+        return {"match_type": "exact", "pick_line": pick_line,
+                "api_line": pick_line, "computed_odds": odds, "adjusted_odds": odds, "bookmaker": book}
+
+    # For alternate-spreads exact match: only accept it if the pick_line is
+    # within MAX_LINE_GAP of the closest main-market line.  A pick like
+    # "Hornets -15.5 (-112)" where the main spread is -6 would otherwise
+    # return exotic long-shot alt-line odds (e.g. +340) instead of flagging
+    # the gap.
+    if alt_mkt:
+        alt_hits = _collect_outcomes(bookmakers, alt_mkt, name_filter=team, line_filter=pick_line)
+        if alt_hits:
+            # Find the closest main-market line to judge how far off we are.
+            main_lines = [pt for pt, _, _ in _collect_outcomes(bookmakers, main_mkt, name_filter=team)
+                          if pt is not None]
+            if main_lines:
+                closest_main = min(main_lines, key=lambda x: abs(x - pick_line))
+                gap_from_main = abs(closest_main - pick_line)
+            else:
+                gap_from_main = 0.0  # no main line at all — accept the alt match
+            if gap_from_main > MAX_LINE_GAP:
+                return {"match_type": f"alt_line_gap_{gap_from_main:.1f}pts", "pick_line": pick_line,
+                        "api_line": closest_main, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
+            odds, book = _pick_best([(price, bk) for _, price, bk in alt_hits])
+            return {"match_type": "exact_alt", "pick_line": pick_line,
                     "api_line": pick_line, "computed_odds": odds, "adjusted_odds": odds, "bookmaker": book}
 
     all_lines: list[tuple[float, int, str]] = []
@@ -498,12 +520,30 @@ def _lookup_total(sport: str, bookmakers: list[dict], direction: str, pick_line:
     _empty = {"match_type": "no_total_data", "pick_line": pick_line,
               "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
-    for mkt in filter(None, [main_mkt, alt_mkt]):
-        hits = _collect_outcomes(bookmakers, mkt, name_filter=outcome_name, line_filter=pick_line)
-        if hits:
-            odds, book = _pick_best([(price, bk) for _, price, bk in hits])
-            label = "exact" if mkt == main_mkt else "exact_alt"
-            return {"match_type": label, "pick_line": pick_line,
+    # Check main market first — exact match wins unconditionally.
+    main_hits = _collect_outcomes(bookmakers, main_mkt, name_filter=outcome_name, line_filter=pick_line)
+    if main_hits:
+        odds, book = _pick_best([(price, bk) for _, price, bk in main_hits])
+        return {"match_type": "exact", "pick_line": pick_line,
+                "api_line": pick_line, "computed_odds": odds, "adjusted_odds": odds, "bookmaker": book}
+
+    # For alternate-totals exact match: only accept if pick_line is within
+    # MAX_LINE_GAP of the closest main-market total line.
+    if alt_mkt:
+        alt_hits = _collect_outcomes(bookmakers, alt_mkt, name_filter=outcome_name, line_filter=pick_line)
+        if alt_hits:
+            main_lines = [pt for pt, _, _ in _collect_outcomes(bookmakers, main_mkt, name_filter=outcome_name)
+                          if pt is not None]
+            if main_lines:
+                closest_main = min(main_lines, key=lambda x: abs(x - pick_line))
+                gap_from_main = abs(closest_main - pick_line)
+            else:
+                gap_from_main = 0.0
+            if gap_from_main > MAX_LINE_GAP:
+                return {"match_type": f"alt_line_gap_{gap_from_main:.1f}pts", "pick_line": pick_line,
+                        "api_line": closest_main, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
+            odds, book = _pick_best([(price, bk) for _, price, bk in alt_hits])
+            return {"match_type": "exact_alt", "pick_line": pick_line,
                     "api_line": pick_line, "computed_odds": odds, "adjusted_odds": odds, "bookmaker": book}
 
     all_lines: list[tuple[float, int, str]] = []
