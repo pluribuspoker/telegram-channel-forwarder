@@ -127,7 +127,9 @@ async def extract_odds(image_bytes):
                     "type": "text",
                     "text": (
                         "This is a sports betting slip screenshot. "
-                        "Return only the American odds number shown (e.g. -146, +220, -110). "
+                        "Return only the odds/juice/vig — a whole integer like -161, +220, or -110. "
+                        "Do NOT return the point spread or total (e.g. +7.5, -3, 224.5 are spreads/totals, not odds). "
+                        "The odds are always a whole number with no decimal point. "
                         "Just the number, nothing else. If you cannot find odds, return nothing."
                     ),
                 },
