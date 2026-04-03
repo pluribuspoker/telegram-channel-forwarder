@@ -801,7 +801,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     if mdate.tzinfo is None:
                         mdate = mdate.replace(tzinfo=dt.timezone.utc)
                     if mdate < cutoff:
-                        return      # regular scan done
+                        break       # regular scan done — break so stale catchup runs
                     yield m
                 # After regular scan: yield any pending messages that weren't reached
                 stale_ids = [
