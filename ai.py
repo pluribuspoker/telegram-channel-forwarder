@@ -5,7 +5,6 @@ ai.py — Claude AI layer: parsing, grading, and context building.
 import asyncio
 import json
 import re
-import time
 
 from datetime import date as _date, timedelta
 
@@ -26,22 +25,6 @@ from scores import (
     _completed_events,
     _ufc_bout_completed,
 )
-
-
-# Cache for Odds API score fetches (KBO, Boxing) — keyed by (sport, date, completed_only).
-# Avoids repeated hits within a process and across rapid successive runs.
-_scores_cache: dict[tuple, tuple[float, list]] = {}
-_SCORES_TTL = 5 * 60  # 5 minutes
-
-
-async def _fetch_scores_cached(sport: str, date: str, completed_only: bool = True) -> list:
-    key = (sport, date, completed_only)
-    entry = _scores_cache.get(key)
-    if entry and time.monotonic() - entry[0] < _SCORES_TTL:
-        return entry[1]
-    result = await fetch_odds_api_scores(sport, date, completed_only)
-    _scores_cache[key] = (time.monotonic(), result)
-    return result
 
 
 _claude: anthropic.AsyncAnthropic | None = None
@@ -257,23 +240,12 @@ async def build_context(
         fighter = player or (teams[0] if teams else "")
         if not fighter:
             return CONTEXT_SKIP, date
-        events = await _fetch_scores_cached("Boxing", date)
+        events = await fetch_odds_api_scores("Boxing", date)
         ctx = odds_api_context(fighter, events)
         return (ctx if ctx else CONTEXT_SKIP), date
 
-    # KBO: Odds API scores (free tier = last ~3 days only)
+    # KBO: grading not yet supported — skip without querying any API
     if sport == "KBO":
-        team = teams[0] if teams else ""
-        if not team:
-            return CONTEXT_SKIP, date
-        events = await _fetch_scores_cached("KBO", date)
-        ctx = odds_api_context(team, events)
-        if ctx:
-            return ctx, date
-        # No completed result — check if a matching game is scheduled/in-progress
-        all_events = await _fetch_scores_cached("KBO", date, completed_only=False)
-        if odds_api_context(team, all_events):
-            return CONTEXT_PENDING, date
         return CONTEXT_SKIP, date
 
     # Other unknown sports → skip
