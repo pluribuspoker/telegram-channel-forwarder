@@ -418,8 +418,6 @@ def _skip_reason(r: dict) -> str:
         return f"no data ({r['sport']})"
     if r["bet_type"] == "prop":
         return "prop"
-    if r["period"] != "game":
-        return f"period ({r['period']})"
     return "unknown"
 
 
