@@ -224,8 +224,8 @@ class AuditLog:
         """Post a formatted HTML summary to the audit Telegram channel."""
         if not self.audit_channel_id or not self.bot_token:
             return
-        if row["verdict"] in ("PENDING", "UNKNOWN"):
-            return  # not yet graded or ungradeable — don't clutter audit channel
+        if row["verdict"] == "PENDING":
+            return  # game not yet played — don't clutter audit channel
 
         import html as _html
 

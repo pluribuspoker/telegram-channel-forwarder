@@ -1094,7 +1094,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     )
                     first_pick, _, first_calc, first_sport, first_game_date = verdicts[0]
                     first_odds = odds_by_pick.get("0", {})
-                    if not has_espn_error:
+                    already_unknown_notified = cached_entry.get("_unknown_notified")
+                    if not has_espn_error and not (overall == "UNKNOWN" and already_unknown_notified):
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
                             sport=first_sport,
@@ -1105,6 +1106,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             odds=first_odds.get("odds"), odds_bookmaker=first_odds.get("bookmaker"),
                             odds_match_type=first_odds.get("match_type"),
                         )
+                        if overall == "UNKNOWN":
+                            pending_cache[cache_key] = {**cached_entry, "_unknown_notified": True}
+                            _save_pending_cache(pending_cache)
                     continue
 
                 first_pick, _, first_calc, first_sport, first_game_date = verdicts[0]
