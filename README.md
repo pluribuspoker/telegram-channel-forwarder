@@ -18,6 +18,7 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 | `audit.py` | Audit log — writes to SQLite + Telegram audit channel |
 | `common.py` | Shared utilities (Anthropic client, OCR, channel parsing, emoji map, regulation ML detection) |
 | `run_tracker.sh` | Timer wrapper with retry logic and healthchecks.io signals |
+| `scripts/audit_odds.py` | Backtest odds lookup against graded picks — fetches historical closing lines from Odds API and outputs CSV |
 
 ---
 
@@ -163,6 +164,8 @@ Tracker-fetched odds use **square brackets** `[-115]` to distinguish them from o
 Both are shown together when available: `Stars/Flyers U5.5 [-120 live · -130 pre]`. Falls back to pre-game only (`[-130 pre]`) if live odds are unavailable, or to a silent miss if neither is found.
 
 Any unexpected failure to find odds posts one warning to the Telegram audit channel (never repeated for the same pick).
+
+The odds tag is inserted by matching the pick line in the message. Cappers often use abbreviations (e.g. "Dbacks" for Arizona Diamondbacks) — the matcher tries the full description first, then falls back to team/player names, then to the non-team portion of the description so abbreviated names still get tagged.
 
 **Sports with odds coverage:** NBA, NCAAB, MLB, NFL, NHL, NCAAF, UFC, UFL (~91% of recent picks; MLB F5 innings and small UFC cards are structural gaps)
 
