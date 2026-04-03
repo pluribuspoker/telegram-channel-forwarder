@@ -114,7 +114,7 @@ python listener.py --test  # uses test_source/dest channels
 
 `tracker.py` grades sports picks by fetching game results from ESPN and using Claude Sonnet to determine win/loss. Appends ✅/❌ inline after each pick line in the Telegram message, preserving original formatting.
 
-**Sports supported:** NBA, NCAAB, MLB, NFL, NHL, NCAAF, UFC, UFL, Tennis (ESPN core API)
+**Sports supported:** NBA, NCAAB, MLB, NFL, NHL, NCAAF, UFC, UFL, Tennis (ESPN core API). Period picks (1H, 2H, Q1) are graded using per-quarter line scores from the ESPN game summary.
 
 **Verdict types:**
 - `✅ WIN` / `❌ LOSS` / `↩️ PUSH` — graded, message edited in Telegram
@@ -197,7 +197,7 @@ python scripts/clear_emojis.py --days 2                  # last 2 days
 
 ### Audit log
 
-Every grade action writes to `picks.db` (SQLite) and posts to a private Telegram audit channel (`AUDIT_CHANNEL_ID`). Messages show capper, channel, pick with verdict emoji, sport, game date, and calc. Dry runs tagged `[DRY]`. PENDING picks written to DB only (not posted to audit channel).
+Every grade action writes to `picks.db` (SQLite) and posts to a private Telegram audit channel (`AUDIT_CHANNEL_ID`). Messages show capper, channel, pick with verdict emoji, sport, game date, and calc. Dry runs tagged `[DRY]`. PENDING picks are written to DB only (not posted to audit channel). UNKNOWN picks post once to the audit channel then are suppressed on subsequent runs.
 
 ### Parse cache
 
