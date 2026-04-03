@@ -1116,21 +1116,24 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
                 first_pick, _, first_calc, first_sport, first_game_date = verdicts[0]
 
+                edit_failed = False
                 if not dry_run:
                     ok = await _bot_edit_message(
                         bot_token, channel_id, msg.id, new_text, msg.media is not None,
                     )
                     if not ok:
                         errors += 1
-                        continue
-                    await asyncio.sleep(0.5)   # stay under Telegram flood limit
-                    for linked_id in pending_cache.get(cache_key, {}).get("linked_message_ids", []):
-                        await _bot_edit_message(
-                            bot_token, channel_id, linked_id, new_text, msg.media is not None,
-                        )
-                        await asyncio.sleep(0.5)
+                        edit_failed = True
+                    else:
+                        await asyncio.sleep(0.5)   # stay under Telegram flood limit
+                        for linked_id in pending_cache.get(cache_key, {}).get("linked_message_ids", []):
+                            await _bot_edit_message(
+                                bot_token, channel_id, linked_id, new_text, msg.media is not None,
+                            )
+                            await asyncio.sleep(0.5)
 
-                edited += 1
+                if not edit_failed:
+                    edited += 1
                 # If some picks are still pending, keep the cache entry (with broadcasted
                 # markers) so we can re-enter this message next run; otherwise evict.
                 still_pending = any(v[1] == "PENDING" for v in verdicts)
@@ -1169,6 +1172,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     capper_name=capper,
                     odds=first_odds.get("odds"), odds_bookmaker=first_odds.get("bookmaker"),
                     odds_match_type=first_odds.get("match_type"),
+                    edit_failed=edit_failed,
                 )
                 if newly_resolved:
                     await audit.broadcast_results(
@@ -1179,6 +1183,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             for j, v in newly_resolved_indexed
                         ],
                         capper_name=capper,
+                        client=client,
                     )
 
         print(f"  ─ edit:{edited} pend:{pending} fail:{failed} err:{errors}" +

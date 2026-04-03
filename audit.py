@@ -192,6 +192,7 @@ class AuditLog:
         odds: int | None = None,
         odds_bookmaker: str | None = None,
         odds_match_type: str | None = None,
+        edit_failed: bool = False,
     ) -> None:
         """
         Write to DB and post an audit Telegram message.
@@ -216,11 +217,11 @@ class AuditLog:
             "odds_match_type": odds_match_type,
         }
         await asyncio.to_thread(self._insert, row)
-        await self._post_telegram(row, channel_name=channel_name, capper_name=capper_name)
+        await self._post_telegram(row, channel_name=channel_name, capper_name=capper_name, edit_failed=edit_failed)
 
     # ── Telegram audit channel ─────────────────────────────────────────────────
 
-    async def _post_telegram(self, row: dict, channel_name: str = "", capper_name: str = "") -> None:
+    async def _post_telegram(self, row: dict, channel_name: str = "", capper_name: str = "", edit_failed: bool = False) -> None:
         """Post a formatted HTML summary to the audit Telegram channel."""
         if not self.audit_channel_id or not self.bot_token:
             return
@@ -234,18 +235,19 @@ class AuditLog:
 
         verdict = row["verdict"]
         sport   = row["sport"]
-        dry_tag = "  <code>[DRY]</code>" if row["dry_run"] else ""
+        dry_tag      = "  <code>[DRY]</code>" if row["dry_run"] else ""
+        edit_fail_tag = "  <code>[EDIT FAILED]</code>" if edit_failed else ""
 
         channel_bare = abs(row["channel_id"])
         link = f"https://t.me/c/{str(channel_bare)[3:]}/{row['message_id']}"
 
-        # Line 1 — capper · channel (linked)  [DRY]
+        # Line 1 — capper · channel (linked)  [DRY] [EDIT FAILED]
         ch_linked = f'<a href="{link}">{e(channel_name)}</a>' if channel_name else f'<a href="{link}">view</a>'
         meta_parts = []
         if capper_name:
             meta_parts.append(f"<b>{e(capper_name)}</b>")
         meta_parts.append(ch_linked)
-        line1 = "  ·  ".join(meta_parts) + dry_tag
+        line1 = "  ·  ".join(meta_parts) + dry_tag + edit_fail_tag
 
         def _trunc(text: str, limit: int = 120) -> str:
             """Truncate to full sentences up to limit chars."""
@@ -334,6 +336,7 @@ class AuditLog:
         message_id: int,
         pick_results: list[tuple[dict, str, int | None]],  # (pick_dict, verdict, odds) per pick
         capper_name: str = "",
+        client=None,
     ) -> None:
         """Post a compact result message to the broadcast results channel for this source channel."""
         target = self.broadcast_results_mappings.get(channel_id)
@@ -398,16 +401,30 @@ class AuditLog:
             lines = [_pick_line(d, v, o) for d, v, o in picks]
             text = capper_linked + "\n" + "\n".join(lines)
 
+        # Try to find the auto-forwarded message in the discussion group so we can reply to it.
+        reply_to_id: int | None = None
+        if client is not None:
+            try:
+                from telethon.tl.functions.messages import GetDiscussionMessageRequest
+                disc = await client(GetDiscussionMessageRequest(peer=channel_id, msg_id=message_id))
+                reply_to_id = disc.messages[0].id
+            except Exception:
+                pass  # no linked group or message not found — send without reply
+
+        payload: dict = {
+            "chat_id": target,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if reply_to_id is not None:
+            payload["reply_to_message_id"] = reply_to_id
+
         try:
             async with httpx.AsyncClient(timeout=10) as http:
                 await http.post(
                     f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
-                    json={
-                        "chat_id": target,
-                        "text": text,
-                        "parse_mode": "HTML",
-                        "disable_web_page_preview": True,
-                    },
+                    json=payload,
                 )
         except Exception as exc:
             print(f"[broadcast_results] Telegram post failed: {exc}")
