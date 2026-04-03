@@ -53,7 +53,7 @@ def _norm_desc(d: str) -> str:
 
 def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict, odds_by_pick: dict | None = None) -> dict:
     """Build a pending-cache entry, preserving linked_message_ids and odds from the existing entry."""
-    return {
+    entry = {
         "capper_name":        capper,
         "parsed":             parsed,
         "leg_verdicts":       leg_verdicts,
@@ -61,6 +61,9 @@ def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict
         # Preserve fetched odds — once set, never overwritten with None
         "odds_by_pick":       odds_by_pick if odds_by_pick is not None else existing.get("odds_by_pick", {}),
     }
+    if existing.get("_unknown_notified"):
+        entry["_unknown_notified"] = True
+    return entry
 
 
 def _find_duplicate_cache_key(
