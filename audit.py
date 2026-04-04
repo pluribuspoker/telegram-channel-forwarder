@@ -405,14 +405,9 @@ class AuditLog:
             legs = "\n".join(f"• {e(d)}" for d, _, _ in picks)
             text = f"{overall_emoji} {capper_linked} · Parlay{combined_part}\n{legs}"
         else:
-            # Non-parlay multi-pick: overall emoji + capper, then pick lines with odds
-            verdicts_only = [v for _, v, _ in picks]
-            overall_emoji = _overall_emoji(verdicts_only)
-            def _pick_line_no_emoji(desc: str, odds_str: str) -> str:
-                odds_part = f" [{e(odds_str)}]" if odds_str else ""
-                return f"{e(desc)}{odds_part}"
-            lines = [_pick_line_no_emoji(d, o) for d, v, o in picks]
-            text = f"{overall_emoji} {capper_linked}\n" + "\n".join(lines)
+            # Non-parlay multi-pick: one emoji per pick
+            lines = [_pick_line(d, v, o) for d, v, o in picks]
+            text = capper_linked + "\n" + "\n".join(lines)
 
         # Try to find the auto-forwarded message in the discussion group so we can reply to it.
         reply_to_id: int | None = None
