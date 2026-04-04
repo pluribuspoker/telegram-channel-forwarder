@@ -381,25 +381,38 @@ class AuditLog:
                 dec *= (o / 100 + 1) if o > 0 else (100 / abs(o) + 1)
             return round((dec - 1) * 100) if dec >= 2.0 else round(-100 / (dec - 1))
 
+        def _overall_emoji(verdicts_only: list[str]) -> str:
+            if "LOSS" in verdicts_only:
+                return VERDICT_EMOJI["LOSS"]
+            elif all(v == "WIN" for v in verdicts_only):
+                return VERDICT_EMOJI["WIN"]
+            elif any(v == "PENDING" for v in verdicts_only):
+                return VERDICT_EMOJI["PENDING"]
+            elif any(v == "PUSH" for v in verdicts_only):
+                return VERDICT_EMOJI["PUSH"]
+            return VERDICT_EMOJI["UNKNOWN"]
+
         if len(picks) == 1:
             desc, verdict, odds_str = picks[0]
-            text = f"{_pick_line(desc, verdict, odds_str)} · {capper_linked}"
+            emoji = VERDICT_EMOJI.get(verdict, "")
+            odds_part = f" [{e(odds_str)}]" if odds_str else ""
+            text = f"{emoji} {capper_linked} · {e(desc)}{odds_part}"
         elif is_parlay:
             verdicts_only = [v for _, v, _ in picks]
-            if "LOSS" in verdicts_only:
-                overall_emoji = VERDICT_EMOJI["LOSS"]
-            elif all(v == "WIN" for v in verdicts_only):
-                overall_emoji = VERDICT_EMOJI["WIN"]
-            else:
-                overall_emoji = VERDICT_EMOJI["PUSH"]
+            overall_emoji = _overall_emoji(verdicts_only)
             combined = _parlay_combined_odds([o for _, _, o in resolved])
             combined_part = f" [{e(fmt_odds(combined))}]" if combined is not None else ""
             legs = "\n".join(f"• {e(d)}" for d, _, _ in picks)
             text = f"{overall_emoji} {capper_linked} · Parlay{combined_part}\n{legs}"
         else:
-            # Non-parlay multi-pick: one emoji per pick
-            lines = [_pick_line(d, v, o) for d, v, o in picks]
-            text = capper_linked + "\n" + "\n".join(lines)
+            # Non-parlay multi-pick: overall emoji + capper, then pick lines with odds
+            verdicts_only = [v for _, v, _ in picks]
+            overall_emoji = _overall_emoji(verdicts_only)
+            def _pick_line_no_emoji(desc: str, odds_str: str) -> str:
+                odds_part = f" [{e(odds_str)}]" if odds_str else ""
+                return f"{e(desc)}{odds_part}"
+            lines = [_pick_line_no_emoji(d, o) for d, v, o in picks]
+            text = f"{overall_emoji} {capper_linked}\n" + "\n".join(lines)
 
         # Try to find the auto-forwarded message in the discussion group so we can reply to it.
         reply_to_id: int | None = None
