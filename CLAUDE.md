@@ -79,7 +79,7 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.py --live --days 2 2>&1
 
 **NHL 3-way / regulation moneyline:** Must win in regulation — OT = LOSS. Detection centralized in `is_regulation_ml()` (`common.py`).
 
-**KBO (Korean Baseball):** Graded via `the-odds-api.com` scores endpoint (`baseball_kbo`). The Odds API has KBO games pre-listed as upcoming events and should mark them `completed=true` with scores after they finish. Team name map is in `ODDS_API_KEYS` / `SPORT_KEYS` (`scores.py`, `odds.py`). If a pick re-parses as `sport: "Other"` despite the message containing "kbo", the post-parse correction in `claude_parse` (`ai.py`) should catch it — check that the raw message text actually contains the string "kbo" (case-insensitive).
+**KBO (Korean Baseball):** Graded via `koreabaseball.com` ASMX endpoint (`fetch_kbo_context` in `scores.py`). The Odds API has KBO odds but never populates scores, so we scrape the official site instead. Picks are always sent the US evening before the game day, so the code fetches `date+1` to find the correct game. Team ID map (`KBO_TEAM_IDS`) is in `scores.py`. If a pick re-parses as `sport: "Other"` despite the message containing "kbo", the post-parse correction in `claude_parse` (`ai.py`) should catch it.
 
 ## Odds integration
 
