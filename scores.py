@@ -414,10 +414,13 @@ def _team_matches(term: str, team_name: str) -> bool:
     n = team_name.lower().strip()
     if not t or not n:
         return False
-    if t not in n and n not in t:
-        return False
     t_words = t.split()
     n_words = n.split()
+    # Allow name-order swaps (e.g. "Pat Guilherme" ↔ "Guilherme Pat") —
+    # common in UFC/Boxing where Odds API may reverse first/last names.
+    if t not in n and n not in t:
+        if sorted(t_words) != sorted(n_words):
+            return False
     for i in range(len(n_words) - len(t_words) + 1):
         if n_words[i: i + len(t_words)] == t_words:
             next_idx = i + len(t_words)
