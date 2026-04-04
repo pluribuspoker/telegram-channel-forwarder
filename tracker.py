@@ -1115,7 +1115,11 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     first_pick, _, first_calc, first_sport, first_game_date = verdicts[0]
                     first_odds = odds_by_pick.get("0", {})
                     already_unknown_notified = cached_entry.get("_unknown_notified")
-                    if not has_espn_error and not (overall == "UNKNOWN" and already_unknown_notified):
+                    all_already_broadcast = (
+                        already_broadcast_indices
+                        and all(j in already_broadcast_indices for j in range(len(verdicts)))
+                    )
+                    if not has_espn_error and not all_already_broadcast and not (overall == "UNKNOWN" and already_unknown_notified):
                         await audit.record(
                             channel_id=channel_id, message_id=msg.id, date=date_str,
                             sport=first_sport,
