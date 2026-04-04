@@ -537,6 +537,9 @@ async def run_backtest(filepath: str) -> None:
         plain = msg_plain_text(msg)
         if not plain.strip():
             continue
+        # Skip messages whose first line contains "__" (manually excluded)
+        if "__" in plain.splitlines()[0]:
+            continue
 
         label = extract_label(plain)
         if label is None:
@@ -844,6 +847,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 visited_keys.add(cache_key)
 
                 if not text.strip():
+                    continue
+                # Skip messages whose first line contains "__" (manually excluded)
+                if "__" in text.splitlines()[0]:
                     continue
                 # Skip already graded (check plain text) — but allow re-entry for
                 # partially-graded messages that still have a pending-cache entry.
