@@ -287,10 +287,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         match_type  = odds_by_pick.get(str(idx), {}).get("match_type", "")
         pregame_val = odds_by_pick.get(str(idx), {}).get("pregame_odds")
         if match_type.startswith("live_"):
-            if pregame_val is not None:
-                odds_tag = f" [{_fmt(odds_val)} live · {_fmt(pregame_val)} pre]"
-            else:
-                odds_tag = f" [{_fmt(odds_val)} live]"
+            odds_tag = f" [{_fmt(odds_val)} live]"
         elif match_type.startswith("pregame_"):
             odds_tag = f" [{_fmt(odds_val)} pre]"
         else:
