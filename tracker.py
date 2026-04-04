@@ -349,6 +349,24 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                     if desc_stripped in line.lower():
                         if not _ODDS_TAG_RE.search(line):
                             lines[j] = f"{line.rstrip()}{odds_tag}"
+                        desc_matched = True
+                        break
+
+        # Fourth fallback: search for the raw bet line number (e.g. "236.5" or "-7.5").
+        # Catches heavily abbreviated team names (e.g. "Twolves / Sixers under 236.5")
+        # where no team name or description fragment survived the previous passes.
+        if not desc_matched:
+            pick_line = pick.get("line")
+            if pick_line is not None:
+                pick_line_f = float(pick_line)
+                line_str = str(int(pick_line_f)) if pick_line_f == int(pick_line_f) else str(pick_line_f)
+                for j, row in enumerate(lines):
+                    if " @ " in row:
+                        continue
+                    if line_str in row:
+                        if not _ODDS_TAG_RE.search(row):
+                            lines[j] = f"{row.rstrip()}{odds_tag}"
+                        desc_matched = True
                         break
 
     return "\n".join(lines)
