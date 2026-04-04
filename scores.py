@@ -2,6 +2,7 @@
 scores.py — Sports data layer: ESPN, Odds API, and score formatting.
 """
 
+import json
 import os
 
 import httpx
@@ -86,6 +87,113 @@ async def fetch_odds_api_scores(sport: str, date: str, completed_only: bool = Tr
         except Exception as exc:
             print(f"    [Odds API error] {sport} {date}: {exc}")
             return []
+
+
+# ─── KBO (koreabaseball.com) ──────────────────────────────────────────────────
+
+KBO_TEAM_IDS: dict[str, str] = {
+    "KT": "KT Wiz",
+    "HH": "Hanwha Eagles",
+    "LG": "LG Twins",
+    "HT": "KIA Tigers",
+    "SK": "SSG Landers",
+    "WO": "Kiwoom Heroes",
+    "OB": "Doosan Bears",
+    "SS": "Samsung Lions",
+    "LT": "Lotte Giants",
+    "NC": "NC Dinos",
+}
+
+
+async def _fetch_kbo_day(http: httpx.AsyncClient, date_str: str) -> list[dict]:
+    """Fetch KBO games for a single YYYYMMDD date. Returns Odds-API-compatible dicts."""
+    try:
+        r = await http.post(
+            "https://www.koreabaseball.com/ws/Main.asmx/GetKboGameList",
+            json={"leId": "1", "srId": "0,1,3,4,5,7,8,9", "date": date_str},
+            headers={"Content-Type": "application/json"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        data, _ = json.JSONDecoder().raw_decode(r.text)
+        inner = data.get("d", data)
+        if isinstance(inner, str):
+            inner = json.loads(inner)
+        results = []
+        for g in (inner.get("game", []) if isinstance(inner, dict) else []):
+            home_name = KBO_TEAM_IDS.get(g.get("HOME_ID", ""), g.get("HOME_ID", ""))
+            away_name = KBO_TEAM_IDS.get(g.get("AWAY_ID", ""), g.get("AWAY_ID", ""))
+            completed = g.get("GAME_RESULT_CK") == 1
+            results.append({
+                "home_team": home_name,
+                "away_team": away_name,
+                "completed": completed,
+                "scores": [
+                    {"name": away_name, "score": g.get("T_SCORE_CN", "")},
+                    {"name": home_name, "score": g.get("B_SCORE_CN", "")},
+                ] if completed else None,
+            })
+        return results
+    except Exception as exc:
+        print(f"    [KBO error] {date_str}: {exc}")
+        return []
+
+
+async def fetch_kbo_context(team: str, date: str) -> tuple[str, str]:
+    """Grade a KBO pick by checking koreabaseball.com for the correct game date.
+
+    KBO picks are often sent a day early (US evening for next-day KST game),
+    and teams frequently play multi-game series (same opponent on consecutive
+    days).  To avoid grading against yesterday's already-finished game, we
+    check date and date+1 independently and apply these rules:
+
+      1. If date+1 has a COMPLETED game for this team → use it (most likely
+         the intended game for an evening pick).
+      2. If date+1 is pending but date is COMPLETED → use date (the pick was
+         probably for today's game and it's done).
+      3. If only a pending game exists on either day → PENDING.
+      4. No game found → empty string (caller decides SKIP vs PENDING).
+
+    Returns (context_str, game_date).
+    """
+    target = _date.fromisoformat(date)
+    async with httpx.AsyncClient(timeout=15) as http:
+        day0 = await _fetch_kbo_day(http, target.strftime("%Y%m%d"))
+        day1 = await _fetch_kbo_day(http, (target + timedelta(days=1)).strftime("%Y%m%d"))
+
+    team_lower = team.lower().strip()
+
+    def _find(games: list[dict]) -> dict | None:
+        for e in games:
+            if (_team_matches(team_lower, e.get("home_team", "").lower()) or
+                    _team_matches(team_lower, e.get("away_team", "").lower())):
+                return e
+        return None
+
+    def _fmt(e: dict) -> str:
+        home, away = e["home_team"], e["away_team"]
+        scores = e.get("scores") or []
+        score_str = "  ".join(f"{s['name']}: {s['score']}" for s in scores)
+        return f"{home} vs {away}\n{score_str}"
+
+    match1 = _find(day1)
+    match0 = _find(day0)
+    date1 = (target + timedelta(days=1)).isoformat()
+    date0 = target.isoformat()
+
+    # Prefer date+1 completed (common case: pick sent evening before)
+    if match1 and match1.get("completed"):
+        return _fmt(match1), date1
+    # Fall back to date completed
+    if match0 and match0.get("completed"):
+        return _fmt(match0), date0
+    # Game exists but not yet completed
+    if match1:
+        return "PENDING", date1
+    if match0:
+        return "PENDING", date0
+
+    return "", date
 
 
 def odds_api_context(fighter: str, events: list[dict]) -> str:

@@ -15,6 +15,7 @@ from scores import (
     ESPN_LEAGUES,
     fetch_espn,
     fetch_espn_summary,
+    fetch_kbo_context,
     fetch_odds_api_scores,
     fetch_tennis_match_context,
     odds_api_context,
@@ -244,14 +245,15 @@ async def build_context(
         ctx = odds_api_context(fighter, events)
         return (ctx if ctx else CONTEXT_SKIP), date
 
-    # KBO: Odds API scores (same as Boxing — free tier = last ~3 days only)
+    # KBO: koreabaseball.com scores (Odds API never populates KBO results)
     if sport == "KBO":
         team = teams[0] if teams else ""
         if not team:
             return CONTEXT_SKIP, date
-        events = await fetch_odds_api_scores("KBO", date)
-        ctx = odds_api_context(team, events)
-        return (ctx if ctx else CONTEXT_PENDING), date
+        ctx, game_date = await fetch_kbo_context(team, date)
+        if ctx == "PENDING":
+            return CONTEXT_PENDING, game_date
+        return (ctx if ctx else CONTEXT_PENDING), game_date
 
     # Other unknown sports → skip
     if sport not in ESPN_LEAGUES:
