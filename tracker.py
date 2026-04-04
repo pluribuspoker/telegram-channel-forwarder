@@ -1166,7 +1166,17 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             }
                     pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
                 else:
-                    pending_cache.pop(cache_key, None)  # fully graded — evict from pending cache
+                    # Keep a minimal cache entry with broadcasted=True so subsequent runs
+                    # don't re-broadcast odds for already-graded picks.
+                    new_leg_verdicts = dict(cached_leg_verdicts)
+                    for j, (lpick, lverdict, lcalc, lps, lgd, *_) in enumerate(verdicts):
+                        if lverdict in ("WIN", "LOSS", "PUSH"):
+                            new_leg_verdicts[str(j)] = {
+                                "verdict": lverdict, "calc": lcalc,
+                                "sport": lps, "game_date": lgd or date_str,
+                                "broadcasted": True,
+                            }
+                    pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
                 all_descs = "\n".join(
                     f"{v[0].get('description', '')}|{v[3]}|{v[4]}|{v[2]}" for v in verdicts if v[1] in _PICK_EMOJI
                 )
