@@ -938,8 +938,6 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 odds_were_empty = not odds_by_pick
                 if odds_were_empty:
                     print(f"  [odds] fetching fresh (no cache) for {cache_key}")
-                else:
-                    print(f"  [odds] using cached for {cache_key}")
                 if not odds_by_pick:
                     for i, pick in enumerate(picks):
                         pick_sport = pick.get("sport") or sport
