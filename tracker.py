@@ -11,20 +11,16 @@ import asyncio
 import hashlib
 import json
 import os
-import re
 import argparse
 
 from datetime import date as _date, timedelta
 
-import anthropic
-import httpx
 from dotenv import load_dotenv
 
 from common import VERDICT_EMOJI
-from scores import ESPN_LEAGUES, fetch_espn, scoreboard_text, odds_requests_used
+from scores import fetch_espn, odds_requests_used
 from odds import fetch_odds_current, quota_used as odds_quota_used
 from ai import (
-    claude,
     claude_parse,
     claude_grade,
     build_context,
@@ -34,702 +30,26 @@ from ai import (
     usage_cost,
     fmt_cost,
 )
+from tracker_cache import (
+    _load_pending_cache,
+    _save_pending_cache,
+    _pending_entry,
+    _find_duplicate_cache_key,
+)
+from tracker_grading import _overall_verdict, grade_matches_label
+from tracker_format import (
+    extract_label,
+    strip_label,
+    _insert_emojis,
+    _insert_odds,
+    _fmt_odds_audit,
+    _bot_edit_message,
+    _PICK_EMOJI,
+)
+from tracker_backtest import run_backtest
 
 load_dotenv()
 load_dotenv(".env.local", override=True)  # VPS-specific overrides (never synced)
-
-# Cache of parsed-but-pending messages so we don't re-call Claude on every run
-_PENDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "parse_cache.json")
-
-
-def _norm_desc(d: str) -> str:
-    """Normalise a pick description for duplicate comparison."""
-    d = d.lower().strip()
-    d = re.sub(r'\([+-]?\d+\)', '', d)               # strip parenthesized odds e.g. (-170)
-    d = re.sub(r'(?<=\s)[+-]?\d{3,}(?=\s|$)', '', d) # strip bare American odds e.g. -170, +110
-    d = re.sub(r'\d+(\.\d+)?u\b', '', d)              # strip units e.g. 1.5u
-    return re.sub(r'\s+', ' ', d).strip()
-
-
-def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict, odds_by_pick: dict | None = None) -> dict:
-    """Build a pending-cache entry, preserving linked_message_ids and odds from the existing entry."""
-    entry = {
-        "capper_name":        capper,
-        "parsed":             parsed,
-        "leg_verdicts":       leg_verdicts,
-        "linked_message_ids": existing.get("linked_message_ids", []),
-        # Preserve fetched odds — once set, never overwritten with None
-        "odds_by_pick":       odds_by_pick if odds_by_pick is not None else existing.get("odds_by_pick", {}),
-    }
-    if existing.get("_unknown_notified"):
-        entry["_unknown_notified"] = True
-    return entry
-
-
-def _find_duplicate_cache_key(
-    pending_cache: dict,
-    channel_id: int,
-    capper_name: str,
-    new_picks: list[dict],
-    exclude_key: str | None = None,
-) -> str | None:
-    """Return the cache key of a pending entry that matches this capper+picks, else None."""
-    norm_new = sorted(_norm_desc(p.get("description", "")) for p in new_picks)
-    capper_lower = capper_name.lower()
-    for key, entry in pending_cache.items():
-        if key == exclude_key:
-            continue
-        if int(key.split(':')[0]) != channel_id:
-            continue
-        if entry.get("capper_name", "").lower() != capper_lower:
-            continue
-        existing_picks = entry.get("parsed", {}).get("picks", [])
-        if not existing_picks:
-            continue
-        norm_existing = sorted(_norm_desc(p.get("description", "")) for p in existing_picks)
-        if norm_existing == norm_new:
-            return key
-    return None
-
-
-def _load_pending_cache() -> dict:
-    try:
-        with open(_PENDING_CACHE_PATH) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-
-def _save_pending_cache(cache: dict) -> None:
-    with open(_PENDING_CACHE_PATH, "w") as f:
-        json.dump(cache, f)
-
-
-# ─── Message parsing ──────────────────────────────────────────────────────────
-
-def msg_plain_text(msg: dict) -> str:
-    text = msg.get("text", "")
-    if isinstance(text, list):
-        parts = []
-        for chunk in text:
-            if isinstance(chunk, str):
-                parts.append(chunk)
-            elif isinstance(chunk, dict) and chunk.get("type") != "blockquote":
-                parts.append(chunk.get("text", ""))
-        return "".join(parts)
-    return text
-
-
-def extract_label(text: str) -> str | None:
-    if "\u2705" in text:
-        return "win"
-    if "\u274c" in text:
-        return "loss"
-    return None
-
-
-def strip_label(text: str) -> str:
-    return re.sub(r"[\u2705\u274c]", "", text).strip()
-
-
-def grade_matches_label(grade: str, label: str) -> bool:
-    """Check if a graded verdict matches the expected label (win/loss)."""
-    return (grade == "WIN" and label == "win") or (grade == "LOSS" and label == "loss")
-
-
-# ─── Emoji insertion ─────────────────────────────────────────────────────────
-
-_PICK_EMOJI = {k: v for k, v in VERDICT_EMOJI.items() if k in ("WIN", "LOSS", "PUSH")}
-
-
-def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
-    """
-    Insert verdict emoji(s) into the message text.
-
-    Parlay messages: add a single overall verdict emoji on the "Parlay:" header
-    line (or after the last leg if no header found).  Per-leg emojis are NOT
-    inserted — the parlay is a single bet.
-
-    Non-parlay messages: insert per-pick verdict emojis inline after each
-    pick's line, matched by team/player name.
-
-    Lines that can't be matched are left unchanged.
-    Returns the modified text (or original if nothing could be matched).
-    """
-    lines = text.rstrip().split("\n")
-
-    is_parlay = any(v[0].get("is_parlay_leg") for v in verdicts)
-
-    if is_parlay:
-        overall = _overall_verdict(verdicts)
-        emoji = _PICK_EMOJI.get(overall)
-        if not emoji:
-            return text  # PENDING / UNKNOWN — nothing to insert yet
-
-        # Prefer appending to the "Parlay:" header line
-        for i, line in enumerate(lines):
-            if "parlay" in line.lower() and not any(ch in line for ch in _PICK_EMOJI.values()):
-                lines[i] = f"{line.rstrip()}{emoji}"
-                return "\n".join(lines)
-
-        # Fallback: find the last leg line and append there
-        last_idx = -1
-        for pick, _verdict, _calc, _sport, *_ in verdicts:
-            if not pick.get("is_parlay_leg"):
-                continue
-            teams  = pick.get("teams") or []
-            player = pick.get("player") or ""
-            identifiers = [player] if player else teams
-            search_terms: list[str] = []
-            for t in identifiers:
-                tl = t.lower().strip()
-                if tl:
-                    search_terms.append(tl)
-                    search_terms.extend(w for w in tl.split() if len(w) > 3)
-            for i, line in enumerate(lines):
-                if any(term in line.lower() for term in search_terms):
-                    last_idx = max(last_idx, i)
-
-        if last_idx >= 0 and not any(ch in lines[last_idx] for ch in _PICK_EMOJI.values()):
-            lines[last_idx] = f"{lines[last_idx].rstrip()}{emoji}"
-        else:
-            lines.append(emoji)
-        return "\n".join(lines)
-
-    # ── Non-parlay: per-pick emoji ────────────────────────────────────────────
-    for pick, verdict, _calc, _sport, *_ in verdicts:
-        emoji = _PICK_EMOJI.get(verdict)
-        if not emoji:
-            continue  # UNKNOWN / PENDING — leave line alone
-
-        teams  = pick.get("teams") or []
-        player = pick.get("player") or ""
-        # For player props, search by player name only — team names appear as game
-        # headers (e.g. "Pirates / Mets:") and would match the wrong line.
-        # For team bets, search by team names.
-        identifiers = [player] if player else teams
-        search_terms: list[str] = []
-        for t in identifiers:
-            tl = t.lower().strip()
-            if tl:
-                search_terms.append(tl)
-                search_terms.extend(w for w in tl.split() if len(w) > 3)
-
-        for i, line in enumerate(lines):
-            if any(ch in line for ch in _PICK_EMOJI.values()):
-                continue  # already has an emoji — skip
-            line_lower = line.lower()
-            if any(term in line_lower for term in search_terms):
-                lines[i] = f"{line.rstrip()}{emoji}"
-                break  # one match per pick
-
-    return "\n".join(lines)
-
-_ODDS_TAG_RE = re.compile(r'\s*\[[+-]\d{3,4}[^\]]*\]')
-
-
-def _fmt_odds_audit(pick: dict, sport: str, capper: str, result) -> str:
-    fmt  = result.format() or "?"
-    desc = pick.get("description", "")
-    bk   = result.bookmaker or "?"
-    lines = [
-        f"📊 <b>odds</b>: {desc} → [{fmt}]",
-        f"{result.match_type} · {bk}",
-    ]
-    if result.api_line is not None and result.pick_line is not None and result.api_line != result.pick_line:
-        lines.append(f"api_line: {result.api_line} | pick_line: {result.pick_line}")
-    lines.append(f"{sport} · {capper}")
-    return "\n".join(lines)
-
-
-def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
-    """
-    Insert odds tags directly after each pick line, e.g. 'Duke -4.5 (-153)'.
-
-    For parlays: inserts combined parlay price on the header line (the line
-    containing "parlay" that isn't a leg bullet). Individual leg prices are
-    not shown — only the combined payout odds.
-    Idempotent — skips lines that already carry an odds tag.
-    Uses same search-term logic as _insert_emojis.
-    """
-    if any(p.get("is_parlay_leg") for p in picks):
-        _leg_odds = [odds_by_pick.get(str(i), {}).get("odds") for i in range(len(picks))]
-        _valid = [o for o in _leg_odds if o is not None]
-        if len(_valid) != len(_leg_odds):
-            return text  # partial odds — don't show misleading combined price
-        _dec = 1.0
-        for _o in _valid:
-            _dec *= (_o / 100 + 1) if _o > 0 else (100 / abs(_o) + 1)
-        _comb = round((_dec - 1) * 100) if _dec >= 2.0 else round(-100 / (_dec - 1))
-        combined_tag = f" [{'+' if _comb > 0 else ''}{_comb}]"
-        lines = text.rstrip().split("\n")
-        for j, line in enumerate(lines):
-            ll = line.lower().lstrip()
-            if ll.startswith("•") or ll.startswith("-"):
-                continue  # skip leg bullet lines
-            if "parlay" not in ll:
-                continue
-            if _ODDS_TAG_RE.search(line):
-                return text  # already tagged — idempotent
-            lines[j] = f"{line.rstrip()}{combined_tag}"
-            return "\n".join(lines)
-        return text
-
-    lines = text.rstrip().split("\n")
-
-    def _fmt(v: int) -> str:
-        return f"+{v}" if v > 0 else str(v)
-
-    for idx, pick in enumerate(picks):
-        odds_val = odds_by_pick.get(str(idx), {}).get("odds")
-        if odds_val is None:
-            continue
-        match_type  = odds_by_pick.get(str(idx), {}).get("match_type", "")
-        pregame_val = odds_by_pick.get(str(idx), {}).get("pregame_odds")
-        if match_type.startswith("live_"):
-            odds_tag = f" [{_fmt(odds_val)} live]"
-        elif match_type.startswith("pregame_"):
-            odds_tag = f" [{_fmt(odds_val)} pre]"
-        else:
-            odds_tag = f" [{_fmt(odds_val)}]"
-
-        teams  = pick.get("teams") or []
-        player = pick.get("player") or ""
-        identifiers = [player] if player else teams
-        search_terms: list[str] = []
-        for t in identifiers:
-            tl = t.lower().strip()
-            if tl:
-                search_terms.append(tl)
-                search_terms.extend(w for w in tl.split() if len(w) > 3)
-
-        # Try description first: more specific than team/player fragments and avoids
-        # false matches on game-info header lines (e.g. "Defenders @ Aviators / 8:00 PM").
-        # Normalise "moneyline" → "ml" so AI-expanded descriptions match message abbreviations.
-        desc = (pick.get("description") or "").lower().strip().replace("moneyline", "ml")
-        desc_matched = False
-        if desc:
-            for j, line in enumerate(lines):
-                if desc in line.lower():
-                    if not _ODDS_TAG_RE.search(line):
-                        lines[j] = f"{line.rstrip()}{odds_tag}"
-                    desc_matched = True
-                    break
-
-        if not desc_matched:
-            for j, line in enumerate(lines):
-                if " @ " in line:  # skip game-info header (e.g. "Team A @ Team B / 8:00 PM")
-                    continue
-                if any(term in line.lower() for term in search_terms):
-                    if _ODDS_TAG_RE.search(line):
-                        break  # already tagged — idempotent
-                    lines[j] = f"{line.rstrip()}{odds_tag}"
-                    desc_matched = True
-                    break
-
-        # Third fallback: strip team/player names from desc and search for the remainder.
-        # Catches abbreviations like "Dbacks ML (2 units)" when AI parsed "Arizona Diamondbacks ML".
-        if not desc_matched and desc:
-            team_words = set()
-            for t in identifiers:
-                for w in t.lower().split():
-                    if len(w) > 3:
-                        team_words.add(w)
-            desc_stripped = desc
-            for w in team_words:
-                desc_stripped = desc_stripped.replace(w, "")
-            desc_stripped = " ".join(desc_stripped.split())  # collapse whitespace
-            if len(desc_stripped) >= 4:
-                for j, line in enumerate(lines):
-                    if " @ " in line:
-                        continue
-                    if desc_stripped in line.lower():
-                        if not _ODDS_TAG_RE.search(line):
-                            lines[j] = f"{line.rstrip()}{odds_tag}"
-                        desc_matched = True
-                        break
-
-        # Fourth fallback: search for the raw bet line number (e.g. "236.5" or "-7.5").
-        # Catches heavily abbreviated team names (e.g. "Twolves / Sixers under 236.5")
-        # where no team name or description fragment survived the previous passes.
-        if not desc_matched:
-            pick_line = pick.get("line")
-            if pick_line is not None:
-                pick_line_f = float(pick_line)
-                line_str = str(int(pick_line_f)) if pick_line_f == int(pick_line_f) else str(pick_line_f)
-                for j, row in enumerate(lines):
-                    if " @ " in row:
-                        continue
-                    if line_str in row:
-                        if not _ODDS_TAG_RE.search(row):
-                            lines[j] = f"{row.rstrip()}{odds_tag}"
-                        desc_matched = True
-                        break
-
-    return "\n".join(lines)
-
-
-def _overall_verdict(verdicts: list[tuple]) -> str:
-    """
-    Collapse per-pick verdicts into a single message verdict.
-
-    Parlay legs: ALL must WIN → WIN; any LOSS → LOSS; any UNKNOWN → UNKNOWN.
-    Non-parlay:  all must agree (all WIN or all LOSS); mixed or any UNKNOWN → UNKNOWN.
-    """
-    if not verdicts:
-        return "UNKNOWN"
-    all_v = [v[1] for v in verdicts]
-    is_parlay = any(v[0].get("is_parlay_leg") for v in verdicts)
-    if is_parlay:
-        if "PENDING" in all_v:
-            return "PENDING"
-        if "UNKNOWN" in all_v:
-            return "UNKNOWN"
-        if "LOSS" in all_v:
-            return "LOSS"
-        if all(v == "WIN" for v in all_v):
-            return "WIN"
-        if "PUSH" in all_v:
-            return "PUSH"
-        return "UNKNOWN"
-    else:
-        unique = set(all_v) - {"PUSH"}
-        if "PENDING" in unique:
-            return "PENDING"
-        if "UNKNOWN" in unique or len(unique) > 1:
-            return "UNKNOWN"
-        return unique.pop() if unique else "PUSH"
-
-
-async def _bot_edit_message(
-    bot_token: str,
-    channel_id: int,
-    message_id: int,
-    new_text: str,
-    has_media: bool,
-) -> bool:
-    """Edit a message via Bot API. Returns True on success."""
-    method = "editMessageCaption" if has_media else "editMessageText"
-    field  = "caption"            if has_media else "text"
-    try:
-        async with httpx.AsyncClient(timeout=10) as http:
-            r = await http.post(
-                f"https://api.telegram.org/bot{bot_token}/{method}",
-                json={"chat_id": channel_id, "message_id": message_id,
-                      field: new_text, "parse_mode": "HTML"},
-            )
-            if not r.is_success:
-                print(f"    [bot edit error] {r.status_code}: {r.text[:120]}")
-                return False
-            return True
-    except Exception as exc:
-        print(f"    [bot edit error] {exc}")
-        return False
-
-
-# ─── Backtest ─────────────────────────────────────────────────────────────────
-
-def _skip_reason(r: dict) -> str:
-    if r.get("is_parlay_leg") and r["sport"] not in ESPN_LEAGUES and r["sport"] != "Tennis":
-        return f"parlay (no data: {r['sport']})"
-    if r["sport"] not in ESPN_LEAGUES and r["sport"] != "Tennis":
-        return f"no data ({r['sport']})"
-    if r["bet_type"] == "prop":
-        return "prop"
-    return "unknown"
-
-
-def _write_detail_file(path: str, source: str, results: list, graded: list,
-                       correct_list: list, skipped_list: list, wrong_list: list,
-                       cost: float) -> None:
-    sep = "=" * 80
-    thin = "-" * 80
-
-    with open(path, "w", encoding="utf-8") as f:
-        def w(line: str = "") -> None:
-            f.write(line + "\n")
-
-        # Header
-        w(sep)
-        w(f"BACKTEST DETAIL REPORT")
-        w(f"Source : {source}")
-        w(f"Total  : {len(results)}  |  Graded: {len(graded)}  |  Skipped: {len(skipped_list)}")
-        if graded:
-            pct = round(100 * len(correct_list) / len(graded))
-            w(f"Accuracy: {len(correct_list)}/{len(graded)} ({pct}%)")
-        w(f"[Claude total] {fmt_cost(cost)}")
-        w(sep)
-
-        for r in results:
-            mark = "OK" if r["correct"] else ("--" if r["skipped"] else "XX")
-            w()
-            w(sep)
-            w(f"[{mark}] MSG {r['msg_id']}  |  {r['date']}  |  {r['sport']}  |  label={r['label'].upper()}  grade={r['grade']}")
-            w(sep)
-
-            # Raw message text
-            w("RAW TEXT:")
-            for line in r["raw_text"].splitlines():
-                w(f"  {line}")
-            w()
-
-            # Parsed pick fields
-            w("PARSED PICK:")
-            p = r["parsed"]
-            w(f"  description : {p.get('description', '')}")
-            w(f"  bet_type    : {p.get('bet_type', '')}")
-            w(f"  period      : {p.get('period', 'game')}")
-            w(f"  teams       : {p.get('teams', [])}")
-            w(f"  player      : {p.get('player', '')}")
-            w(f"  prop_stat   : {p.get('prop_stat', '')}")
-            w(f"  line        : {p.get('line', '')}")
-            w(f"  direction   : {p.get('direction', '')}")
-            w()
-
-            # Context passed to grader
-            w("CONTEXT (sent to grader):")
-            ctx = r["context"]
-            if ctx == CONTEXT_SKIP:
-                w("  [skipped — no grader call]")
-            else:
-                for line in ctx.splitlines():
-                    w(f"  {line}")
-            w()
-
-            # Grader output
-            w(f"GRADE: {r['grade']}")
-            if r["calc"]:
-                w(f"CALC : {r['calc']}")
-            if r["skipped"]:
-                w(f"SKIP REASON: {_skip_reason(r)}")
-            w(thin)
-
-        # Incorrect summary
-        w()
-        w(sep)
-        w("INCORRECT GRADES:")
-        w(sep)
-        if wrong_list:
-            for r in wrong_list:
-                w(f"  msg {r['msg_id']:3d}  {r['date']}  {r['sport']:6s}  got={r['grade']}  expected={r['label'].upper()}")
-                w(f"    pick   : {r['pick']}")
-                w(f"    calc   : {r['calc']}")
-                w()
-        else:
-            w("  (none)")
-
-
-async def run_backtest(filepath: str) -> None:
-    with open(filepath, encoding="utf-8") as f:
-        data = json.load(f)
-
-    channel_name = data.get("name", filepath)
-    messages = [m for m in data["messages"] if m.get("type") == "message"]
-
-    print(f"\nBacktest: {channel_name}  ({len(messages)} messages)")
-    print("=" * 72)
-
-    results = []
-    scoreboard_cache: dict[tuple[str, str], dict | None] = {}
-    summary_cache: dict[tuple[str, str], dict | None] = {}
-
-    for msg in messages:
-        plain = msg_plain_text(msg)
-        if not plain.strip():
-            continue
-        # Skip messages whose first line contains "__" (manually excluded)
-        if "__" in plain.splitlines()[0]:
-            continue
-
-        label = extract_label(plain)
-        if label is None:
-            continue
-
-        clean = strip_label(plain)
-        date = msg["date"][:10]
-
-        parsed = await claude_parse(clean, date)
-        if not parsed:
-            print(f"  [parse fail] msg {msg['id']}")
-            continue
-
-        sport = parsed.get("sport", "Other")
-        picks = parsed.get("picks", [])
-        if not picks:
-            continue
-
-        # Fetch scoreboard once per (sport, date)
-        sb_key = (sport, date)
-        if sb_key not in scoreboard_cache:
-            scoreboard_cache[sb_key] = await fetch_espn(sport, date)
-        scoreboard = scoreboard_cache[sb_key]
-
-        for pick in picks:
-            pick_desc = pick.get("description", clean[:80])
-            bet_type = pick.get("bet_type", "")
-            period = pick.get("period", "game")
-            is_parlay_leg = pick.get("is_parlay_leg", False)
-            # Per-pick sport override (used for cross-sport parlays)
-            pick_sport = pick.get("sport") or sport
-
-            # Fetch scoreboard for per-pick sport if different from message sport
-            if pick_sport != sport:
-                pick_sb_key = (pick_sport, date)
-                if pick_sb_key not in scoreboard_cache:
-                    scoreboard_cache[pick_sb_key] = await fetch_espn(pick_sport, date)
-                pick_scoreboard = scoreboard_cache[pick_sb_key]
-            else:
-                pick_scoreboard = scoreboard
-
-            context, _game_date = await build_context(pick_sport, date, pick, pick_scoreboard, summary_cache)
-
-            if context in (CONTEXT_SKIP, CONTEXT_ESPN_ERROR):
-                grade, calc = "UNKNOWN", ""
-            elif context == CONTEXT_PENDING:
-                grade, calc = "PENDING", ""
-            else:
-                grade, calc = await claude_grade(pick_desc, date, context, bet_type)
-
-            correct = grade_matches_label(grade, label)
-            skipped = grade in ("PUSH", "UNKNOWN")
-            mark = "OK" if correct else ("--" if skipped else "XX")
-
-            print(
-                f"  {mark}  msg {msg['id']:3d}  {date}  {pick_sport:6s}  "
-                f"{grade:7s}  label={label.upper():<4s}  {pick_desc[:48]}"
-            )
-            results.append({
-                "msg_id": msg["id"],
-                "date": date,
-                "sport": pick_sport,
-                "label": label,
-                "grade": grade,
-                "calc": calc,
-                "correct": correct,
-                "skipped": skipped,
-                "pick": pick_desc,
-                "bet_type": bet_type,
-                "period": period,
-                "is_parlay_leg": is_parlay_leg,
-                "parsed": pick,
-                "context": context,
-                "raw_text": msg_plain_text(msg),
-            })
-
-    # ── Summary ──
-    graded = [r for r in results if not r["skipped"]]
-    correct_list = [r for r in graded if r["correct"]]
-    skipped_list = [r for r in results if r["skipped"]]
-    wrong_list = [r for r in graded if not r["correct"]]
-
-    print(f"\n{'=' * 72}")
-    total = len(results)
-    if graded:
-        pct = round(100 * len(correct_list) / len(graded))
-        print(f"Accuracy : {len(correct_list)}/{len(graded)} ({pct}%)  |  skipped: {len(skipped_list)}/{total}")
-    else:
-        print(f"Accuracy : N/A  |  skipped: {len(skipped_list)}/{total}")
-
-    cost = usage_cost()
-    print(f"[Claude total] {fmt_cost(cost)}")
-
-    if wrong_list:
-        print("\nIncorrect grades:")
-        for r in wrong_list:
-            print(f"  msg {r['msg_id']:3d}  {r['date']}  {r['sport']:6s}  got={r['grade']}  expected={r['label'].upper()}")
-            print(f"         {r['pick'][:65]}")
-
-    # Skip breakdown
-    if skipped_list:
-        skip_by_reason: dict[str, int] = {}
-        for r in skipped_list:
-            reason = _skip_reason(r)
-            skip_by_reason[reason] = skip_by_reason.get(reason, 0) + 1
-
-        print("\nSkipped breakdown:")
-        for reason, count in sorted(skip_by_reason.items(), key=lambda x: -x[1]):
-            print(f"  {reason}: {count}")
-
-    # ── Write detail file ──
-    data_dir = os.path.join(os.path.dirname(__file__), "data")
-    os.makedirs(data_dir, exist_ok=True)
-    base = os.path.splitext(os.path.basename(filepath))[0]
-    out_path = os.path.join(data_dir, f"backtest_{base}.txt")
-    _write_detail_file(out_path, filepath, results, graded, correct_list, skipped_list, wrong_list, cost)
-    print(f"\nDetail file: {out_path}")
-    from audit import log_api_costs
-    log_api_costs("backtest", cost, odds_requests_used())
-
-
-async def grade_one(text: str, date: str) -> None:
-    """Parse and grade a single pick message, printing full detail."""
-    import sys
-    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
-
-    label = extract_label(text)
-    clean = strip_label(text)
-
-    parsed = await claude_parse(clean, date)
-    if not parsed:
-        print("[parse fail]")
-        return
-
-    sport = parsed.get("sport", "Other")
-    picks = parsed.get("picks", [])
-    print(f"Sport: {sport}  |  {len(picks)} pick(s)")
-    print()
-
-    scoreboard_cache: dict = {}
-    summary_cache: dict = {}
-
-    sb_key = (sport, date)
-    scoreboard_cache[sb_key] = await fetch_espn(sport, date)
-
-    for i, pick in enumerate(picks, 1):
-        pick_sport = pick.get("sport") or sport
-        if pick_sport != sport:
-            ps_key = (pick_sport, date)
-            if ps_key not in scoreboard_cache:
-                scoreboard_cache[ps_key] = await fetch_espn(pick_sport, date)
-            scoreboard = scoreboard_cache[ps_key]
-        else:
-            scoreboard = scoreboard_cache[sb_key]
-
-        pick_desc = pick.get("description", clean[:80])
-        print(f"Pick {i}: {pick_desc}")
-        print(f"  sport={pick_sport}  bet_type={pick.get('bet_type')}  period={pick.get('period','game')}"
-              f"  teams={pick.get('teams')}  player={pick.get('player')}"
-              f"  line={pick.get('line')}  dir={pick.get('direction')}"
-              f"  parlay_leg={pick.get('is_parlay_leg', False)}")
-
-        context, _game_date = await build_context(pick_sport, date, pick, scoreboard, summary_cache)
-        print()
-        print("  CONTEXT:")
-        if context == CONTEXT_SKIP:
-            print("    [skipped]")
-        else:
-            for ln in context.splitlines():
-                print(f"    {ln}")
-        print()
-
-        if context != CONTEXT_SKIP:
-            grade, calc = await claude_grade(pick_desc, date, context, pick.get("bet_type", ""))
-            print(f"  GRADE : {grade}")
-            print(f"  CALC  : {calc}")
-        else:
-            grade = "UNKNOWN"
-            print(f"  GRADE : UNKNOWN (skipped)")
-
-        if label:
-            correct = grade_matches_label(grade, label)
-            print(f"  LABEL : {label.upper()}  →  {'OK' if correct else ('--' if grade in ('PUSH','UNKNOWN') else 'XX')}")
-        print()
-
-    print()
-    print(f"[Claude total] {fmt_cost(usage_cost())}  |  [Odds API] {odds_requests_used()} requests used")
-    from audit import log_api_costs
-    log_api_costs("debug", usage_cost(), odds_requests_used())
-
 
 # ─── Live mode ────────────────────────────────────────────────────────────────
 
@@ -1241,6 +561,78 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
     print(f"\n[Claude total] {fmt_cost(usage_cost())}  |  [Odds API] {total_odds_quota} requests used")
     from audit import log_api_costs
     log_api_costs(run_type, usage_cost(), total_odds_quota)
+
+
+# ─── grade_one ────────────────────────────────────────────────────────────────
+
+async def grade_one(text: str, date: str) -> None:
+    """Parse and grade a single pick message, printing full detail."""
+    import sys
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+
+    label = extract_label(text)
+    clean = strip_label(text)
+
+    parsed = await claude_parse(clean, date)
+    if not parsed:
+        print("[parse fail]")
+        return
+
+    sport = parsed.get("sport", "Other")
+    picks = parsed.get("picks", [])
+    print(f"Sport: {sport}  |  {len(picks)} pick(s)")
+    print()
+
+    scoreboard_cache: dict = {}
+    summary_cache: dict = {}
+
+    sb_key = (sport, date)
+    scoreboard_cache[sb_key] = await fetch_espn(sport, date)
+
+    for i, pick in enumerate(picks, 1):
+        pick_sport = pick.get("sport") or sport
+        if pick_sport != sport:
+            ps_key = (pick_sport, date)
+            if ps_key not in scoreboard_cache:
+                scoreboard_cache[ps_key] = await fetch_espn(pick_sport, date)
+            scoreboard = scoreboard_cache[ps_key]
+        else:
+            scoreboard = scoreboard_cache[sb_key]
+
+        pick_desc = pick.get("description", clean[:80])
+        print(f"Pick {i}: {pick_desc}")
+        print(f"  sport={pick_sport}  bet_type={pick.get('bet_type')}  period={pick.get('period','game')}"
+              f"  teams={pick.get('teams')}  player={pick.get('player')}"
+              f"  line={pick.get('line')}  dir={pick.get('direction')}"
+              f"  parlay_leg={pick.get('is_parlay_leg', False)}")
+
+        context, _game_date = await build_context(pick_sport, date, pick, scoreboard, summary_cache)
+        print()
+        print("  CONTEXT:")
+        if context == CONTEXT_SKIP:
+            print("    [skipped]")
+        else:
+            for ln in context.splitlines():
+                print(f"    {ln}")
+        print()
+
+        if context != CONTEXT_SKIP:
+            grade, calc = await claude_grade(pick_desc, date, context, pick.get("bet_type", ""))
+            print(f"  GRADE : {grade}")
+            print(f"  CALC  : {calc}")
+        else:
+            grade = "UNKNOWN"
+            print(f"  GRADE : UNKNOWN (skipped)")
+
+        if label:
+            correct = grade_matches_label(grade, label)
+            print(f"  LABEL : {label.upper()}  →  {'OK' if correct else ('--' if grade in ('PUSH','UNKNOWN') else 'XX')}")
+        print()
+
+    print()
+    print(f"[Claude total] {fmt_cost(usage_cost())}  |  [Odds API] {odds_requests_used()} requests used")
+    from audit import log_api_costs
+    log_api_costs("debug", usage_cost(), odds_requests_used())
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
