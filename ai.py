@@ -244,9 +244,14 @@ async def build_context(
         ctx = odds_api_context(fighter, events)
         return (ctx if ctx else CONTEXT_SKIP), date
 
-    # KBO: grading not yet supported — skip without querying any API
+    # KBO: Odds API scores (same as Boxing — free tier = last ~3 days only)
     if sport == "KBO":
-        return CONTEXT_SKIP, date
+        team = teams[0] if teams else ""
+        if not team:
+            return CONTEXT_SKIP, date
+        events = await fetch_odds_api_scores("KBO", date)
+        ctx = odds_api_context(team, events)
+        return (ctx if ctx else CONTEXT_PENDING), date
 
     # Other unknown sports → skip
     if sport not in ESPN_LEAGUES:
