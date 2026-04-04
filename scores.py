@@ -140,58 +140,27 @@ async def _fetch_kbo_day(http: httpx.AsyncClient, date_str: str) -> list[dict]:
 
 
 async def fetch_kbo_context(team: str, date: str) -> tuple[str, str]:
-    """Grade a KBO pick by checking koreabaseball.com for the correct game date.
+    """Grade a KBO pick by checking koreabaseball.com for the next day's game.
 
-    KBO picks are often sent a day early (US evening for next-day KST game),
-    and teams frequently play multi-game series (same opponent on consecutive
-    days).  To avoid grading against yesterday's already-finished game, we
-    check date and date+1 independently and apply these rules:
-
-      1. If date+1 has a COMPLETED game for this team → use it (most likely
-         the intended game for an evening pick).
-      2. If date+1 is pending but date is COMPLETED → use date (the pick was
-         probably for today's game and it's done).
-      3. If only a pending game exists on either day → PENDING.
-      4. No game found → empty string (caller decides SKIP vs PENDING).
-
-    Returns (context_str, game_date).
+    KBO picks are always sent the US evening before the game (next KST day),
+    so we only check date+1.  Returns (context_str, game_date).
     """
     target = _date.fromisoformat(date)
+    game_date = target + timedelta(days=1)
+    game_date_str = game_date.isoformat()
     async with httpx.AsyncClient(timeout=15) as http:
-        day0 = await _fetch_kbo_day(http, target.strftime("%Y%m%d"))
-        day1 = await _fetch_kbo_day(http, (target + timedelta(days=1)).strftime("%Y%m%d"))
+        games = await _fetch_kbo_day(http, game_date.strftime("%Y%m%d"))
 
     team_lower = team.lower().strip()
-
-    def _find(games: list[dict]) -> dict | None:
-        for e in games:
-            if (_team_matches(team_lower, e.get("home_team", "").lower()) or
-                    _team_matches(team_lower, e.get("away_team", "").lower())):
-                return e
-        return None
-
-    def _fmt(e: dict) -> str:
-        home, away = e["home_team"], e["away_team"]
-        scores = e.get("scores") or []
-        score_str = "  ".join(f"{s['name']}: {s['score']}" for s in scores)
-        return f"{home} vs {away}\n{score_str}"
-
-    match1 = _find(day1)
-    match0 = _find(day0)
-    date1 = (target + timedelta(days=1)).isoformat()
-    date0 = target.isoformat()
-
-    # Prefer date+1 completed (common case: pick sent evening before)
-    if match1 and match1.get("completed"):
-        return _fmt(match1), date1
-    # Fall back to date completed
-    if match0 and match0.get("completed"):
-        return _fmt(match0), date0
-    # Game exists but not yet completed
-    if match1:
-        return "PENDING", date1
-    if match0:
-        return "PENDING", date0
+    for e in games:
+        home, away = e.get("home_team", ""), e.get("away_team", "")
+        if not (_team_matches(team_lower, home.lower()) or _team_matches(team_lower, away.lower())):
+            continue
+        if e.get("completed"):
+            scores = e.get("scores") or []
+            score_str = "  ".join(f"{s['name']}: {s['score']}" for s in scores)
+            return f"{home} vs {away}\n{score_str}", game_date_str
+        return "PENDING", game_date_str
 
     return "", date
 
