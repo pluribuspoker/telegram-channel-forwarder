@@ -1098,9 +1098,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
                 # Cache the parse result and any resolved leg verdicts to avoid re-calling
                 # Claude on subsequent runs for legs that are already graded.
-                # Also always cache odds_by_pick when freshly fetched so they aren't
-                # re-fetched (and re-warned) on every run for partially-graded PENDING picks.
-                if not graded or parlay_pending or odds_were_empty:
+                if not graded or parlay_pending:
                     new_leg_verdicts = dict(cached_leg_verdicts)  # preserve previously cached
                     for j, (lpick, lverdict, lcalc, lps, lgd, *_) in enumerate(verdicts):
                         if lverdict in ("WIN", "LOSS", "PUSH"):
@@ -1136,6 +1134,13 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         if overall == "UNKNOWN":
                             pending_cache[cache_key] = {**cached_entry, "_unknown_notified": True}
                             _save_pending_cache(pending_cache)
+                    # If odds were freshly fetched this run, write them to the cache now
+                    # so subsequent runs don't re-fetch and re-warn. Only touch odds_by_pick
+                    # to avoid disturbing leg_verdicts (e.g. broadcasted flags).
+                    if odds_were_empty and odds_by_pick:
+                        existing = pending_cache.get(cache_key, {})
+                        if isinstance(existing, dict):
+                            pending_cache[cache_key] = {**existing, "odds_by_pick": odds_by_pick}
                     continue
 
                 first_pick, _, first_calc, first_sport, first_game_date = verdicts[0]
