@@ -324,7 +324,13 @@ async def build_context(
                 future_sb = await fetch_espn(sport, future_date)
                 if not future_sb:
                     continue
-                # UFC: if the specific bout is already completed on this future date, grade it now
+                # If the game is already completed on this future date, grade it now
+                future_completed = _completed_events(future_sb)
+                future_ids = find_event_ids(future_completed, teams, player)
+                if future_ids:
+                    display = future_sb if sport == "UFC" else {"events": [e for e in future_completed if e.get("id") in set(future_ids)]}
+                    return scoreboard_text(display, sport), future_date
+                # UFC: a bout may be completed even while the event card is still in progress
                 if sport == "UFC" and _ufc_bout_completed(future_sb, teams, player):
                     return scoreboard_text(future_sb, sport), future_date
                 if find_event_ids(future_sb.get("events", []), teams, player):
