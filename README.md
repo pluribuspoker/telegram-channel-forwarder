@@ -91,9 +91,6 @@ python listener.py --test  # uses test_source/dest channels
 ### Mapping options
 
 **`filter_pattern`** — regex applied to message text; only matching messages are forwarded. Omit to forward everything. Bypassed in `--test` mode so any message triggers a forward.
-```json
-"filter_pattern": "(?im)(^[A-Za-z][A-Za-z ]*: *[(]|^STRAIGHT\\b)"
-```
 
 **`ocr_odds`** — extracts American odds from a bet slip screenshot via Claude Haiku and appends to caption. Image dropped on success; kept as fallback on failure. Requires `ANTHROPIC_API_KEY`.
 ```json
