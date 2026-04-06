@@ -228,3 +228,24 @@ See `CLAUDE.md` for server aliases, deploy workflow, and switching to test mode.
 git add -A && git commit -m "..."
 ship   # pushes to GitHub + runs deploy on server
 ```
+
+---
+
+## Backups
+
+`picks.db` and `parse_cache.json` are backed up daily to a private GitHub repo ([telegram-forwarder-backups](https://github.com/pluribuspoker/telegram-forwarder-backups)).
+
+- **Schedule:** daily at 06:00 UTC via cron, skips if nothing changed
+- **Script:** `/root/backup.sh` on the VPS
+- **Log:** `/var/log/backup.log`
+- **Auth:** deploy key scoped to the backup repo only
+- **Manual run:** `ssh root@<VPS_IP> /root/backup.sh`
+
+**Restore:**
+```bash
+# On the VPS
+cd /root/backups && git pull
+cp picks.db /home/forwarder/app/picks.db
+cp parse_cache.json /home/forwarder/app/parse_cache.json
+chown forwarder:forwarder /home/forwarder/app/picks.db /home/forwarder/app/parse_cache.json
+```
