@@ -417,7 +417,8 @@ def _collect_outcomes(
 
 
 def _find_event_id(event_list: list[dict], teams: list[str]) -> str | None:
-    scored: list[tuple[int, str]] = []
+    now = datetime.now(timezone.utc)
+    scored: list[tuple[tuple[int, int, float], str]] = []
     for term in teams:
         t_lower = term.lower()
         for event in event_list:
@@ -425,11 +426,21 @@ def _find_event_id(event_list: list[dict], teams: list[str]) -> str | None:
             away = event.get("away_team", "")
             for side in (home, away):
                 if _team_matches(t_lower, side.lower()):
-                    scored.append((-len(side), event["id"]))
+                    # Prefer not-yet-started events (0) over already-started (1)
+                    ct = event.get("commence_time", "")
+                    try:
+                        commence = datetime.fromisoformat(ct.replace("Z", "+00:00"))
+                        started = 1 if commence < now else 0
+                        # Among not-started: prefer soonest; among started: prefer most recent
+                        proximity = abs((commence - now).total_seconds())
+                    except (ValueError, AttributeError):
+                        started = 1
+                        proximity = float("inf")
+                    scored.append(((started, -len(side), proximity), event["id"]))
                     break
     if not scored:
         return None
-    scored.sort(key=lambda x: x[0], reverse=True)
+    scored.sort(key=lambda x: x[0])
     return scored[0][1]
 
 
