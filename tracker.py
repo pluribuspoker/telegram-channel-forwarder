@@ -517,7 +517,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             }
                     pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
                 all_descs = "\n".join(
-                    f"{v[0].get('description', '')}|{v[3]}|{v[4]}|{v[2]}" for v in verdicts if v[1] in _PICK_EMOJI
+                    f"{v[1]}: {v[0].get('description', '')}|{v[3]}|{v[4]}|{v[2]}" for v in verdicts if v[1] in _PICK_EMOJI
                 )
                 all_calcs = "  ·  ".join(
                     v[2] for v in verdicts if v[1] in _PICK_EMOJI and v[2]
