@@ -211,29 +211,9 @@ async def channel_probe(client, bot, channels, use_test):
                 preview = (newest.text or "[media]").replace("\n", " ")[:28]
                 print(f"  ⊙ {src_label}: new msg ({age.seconds//60}m ago) {preview!r}")
 
-                # Catch-up: forward any messages not already handled by event handlers
-                # Separate into singles and albums (grouped_id)
-                albums: dict[int, list] = {}
-                singles = []
-                for msg in sorted(msgs, key=lambda m: m.id):
-                    if _was_forwarded(source_entity.id, msg.id):
-                        continue
-                    if msg.grouped_id:
-                        albums.setdefault(msg.grouped_id, []).append(msg)
-                    else:
-                        singles.append(msg)
-
-                for msg in singles:
-                    try:
-                        await _forward_group([msg], mapping, client, bot, bot_dest_entity, use_test, catchup=True)
-                    except Exception as e:
-                        print(f"  ✗ Catch-up failed msg {msg.id}: {e}", file=sys.stderr)
-
-                for gid, group in albums.items():
-                    try:
-                        await _forward_group(group, mapping, client, bot, bot_dest_entity, use_test, catchup=True)
-                    except Exception as e:
-                        print(f"  ✗ Catch-up failed album {gid}: {e}", file=sys.stderr)
+                # Catch-up forwarding DISABLED — was causing duplicate forwards
+                # when the event handler already handled the message.
+                # TODO: fix dedup before re-enabling
 
             except Exception as e:
                 print(f"  ⊙ {src_label}: probe failed ({str(e)[:40]})")
