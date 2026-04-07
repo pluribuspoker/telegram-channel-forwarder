@@ -105,7 +105,6 @@ def _forwarded_init() -> None:
     """Create the listener_forwarded table if needed and prune entries older than 48h."""
     try:
         conn = sqlite3.connect(_DB_PATH)
-        conn.execute("DROP TABLE IF EXISTS listener_forwarded")
         conn.execute(
             "CREATE TABLE IF NOT EXISTS listener_forwarded"
             " (channel_id INTEGER NOT NULL, msg_id INTEGER NOT NULL, ts REAL NOT NULL,"
