@@ -105,9 +105,11 @@ def _forwarded_init() -> None:
     """Create the listener_forwarded table if needed and prune entries older than 48h."""
     try:
         conn = sqlite3.connect(_DB_PATH)
+        conn.execute("DROP TABLE IF EXISTS listener_forwarded")
         conn.execute(
             "CREATE TABLE IF NOT EXISTS listener_forwarded"
-            " (msg_id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, ts REAL NOT NULL)"
+            " (channel_id INTEGER NOT NULL, msg_id INTEGER NOT NULL, ts REAL NOT NULL,"
+            " PRIMARY KEY (channel_id, msg_id))"
         )
         cutoff = datetime.datetime.now(datetime.timezone.utc).timestamp() - 48 * 3600
         conn.execute("DELETE FROM listener_forwarded WHERE ts < ?", (cutoff,))
@@ -117,13 +119,13 @@ def _forwarded_init() -> None:
         pass
 
 
-def _forwarded_save(msg_id: int, channel_id: int) -> None:
+def _forwarded_save(channel_id: int, msg_id: int) -> None:
     """Record a forwarded message ID in picks.db."""
     try:
         conn = sqlite3.connect(_DB_PATH)
         conn.execute(
-            "INSERT OR IGNORE INTO listener_forwarded (msg_id, channel_id, ts) VALUES (?,?,?)",
-            (msg_id, channel_id, datetime.datetime.now(datetime.timezone.utc).timestamp()),
+            "INSERT OR IGNORE INTO listener_forwarded (channel_id, msg_id, ts) VALUES (?,?,?)",
+            (channel_id, msg_id, datetime.datetime.now(datetime.timezone.utc).timestamp()),
         )
         conn.commit()
         conn.close()
@@ -131,11 +133,14 @@ def _forwarded_save(msg_id: int, channel_id: int) -> None:
         pass
 
 
-def _was_forwarded(msg_id: int) -> bool:
+def _was_forwarded(channel_id: int, msg_id: int) -> bool:
     """Check if a message was already forwarded."""
     try:
         conn = sqlite3.connect(_DB_PATH)
-        row = conn.execute("SELECT 1 FROM listener_forwarded WHERE msg_id = ?", (msg_id,)).fetchone()
+        row = conn.execute(
+            "SELECT 1 FROM listener_forwarded WHERE channel_id = ? AND msg_id = ?",
+            (channel_id, msg_id),
+        ).fetchone()
         conn.close()
         return row is not None
     except Exception:
@@ -172,9 +177,9 @@ async def _forward_group(group, mapping, client, bot, bot_dest_entity, use_test,
     caption, odds = await enrich_caption(group, mapping, client)
     log_group(group, sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None, catchup=catchup)
     await send_group(client, group, bot_dest_entity, sender=bot, caption_override=caption, text_only=bool(odds))
-    channel_id = group[0].peer_id.channel_id
+    ch_id = group[0].peer_id.channel_id
     for m in group:
-        _forwarded_save(m.id, channel_id)
+        _forwarded_save(ch_id, m.id)
     if not use_test:
         asyncio.create_task(_trigger_tracker_soon())
     return True
@@ -211,7 +216,7 @@ async def channel_probe(client, bot, channels, use_test):
                 albums: dict[int, list] = {}
                 singles = []
                 for msg in sorted(msgs, key=lambda m: m.id):
-                    if _was_forwarded(msg.id):
+                    if _was_forwarded(source_entity.id, msg.id):
                         continue
                     if msg.grouped_id:
                         albums.setdefault(msg.grouped_id, []).append(msg)
