@@ -65,7 +65,7 @@ def _group_summary(group):
     return preview, media_tag
 
 
-def log_group(group, sent, ocr_odds=None):
+def log_group(group, sent, ocr_odds=None, catchup=False):
     """Print a single log line for a processed message group.
 
     ocr_odds=None  → no OCR attempted
@@ -75,7 +75,7 @@ def log_group(group, sent, ocr_odds=None):
     preview, media_tag = _group_summary(group)
 
     if sent:
-        badge = "✦ SENT    "
+        badge = "✦ CATCH-UP" if catchup else "✦ SENT    "
     else:
         badge = "· filtered"
 
