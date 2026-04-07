@@ -82,7 +82,7 @@ def _probe_db_load() -> dict:
         conn.commit()
         rows = conn.execute("SELECT channel_id, topic_id, last_msg_id FROM listener_probe_state").fetchall()
         conn.close()
-        return {(r[0], r[1]): r[2] for r in rows}
+        return {(r[0], r[1] or 0): r[2] for r in rows}
     except Exception:
         return {}
 
@@ -93,7 +93,7 @@ def _probe_db_save(channel_id: int, topic_id, msg_id: int) -> None:
         conn = sqlite3.connect(_DB_PATH)
         conn.execute(
             "INSERT OR REPLACE INTO listener_probe_state (channel_id, topic_id, last_msg_id) VALUES (?,?,?)",
-            (channel_id, topic_id, msg_id),
+            (channel_id, topic_id or 0, msg_id),
         )
         conn.commit()
         conn.close()
@@ -192,7 +192,7 @@ async def channel_probe(client, bot, channels, use_test):
         await asyncio.sleep(300)
         for source_entity, bot_dest_entity, src_label, _, topic_id, mapping in channels:
             try:
-                probe_key = (source_entity.id, topic_id)
+                probe_key = (source_entity.id, topic_id or 0)
                 kwargs = {"reply_to": topic_id} if topic_id else {}
                 min_id = last_seen.get(probe_key, 0)
                 msgs = await client.get_messages(source_entity, min_id=min_id, limit=50, **kwargs)
@@ -210,9 +210,29 @@ async def channel_probe(client, bot, channels, use_test):
                 preview = (newest.text or "[media]").replace("\n", " ")[:28]
                 print(f"  ⊙ {src_label}: new msg ({age.seconds//60}m ago) {preview!r}")
 
-                # Catch-up forwarding DISABLED — was causing duplicate forwards
-                # when the event handler already handled the message.
-                # TODO: fix dedup before re-enabling
+                # Catch-up: forward any messages not already handled by event handlers
+                # Separate into singles and albums (grouped_id)
+                albums: dict[int, list] = {}
+                singles = []
+                for msg in sorted(msgs, key=lambda m: m.id):
+                    if _was_forwarded(source_entity.id, msg.id):
+                        continue
+                    if msg.grouped_id:
+                        albums.setdefault(msg.grouped_id, []).append(msg)
+                    else:
+                        singles.append(msg)
+
+                for msg in singles:
+                    try:
+                        await _forward_group([msg], mapping, client, bot, bot_dest_entity, use_test, catchup=True)
+                    except Exception as e:
+                        print(f"  ✗ Catch-up failed msg {msg.id}: {e}", file=sys.stderr)
+
+                for gid, group in albums.items():
+                    try:
+                        await _forward_group(group, mapping, client, bot, bot_dest_entity, use_test, catchup=True)
+                    except Exception as e:
+                        print(f"  ✗ Catch-up failed album {gid}: {e}", file=sys.stderr)
 
             except Exception as e:
                 print(f"  ⊙ {src_label}: probe failed ({str(e)[:40]})")
