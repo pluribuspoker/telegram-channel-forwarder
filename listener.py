@@ -68,7 +68,6 @@ async def connection_watchdog(client):
 
 
 _DB_PATH = os.path.join(os.path.dirname(__file__), "picks.db")
-_forwarded_ids: set[int] = set()
 
 
 def _probe_db_load() -> dict:
@@ -102,8 +101,8 @@ def _probe_db_save(channel_id: int, topic_id, msg_id: int) -> None:
         pass
 
 
-def _forwarded_load() -> set:
-    """Load recently forwarded message IDs from picks.db, pruning entries older than 48h."""
+def _forwarded_init() -> None:
+    """Create the listener_forwarded table if needed and prune entries older than 48h."""
     try:
         conn = sqlite3.connect(_DB_PATH)
         conn.execute(
@@ -113,16 +112,13 @@ def _forwarded_load() -> set:
         cutoff = datetime.datetime.now(datetime.timezone.utc).timestamp() - 48 * 3600
         conn.execute("DELETE FROM listener_forwarded WHERE ts < ?", (cutoff,))
         conn.commit()
-        rows = conn.execute("SELECT msg_id FROM listener_forwarded").fetchall()
         conn.close()
-        return {r[0] for r in rows}
     except Exception:
-        return set()
+        pass
 
 
 def _forwarded_save(msg_id: int, channel_id: int) -> None:
-    """Record a forwarded message ID in both the in-memory set and picks.db."""
-    _forwarded_ids.add(msg_id)
+    """Record a forwarded message ID in picks.db."""
     try:
         conn = sqlite3.connect(_DB_PATH)
         conn.execute(
@@ -133,6 +129,17 @@ def _forwarded_save(msg_id: int, channel_id: int) -> None:
         conn.close()
     except Exception:
         pass
+
+
+def _was_forwarded(msg_id: int) -> bool:
+    """Check if a message was already forwarded."""
+    try:
+        conn = sqlite3.connect(_DB_PATH)
+        row = conn.execute("SELECT 1 FROM listener_forwarded WHERE msg_id = ?", (msg_id,)).fetchone()
+        conn.close()
+        return row is not None
+    except Exception:
+        return False
 
 
 async def _trigger_tracker_soon():
@@ -204,7 +211,7 @@ async def channel_probe(client, bot, channels, use_test):
                 albums: dict[int, list] = {}
                 singles = []
                 for msg in sorted(msgs, key=lambda m: m.id):
-                    if msg.id in _forwarded_ids:
+                    if _was_forwarded(msg.id):
                         continue
                     if msg.grouped_id:
                         albums.setdefault(msg.grouped_id, []).append(msg)
@@ -212,16 +219,12 @@ async def channel_probe(client, bot, channels, use_test):
                         singles.append(msg)
 
                 for msg in singles:
-                    if msg.id in _forwarded_ids:
-                        continue  # re-check in case event handler ran between iterations
                     try:
                         await _forward_group([msg], mapping, client, bot, bot_dest_entity, use_test, catchup=True)
                     except Exception as e:
                         print(f"  ✗ Catch-up failed msg {msg.id}: {e}", file=sys.stderr)
 
                 for gid, group in albums.items():
-                    if any(m.id in _forwarded_ids for m in group):
-                        continue
                     try:
                         await _forward_group(group, mapping, client, bot, bot_dest_entity, use_test, catchup=True)
                     except Exception as e:
@@ -270,9 +273,8 @@ async def main():
         dst_label = getattr(dest_entity, 'title', dest_entity)
         channels.append((source_entity, bot_dest_entity, src_label, dst_label, topic_id, mapping))
 
-    # ── Seed forwarded IDs from DB ─────────────────────────────────────────────
-    global _forwarded_ids
-    _forwarded_ids = _forwarded_load()
+    # ── Init forwarded tracking table ───────────────────────────────────────────
+    _forwarded_init()
 
     # ── Print startup block ───────────────────────────────────────────────────
     print(f"\n{_SEP}")
