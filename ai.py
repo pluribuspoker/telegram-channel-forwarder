@@ -302,10 +302,12 @@ async def build_context(
                 # UFC: show the full card so grader sees all bouts; others: filter to the game
                 display = scoreboard if sport == "UFC" else {"events": [e for e in events if e.get("id") in set(relevant_ids)]}
                 return scoreboard_text(display, sport), date
-            # No completed match — check if game/bout exists but hasn't started/finished yet
-            if find_event_ids(scoreboard.get("events", []), teams, player):
-                return CONTEXT_PENDING, date
-            # No match on exact date — try the previous day (handles "sent late" picks)
+            # No completed match — check if game/bout exists but hasn't started/finished yet.
+            # Before returning PENDING, also check the previous day — a late-night pick
+            # may have its date shifted by one day, and a completed game on prev_date
+            # should take priority over a scheduled game on the given date.
+            has_scheduled = bool(find_event_ids(scoreboard.get("events", []), teams, player))
+            # No match on exact date (or only scheduled) — try the previous day
             prev_date = (_date.fromisoformat(date) - timedelta(days=1)).isoformat()
             prev_sb = await fetch_espn(sport, prev_date)
             if prev_sb:
@@ -317,6 +319,10 @@ async def build_context(
                     return scoreboard_text(display, sport), prev_date
                 if find_event_ids(prev_sb.get("events", []), teams, player):
                     return CONTEXT_PENDING, prev_date
+            # If we found a scheduled game on `date` and prev_date didn't resolve it,
+            # the game genuinely hasn't been played yet.
+            if has_scheduled:
+                return CONTEXT_PENDING, date
             # Scan the next 3 days for a scheduled matchup — always run this so picks posted
             # in multi-day messages (some games done, some future) are found correctly.
             for offset in range(1, 4):
