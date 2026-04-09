@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
-from common import VERDICT_EMOJI
+from common import VERDICT_EMOJI, parlay_combined_odds
 from scores import fetch_espn, odds_requests_used
 from odds import fetch_odds_current, quota_used as odds_quota_used
 from ai import (
@@ -67,6 +67,13 @@ _TAG_ICON = {"WAIT": "⏳", "EDIT": "✏", "DRY ": "🧪", "SKIP": "⚠", "ESPN"
 def _trunc(s: str, w: int) -> str:
     """Truncate string to width w, appending … if trimmed."""
     return s if len(s) <= w else s[:w - 1] + "…"
+
+def _to_bot_html(text: str, entities) -> str:
+    """Convert Telethon message text+entities to Bot API-compatible HTML."""
+    from telethon.extensions import html as tl_html
+    ht = tl_html.unparse(text, entities or [])
+    return ht.replace("<spoiler>", "<tg-spoiler>").replace("</spoiler>", "</tg-spoiler>")
+
 
 async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = None) -> None:
     import datetime as dt
@@ -305,9 +312,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # Edit odds into the message so they appear while PENDING.
                 # Idempotent — _insert_odds won't re-add if tag already present.
                 if not dry_run and any(v.get("odds") is not None for v in odds_by_pick.values()):
-                    from telethon.extensions import html as tl_html
-                    _ht = tl_html.unparse(text, msg.entities or [])
-                    _ht = _ht.replace("<spoiler>", "<tg-spoiler>").replace("</spoiler>", "</tg-spoiler>")
+                    _ht = _to_bot_html(text, msg.entities)
                     _odds_text = _insert_odds(_ht, picks, odds_by_pick)
                     if _odds_text != _ht:
                         await _bot_edit_message(bot_token, channel_id, msg.id, _odds_text, msg.media is not None)
@@ -353,13 +358,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     verdicts.append((pick, verdict, calc, pick_sport, game_date))
 
                 # Build edited text — odds then emoji inserted inline after each pick's line
-                # Convert to HTML to preserve original formatting entities
-                from telethon.extensions import html as tl_html
-                import html as _html
-                html_text = tl_html.unparse(text, msg.entities or [])
-                # Escape any HTML special chars that Telethon may have left as plain text
-                # (unparse already handles this, but sanitise spoiler tag for Bot API)
-                html_text = html_text.replace("<spoiler>", "<tg-spoiler>").replace("</spoiler>", "</tg-spoiler>")
+                html_text = _to_bot_html(text, msg.entities)
                 html_text = _insert_odds(html_text, picks, odds_by_pick)
                 new_text = _insert_emojis(html_text, verdicts)
                 graded = [v for v in verdicts if v[1] in _PICK_EMOJI]
@@ -392,12 +391,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 parlay_combined_str = ""
                 if is_parlay:
                     _leg_odds = [odds_by_pick.get(str(i), {}).get("odds") for i in range(len(verdicts))]
-                    _valid = [o for o in _leg_odds if o is not None]
-                    if _valid and len(_valid) == len(_leg_odds):
-                        _dec = 1.0
-                        for _o in _valid:
-                            _dec *= (_o / 100 + 1) if _o > 0 else (100 / abs(_o) + 1)
-                        _comb = round((_dec - 1) * 100) if _dec >= 2.0 else round(-100 / (_dec - 1))
+                    _comb = parlay_combined_odds(_leg_odds)
+                    if _comb is not None:
                         parlay_combined_str = f"[{'+' if _comb > 0 else ''}{_comb}]"
                 first_active = True
                 for i, (pick, verdict, calc, ps, gd, *_) in enumerate(verdicts):
@@ -493,29 +488,17 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     edited += 1
                 # If some picks are still pending, keep the cache entry (with broadcasted
                 # markers) so we can re-enter this message next run; otherwise evict.
-                still_pending = any(v[1] == "PENDING" for v in verdicts)
-                if still_pending:
-                    new_leg_verdicts = dict(cached_leg_verdicts)
-                    for j, (lpick, lverdict, lcalc, lps, lgd, *_) in enumerate(verdicts):
-                        if lverdict in ("WIN", "LOSS", "PUSH"):
-                            new_leg_verdicts[str(j)] = {
-                                "verdict": lverdict, "calc": lcalc,
-                                "sport": lps, "game_date": lgd or date_str,
-                                "broadcasted": True,   # prevent double-broadcast next run
-                            }
-                    pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
-                else:
-                    # Keep a minimal cache entry with broadcasted=True so subsequent runs
-                    # don't re-broadcast odds for already-graded picks.
-                    new_leg_verdicts = dict(cached_leg_verdicts)
-                    for j, (lpick, lverdict, lcalc, lps, lgd, *_) in enumerate(verdicts):
-                        if lverdict in ("WIN", "LOSS", "PUSH"):
-                            new_leg_verdicts[str(j)] = {
-                                "verdict": lverdict, "calc": lcalc,
-                                "sport": lps, "game_date": lgd or date_str,
-                                "broadcasted": True,
-                            }
-                    pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
+                # Cache resolved legs with broadcasted=True to prevent double-broadcast.
+                # Keep full entry if some picks are still pending; minimal entry otherwise.
+                new_leg_verdicts = dict(cached_leg_verdicts)
+                for j, (lpick, lverdict, lcalc, lps, lgd, *_) in enumerate(verdicts):
+                    if lverdict in ("WIN", "LOSS", "PUSH"):
+                        new_leg_verdicts[str(j)] = {
+                            "verdict": lverdict, "calc": lcalc,
+                            "sport": lps, "game_date": lgd or date_str,
+                            "broadcasted": True,
+                        }
+                pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
                 all_descs = "\n".join(
                     f"{v[1]}: {v[0].get('description', '')}|{v[3]}|{v[4]}|{v[2]}" for v in verdicts if v[1] in _PICK_EMOJI
                 )

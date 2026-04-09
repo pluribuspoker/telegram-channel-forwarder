@@ -2,11 +2,25 @@ import re
 
 import httpx
 
-from common import VERDICT_EMOJI
+from common import VERDICT_EMOJI, parlay_combined_odds
 from tracker_grading import _overall_verdict
 
 _PICK_EMOJI = {k: v for k, v in VERDICT_EMOJI.items() if k in ("WIN", "LOSS", "PUSH")}
 _ODDS_TAG_RE = re.compile(r'\s*\[[+-]\d{3,4}[^\]]*\]')
+
+
+def _pick_search_terms(pick: dict) -> list[str]:
+    """Build lowercase search terms from a pick's teams/player fields."""
+    player = pick.get("player") or ""
+    teams = pick.get("teams") or []
+    identifiers = [player] if player else teams
+    terms: list[str] = []
+    for t in identifiers:
+        tl = t.lower().strip()
+        if tl:
+            terms.append(tl)
+            terms.extend(w for w in tl.split() if len(w) > 3)
+    return terms
 
 
 def msg_plain_text(msg: dict) -> str:
@@ -69,15 +83,7 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
         for pick, _verdict, _calc, _sport, *_ in verdicts:
             if not pick.get("is_parlay_leg"):
                 continue
-            teams  = pick.get("teams") or []
-            player = pick.get("player") or ""
-            identifiers = [player] if player else teams
-            search_terms: list[str] = []
-            for t in identifiers:
-                tl = t.lower().strip()
-                if tl:
-                    search_terms.append(tl)
-                    search_terms.extend(w for w in tl.split() if len(w) > 3)
+            search_terms = _pick_search_terms(pick)
             for i, line in enumerate(lines):
                 if any(term in line.lower() for term in search_terms):
                     last_idx = max(last_idx, i)
@@ -94,18 +100,7 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
         if not emoji:
             continue  # UNKNOWN / PENDING — leave line alone
 
-        teams  = pick.get("teams") or []
-        player = pick.get("player") or ""
-        # For player props, search by player name only — team names appear as game
-        # headers (e.g. "Pirates / Mets:") and would match the wrong line.
-        # For team bets, search by team names.
-        identifiers = [player] if player else teams
-        search_terms: list[str] = []
-        for t in identifiers:
-            tl = t.lower().strip()
-            if tl:
-                search_terms.append(tl)
-                search_terms.extend(w for w in tl.split() if len(w) > 3)
+        search_terms = _pick_search_terms(pick)
 
         for i, line in enumerate(lines):
             if any(ch in line for ch in _PICK_EMOJI.values()):
@@ -144,13 +139,9 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     """
     if any(p.get("is_parlay_leg") for p in picks):
         _leg_odds = [odds_by_pick.get(str(i), {}).get("odds") for i in range(len(picks))]
-        _valid = [o for o in _leg_odds if o is not None]
-        if len(_valid) != len(_leg_odds):
+        _comb = parlay_combined_odds(_leg_odds)
+        if _comb is None:
             return text  # partial odds — don't show misleading combined price
-        _dec = 1.0
-        for _o in _valid:
-            _dec *= (_o / 100 + 1) if _o > 0 else (100 / abs(_o) + 1)
-        _comb = round((_dec - 1) * 100) if _dec >= 2.0 else round(-100 / (_dec - 1))
         combined_tag = f" [{'+' if _comb > 0 else ''}{_comb}]"
         lines = text.rstrip().split("\n")
         for j, line in enumerate(lines):
@@ -183,15 +174,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         else:
             odds_tag = f" [{_fmt(odds_val)}]"
 
-        teams  = pick.get("teams") or []
-        player = pick.get("player") or ""
-        identifiers = [player] if player else teams
-        search_terms: list[str] = []
-        for t in identifiers:
-            tl = t.lower().strip()
-            if tl:
-                search_terms.append(tl)
-                search_terms.extend(w for w in tl.split() if len(w) > 3)
+        search_terms = _pick_search_terms(pick)
 
         # Try description first: more specific than team/player fragments and avoids
         # false matches on game-info header lines (e.g. "Defenders @ Aviators / 8:00 PM").
@@ -220,6 +203,9 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         # Third fallback: strip team/player names from desc and search for the remainder.
         # Catches abbreviations like "Dbacks ML (2 units)" when AI parsed "Arizona Diamondbacks ML".
         if not desc_matched and desc:
+            player = pick.get("player") or ""
+            teams = pick.get("teams") or []
+            identifiers = [player] if player else teams
             team_words = set()
             for t in identifiers:
                 for w in t.lower().split():

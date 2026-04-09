@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from common import VERDICT_EMOJI, is_regulation_ml
+from common import VERDICT_EMOJI, is_regulation_ml, parlay_combined_odds
 
 
 def _clean_desc(desc: str) -> str:
@@ -371,15 +371,7 @@ class AuditLog:
             odds_part = f" [{e(odds_str)}]" if odds_str else ""
             return f"{VERDICT_EMOJI.get(verdict, '')} {e(desc)}{odds_part}"
 
-        def _parlay_combined_odds(leg_odds: list[int | None]) -> int | None:
-            """Multiply individual American leg odds into a combined parlay price."""
-            valid = [o for o in leg_odds if o is not None]
-            if len(valid) != len(leg_odds):
-                return None
-            dec = 1.0
-            for o in valid:
-                dec *= (o / 100 + 1) if o > 0 else (100 / abs(o) + 1)
-            return round((dec - 1) * 100) if dec >= 2.0 else round(-100 / (dec - 1))
+        _parlay_combined_odds = parlay_combined_odds
 
         def _overall_emoji(verdicts_only: list[str]) -> str:
             if "LOSS" in verdicts_only:

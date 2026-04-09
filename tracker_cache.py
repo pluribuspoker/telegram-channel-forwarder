@@ -1,8 +1,10 @@
 import json
 import os
 import re
+from datetime import datetime, timedelta, timezone
 
 _PENDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "parse_cache.json")
+_EVICT_AFTER_DAYS = 14
 
 
 def _norm_desc(d: str) -> str:
@@ -64,5 +66,52 @@ def _load_pending_cache() -> dict:
 
 
 def _save_pending_cache(cache: dict) -> None:
+    _evict_stale(cache)
     with open(_PENDING_CACHE_PATH, "w") as f:
         json.dump(cache, f)
+
+
+def _evict_stale(cache: dict) -> None:
+    """Remove entries that are fully resolved and older than _EVICT_AFTER_DAYS.
+
+    Only evicts:
+      - Fully resolved entries (all legs WIN/LOSS/PUSH) whose newest game_date is old
+      - _dupe / _failed markers whose primary entry has already been evicted
+      - Non-dict entries (corrupt)
+    """
+    stale_keys = []
+    for key, entry in cache.items():
+        if not isinstance(entry, dict):
+            stale_keys.append(key)
+            continue
+        # _dupe markers: only evict if the primary entry is gone
+        if entry.get("_dupe"):
+            primary_key = f"{key.split(':')[0]}:{entry.get('primary_id', '')}"
+            if primary_key not in cache:
+                stale_keys.append(key)
+            continue
+        # _failed markers: skip — they're cheap and prevent re-notifying audit
+        if entry.get("_failed"):
+            continue
+        leg_verdicts = entry.get("leg_verdicts", {})
+        if not leg_verdicts:
+            continue
+        # Keep entries that still have unresolved legs
+        all_resolved = all(
+            isinstance(v, dict) and v.get("verdict") in ("WIN", "LOSS", "PUSH")
+            for v in leg_verdicts.values()
+        )
+        if not all_resolved:
+            continue
+        # Check age: use the most recent game_date among legs
+        dates = [v.get("game_date", "") for v in leg_verdicts.values() if isinstance(v, dict)]
+        if not dates:
+            continue
+        try:
+            newest = max(datetime.fromisoformat(d) for d in dates if d)
+            if datetime.now() - newest > timedelta(days=_EVICT_AFTER_DAYS):
+                stale_keys.append(key)
+        except (ValueError, TypeError):
+            pass
+    for key in stale_keys:
+        del cache[key]

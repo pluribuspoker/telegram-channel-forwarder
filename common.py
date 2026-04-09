@@ -8,10 +8,19 @@ import copy
 import re
 import sys
 
-import anthropic
 from telethon.tl.types import MessageEntityBlockquote, MessageMediaDocument, MessageMediaPhoto
 
-_anth_client = None
+
+def parlay_combined_odds(leg_odds: list[int | None]) -> int | None:
+    """Multiply individual American leg odds into a combined parlay price.
+    Returns None if any leg is missing odds."""
+    valid = [o for o in leg_odds if o is not None]
+    if not valid or len(valid) != len(leg_odds):
+        return None
+    dec = 1.0
+    for o in valid:
+        dec *= (o / 100 + 1) if o > 0 else (100 / abs(o) + 1)
+    return round((dec - 1) * 100) if dec >= 2.0 else round(-100 / (dec - 1))
 
 VERDICT_EMOJI = {
     "WIN":     "✅",
@@ -36,10 +45,8 @@ def is_regulation_ml(description: str) -> bool:
 
 
 def _anthropic():
-    global _anth_client
-    if _anth_client is None:
-        _anth_client = anthropic.AsyncAnthropic()  # reads ANTHROPIC_API_KEY from env
-    return _anth_client
+    from ai import claude
+    return claude()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
