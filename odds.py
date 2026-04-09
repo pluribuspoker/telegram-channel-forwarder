@@ -252,11 +252,16 @@ def _init_db(conn: sqlite3.Connection) -> None:
 
 
 def _evict_old(conn: sqlite3.Connection) -> None:
+    # fetched_at is stored as ISO 8601 ('2026-04-09T01:14:58.447536+00:00') while
+    # datetime('now', ...) returns 'YYYY-MM-DD HH:MM:SS'. A raw string compare puts
+    # same-day ISO rows *after* the datetime() value because 'T' (0x54) > ' ' (0x20),
+    # so TTL eviction silently fails within a UTC day. Wrap both sides in datetime()
+    # to force a normalized comparison.
     conn.execute("DELETE FROM odds_cache   WHERE game_date != 'current' AND game_date != 'live' AND game_date < date('now', '-60 days')")
-    conn.execute("DELETE FROM odds_cache   WHERE game_date  = 'current' AND fetched_at < datetime('now', '-2 days')")
-    conn.execute("DELETE FROM odds_cache   WHERE game_date  = 'live'    AND fetched_at < datetime('now', '-5 minutes')")
+    conn.execute("DELETE FROM odds_cache   WHERE game_date  = 'current' AND datetime(fetched_at) < datetime('now', '-2 days')")
+    conn.execute("DELETE FROM odds_cache   WHERE game_date  = 'live'    AND datetime(fetched_at) < datetime('now', '-5 minutes')")
     conn.execute("DELETE FROM events_cache WHERE game_date != 'current' AND game_date < date('now', '-60 days')")
-    conn.execute("DELETE FROM events_cache WHERE game_date  = 'current' AND fetched_at < datetime('now', '-30 minutes')")
+    conn.execute("DELETE FROM events_cache WHERE game_date  = 'current' AND datetime(fetched_at) < datetime('now', '-30 minutes')")
     conn.commit()
 
 
