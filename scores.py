@@ -403,6 +403,37 @@ def box_score_text(summary: dict, player_hint: str = "") -> str:
 # e.g., "Iowa" should not match "Iowa State Cyclones" because "State" follows "Iowa".
 _QUALIFIERS = {"state", "tech", "a&m", "am", "international", "st"}  # "st" = abbrev for State/Saint disambiguation
 
+# Common abbreviations / short names → canonical long form used by the Odds API.
+# Both keys and values must be **lowercase**.
+_TEAM_ALIASES: dict[str, str] = {
+    "okc":           "oklahoma city",
+    "okc thunder":   "oklahoma city thunder",
+    "philly":        "philadelphia",
+    "nola":          "new orleans",
+    "nola pelicans": "new orleans pelicans",
+    "ny knicks":     "new york knicks",
+    "ny mets":       "new york mets",
+    "ny yankees":    "new york yankees",
+    "ny jets":       "new york jets",
+    "ny giants":     "new york giants",
+    "la lakers":     "los angeles lakers",
+    "la clippers":   "los angeles clippers",
+    "la dodgers":    "los angeles dodgers",
+    "la angels":     "los angeles angels",
+    "la rams":       "los angeles rams",
+    "la chargers":   "los angeles chargers",
+    "la galaxy":     "la galaxy",
+    "sf giants":     "san francisco giants",
+    "sf 49ers":      "san francisco 49ers",
+    "tb bucs":       "tampa bay buccaneers",
+    "tb rays":       "tampa bay rays",
+    "tb lightning":  "tampa bay lightning",
+    "kc chiefs":     "kansas city chiefs",
+    "kc royals":     "kansas city royals",
+    "gb packers":    "green bay packers",
+    "ne patriots":   "new england patriots",
+}
+
 
 def _team_matches(term: str, team_name: str) -> bool:
     """Return True if term matches team_name, avoiding ambiguous prefix matches.
@@ -412,6 +443,8 @@ def _team_matches(term: str, team_name: str) -> bool:
     """
     t = term.lower().strip()
     n = team_name.lower().strip()
+    # Expand common abbreviations before matching
+    t = _TEAM_ALIASES.get(t, t)
     if not t or not n:
         return False
     t_words = t.split()
