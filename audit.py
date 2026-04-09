@@ -416,18 +416,38 @@ class AuditLog:
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
+            # If reply_to_id points to a message the bot can't resolve (e.g. the
+            # auto-forwarded discussion copy ended up in a state where Bot API
+            # returns "message to be replied not found"), Telegram will still
+            # post the broadcast — just without the reply thread — instead of
+            # dropping the whole request. Without this flag the sendMessage
+            # returns 400 and the result silently never posts.
+            "allow_sending_without_reply": True,
         }
         if reply_to_id is not None:
             payload["reply_to_message_id"] = reply_to_id
 
         try:
             async with httpx.AsyncClient(timeout=10) as http:
-                await http.post(
+                r = await http.post(
                     f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
                     json=payload,
                 )
+            if not r.is_success:
+                snippet = r.text[:300]
+                print(f"[broadcast_results] Telegram post failed: {r.status_code} {snippet}")
+                await self.warn(
+                    f"⚠ <b>broadcast_results failed</b> [{r.status_code}]\n"
+                    f"{e(snippet)}\n"
+                    f'<a href="{link}">view pick</a>'
+                )
         except Exception as exc:
             print(f"[broadcast_results] Telegram post failed: {exc}")
+            await self.warn(
+                f"⚠ <b>broadcast_results exception</b>\n"
+                f"{e(str(exc)[:300])}\n"
+                f'<a href="{link}">view pick</a>'
+            )
 
 
 def log_api_costs(run_type: str, claude_cost: float, odds_requests: int, db_path: str = DB_PATH) -> None:
