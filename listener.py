@@ -189,7 +189,7 @@ async def channel_probe(client, bot, channels, use_test):
     await asyncio.sleep(60)
     last_seen: dict = _probe_db_load()
     while True:
-        await asyncio.sleep(300)
+        await asyncio.sleep(60)
         for source_entity, bot_dest_entity, src_label, _, topic_id, mapping in channels:
             try:
                 probe_key = (source_entity.id, topic_id or 0)
