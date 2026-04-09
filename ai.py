@@ -59,7 +59,7 @@ Return JSON (no markdown fences):
       "bet_type": "spread|moneyline|total|team_total|prop",
       "is_parlay_leg": false,
       "period": "game|1h|2h|1q|2q|3q|4q",
-      "teams": ["Team or player name(s) in the bet"],
+      "teams": ["Full canonical team name(s) — e.g. 'Oklahoma City Thunder' not 'OKC Thunder', 'Los Angeles Lakers' not 'LA Lakers'"],
       "player": "player name if this is a player prop, else null",
       "prop_stat": "stat abbrev if prop (e.g. PTS, REB, AST, PTS+REB, HITS), else null",
       "line": <number or null>,
