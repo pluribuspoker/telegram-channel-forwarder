@@ -422,27 +422,43 @@ def _collect_outcomes(
 
 
 def _find_event_id(event_list: list[dict], teams: list[str]) -> str | None:
+    """Pick the event that best matches the pick's teams list.
+
+    Scoring (lower is better):
+      1. -(# of distinct pick teams that match this event)  — an event matching
+         both teams always beats an event matching only one. This prevents a
+         mis-parsed opponent from hijacking the lookup to a different game.
+      2. first_team_miss (0 if the first team in the pick matches, else 1) —
+         the first team is typically the subject of the bet, so we prefer it
+         when no event matches both teams.
+      3. started (0 = not yet started, 1 = already started) — prefer upcoming
+         over completed games at the same time.
+      4. proximity to now.
+    """
     now = datetime.now(timezone.utc)
-    scored: list[tuple[tuple[int, int, float], str]] = []
-    for term in teams:
-        t_lower = term.lower()
-        for event in event_list:
-            home = event.get("home_team", "")
-            away = event.get("away_team", "")
-            for side in (home, away):
-                if _team_matches(t_lower, side.lower()):
-                    # Prefer not-yet-started events (0) over already-started (1)
-                    ct = event.get("commence_time", "")
-                    try:
-                        commence = datetime.fromisoformat(ct.replace("Z", "+00:00"))
-                        started = 1 if commence < now else 0
-                        # Among not-started: prefer soonest; among started: prefer most recent
-                        proximity = abs((commence - now).total_seconds())
-                    except (ValueError, AttributeError):
-                        started = 1
-                        proximity = float("inf")
-                    scored.append(((started, -len(side), proximity), event["id"]))
-                    break
+    teams_lower = [t.lower() for t in teams]
+    scored: list[tuple[tuple[int, int, int, float], str]] = []
+    for event in event_list:
+        home = event.get("home_team", "")
+        away = event.get("away_team", "")
+        sides = [home.lower(), away.lower()]
+        matched_idxs = [
+            i for i, t in enumerate(teams_lower)
+            if any(_team_matches(t, s) for s in sides)
+        ]
+        if not matched_idxs:
+            continue
+        ct = event.get("commence_time", "")
+        try:
+            commence = datetime.fromisoformat(ct.replace("Z", "+00:00"))
+            started = 1 if commence < now else 0
+            proximity = abs((commence - now).total_seconds())
+        except (ValueError, AttributeError):
+            started = 1
+            proximity = float("inf")
+        match_count = len(matched_idxs)
+        first_team_miss = 0 if 0 in matched_idxs else 1
+        scored.append(((-match_count, first_team_miss, started, proximity), event["id"]))
     if not scored:
         return None
     scored.sort(key=lambda x: x[0])
