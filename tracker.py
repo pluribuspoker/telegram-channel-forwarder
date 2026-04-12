@@ -354,6 +354,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             verdict, calc = await claude_grade(
                                 pick.get("description", text[:80]), date_str, context,
                                 pick.get("bet_type", ""),
+                                pick.get("prop_stat") or "",
                             )
                     verdicts.append((pick, verdict, calc, pick_sport, game_date))
 
@@ -603,7 +604,7 @@ async def grade_one(text: str, date: str) -> None:
         print()
 
         if context != CONTEXT_SKIP:
-            grade, calc = await claude_grade(pick_desc, date, context, pick.get("bet_type", ""))
+            grade, calc = await claude_grade(pick_desc, date, context, pick.get("bet_type", ""), pick.get("prop_stat") or "")
             print(f"  GRADE : {grade}")
             print(f"  CALC  : {calc}")
         else:

@@ -175,7 +175,7 @@ async def run_backtest(filepath: str) -> None:
             elif context == CONTEXT_PENDING:
                 grade, calc = "PENDING", ""
             else:
-                grade, calc = await claude_grade(pick_desc, date, context, bet_type)
+                grade, calc = await claude_grade(pick_desc, date, context, bet_type, pick.get("prop_stat") or "")
 
             correct = grade_matches_label(grade, label)
             skipped = grade in ("PUSH", "UNKNOWN")

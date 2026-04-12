@@ -385,8 +385,9 @@ def box_score_text(summary: dict, player_hint: str = "") -> str:
                 stats = dict(zip(keys, stats_raw))
 
                 # Basketball stat line
-                bball_keys = ["points", "rebounds", "assists", "steals", "blocks"]
-                bball = [f"{k[:3].upper()}={stats[k]}" for k in bball_keys if k in stats]
+                bball_map = {"points": "PTS", "rebounds": "REB", "assists": "AST",
+                             "steals": "STL", "blocks": "BLK"}
+                bball = [f"{abbr}={stats[k]}" for k, abbr in bball_map.items() if k in stats]
 
                 # Baseball stat line
                 bball2_keys = ["hits", "atBats", "runs", "RBIs", "homeRuns", "walks"]

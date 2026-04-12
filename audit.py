@@ -343,9 +343,9 @@ class AuditLog:
         if not target or not self.bot_token:
             return
 
-        # Only keep resolved picks; require at least one WIN or LOSS to broadcast
+        # Keep resolved picks (WIN/LOSS/PUSH) and broadcast if any are present
         resolved = [(p, v, o) for p, v, o in pick_results if v in ("WIN", "LOSS", "PUSH")]
-        if not any(v in ("WIN", "LOSS") for _, v, _ in resolved):
+        if not resolved:
             return
 
         import html as _html

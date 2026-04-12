@@ -59,7 +59,7 @@ Return JSON (no markdown fences):
       "bet_type": "spread|moneyline|total|team_total|prop",
       "is_parlay_leg": false,
       "period": "game|1h|2h|1q|2q|3q|4q",
-      "teams": ["Full canonical team/player name(s) — e.g. 'Oklahoma City Thunder' not 'OKC Thunder', 'Los Angeles Lakers' not 'LA Lakers'"],
+      "teams": ["Full canonical team/player name(s) — e.g. 'Oklahoma City Thunder' not 'OKC Thunder', 'Los Angeles Lakers' not 'LA Lakers'. For player props, this MUST contain the player's current team (e.g. Evan Mobley PRA → teams: ['Cleveland Cavaliers']) so the game can be located — never leave empty for a player prop."],
       "player": "player name if this is a player prop, else null",
       "prop_stat": "stat abbrev if prop (e.g. PTS, REB, AST, PTS+REB, HITS), else null",
       "line": <number or null>,
@@ -86,7 +86,7 @@ Message:
 _GRADE_PROMPT = """\
 Grade this sports betting pick. Show your calculation, then give the verdict.
 
-Pick: {pick}
+Pick: {pick}{prop_stat_line}
 Date: {date}
 
 Game data:
@@ -101,7 +101,7 @@ Rules by bet type:
 - NHL regulation/3-way moneyline (pick description contains "3-way", "60 min", "regulation", "reg ML", etc.): team must win in REGULATION only. If the score data shows OT=1 (or any OT column with a non-zero value), or P4 or more periods, the game went to overtime — the pick is a LOSS regardless of who won in OT.
 - Total over/under (bet_type=total): ALWAYS add BOTH teams' scores regardless of how the pick is worded. score_A + score_B = combined. Compare combined to line. Even "Drake 1H Over 62.5" means the whole game's H1 combined, not just Drake's score — because bet_type is total, not team_total.
 - Team total (bet_type=team_total, e.g. "Hornets team total over 117.5"): use ONLY the named team's score, not combined.
-- Player prop: add the player's listed stats. Compare to line.
+- Player prop (bet_type=prop): sum ONLY the stats explicitly named in the "Prop stat:" field. Do NOT include any other stats shown in the box score. Stat abbreviations decompose on '+' and '/'. Basketball: PTS=points, REB=rebounds, AST=assists, STL=steals, BLK=blocks, 3PM/3PT=three pointers, TO/TOV=turnovers. Baseball: H/HITS=hits, HR=homeRuns, R=runs, RBI=RBIs, BB=walks, AB=atBats. Examples: "PTS+REB+AST" → add ONLY PTS+REB+AST (ignore STL/BLK even if shown); "PRA" → PTS+REB+AST; "PR" → PTS+REB; "P+A" → PTS+AST. Show each component number in calc, e.g. "PTS(10)+REB(6)+AST(1)=17 vs 29.5".
 - Period bets (1H, 1Q, 2H): use ONLY the scores for that period shown in the data.
 - UFC/MMA: use LAST NAME matching if the full name doesn't exactly match. "Alex Sola" matches "Axel Sola".
 - Boxing/UFC moneyline: fighter wins the bout → WIN. Loses → LOSS. Scores may show "W"/"L" or numeric points — use winner field or highest score. Draw or No Contest → PUSH.
@@ -179,14 +179,15 @@ async def claude_parse(text: str, date: str | None = None) -> dict | None:
     return parsed
 
 
-async def claude_grade(pick_desc: str, date: str, context: str, bet_type: str = "") -> tuple[str, str]:
+async def claude_grade(pick_desc: str, date: str, context: str, bet_type: str = "", prop_stat: str = "") -> tuple[str, str]:
     """Returns (verdict, calc)."""
+    prop_stat_line = f"\nProp stat: {prop_stat}" if prop_stat else ""
     resp = await _claude_create_with_retry(
         model="claude-sonnet-4-6",
         max_tokens=150,
         messages=[{
             "role": "user",
-            "content": _GRADE_PROMPT.format(pick=pick_desc, date=date, context=context),
+            "content": _GRADE_PROMPT.format(pick=pick_desc, date=date, context=context, prop_stat_line=prop_stat_line),
         }],
     )
     raw = resp.content[0].text.strip()
