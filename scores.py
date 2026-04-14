@@ -554,6 +554,200 @@ def _ufc_bout_completed(data: dict, teams: list[str], player: str = "") -> bool:
     return False
 
 
+# ─── Early grading (mid-game) ────────────────────────────────────────────────
+
+# Maps (sport, period_code) → list of 1-based ESPN period indices.
+_QUARTER_PERIODS = {"1h": [1, 2], "2h": [3, 4], "1q": [1], "2q": [2], "3q": [3], "4q": [4]}
+_BASEBALL_PERIODS = {"1h": [1, 2, 3, 4, 5], "2h": [6, 7, 8, 9]}
+
+PERIOD_MAP: dict[tuple[str, str], list[int]] = {
+    **{(s, p): v for s in ("NBA", "NCAAB", "NFL", "NCAAF", "UFL") for p, v in _QUARTER_PERIODS.items()},
+    **{(s, p): v for s in ("MLB", "KBO") for p, v in _BASEBALL_PERIODS.items()},
+    ("NHL", "1h"): [1],
+}
+
+
+def _find_event_for_pick(
+    scoreboard: dict, teams: list[str], player: str = "",
+) -> dict | None:
+    """Find the event matching teams/player in scoreboard data (any state)."""
+    events = scoreboard.get("events", [])
+    ids = find_event_ids(events, teams, player)
+    if not ids:
+        return None
+    target_id = ids[0]
+    for e in events:
+        if e.get("id") == target_id:
+            return e
+    return None
+
+
+def _extract_period_scores(
+    event: dict, sport: str, period: str,
+) -> tuple[str, float, str, float] | None:
+    """Extract (away_name, away_score, home_name, home_score) for the given period.
+
+    For period='game', uses the competitor total score.
+    For specific periods, sums the relevant linescores.
+    Returns None if data is insufficient.
+    """
+    comp = event.get("competitions", [{}])[0]
+    by_side = {c.get("homeAway"): c for c in comp.get("competitors", [])}
+    away = by_side.get("away", {})
+    home = by_side.get("home", {})
+    away_name = away.get("team", {}).get("displayName", "")
+    home_name = home.get("team", {}).get("displayName", "")
+
+    if period == "game":
+        try:
+            return (away_name, float(away.get("score", 0)),
+                    home_name, float(home.get("score", 0)))
+        except (ValueError, TypeError):
+            return None
+
+    period_indices = PERIOD_MAP.get((sport, period))
+    if not period_indices:
+        return None
+
+    away_ls = away.get("linescores", [])
+    home_ls = home.get("linescores", [])
+    # Need data for all requested periods (1-based → 0-based index)
+    max_needed = max(period_indices)
+    if len(away_ls) < max_needed or len(home_ls) < max_needed:
+        return None
+
+    try:
+        away_score = sum(float(away_ls[p - 1].get("value", 0)) for p in period_indices)
+        home_score = sum(float(home_ls[p - 1].get("value", 0)) for p in period_indices)
+        return (away_name, away_score, home_name, home_score)
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_period_complete(event: dict, sport: str, period: str) -> bool:
+    """Return True if all periods in the bet's range are already finished."""
+    period_indices = PERIOD_MAP.get((sport, period))
+    if not period_indices:
+        return False
+    current_period = event.get("status", {}).get("period", 0)
+    return current_period > max(period_indices)
+
+
+def try_early_grade_math(
+    sport: str, pick: dict, scoreboard: dict | None,
+) -> tuple[str, str] | None:
+    """Grade a total/team_total pick early if the score already exceeds the line.
+
+    Returns (verdict, calc) or None if the outcome isn't determined yet.
+    """
+    if not scoreboard:
+        return None
+
+    bet_type = pick.get("bet_type", "")
+    if bet_type not in ("total", "team_total"):
+        return None
+
+    direction = pick.get("direction")
+    line = pick.get("line")
+    if line is None or direction not in ("over", "under"):
+        return None
+
+    teams = pick.get("teams", [])
+    player = pick.get("player", "")
+    period = pick.get("period", "game")
+
+    event = _find_event_for_pick(scoreboard, teams, player)
+    if not event:
+        return None
+
+    state = event.get("status", {}).get("type", {}).get("state", "")
+    if state != "in":  # only for in-progress games
+        return None
+
+    scores = _extract_period_scores(event, sport, period)
+    if scores is None:
+        return None
+
+    away_name, away_score, home_name, home_score = scores
+    period_tag = f" {period.upper()}" if period != "game" else ""
+
+    if bet_type == "total":
+        combined = away_score + home_score
+        if combined > line:
+            calc = f"[mid-game] {away_score:g}+{home_score:g}={combined:g} vs {line}{period_tag}"
+            return ("WIN", calc) if direction == "over" else ("LOSS", calc)
+
+    elif bet_type == "team_total":
+        team_name = teams[0] if teams else ""
+        if _team_matches(team_name.lower(), away_name.lower()):
+            team_score, used_name = away_score, away_name
+        elif _team_matches(team_name.lower(), home_name.lower()):
+            team_score, used_name = home_score, home_name
+        else:
+            return None
+        if team_score > line:
+            calc = f"[mid-game] {used_name} {team_score:g} vs {line}{period_tag}"
+            return ("WIN", calc) if direction == "over" else ("LOSS", calc)
+
+    return None
+
+
+def build_early_context(
+    sport: str, pick: dict, scoreboard: dict | None,
+) -> str | None:
+    """For period bets where the period is complete but the game is still going,
+    format scores as context for Claude grading.
+
+    Handles spread/moneyline period bets (totals are handled by try_early_grade_math).
+    Returns context string or None.
+    """
+    if not scoreboard:
+        return None
+
+    period = pick.get("period", "game")
+    if period == "game":
+        return None
+
+    teams = pick.get("teams", [])
+    player = pick.get("player", "")
+
+    event = _find_event_for_pick(scoreboard, teams, player)
+    if not event:
+        return None
+
+    state = event.get("status", {}).get("type", {}).get("state", "")
+    if state != "in":
+        return None
+
+    if not _is_period_complete(event, sport, period):
+        return None
+
+    period_indices = PERIOD_MAP.get((sport, period))
+    if not period_indices:
+        return None
+
+    comp = event.get("competitions", [{}])[0]
+    by_side = {c.get("homeAway"): c for c in comp.get("competitors", [])}
+    period_label = period.upper()
+
+    lines = [f"[{period_label} final — game still in progress]"]
+    for side in ("away", "home"):
+        c = by_side.get(side, {})
+        name = c.get("team", {}).get("displayName", "?")
+        ls = c.get("linescores", [])
+        max_needed = max(period_indices)
+        if len(ls) < max_needed:
+            return None
+        parts = [f"P{p}={ls[p - 1].get('displayValue', '?')}" for p in period_indices]
+        try:
+            total = sum(float(ls[p - 1].get("value", 0)) for p in period_indices)
+        except (ValueError, TypeError):
+            return None
+        lines.append(f"{name}: {' '.join(parts)} | {period_label}={total:g}")
+
+    return "\n".join(lines)
+
+
 def extract_espn_bookmaker(competition: dict) -> dict | None:
     """Convert ESPN competition.odds[0] into a single Odds-API-style bookmaker dict.
 

@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 from common import VERDICT_EMOJI, parlay_combined_odds
-from scores import fetch_espn, odds_requests_used
+from scores import fetch_espn, odds_requests_used, try_early_grade_math, build_early_context
 from odds import fetch_odds_current, quota_used as odds_quota_used
 from ai import (
     claude_parse,
@@ -340,22 +340,35 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         ps_key = (pick_sport, date_str)
                         if ps_key not in scoreboard_cache:
                             scoreboard_cache[ps_key] = await fetch_espn(pick_sport, date_str)
-                        context, game_date = await build_context(
-                            pick_sport, date_str, pick,
-                            scoreboard_cache[ps_key], summary_cache,
-                        )
-                        if context in (CONTEXT_ESPN_ERROR, CONTEXT_PENDING):
-                            if context == CONTEXT_ESPN_ERROR:
-                                has_espn_error = True
-                            verdict, calc = "PENDING", ""
-                        elif context == CONTEXT_SKIP:
-                            verdict, calc = "UNKNOWN", ""
+                        sb = scoreboard_cache[ps_key]
+
+                        # Early grade: totals where score already exceeds the line
+                        early = try_early_grade_math(pick_sport, pick, sb)
+                        if early:
+                            verdict, calc = early
+                            game_date = date_str
                         else:
-                            verdict, calc = await claude_grade(
-                                pick.get("description", text[:80]), date_str, context,
-                                pick.get("bet_type", ""),
-                                pick.get("prop_stat") or "",
-                            )
+                            # Early context: period bets where the period is complete
+                            early_ctx = build_early_context(pick_sport, pick, sb)
+                            if early_ctx:
+                                context, game_date = early_ctx, date_str
+                            else:
+                                context, game_date = await build_context(
+                                    pick_sport, date_str, pick, sb, summary_cache,
+                                )
+
+                            if context in (CONTEXT_ESPN_ERROR, CONTEXT_PENDING):
+                                if context == CONTEXT_ESPN_ERROR:
+                                    has_espn_error = True
+                                verdict, calc = "PENDING", ""
+                            elif context == CONTEXT_SKIP:
+                                verdict, calc = "UNKNOWN", ""
+                            else:
+                                verdict, calc = await claude_grade(
+                                    pick.get("description", text[:80]), date_str, context,
+                                    pick.get("bet_type", ""),
+                                    pick.get("prop_stat") or "",
+                                )
                     verdicts.append((pick, verdict, calc, pick_sport, game_date))
 
                 # Build edited text — odds then emoji inserted inline after each pick's line
@@ -593,23 +606,36 @@ async def grade_one(text: str, date: str) -> None:
               f"  line={pick.get('line')}  dir={pick.get('direction')}"
               f"  parlay_leg={pick.get('is_parlay_leg', False)}")
 
-        context, _game_date = await build_context(pick_sport, date, pick, scoreboard, summary_cache)
-        print()
-        print("  CONTEXT:")
-        if context == CONTEXT_SKIP:
-            print("    [skipped]")
-        else:
-            for ln in context.splitlines():
-                print(f"    {ln}")
-        print()
-
-        if context != CONTEXT_SKIP:
-            grade, calc = await claude_grade(pick_desc, date, context, pick.get("bet_type", ""), pick.get("prop_stat") or "")
-            print(f"  GRADE : {grade}")
+        # Try pure-math early grade first
+        early = try_early_grade_math(pick_sport, pick, scoreboard)
+        if early:
+            grade, calc = early
+            print()
+            print(f"  EARLY : {grade}")
             print(f"  CALC  : {calc}")
         else:
-            grade = "UNKNOWN"
-            print(f"  GRADE : UNKNOWN (skipped)")
+            # Try period-complete early context
+            early_ctx = build_early_context(pick_sport, pick, scoreboard)
+            if early_ctx:
+                context, _game_date = early_ctx, date
+            else:
+                context, _game_date = await build_context(pick_sport, date, pick, scoreboard, summary_cache)
+            print()
+            print("  CONTEXT:")
+            if context == CONTEXT_SKIP:
+                print("    [skipped]")
+            else:
+                for ln in context.splitlines():
+                    print(f"    {ln}")
+            print()
+
+            if context != CONTEXT_SKIP:
+                grade, calc = await claude_grade(pick_desc, date, context, pick.get("bet_type", ""), pick.get("prop_stat") or "")
+                print(f"  GRADE : {grade}")
+                print(f"  CALC  : {calc}")
+            else:
+                grade = "UNKNOWN"
+                print(f"  GRADE : UNKNOWN (skipped)")
 
         if label:
             correct = grade_matches_label(grade, label)
