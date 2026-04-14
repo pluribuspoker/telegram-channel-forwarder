@@ -75,6 +75,7 @@ Classification rules:
 - Tennis: ONLY classify as Tennis if the message contains explicit Tennis indicators — tournament names (Open, Slam, ATP, WTA, Masters, Wimbledon), match format words (sets, tiebreak, deuce), court surfaces, or well-known tennis players (Djokovic, Alcaraz, Sinner, Swiatek, Sabalenka, Medvedev, Zverev, Rune, etc.). Do NOT classify as Tennis based solely on a person's surname.
 - Boxing: if the pick involves known professional boxers (e.g. Ryan Garcia, Canelo, Fury, Usyk, Crawford, Beterbiev, etc.), classify as Boxing, not UFC. If a single surname could be a boxer (e.g. Garcia), prefer Boxing over UFC when no other context is available.
 - KBO = Korean Baseball Organization. Classify as KBO if the pick involves KBO team names or explicit KBO context. KBO teams and their common nicknames/abbreviations (resolve any of these to the canonical full name in "teams"): KT Wiz (WIZ/KT), Samsung Lions (LIONS/SAMSUNG), LG Twins (TWINS/LG), Doosan Bears (BEARS/DOOSAN), Lotte Giants (GIANTS/LOTTE), NC Dinos (DINOS/NC), KIA Tigers (TIGERS/KIA), SSG Landers (LANDERS/SSG), Hanwha Eagles (EAGLES/HANWHA), Kiwoom Heroes (HEROES/KIWOOM). Critically: "LIONS" alone is ALWAYS Samsung Lions (not Lotte Giants), "GIANTS" alone is ALWAYS Lotte Giants, etc. Never invent an opponent that isn't in the message text.
+- MLB/NFL team name collisions: "Cardinals" can be Arizona Cardinals (NFL) or St. Louis Cardinals (MLB). "Giants" can be New York Giants (NFL) or San Francisco Giants (MLB). To disambiguate: (1) If an opponent team is mentioned and belongs to only one sport (e.g. "Red Sox", "Dodgers" → MLB; "Cowboys", "Eagles" → NFL), use that sport. (2) If no opponent context: outside the NFL season (mid-February through early September), always resolve to MLB. During NFL season overlap (September through early February), prefer NFL on Sunday/Monday/Thursday (typical NFL game days) and MLB on Tuesday/Wednesday/Friday/Saturday. Always use the full canonical MLB name ("St. Louis Cardinals", "San Francisco Giants") or NFL name ("Arizona Cardinals", "New York Giants") in the teams field.
 - If a single surname with a moneyline has no clear sport context and is not a known boxer or MMA fighter, default to UFC.
 - For parlays: list each leg as a separate pick with its REAL bet_type (moneyline, spread, etc.) and set is_parlay_leg=true on each. Do NOT use bet_type="parlay". When players/teams are slash-separated (e.g. "FAA/Shapovalov MLP" or "SPURS/GARCIA MLP"), split them into ONE pick per player/team — do not put two teams in one pick's teams field.
 - Cross-sport parlays: if legs belong to different sports (e.g. one NBA team + one UFC fighter), set the pick-level "sport" field to override the top-level sport for that leg. Leave pick "sport" as null when it matches the top-level sport.
@@ -159,7 +160,7 @@ async def claude_parse(text: str, date: str | None = None) -> dict | None:
     from datetime import date as _d
     d = _d.fromisoformat(date) if date else _d.today()
     day_name = d.strftime("%A")
-    date_ctx = f"Context: Today is {day_name}.\n" if day_name else ""
+    date_ctx = f"Context: Today is {day_name}, {d.strftime('%B')} {d.day}.\n" if day_name else ""
     resp = await _claude_create_with_retry(
         model="claude-sonnet-4-6",
         max_tokens=500,
