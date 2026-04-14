@@ -159,9 +159,41 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 ]
                 if stale_ids:
                     fetched = await client.get_messages(channel_id, ids=stale_ids)
-                    for m in (fetched if isinstance(fetched, list) else [fetched]):
+                    for sid, m in zip(stale_ids, fetched if isinstance(fetched, list) else [fetched]):
                         if m:
                             yield m
+                        else:
+                            # Primary message was deleted — promote a surviving linked dupe
+                            dead_key = f"{channel_id}:{sid}"
+                            dead_entry = pending_cache.get(dead_key, {})
+                            linked = dead_entry.get("linked_message_ids", [])
+                            if linked and isinstance(dead_entry, dict) and "parsed" in dead_entry:
+                                # Try to find a surviving linked message
+                                alive = await client.get_messages(channel_id, ids=linked)
+                                alive_list = alive if isinstance(alive, list) else [alive]
+                                for lmsg in alive_list:
+                                    if lmsg and lmsg.id:
+                                        new_key = f"{channel_id}:{lmsg.id}"
+                                        # Promote: copy parsed data from dead primary
+                                        promoted = {
+                                            "capper_name":        dead_entry.get("capper_name", ""),
+                                            "parsed":             dead_entry["parsed"],
+                                            "leg_verdicts":       dead_entry.get("leg_verdicts", {}),
+                                            "linked_message_ids": [i for i in linked if i != lmsg.id],
+                                            "odds_by_pick":       dead_entry.get("odds_by_pick", {}),
+                                        }
+                                        pending_cache[new_key] = promoted
+                                        # Update remaining dupes to point to new primary
+                                        for other_id in linked:
+                                            if other_id != lmsg.id:
+                                                ok = f"{channel_id}:{other_id}"
+                                                if ok in pending_cache and isinstance(pending_cache[ok], dict):
+                                                    pending_cache[ok]["primary_id"] = lmsg.id
+                                        # Remove the dead primary
+                                        pending_cache.pop(dead_key, None)
+                                        print(f"  [dupe] promoted {lmsg.id} (primary {sid} deleted)")
+                                        yield lmsg
+                                        break
 
             async for msg in _iter_with_catchup():
                 msg_date = msg.date
