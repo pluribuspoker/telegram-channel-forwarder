@@ -99,6 +99,10 @@ python listener.py --test  # uses test_source/dest channels
 
 **`source_topic_id`** — optional, for forum/topic channels only.
 
+**`sent_by_user`** — Telegram username (without `@`). Only messages from this user are forwarded. The username is resolved to a numeric ID at startup. Not bypassed in `--test` mode.
+
+**`send_as_user`** — if `true`, messages are sent via the user account instead of the bot. Useful when the destination channel shouldn't show the bot as author.
+
 ### Logging
 ```
  15:43:26  ✦ SENT     ┃  STRAIGHT: (1 UNIT)  UCLA +6.5  [ocr: -146]
