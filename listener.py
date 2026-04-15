@@ -168,14 +168,17 @@ async def _trigger_tracker_soon():
             await asyncio.sleep(5)  # second pass: catches "message not yet in window" edge case
 
 
-async def _forward_group(group, mapping, client, bot, bot_dest_entity, use_test, catchup=False):
+async def _forward_group(group, mapping, client, sender, dest_entity, use_test, catchup=False):
     """Shared forwarding logic: filter → enrich → log → send → record → trigger tracker."""
+    sent_by_id = mapping.get("_sent_by_user_id")
+    if sent_by_id and group[0].sender_id != sent_by_id:
+        return False
     if not use_test and not passes_filter(group, mapping):
         log_group(group, sent=False)
         return False
     caption, odds = await enrich_caption(group, mapping, client)
     log_group(group, sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None, catchup=catchup)
-    await send_group(client, group, bot_dest_entity, sender=bot, caption_override=caption, text_only=bool(odds))
+    await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds))
     ch_id = group[0].peer_id.channel_id
     for m in group:
         _forwarded_save(ch_id, m.id)
@@ -184,13 +187,13 @@ async def _forward_group(group, mapping, client, bot, bot_dest_entity, use_test,
     return True
 
 
-async def channel_probe(client, bot, channels, use_test):
+async def channel_probe(client, channels, use_test):
     """Every 5 min, log the latest message in each source channel. Forward any missed messages."""
     await asyncio.sleep(60)
     last_seen: dict = _probe_db_load()
     while True:
         await asyncio.sleep(60)
-        for source_entity, bot_dest_entity, src_label, _, topic_id, mapping in channels:
+        for source_entity, sender_dest_entity, src_label, _, topic_id, mapping, sender_client in channels:
             try:
                 probe_key = (source_entity.id, topic_id or 0)
                 kwargs = {"reply_to": topic_id} if topic_id else {}
@@ -224,13 +227,13 @@ async def channel_probe(client, bot, channels, use_test):
 
                 for msg in singles:
                     try:
-                        await _forward_group([msg], mapping, client, bot, bot_dest_entity, use_test, catchup=True)
+                        await _forward_group([msg], mapping, client, sender_client, sender_dest_entity, use_test, catchup=True)
                     except Exception as e:
                         print(f"  ✗ Catch-up failed msg {msg.id}: {e}", file=sys.stderr)
 
                 for gid, group in albums.items():
                     try:
-                        await _forward_group(group, mapping, client, bot, bot_dest_entity, use_test, catchup=True)
+                        await _forward_group(group, mapping, client, sender_client, sender_dest_entity, use_test, catchup=True)
                     except Exception as e:
                         print(f"  ✗ Catch-up failed album {gid}: {e}", file=sys.stderr)
 
@@ -252,7 +255,7 @@ async def main():
 
     # ── Resolve channels ──────────────────────────────────────────────────────
     registered = set()
-    channels = []  # (source_entity, bot_dest_entity, src_label, dst_label, topic_id, mapping)
+    channels = []  # (source_entity, sender_dest_entity, src_label, dst_label, topic_id, mapping, sender_client)
 
     for mapping in MAPPINGS:
         source_raw = mapping.get("test_source_channel") if use_test else None
@@ -266,6 +269,20 @@ async def main():
         dest_entity = await client.get_entity(dest_raw)
         bot_dest_entity = await bot.get_entity(dest_raw)
 
+        # Resolve sent_by_user username → numeric ID
+        if mapping.get("sent_by_user"):
+            user_entity = await client.get_entity(mapping["sent_by_user"])
+            mapping["_sent_by_user_id"] = user_entity.id
+            print(f"  Resolved sent_by_user '{mapping['sent_by_user']}' → {user_entity.id}")
+
+        # Determine sender client based on send_as_user flag
+        if mapping.get("send_as_user"):
+            sender_client = client
+            sender_dest_entity = dest_entity
+        else:
+            sender_client = bot
+            sender_dest_entity = bot_dest_entity
+
         pair = (source_entity.id, dest_entity.id)
         if pair in registered:
             continue
@@ -275,7 +292,7 @@ async def main():
         if topic_id:
             src_label += f" #{topic_id}"
         dst_label = getattr(dest_entity, 'title', dest_entity)
-        channels.append((source_entity, bot_dest_entity, src_label, dst_label, topic_id, mapping))
+        channels.append((source_entity, sender_dest_entity, src_label, dst_label, topic_id, mapping, sender_client))
 
     # ── Init forwarded tracking table ───────────────────────────────────────────
     _forwarded_init()
@@ -284,12 +301,12 @@ async def main():
     print(f"\n{_SEP}")
     print(f"  Mode: {'TEST' if use_test else 'REAL'}  |  {len(channels)} channel mapping(s)")
     src_w = max((len(c[2]) for c in channels), default=0)
-    for _, _, src_lbl, dst_lbl, _, _ in channels:
+    for _, _, src_lbl, dst_lbl, _, _, _ in channels:
         print(f"  Listening:  {src_lbl:<{src_w}}  →  {dst_lbl}")
     print(f"{_SEP}\n")
 
     # ── Register event handlers ───────────────────────────────────────────────
-    for source_entity, bot_dest_entity, _, _, topic_id, mapping in channels:
+    for source_entity, sender_dest_entity, _, _, topic_id, mapping, sender_client in channels:
 
         def _topic_ok(msg, topic_id=topic_id):
             """Return True if the message belongs to the configured topic (or no topic filter)."""
@@ -302,29 +319,29 @@ async def main():
             return msg_topic == topic_id
 
         @client.on(events.NewMessage(chats=source_entity))
-        async def handler(event, bot_dest_entity=bot_dest_entity, mapping=mapping, _topic_ok=_topic_ok):
+        async def handler(event, sender_dest_entity=sender_dest_entity, mapping=mapping, _topic_ok=_topic_ok, sender_client=sender_client):
             msg = event.message
             if msg.grouped_id:
                 return  # handled by album_handler below
             if not _topic_ok(msg):
                 return
             try:
-                await _forward_group([msg], mapping, client, bot, bot_dest_entity, use_test)
+                await _forward_group([msg], mapping, client, sender_client, sender_dest_entity, use_test)
             except Exception as e:
                 print(f"  ✗ Failed on message {msg.id}: {e}", file=sys.stderr)
 
         @client.on(events.Album(chats=source_entity))
-        async def album_handler(event, bot_dest_entity=bot_dest_entity, mapping=mapping, _topic_ok=_topic_ok):
+        async def album_handler(event, sender_dest_entity=sender_dest_entity, mapping=mapping, _topic_ok=_topic_ok, sender_client=sender_client):
             group = sorted(event.messages, key=lambda m: m.id)
             if not _topic_ok(group[0]):
                 return
             try:
-                await _forward_group(group, mapping, client, bot, bot_dest_entity, use_test)
+                await _forward_group(group, mapping, client, sender_client, sender_dest_entity, use_test)
             except Exception as e:
                 print(f"  ✗ Album send failed: {e}", file=sys.stderr)
 
     asyncio.create_task(heartbeat())
-    asyncio.create_task(channel_probe(client, bot, channels, use_test))
+    asyncio.create_task(channel_probe(client, channels, use_test))
     watchdog = asyncio.create_task(connection_watchdog(client))
     try:
         await asyncio.gather(client.run_until_disconnected(), watchdog)
