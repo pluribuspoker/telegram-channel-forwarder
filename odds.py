@@ -164,6 +164,7 @@ class OddsResult:
     pregame_odds:       int | None = None
     pregame_bookmaker:  str | None = None
     pregame_match_type: str | None = None
+    game_date:          str | None = None   # YYYY-MM-DD from commence_time
 
     @property
     def found(self) -> bool:
@@ -930,6 +931,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
             event_id   = _find_event_id(event_list, teams)
             if not event_id:
                 return OddsResult(match_type="no_game", pick_line=pick.get("line"))
+            gd = _get_event_date(event_list, event_id)
             if _event_already_started(event_list, event_id):
                 live_bk = await _fetch_current_bookmakers(sport_key, event_id, prop_market, conn, live=True)
                 pregame = await _try_pregame(sport, sport_key, event_list, event_id, pick, db_path)
@@ -943,12 +945,13 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
                             pregame_odds=pregame.odds if pregame else None,
                             pregame_bookmaker=pregame.bookmaker if pregame else None,
                             pregame_match_type=f"pregame_{pregame.match_type}" if pregame else None,
+                            game_date=gd,
                         )
                 if pregame:
                     return OddsResult(match_type=f"pregame_{pregame.match_type}", odds=pregame.odds,
                                       bookmaker=pregame.bookmaker, api_line=pregame.api_line,
-                                      pick_line=pregame.pick_line)
-                return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"))
+                                      pick_line=pregame.pick_line, game_date=gd)
+                return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"), game_date=gd)
             bookmakers = await _fetch_current_bookmakers(sport_key, event_id, prop_market, conn)
             r = _lookup_prop(bookmakers, pick.get("player") or "", prop_market,
                              pick.get("direction") or "over", float(pick.get("line") or 0.5))
@@ -958,6 +961,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
                 bookmaker  = r["bookmaker"],
                 api_line   = r["api_line"],
                 pick_line  = r["pick_line"],
+                game_date  = gd,
             )
 
         # ── All other bet types ───────────────────────────────────────────────
@@ -966,6 +970,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
         # Odds API first (current pre-game and live)
         event_list = await _fetch_current_event_list(sport_key, conn)
         event_id   = _find_event_id(event_list, teams)
+        gd = _get_event_date(event_list, event_id) if event_id else None
         if event_id:
             if _event_already_started(event_list, event_id):
                 live_bk = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick), conn, live=True)
@@ -979,12 +984,13 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
                             pregame_odds=pregame.odds if pregame else None,
                             pregame_bookmaker=pregame.bookmaker if pregame else None,
                             pregame_match_type=f"pregame_{pregame.match_type}" if pregame else None,
+                            game_date=gd,
                         )
                 if pregame:
                     return OddsResult(match_type=f"pregame_{pregame.match_type}", odds=pregame.odds,
                                       bookmaker=pregame.bookmaker, api_line=pregame.api_line,
-                                      pick_line=pregame.pick_line)
-                return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"))
+                                      pick_line=pregame.pick_line, game_date=gd)
+                return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"), game_date=gd)
             else:
                 bookmakers = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick), conn)
 
@@ -1005,6 +1011,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
             bookmaker  = r["bookmaker"],
             api_line   = r["api_line"],
             pick_line  = r["pick_line"],
+            game_date  = gd,
         )
 
     finally:

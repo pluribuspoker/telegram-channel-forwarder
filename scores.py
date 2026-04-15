@@ -139,19 +139,28 @@ async def _fetch_kbo_day(http: httpx.AsyncClient, date_str: str) -> list[dict]:
         return []
 
 
-async def fetch_kbo_context(team: str, date: str) -> tuple[str, str]:
-    """Grade a KBO pick by checking koreabaseball.com for the next day's game.
+async def fetch_kbo_context(
+    team: str, date: str, *, odds_game_date: str | None = None,
+) -> tuple[str, str]:
+    """Grade a KBO pick by checking koreabaseball.com.
 
-    KBO picks are always sent the US evening before the game (next KST day),
-    so we only check date+1.  Returns (context_str, game_date).
+    If *odds_game_date* is available (from the Odds API commence_time), we
+    use that exact date.  Otherwise we fall back to date+1 (the original
+    heuristic — picks are sent US evening before the KST game day).
+    We never check date+0 because back-to-back series (common in KBO/MLB)
+    would match the wrong completed game.
+    Returns (context_str, game_date).
     """
-    target = _date.fromisoformat(date)
-    game_date = target + timedelta(days=1)
+    if odds_game_date:
+        game_date = _date.fromisoformat(odds_game_date)
+    else:
+        game_date = _date.fromisoformat(date) + timedelta(days=1)
     game_date_str = game_date.isoformat()
+
+    team_lower = team.lower().strip()
     async with httpx.AsyncClient(timeout=15) as http:
         games = await _fetch_kbo_day(http, game_date.strftime("%Y%m%d"))
 
-    team_lower = team.lower().strip()
     for e in games:
         home, away = e.get("home_team", ""), e.get("away_team", "")
         if not (_team_matches(team_lower, home.lower()) or _team_matches(team_lower, away.lower())):
