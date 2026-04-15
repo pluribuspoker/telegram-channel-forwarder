@@ -225,6 +225,18 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # {"_dupe": True} is stored when this message was identified as a duplicate
                 # so we can skip claude_parse on subsequent runs without re-paying.
                 if isinstance(cached, dict) and cached.get("_dupe"):
+                    # Edit odds onto the duplicate if the primary has them but this msg doesn't yet
+                    primary_key = f"{channel_id}:{cached.get('primary_id')}"
+                    primary_entry = pending_cache.get(primary_key, {})
+                    if not dry_run and isinstance(primary_entry, dict):
+                        dup_odds = primary_entry.get("odds_by_pick", {})
+                        if any(v.get("odds") is not None for v in dup_odds.values()):
+                            dup_picks = primary_entry.get("parsed", {}).get("picks", [])
+                            _ht = _to_bot_html(text, msg.entities)
+                            _odds_text = _insert_odds(_ht, dup_picks, dup_odds)
+                            if _odds_text != _ht:
+                                await _bot_edit_message(bot_token, channel_id, msg.id, _odds_text, msg.media is not None)
+                                await asyncio.sleep(0.5)
                     continue  # primary row carries the +N dup annotation
                 # {"_failed": True} is stored after the first audit notification so we
                 # don't spam the audit channel. We only re-try parsing if the message
@@ -293,8 +305,19 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 if dup_key:
                     dup_id = int(dup_key.split(':')[1])
                     linked = pending_cache[dup_key].setdefault("linked_message_ids", [])
-                    if msg.id not in linked:
+                    newly_linked = msg.id not in linked
+                    if newly_linked:
                         linked.append(msg.id)
+                    # Edit odds onto the duplicate if the primary already has them
+                    primary_entry = pending_cache[dup_key]
+                    dup_odds = primary_entry.get("odds_by_pick", {})
+                    if not dry_run and newly_linked and any(v.get("odds") is not None for v in dup_odds.values()):
+                        dup_picks = primary_entry.get("parsed", {}).get("picks", [])
+                        _ht = _to_bot_html(text, msg.entities)
+                        _odds_text = _insert_odds(_ht, dup_picks, dup_odds)
+                        if _odds_text != _ht:
+                            await _bot_edit_message(bot_token, channel_id, msg.id, _odds_text, msg.media is not None)
+                            await asyncio.sleep(0.5)
                     # Cache the dupe marker so we skip claude_parse on future runs
                     pending_cache[cache_key] = {"_dupe": True, "primary_id": dup_id}
                     continue  # primary row carries the +N dup annotation
