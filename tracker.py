@@ -336,6 +336,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             "pregame_odds":       result.pregame_odds,
                             "pregame_bookmaker":  result.pregame_bookmaker,
                             "pregame_match_type": result.pregame_match_type,
+                            "game_date":          result.game_date,
                         }
                         odds_total += 1
                         if display_odds is not None:
@@ -385,8 +386,10 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             if early_ctx:
                                 context, game_date = early_ctx, date_str
                             else:
+                                odds_gd = odds_by_pick.get(str(i), {}).get("game_date")
                                 context, game_date = await build_context(
                                     pick_sport, date_str, pick, sb, summary_cache,
+                                    odds_game_date=odds_gd,
                                 )
 
                             if context in (CONTEXT_ESPN_ERROR, CONTEXT_PENDING):
