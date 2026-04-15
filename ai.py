@@ -222,7 +222,6 @@ async def build_context(
     pick: dict,
     scoreboard: dict | None,
     summary_cache: dict,
-    odds_game_date: str | None = None,
 ) -> tuple[str, str]:
     """Return (context_str, game_date) for grading this pick.
     game_date is the actual date the game is/was played (may differ from pick date)."""
@@ -253,7 +252,7 @@ async def build_context(
         team = teams[0] if teams else ""
         if not team:
             return CONTEXT_SKIP, date
-        ctx, game_date = await fetch_kbo_context(team, date, odds_game_date=odds_game_date)
+        ctx, game_date = await fetch_kbo_context(team, date)
         if ctx == "PENDING":
             return CONTEXT_PENDING, game_date
         return (ctx if ctx else CONTEXT_PENDING), game_date

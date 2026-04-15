@@ -139,47 +139,29 @@ async def _fetch_kbo_day(http: httpx.AsyncClient, date_str: str) -> list[dict]:
         return []
 
 
-async def fetch_kbo_context(
-    team: str, date: str, *, odds_game_date: str | None = None,
-) -> tuple[str, str]:
-    """Grade a KBO pick by checking koreabaseball.com.
+async def fetch_kbo_context(team: str, date: str) -> tuple[str, str]:
+    """Grade a KBO pick by checking koreabaseball.com for the next day's game.
 
-    If *odds_game_date* is available (from the Odds API commence_time), we
-    check that date first — it's the most reliable source for the actual game
-    date.  Otherwise we fall back to date+1 then date+0 (the old heuristic).
-    Returns (context_str, game_date).
+    KBO picks are always sent the US evening before the game (next KST day),
+    so we only check date+1.  Returns (context_str, game_date).
     """
     target = _date.fromisoformat(date)
-    team_lower = team.lower().strip()
-    pending_hit = None  # remember first in-progress match
-
-    # Build candidate dates: odds date first (if known), then date+1, date+0.
-    candidates: list[_date] = []
-    if odds_game_date:
-        candidates.append(_date.fromisoformat(odds_game_date))
-    for offset in (1, 0):
-        d = target + timedelta(days=offset)
-        if d not in candidates:
-            candidates.append(d)
-
+    game_date = target + timedelta(days=1)
+    game_date_str = game_date.isoformat()
     async with httpx.AsyncClient(timeout=15) as http:
-        for game_date in candidates:
-            game_date_str = game_date.isoformat()
-            games = await _fetch_kbo_day(http, game_date.strftime("%Y%m%d"))
-            for e in games:
-                home, away = e.get("home_team", ""), e.get("away_team", "")
-                if not (_team_matches(team_lower, home.lower()) or _team_matches(team_lower, away.lower())):
-                    continue
-                if e.get("completed"):
-                    scores = e.get("scores") or []
-                    score_str = "  ".join(f"{s['name']}: {s['score']}" for s in scores)
-                    return f"{home} vs {away}\n{score_str}", game_date_str
-                if pending_hit is None:
-                    pending_hit = game_date_str
-                break  # team found on this date, move to next candidate
+        games = await _fetch_kbo_day(http, game_date.strftime("%Y%m%d"))
 
-    if pending_hit is not None:
-        return "PENDING", pending_hit
+    team_lower = team.lower().strip()
+    for e in games:
+        home, away = e.get("home_team", ""), e.get("away_team", "")
+        if not (_team_matches(team_lower, home.lower()) or _team_matches(team_lower, away.lower())):
+            continue
+        if e.get("completed"):
+            scores = e.get("scores") or []
+            score_str = "  ".join(f"{s['name']}: {s['score']}" for s in scores)
+            return f"{home} vs {away}\n{score_str}", game_date_str
+        return "PENDING", game_date_str
+
     return "", date
 
 
