@@ -103,7 +103,9 @@ MARKETS_FULL = (
     "team_totals,alternate_team_totals,"
     "h2h_h1,spreads_h1,totals_h1,"
     "h2h_h2,spreads_h2,totals_h2,"
-    "h2h_q1,spreads_q1,totals_q1"
+    "h2h_q1,spreads_q1,totals_q1,"
+    "h2h_1st_5_innings,spreads_1st_5_innings,totals_1st_5_innings,"
+    "alternate_spreads_1st_5_innings,alternate_totals_1st_5_innings"
 )
 
 MARKETS_BY_TYPE: dict[str, str] = {
@@ -136,6 +138,18 @@ _PERIOD_SUFFIX: dict[str, str] = {
     "1h": "_h1", "2h": "_h2",
     "1q": "_q1", "2q": "_q2", "3q": "_q3", "4q": "_q4",
 }
+
+# MLB uses inning-based market keys instead of _h1/_h2.
+_MLB_PERIOD_SUFFIX: dict[str, str] = {
+    "1h": "_1st_5_innings",
+}
+
+
+def _get_period_suffix(period: str, sport: str = "") -> str:
+    """Return the Odds API market suffix for a period, sport-aware for MLB innings."""
+    if sport == "MLB" and period in _MLB_PERIOD_SUFFIX:
+        return _MLB_PERIOD_SUFFIX[period]
+    return _PERIOD_SUFFIX.get(period, "")
 
 # ── OddsResult ────────────────────────────────────────────────────────────────
 
@@ -466,8 +480,8 @@ def _find_event_id(event_list: list[dict], teams: list[str]) -> str | None:
     return scored[0][1]
 
 
-def _lookup_moneyline(bookmakers: list[dict], team: str, period: str = "game", market: str = "h2h") -> dict:
-    mkt = market + _PERIOD_SUFFIX.get(period, "")
+def _lookup_moneyline(bookmakers: list[dict], team: str, period: str = "game", market: str = "h2h", sport: str = "") -> dict:
+    mkt = market + _get_period_suffix(period, sport)
     candidates = [(price, bk) for _, price, bk in _collect_outcomes(bookmakers, mkt, name_filter=team)]
     odds, book = _pick_best(candidates)
     return {
@@ -481,9 +495,9 @@ def _lookup_moneyline(bookmakers: list[dict], team: str, period: str = "game", m
 
 
 def _lookup_spread(sport: str, bookmakers: list[dict], team: str, pick_line: float, period: str = "game") -> dict:
-    suffix   = _PERIOD_SUFFIX.get(period, "")
+    suffix   = _get_period_suffix(period, sport)
     main_mkt = "spreads" + suffix
-    alt_mkt  = "alternate_spreads" if not suffix else None
+    alt_mkt  = ("alternate_spreads" + suffix) if (not suffix or suffix.startswith("_1st_")) else None
 
     _empty = {"match_type": "no_spread_data", "pick_line": pick_line,
               "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
@@ -523,9 +537,9 @@ def _lookup_spread(sport: str, bookmakers: list[dict], team: str, pick_line: flo
 
 
 def _lookup_total(sport: str, bookmakers: list[dict], direction: str, pick_line: float, period: str = "game") -> dict:
-    suffix       = _PERIOD_SUFFIX.get(period, "")
+    suffix       = _get_period_suffix(period, sport)
     main_mkt     = "totals" + suffix
-    alt_mkt      = "alternate_totals" if not suffix else None
+    alt_mkt      = ("alternate_totals" + suffix) if (not suffix or suffix.startswith("_1st_")) else None
     outcome_name = "Over" if direction == "over" else "Under"
 
     _empty = {"match_type": "no_total_data", "pick_line": pick_line,
@@ -571,7 +585,7 @@ def _lookup_team_total(sport: str, bookmakers: list[dict], team: str, direction:
     unlike game totals which use `name` for the outcome label only.
     """
     outcome_name = "Over" if direction == "over" else "Under"
-    suffix = _PERIOD_SUFFIX.get(period, "")
+    suffix = _get_period_suffix(period, sport)
     _empty = {"match_type": "team_total_unavailable", "pick_line": pick_line,
               "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
@@ -700,7 +714,7 @@ def lookup_pick_odds(sport: str, pick: dict, bookmakers: list[dict]) -> dict:
 
     if bet_type == "moneyline":
         market = "h2h_3_way" if sport == "NHL" and is_regulation_ml(desc) else "h2h"
-        return _lookup_moneyline(bookmakers, teams[0] if teams else "", period, market)
+        return _lookup_moneyline(bookmakers, teams[0] if teams else "", period, market, sport)
 
     if bet_type == "spread":
         if line is None:
@@ -718,9 +732,21 @@ def lookup_pick_odds(sport: str, pick: dict, bookmakers: list[dict]) -> dict:
             "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
 
-def _markets_for_pick(pick: dict) -> str:
+_MLB_INNINGS_MARKETS: dict[str, str] = {
+    "moneyline": "h2h_1st_5_innings",
+    "spread":    "spreads_1st_5_innings,alternate_spreads_1st_5_innings",
+    "total":     "totals_1st_5_innings,alternate_totals_1st_5_innings",
+}
+
+
+def _markets_for_pick(pick: dict, sport: str = "") -> str:
     """Minimal markets string for this pick's bet_type. Falls back to MARKETS_FULL."""
-    return MARKETS_BY_TYPE.get(pick.get("bet_type", ""), MARKETS_FULL)
+    base = MARKETS_BY_TYPE.get(pick.get("bet_type", ""), MARKETS_FULL)
+    if sport == "MLB" and pick.get("period") in _MLB_PERIOD_SUFFIX:
+        extra = _MLB_INNINGS_MARKETS.get(pick.get("bet_type", ""), "")
+        if extra:
+            return base + "," + extra
+    return base
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -786,7 +812,7 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
         event_list = await _fetch_event_list(sport_key, game_date, conn)
         event_id   = _find_event_id(event_list, teams)
         if event_id:
-            bookmakers = await _fetch_bookmakers(sport_key, event_id, game_date, _markets_for_pick(pick), conn)
+            bookmakers = await _fetch_bookmakers(sport_key, event_id, game_date, _markets_for_pick(pick, sport), conn)
 
         r = lookup_pick_odds(sport, pick, bookmakers)
 
@@ -857,7 +883,7 @@ async def _try_pregame(
             return None
         markets = prop_market
     else:
-        markets = _markets_for_pick(pick)
+        markets = _markets_for_pick(pick, sport)
 
     conn = sqlite3.connect(db_path)
     try:
@@ -973,7 +999,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
         gd = _get_event_date(event_list, event_id) if event_id else None
         if event_id:
             if _event_already_started(event_list, event_id):
-                live_bk = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick), conn, live=True)
+                live_bk = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick, sport), conn, live=True)
                 pregame = await _try_pregame(sport, sport_key, event_list, event_id, pick, db_path)
                 if live_bk:
                     r = lookup_pick_odds(sport, pick, live_bk)
@@ -992,7 +1018,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
                                       pick_line=pregame.pick_line, game_date=gd)
                 return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"), game_date=gd)
             else:
-                bookmakers = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick), conn)
+                bookmakers = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick, sport), conn)
 
         r = lookup_pick_odds(sport, pick, bookmakers)
 
