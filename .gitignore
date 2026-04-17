@@ -203,6 +203,8 @@ cython_debug/
 .cursorindexingignore
 
 state.json
+service_account.json
+api-project-*.json
 *.png
 picks.db
 picks.db-journal

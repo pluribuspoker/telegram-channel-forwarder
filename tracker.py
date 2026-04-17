@@ -48,6 +48,7 @@ from tracker_format import (
     _PICK_EMOJI,
 )
 from tracker_backtest import run_backtest
+from sheets import append_pick_rows
 
 load_dotenv()
 load_dotenv(".env.local", override=True)  # VPS-specific overrides (never synced)
@@ -597,16 +598,27 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     edit_failed=edit_failed,
                 )
                 if newly_resolved:
+                    _nr_pick_results = [
+                        (v[0], v[1], odds_by_pick.get(str(j), {}).get("odds"))
+                        for j, v in newly_resolved_indexed
+                    ]
                     await audit.broadcast_results(
                         channel_id=channel_id,
                         message_id=msg.id,
-                        pick_results=[
-                            (v[0], v[1], odds_by_pick.get(str(j), {}).get("odds"))
-                            for j, v in newly_resolved_indexed
-                        ],
+                        pick_results=_nr_pick_results,
                         capper_name=capper,
                         client=client,
                     )
+                    sheets_channel = os.getenv("SHEETS_GRADE_CHANNEL", "")
+                    if not dry_run and sheets_channel and channel_id == int(sheets_channel):
+                        try:
+                            await append_pick_rows(
+                                pick_results=_nr_pick_results,
+                                date_str=date_str,
+                                raw_text=text,
+                            )
+                        except Exception as exc:
+                            print(f"[sheets] warn: {exc}")
 
         print(f"  ─ edit:{edited} pend:{pending} fail:{failed} err:{errors}" +
               (f" odds:{odds_found}/{odds_total}" if odds_total else ""))
