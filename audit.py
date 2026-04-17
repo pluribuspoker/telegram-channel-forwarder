@@ -392,7 +392,7 @@ class AuditLog:
         elif is_parlay:
             verdicts_only = [v for _, v, _ in picks]
             overall_emoji = _overall_emoji(verdicts_only)
-            combined = _parlay_combined_odds([o for _, _, o in resolved])
+            combined = _parlay_combined_odds([o for p, _, o in resolved if p.get("is_parlay_leg")])
             combined_part = f" [{e(fmt_odds(combined))}]" if combined is not None else ""
             legs = "\n".join(f"• {e(d)}" for d, _, _ in picks)
             text = f"{overall_emoji} {capper_linked} · Parlay{combined_part}\n{legs}"

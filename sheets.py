@@ -132,7 +132,7 @@ async def append_pick_rows(
     if is_parlay:
         sport = (resolved[0][0].get("sport") or "").upper()
         legs_desc = " / ".join(_format_pick(p).upper() for p, _, _ in resolved)
-        combined = parlay_combined_odds([o for _, _, o in resolved])
+        combined = parlay_combined_odds([o for p, _, o in resolved if p.get("is_parlay_leg")])
         overall_verdict = "LOSS" if any(v == "LOSS" for _, v, _ in resolved) else \
                           "WIN" if all(v == "WIN" for _, v, _ in resolved) else \
                           "PUSH"

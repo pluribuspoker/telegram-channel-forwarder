@@ -498,7 +498,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # Compute combined parlay odds for log display
                 parlay_combined_str = ""
                 if is_parlay:
-                    _leg_odds = [odds_by_pick.get(str(i), {}).get("odds") for i in range(len(verdicts))]
+                    _leg_odds = [odds_by_pick.get(str(i), {}).get("odds")
+                                 for i, v in enumerate(verdicts) if v[0].get("is_parlay_leg")]
                     _comb = parlay_combined_odds(_leg_odds)
                     if _comb is not None:
                         parlay_combined_str = f"[{'+' if _comb > 0 else ''}{_comb}]"
