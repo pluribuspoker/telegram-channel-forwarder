@@ -18,6 +18,8 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 | `audit.py` | Audit log — writes to SQLite + Telegram audit channel |
 | `common.py` | Shared utilities (Anthropic client, OCR, channel parsing, emoji map, regulation ML detection) |
 | `run_tracker.sh` | Timer wrapper with retry logic and healthchecks.io signals |
+| `scripts/sauce_daily.py` | Kyle Kirms (Sauce) daily scraper — scrape, grade, screenshot, send DM |
+| `scripts/scrape_kirms.py` | Fetches open-bets from Kirms' published Google Sheet |
 | `scripts/audit_odds.py` | Backtest odds lookup against graded picks — fetches historical closing lines from Odds API and outputs CSV |
 
 ---
@@ -220,6 +222,34 @@ Deployed as a systemd timer firing every 5 minutes. Manual runs via server alias
 grade      # live, last 1 day
 gradetest  # dry run, last 2 days
 ```
+
+---
+
+## Sauce Daily (Kyle Kirms)
+
+`scripts/sauce_daily.py` scrapes the SAUCE tab from Kyle Kirms' open-bets page (a publicly embedded Google Sheet), grades past picks, renders a screenshot, and sends it as a Telegram DM.
+
+**Daily flow:**
+1. Fetch SAUCE tab data via HTTP (no login/browser needed — the sheet is published)
+2. Classify sports + parse bet structure via Claude Haiku
+3. Validate sport classification against ESPN schedules (catches ambiguous teams like Rangers MLB vs NHL)
+4. Store in `sauce_picks` table in `picks.db`
+5. Grade PENDING picks using ESPN scores + Claude Sonnet
+6. Write results to [Google Sheet](https://docs.google.com/spreadsheets/d/1yozWEoQ5m6rqNC8-E5UGwg0ySjYbAybNHwPmtNTYIzM)
+7. Render screenshot (upcoming + past with ✅/❌ emoji)
+8. Send as DM to @Capperleaked
+
+**Usage:**
+```bash
+python scripts/sauce_daily.py                        # full run → test channel
+python scripts/sauce_daily.py --channel @username    # send DM to a user
+python scripts/sauce_daily.py --grade-only           # grade pending, no screenshot
+python scripts/sauce_daily.py --no-send              # scrape+grade+sheet, skip Telegram
+```
+
+**VPS cron:** runs daily at 6:00 AM ET as `forwarder` user. Logs at `/tmp/sauce_daily_cron.log`.
+
+**ESPN sport validation:** `validate_sport()` in `scores.py` cross-references Claude's sport classification against the actual ESPN schedule. If a team has no game in the classified sport on that date, it checks alternative sports. Also integrated into the core tracker flow (`tracker.py`).
 
 ---
 
