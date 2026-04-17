@@ -566,7 +566,7 @@ async def render_image(html: str) -> bytes:
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Sauce daily picks")
-    parser.add_argument("--channel", type=int, default=TEST_CHANNEL, help="Telegram channel ID")
+    parser.add_argument("--channel", default=str(TEST_CHANNEL), help="Telegram channel ID or @username")
     parser.add_argument("--grade-only", action="store_true", help="Only grade pending, no screenshot")
     parser.add_argument("--no-send", action="store_true", help="Skip Telegram send")
     parser.add_argument("--setup-sheet", action="store_true", help="Set up sheet headers")
@@ -642,12 +642,19 @@ async def main():
         return
 
     # ── 8. Send to Telegram ──
-    print(f"Sending to channel {args.channel}...")
+    dest = args.channel
+    try:
+        dest = int(dest)
+    except ValueError:
+        if not dest.startswith("@"):
+            dest = f"@{dest}"
+    print(f"Sending to {dest}...")
     client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
     await client.start()
+    entity = await client.get_entity(dest)
     buf = io.BytesIO(img)
     buf.name = "sauce_open_bets.png"
-    await client.send_file(args.channel, buf)
+    await client.send_file(entity, buf)
     print("Sent!")
     await client.disconnect()
 
