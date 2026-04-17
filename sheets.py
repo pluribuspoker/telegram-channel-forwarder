@@ -95,18 +95,22 @@ async def append_pick_rows(
     pick_results: list[tuple[dict, str, int | None]],
     date_str: str,
     raw_text: str,
+    sheets_id: str,
 ) -> None:
-    """Append one row per resolved pick (or one row per parlay) to the Google Sheet."""
-    sheet_id = os.getenv("SHEETS_PICK_LOG_ID", "")
-    gid_str = os.getenv("SHEETS_PICK_LOG_GID", "0")
-    if not sheet_id:
+    """Append one row per resolved pick (or one row per parlay) to the Google Sheet.
+
+    sheets_id: "spreadsheet_id:gid" string from the mapping config.
+    """
+    if not sheets_id:
         return
 
     gc = _get_client()
     if gc is None:
         return
 
-    gid = int(gid_str)
+    parts = sheets_id.split(":", 1)
+    sheet_id = parts[0]
+    gid = int(parts[1]) if len(parts) > 1 else 0
     spreadsheet = gc.open_by_key(sheet_id)
     worksheet = next(
         (ws for ws in spreadsheet.worksheets() if ws.id == gid),

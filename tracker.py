@@ -102,12 +102,15 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
     # Build broadcast results map from MAPPINGS_CONFIG: graded dest_channel → broadcast_results_channel.
     # In dry-run, route to test_broadcast_results_channel so results can be previewed safely.
     broadcast_results_map: dict[int, int] = {}
+    sheets_map: dict[int, str] = {}  # dest_channel → "sheet_id:gid"
     for m in json.loads(os.getenv("MAPPINGS_CONFIG", "[]")):
         dest = m.get("dest_channel")
         bc_key = "test_broadcast_results_channel" if dry_run else "broadcast_results_channel"
         bc = m.get(bc_key)
         if dest and bc:
             broadcast_results_map[dest] = bc
+        if dest and m.get("sheets_id"):
+            sheets_map[dest] = m["sheets_id"]
 
     audit         = AuditLog(broadcast_results_mappings=broadcast_results_map)
     pending_cache = _load_pending_cache()
@@ -609,13 +612,13 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         capper_name=capper,
                         client=client,
                     )
-                    sheets_channel = os.getenv("SHEETS_GRADE_CHANNEL", "")
-                    if not dry_run and sheets_channel and channel_id == int(sheets_channel):
+                    if not dry_run and channel_id in sheets_map:
                         try:
                             await append_pick_rows(
                                 pick_results=_nr_pick_results,
                                 date_str=date_str,
                                 raw_text=text,
+                                sheets_id=sheets_map[channel_id],
                             )
                         except Exception as exc:
                             print(f"[sheets] warn: {exc}")
