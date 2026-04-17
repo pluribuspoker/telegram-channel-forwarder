@@ -4,6 +4,7 @@ scores.py — Sports data layer: ESPN, Odds API, and score formatting.
 
 import json
 import os
+import re
 
 import httpx
 from datetime import date as _date, timedelta
@@ -871,3 +872,90 @@ def espn_bookmakers_for_teams(espn_data: dict, teams: list[str]) -> list[dict]:
                 bk = extract_espn_bookmaker(comp)
                 return [bk] if bk else []
     return []
+
+
+# ─── ESPN sport validation ───────────────────────────────────────────────────
+
+# Team name fragments that exist in multiple ESPN sports
+_AMBIGUOUS_SPORTS = {
+    "rangers":   ["MLB", "NHL"],
+    "cardinals": ["MLB", "NFL"],
+    "giants":    ["MLB", "NFL"],
+    "kings":     ["NBA", "NHL"],
+    "blues":     ["NHL", "MLB"],
+    "panthers":  ["NHL", "NFL"],
+    "jets":      ["NHL", "NFL"],
+}
+
+
+async def validate_sport(
+    sport: str,
+    teams: list[str],
+    bet_text: str,
+    date_str: str,
+    scoreboard_cache: dict[tuple[str, str], dict | None],
+) -> tuple[str, list[str]]:
+    """Verify a sport classification against ESPN schedules.
+
+    Checks that the team actually has a game in the classified sport on the
+    given date.  If not, tries alternative sports (especially for ambiguous
+    names like Rangers, Cardinals, Giants).
+
+    Returns (corrected_sport, corrected_teams).  If no correction needed,
+    returns the originals unchanged.
+    """
+    if sport not in ESPN_LEAGUES or not teams:
+        return sport, teams
+
+    # Fetch scoreboard for the classified sport
+    sb_key = (sport, date_str)
+    if sb_key not in scoreboard_cache:
+        scoreboard_cache[sb_key] = await fetch_espn(sport, date_str)
+    sb = scoreboard_cache[sb_key]
+
+    if sb and find_event_ids(sb.get("events", []), teams):
+        return sport, teams  # confirmed
+
+    # Build set of alternative sports to check
+    needs_check: set[str] = set()
+    for team in teams:
+        tl = team.lower()
+        for frag, alt_sports in _AMBIGUOUS_SPORTS.items():
+            if frag in tl:
+                for alt in alt_sports:
+                    if alt != sport and alt in ESPN_LEAGUES:
+                        needs_check.add(alt)
+
+    if not needs_check:
+        for alt in ["MLB", "NBA", "NHL", "NFL"]:
+            if alt != sport and alt in ESPN_LEAGUES:
+                needs_check.add(alt)
+
+    # Raw fragments from the bet text for fuzzy matching
+    raw_terms = re.split(r'[\s/]+', bet_text)
+    raw_terms = [t for t in raw_terms if len(t) > 2 and t not in ("Over", "Under", "ML", "TT")]
+    search_teams = list(set(teams + raw_terms))
+
+    for alt_sport in needs_check:
+        alt_key = (alt_sport, date_str)
+        if alt_key not in scoreboard_cache:
+            scoreboard_cache[alt_key] = await fetch_espn(alt_sport, date_str)
+        alt_sb = scoreboard_cache[alt_key]
+        if not alt_sb:
+            continue
+        alt_events = alt_sb.get("events", [])
+        matched_ids = find_event_ids(alt_events, search_teams)
+        if matched_ids:
+            # Fix team names from the ESPN event
+            corrected_teams = teams
+            for evt in alt_events:
+                if evt.get("id") in matched_ids:
+                    for comp in evt.get("competitions", [{}]):
+                        for c in comp.get("competitors", []):
+                            name = c.get("team", {}).get("displayName", "")
+                            if name and any(f.lower() in name.lower() for f in raw_terms):
+                                corrected_teams = [name]
+                                break
+            return alt_sport, corrected_teams
+
+    return sport, teams

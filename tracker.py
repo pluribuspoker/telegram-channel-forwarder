@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 from common import VERDICT_EMOJI, parlay_combined_odds
-from scores import fetch_espn, odds_requests_used, try_early_grade_math, build_early_context
+from scores import fetch_espn, odds_requests_used, try_early_grade_math, build_early_context, validate_sport
 from odds import fetch_odds_current, quota_used as odds_quota_used
 from ai import (
     claude_parse,
@@ -290,6 +290,38 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     continue
                 sport = parsed.get("sport", "Other")
                 picks = parsed.get("picks", [])
+
+                # Validate sport classification against ESPN schedules
+                # (only on fresh parses, not cached ones — cached entries
+                # were already validated on their first run)
+                if not cached_parse and picks:
+                    teams = picks[0].get("teams", [])
+                    bet_desc = picks[0].get("description", "")
+                    new_sport, new_teams = await validate_sport(
+                        sport, teams, bet_desc, date_str, scoreboard_cache,
+                    )
+                    if new_sport != sport:
+                        print(f"  ESPN sport override: {sport} -> {new_sport}")
+                        sport = new_sport
+                        parsed["sport"] = sport
+                    if new_teams != teams:
+                        picks[0]["teams"] = new_teams
+
+                    # Also validate per-pick sport overrides (cross-sport parlays)
+                    for pick in picks[1:]:
+                        ps = pick.get("sport")
+                        if ps and ps in ("NBA", "NCAAB", "MLB", "NFL", "NHL"):
+                            pt = pick.get("teams", [])
+                            pd = pick.get("description", "")
+                            new_ps, new_pt = await validate_sport(
+                                ps, pt, pd, date_str, scoreboard_cache,
+                            )
+                            if new_ps != ps:
+                                print(f"  ESPN pick sport override: {ps} -> {new_ps}")
+                                pick["sport"] = new_ps
+                            if new_pt != pt:
+                                pick["teams"] = new_pt
+
                 if not picks:
                     failed += 1
                     print(f"\n{msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'no picks':<{_DESC_W}} {'':<{_ODDS_W}} {int(date_str[5:7])}/{int(date_str[8:10])} ⚠")
