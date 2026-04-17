@@ -182,3 +182,28 @@ async def append_pick_rows(
             [full_row],
             value_input_option="USER_ENTERED",
         )
+
+    # Copy formatting (borders, font, alignment, colors) from the last
+    # existing row to all newly appended rows in a single batch request.
+    fmt_requests = [{
+        "copyPaste": {
+            "source": {
+                "sheetId": worksheet.id,
+                "startRowIndex": last_data_row - 1,
+                "endRowIndex": last_data_row,
+                "startColumnIndex": 0,
+                "endColumnIndex": total_cols,
+            },
+            "destination": {
+                "sheetId": worksheet.id,
+                "startRowIndex": next_row - 1,
+                "endRowIndex": next_row - 1 + len(rows_to_append),
+                "startColumnIndex": 0,
+                "endColumnIndex": total_cols,
+            },
+            "pasteType": "PASTE_FORMAT",
+        }
+    }]
+    await asyncio.to_thread(
+        spreadsheet.batch_update, {"requests": fmt_requests}
+    )
