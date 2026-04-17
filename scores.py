@@ -473,6 +473,8 @@ _TEAM_ALIASES: dict[str, str] = {
     "sf giants":     "san francisco giants",
     "kc royals":     "kansas city royals",
     "tb rays":       "tampa bay rays",
+    # ── UFL ───────────────────────────────────────────────────────────
+    "arlington renegades": "dallas renegades",  # rebranded 2025
 }
 
 
