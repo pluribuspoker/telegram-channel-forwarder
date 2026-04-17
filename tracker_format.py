@@ -137,31 +137,43 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     Idempotent — skips lines that already carry an odds tag.
     Uses same search-term logic as _insert_emojis.
     """
-    if any(p.get("is_parlay_leg") for p in picks):
-        _leg_odds = [odds_by_pick.get(str(i), {}).get("odds") for i in range(len(picks))]
-        _comb = parlay_combined_odds(_leg_odds)
-        if _comb is None:
-            return text  # partial odds — don't show misleading combined price
-        combined_tag = f" [{'+' if _comb > 0 else ''}{_comb}]"
-        lines = text.rstrip().split("\n")
-        for j, line in enumerate(lines):
-            ll = line.lower().lstrip()
-            if ll.startswith("•") or ll.startswith("-"):
-                continue  # skip leg bullet lines
-            if "parlay" not in ll:
-                continue
-            if _ODDS_TAG_RE.search(line):
-                return text  # already tagged — idempotent
-            lines[j] = f"{line.rstrip()}{combined_tag}"
-            return "\n".join(lines)
-        return text
+    parlay_idxs = [i for i, p in enumerate(picks) if p.get("is_parlay_leg")]
+    standalone_idxs = [i for i, p in enumerate(picks) if not p.get("is_parlay_leg")]
 
     lines = text.rstrip().split("\n")
+
+    if parlay_idxs:
+        _leg_odds = [odds_by_pick.get(str(i), {}).get("odds") for i in parlay_idxs]
+        _comb = parlay_combined_odds(_leg_odds)
+        if _comb is not None:
+            combined_tag = f" [{'+' if _comb > 0 else ''}{_comb}]"
+            # Try to find the parlay bet line: a line mentioning multiple leg teams
+            leg_terms = []
+            for i in parlay_idxs:
+                for t in (picks[i].get("teams") or []):
+                    for w in t.lower().split():
+                        if len(w) > 3:
+                            leg_terms.append(w)
+            best_j, best_count = -1, 0
+            for j, line in enumerate(lines):
+                ll = line.lower()
+                hits = sum(1 for t in leg_terms if t in ll)
+                if hits > best_count:
+                    best_count = hits
+                    best_j = j
+            if best_j >= 0 and best_count >= 2 and not _ODDS_TAG_RE.search(lines[best_j]):
+                lines[best_j] = f"{lines[best_j].rstrip()}{combined_tag}"
+
+        # If no standalone picks, we're done
+        if not standalone_idxs:
+            return "\n".join(lines)
 
     def _fmt(v: int) -> str:
         return f"+{v}" if v > 0 else str(v)
 
     for idx, pick in enumerate(picks):
+        if pick.get("is_parlay_leg"):
+            continue  # parlay legs handled above via combined odds
         odds_val = odds_by_pick.get(str(idx), {}).get("odds")
         if odds_val is None:
             continue
