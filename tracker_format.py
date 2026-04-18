@@ -64,38 +64,11 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
     """
     lines = text.rstrip().split("\n")
 
-    is_parlay = any(v[0].get("is_parlay_leg") for v in verdicts)
+    parlay_verdicts = [v for v in verdicts if v[0].get("is_parlay_leg")]
+    standalone_verdicts = [v for v in verdicts if not v[0].get("is_parlay_leg")]
 
-    if is_parlay:
-        overall = _overall_verdict(verdicts)
-        emoji = _PICK_EMOJI.get(overall)
-        if not emoji:
-            return text  # PENDING / UNKNOWN — nothing to insert yet
-
-        # Prefer appending to the "Parlay:" header line
-        for i, line in enumerate(lines):
-            if "parlay" in line.lower() and not any(ch in line for ch in _PICK_EMOJI.values()):
-                lines[i] = f"{line.rstrip()}{emoji}"
-                return "\n".join(lines)
-
-        # Fallback: find the last leg line and append there
-        last_idx = -1
-        for pick, _verdict, _calc, _sport, *_ in verdicts:
-            if not pick.get("is_parlay_leg"):
-                continue
-            search_terms = _pick_search_terms(pick)
-            for i, line in enumerate(lines):
-                if any(term in line.lower() for term in search_terms):
-                    last_idx = max(last_idx, i)
-
-        if last_idx >= 0 and not any(ch in lines[last_idx] for ch in _PICK_EMOJI.values()):
-            lines[last_idx] = f"{lines[last_idx].rstrip()}{emoji}"
-        else:
-            lines.append(emoji)
-        return "\n".join(lines)
-
-    # ── Non-parlay: per-pick emoji ────────────────────────────────────────────
-    for pick, verdict, _calc, _sport, *_ in verdicts:
+    # ── Standalone picks: per-pick emoji ──────────────────────────────────────
+    for pick, verdict, _calc, _sport, *_ in standalone_verdicts:
         emoji = _PICK_EMOJI.get(verdict)
         if not emoji:
             continue  # UNKNOWN / PENDING — leave line alone
@@ -109,6 +82,33 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
             if any(term in line_lower for term in search_terms):
                 lines[i] = f"{line.rstrip()}{emoji}"
                 break  # one match per pick
+
+    # ── Parlay: single overall emoji ──────────────────────────────────────────
+    if parlay_verdicts:
+        overall = _overall_verdict(parlay_verdicts)
+        emoji = _PICK_EMOJI.get(overall)
+        if emoji:
+            # Prefer appending to the "Parlay:" header line
+            placed = False
+            for i, line in enumerate(lines):
+                if "parlay" in line.lower() and not any(ch in line for ch in _PICK_EMOJI.values()):
+                    lines[i] = f"{line.rstrip()}{emoji}"
+                    placed = True
+                    break
+
+            if not placed:
+                # Fallback: find the last leg line and append there
+                last_idx = -1
+                for pick, _verdict, _calc, _sport, *_ in parlay_verdicts:
+                    search_terms = _pick_search_terms(pick)
+                    for i, line in enumerate(lines):
+                        if any(term in line.lower() for term in search_terms):
+                            last_idx = max(last_idx, i)
+
+                if last_idx >= 0 and not any(ch in lines[last_idx] for ch in _PICK_EMOJI.values()):
+                    lines[last_idx] = f"{lines[last_idx].rstrip()}{emoji}"
+                else:
+                    lines.append(emoji)
 
     return "\n".join(lines)
 
