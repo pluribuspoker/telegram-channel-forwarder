@@ -7,6 +7,17 @@ from tracker_grading import _overall_verdict
 
 _PICK_EMOJI = {k: v for k, v in VERDICT_EMOJI.items() if k in ("WIN", "LOSS", "PUSH")}
 _ODDS_TAG_RE = re.compile(r'\s*\[[+-]\d{3,4}[^\]]*\]')
+# Lines that look like bet lines: contain odds, units, spread/total numbers, or bet-type keywords
+_BET_LINE_RE = re.compile(
+    r'(?i)'
+    r'(?:\[?[+-]\d{3,4}\]?'           # odds like +150, [-110]
+    r'|\b\d+\.5\b'                     # half-point lines (spreads/totals)
+    r'|\b\d+\s*units?\b'              # unit sizing
+    r'|\bml\b|\bmoneyline\b'          # moneyline keywords
+    r'|\bover\b|\bunder\b'              # totals
+    r'|\b[+-]\d+(?:\.5)?\b'           # spreads like -3, +7.5
+    r')'
+)
 
 
 def _pick_search_terms(pick: dict) -> list[str]:
@@ -48,6 +59,89 @@ def strip_label(text: str) -> str:
     return re.sub(r"[\u2705\u274c]", "", text).strip()
 
 
+def _match_pick_line(lines: list[str], pick: dict) -> int | None:
+    """Find the line index for a pick using cascading fallbacks.
+
+    1. Team/player name match (existing logic)
+    2. Description match (e.g. "Cleveland Cavaliers 1H -2.5" in line)
+    3. Stripped description (remove team words, match remainder like "1h -2.5")
+    4. Bet line number (e.g. "-2.5", "236.5")
+    5. Bet-line heuristic: odds, units, spread/total patterns — pick the
+       best candidate line that looks like a pick line
+    """
+    def _available(i: int) -> bool:
+        return not any(ch in lines[i] for ch in _PICK_EMOJI.values())
+
+    # Pass 1: team/player name
+    search_terms = _pick_search_terms(pick)
+    for i, line in enumerate(lines):
+        if not _available(i):
+            continue
+        line_lower = line.lower()
+        if any(term in line_lower for term in search_terms):
+            return i
+
+    # Pass 2: full description
+    desc = (pick.get("description") or "").lower().strip().replace("moneyline", "ml")
+    if desc:
+        for i, line in enumerate(lines):
+            if not _available(i):
+                continue
+            if desc in line.lower():
+                return i
+
+    # Pass 3: description with team/player words stripped
+    if desc:
+        player = pick.get("player") or ""
+        teams = pick.get("teams") or []
+        identifiers = [player] if player else teams
+        team_words = set()
+        for t in identifiers:
+            for w in t.lower().split():
+                if len(w) > 3:
+                    team_words.add(w)
+        desc_stripped = desc
+        for w in team_words:
+            desc_stripped = desc_stripped.replace(w, "")
+        desc_stripped = " ".join(desc_stripped.split())
+        if len(desc_stripped) >= 3:
+            for i, line in enumerate(lines):
+                if not _available(i):
+                    continue
+                if desc_stripped in line.lower():
+                    return i
+
+    # Pass 4: raw line number (e.g. "-2.5", "236.5")
+    pick_line = pick.get("line")
+    if pick_line is not None:
+        pick_line_f = float(pick_line)
+        line_str = str(int(pick_line_f)) if pick_line_f == int(pick_line_f) else str(pick_line_f)
+        for i, line in enumerate(lines):
+            if not _available(i):
+                continue
+            if line_str in line:
+                return i
+
+    # Pass 5: find the best line that looks like a bet line (has odds, units,
+    # spread numbers, etc.) but isn't a header/capper-name line.
+    # Score each line by how many bet-line indicators it has.
+    best_i, best_score = None, 0
+    for i, line in enumerate(lines):
+        if not _available(i):
+            continue
+        stripped = line.strip()
+        if not stripped or len(stripped) < 3:
+            continue
+        score = len(_BET_LINE_RE.findall(stripped))
+        if score > best_score:
+            best_score = score
+            best_i = i
+    if best_i is not None:
+        return best_i
+
+    return None
+
+
 def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
     """
     Insert verdict emoji(s) into the message text.
@@ -73,15 +167,9 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
         if not emoji:
             continue  # UNKNOWN / PENDING — leave line alone
 
-        search_terms = _pick_search_terms(pick)
-
-        for i, line in enumerate(lines):
-            if any(ch in line for ch in _PICK_EMOJI.values()):
-                continue  # already has an emoji — skip
-            line_lower = line.lower()
-            if any(term in line_lower for term in search_terms):
-                lines[i] = f"{line.rstrip()}{emoji}"
-                break  # one match per pick
+        matched = _match_pick_line(lines, pick)
+        if matched is not None:
+            lines[matched] = f"{lines[matched].rstrip()}{emoji}"
 
     # ── Parlay: single overall emoji ──────────────────────────────────────────
     if parlay_verdicts:
