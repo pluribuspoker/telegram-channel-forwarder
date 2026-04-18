@@ -574,7 +574,7 @@ async def main():
     parser.add_argument("--grade-only", action="store_true", help="Only grade pending, no screenshot")
     parser.add_argument("--no-send", action="store_true", help="Skip Telegram send")
     parser.add_argument("--setup-sheet", action="store_true", help="Set up sheet headers")
-    parser.add_argument("--days-back", type=int, default=3, help="Days back for past picks")
+    parser.add_argument("--days-back", type=int, default=3, help="Days back for grading pending picks")
     args = parser.parse_args()
 
     _init_db()
@@ -622,11 +622,21 @@ async def main():
         return
 
     # ── 6. Build screenshot data ──
+    # Use only picks currently on the sheet (not stale DB entries from older days)
     upcoming_picks = [p for p in picks if p.get("section") == "Upcoming"]
+    past_picks = [p for p in picks if p.get("section") == "Past"]
 
-    today = _date.today().isoformat()
-    past_cutoff = (_date.today() - timedelta(days=args.days_back)).isoformat()
-    past_picks = get_picks_for_dates(past_cutoff, today)
+    # Enrich past picks with verdicts from the DB
+    with _connect() as conn:
+        for p in past_picks:
+            iso_date = _date_to_iso(p["date"])
+            row = conn.execute(
+                "SELECT verdict, calc FROM sauce_picks WHERE date = ? AND bet = ?",
+                (iso_date, p["bet"]),
+            ).fetchone()
+            if row:
+                p["verdict"] = row["verdict"]
+                p["calc"] = row["calc"]
 
     print(f"\nScreenshot: {len(upcoming_picks)} upcoming, {len(past_picks)} past")
 
