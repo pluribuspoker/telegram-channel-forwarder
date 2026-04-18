@@ -634,10 +634,12 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     edit_failed=edit_failed,
                 )
                 if newly_resolved:
-                    _nr_pick_results = [
-                        (v[0], v[1], odds_by_pick.get(str(j), {}).get("odds"))
-                        for j, v in newly_resolved_indexed
-                    ]
+                    _nr_pick_results = []
+                    for j, v in newly_resolved_indexed:
+                        pick_dict = v[0]
+                        if not pick_dict.get("sport"):
+                            pick_dict["sport"] = v[3]  # pick_sport from verdicts
+                        _nr_pick_results.append((pick_dict, v[1], odds_by_pick.get(str(j), {}).get("odds")))
                     await audit.broadcast_results(
                         channel_id=channel_id,
                         message_id=msg.id,

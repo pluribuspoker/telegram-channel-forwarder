@@ -204,6 +204,35 @@ async def append_pick_rows(
             "pasteType": "PASTE_FORMAT",
         }
     }]
+    # Set result column (I) background color based on verdict
+    result_col_index = 8  # column I (0-indexed)
+    _COLORS = {
+        "win":  {"red": 0, "green": 1, "blue": 0},  # pure green
+        "lose": {"red": 1, "green": 0, "blue": 0},  # pure red
+        "push": {"red": 1, "green": 1, "blue": 0},  # yellow
+    }
+    for i, data_row in enumerate(rows_to_append):
+        result_val = data_row[result_col_index]
+        color = _COLORS.get(result_val)
+        if color:
+            fmt_requests.append({
+                "repeatCell": {
+                    "range": {
+                        "sheetId": worksheet.id,
+                        "startRowIndex": next_row - 1 + i,
+                        "endRowIndex": next_row + i,
+                        "startColumnIndex": result_col_index,
+                        "endColumnIndex": result_col_index + 1,
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "backgroundColor": color,
+                        }
+                    },
+                    "fields": "userEnteredFormat.backgroundColor",
+                }
+            })
+
     await asyncio.to_thread(
         spreadsheet.batch_update, {"requests": fmt_requests}
     )
