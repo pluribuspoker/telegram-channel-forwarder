@@ -104,7 +104,7 @@ async def classify_and_parse(picks: list[dict]) -> list[dict]:
     prompt = (
         "You are analyzing sports bets from a US capper's open-bets sheet.\n\n"
         "For each bet below, return a JSON list of objects with:\n"
-        '  "sport": "NBA|NCAAB|MLB|NFL|NHL|UFC|Tennis|Boxing|KBO|Other",\n'
+        '  "sport": "NBA|NCAAB|NCAAF|MLB|NFL|NHL|UFC|Tennis|Boxing|KBO|Other",\n'
         '  "bet_type": "spread|moneyline|total|team_total|prop",\n'
         '  "teams": ["Full canonical team name(s)"],\n'
         '  "line": <number or null>,\n'
@@ -113,7 +113,11 @@ async def classify_and_parse(picks: list[dict]) -> list[dict]:
         '  "prop_stat": "stat abbreviation or null",\n'
         '  "period": "game|1h|2h|1q|2q|3q|4q"\n\n'
         "Rules:\n"
-        '- Use full canonical team names (e.g. "Cleveland Guardians" not "Guardians")\n'
+        '- Use ESPN-style team names: "TCU Horned Frogs" not "Texas Christian University", '
+        '"Hawai\'i Rainbow Warriors", "BYU Cougars", "LA Clippers"\n'
+        '- Common abbreviations: UMKC=Kansas City Roos, FIU=Florida International Panthers, '
+        'UMass=Massachusetts Minutemen, GW=George Washington Revolutionaries, '
+        'Cal Baptist=California Baptist Lancers, SMU=SMU Mustangs, TTU=Texas Tech Red Raiders\n'
         '- For totals like "WSH/SF Over 7.5", teams should list both teams\n'
         '- For moneyline like "Suns ML", teams should list the team\n'
         '- For spreads like "Hornets -2.5", line=-2.5\n'

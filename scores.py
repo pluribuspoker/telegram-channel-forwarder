@@ -439,7 +439,8 @@ _TEAM_ALIASES: dict[str, str] = {
     "gsw warriors":  "golden state warriors",
     "sa spurs":      "san antonio spurs",
     "la lakers":     "los angeles lakers",
-    "la clippers":   "los angeles clippers",
+    "la clippers":   "la clippers",         # ESPN uses "LA Clippers", not "Los Angeles"
+    "los angeles clippers": "la clippers",
     "ny knicks":     "new york knicks",
     "nola pelicans": "new orleans pelicans",
     "philly sixers": "philadelphia 76ers",
@@ -473,9 +474,37 @@ _TEAM_ALIASES: dict[str, str] = {
     "sf giants":     "san francisco giants",
     "kc royals":     "kansas city royals",
     "tb rays":       "tampa bay rays",
+    # ── NCAAF / NCAAB ────────────────────────────────────────────────
+    "miami redhawks":      "miami (oh) redhawks",
+    "miami ohio":          "miami (oh)",
+    "miami ohio redhawks": "miami (oh) redhawks",
+    "seattle redhawks":    "seattle u redhawks",
+    "seattle":             "seattle u",
+    "american eagles":     "american university eagles",
+    "american":            "american university",
+    "umkc":                "kansas city",
+    "umkc roos":           "kansas city roos",
+    "fiu":                 "florida international",
+    "fiu panthers":        "florida international panthers",
+    "umass":               "massachusetts",
+    "umass minutemen":     "massachusetts minutemen",
+    "cal baptist":         "california baptist",
+    "cal baptist lancers": "california baptist lancers",
+    "st bonaventure":      "st. bonaventure",
+    "st bonaventure bonnies": "st. bonaventure bonnies",
+    "george washington colonials": "george washington revolutionaries",
+    "grand canyon antelopes": "grand canyon lopes",
+    "mel costa":             "melquizael costa",
     # ── UFL ───────────────────────────────────────────────────────────
     "arlington renegades": "dallas renegades",  # rebranded 2025
 }
+
+
+def _strip_accents(s: str) -> str:
+    import unicodedata
+    return "".join(
+        c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn"
+    )
 
 
 def _team_matches(term: str, team_name: str) -> bool:
@@ -484,8 +513,8 @@ def _team_matches(term: str, team_name: str) -> bool:
     'Iowa' matches 'Iowa Hawkeyes' but NOT 'Iowa State Cyclones'
     'Texas' matches 'Texas Longhorns' but NOT 'Texas Tech Red Raiders'
     """
-    t = term.lower().strip()
-    n = team_name.lower().strip()
+    t = _strip_accents(term.lower().strip())
+    n = _strip_accents(team_name.lower().strip())
     # Expand common abbreviations before matching
     t = _TEAM_ALIASES.get(t, t)
     if not t or not n:
