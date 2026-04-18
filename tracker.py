@@ -275,6 +275,11 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     int(k) for k, v in cached_leg_verdicts.items()
                     if isinstance(v, dict) and v.get("broadcasted")
                 }
+                # Skip fully-resolved messages where every leg has been broadcast
+                if cached_parse and already_broadcast_indices:
+                    n_picks = len(cached_parse.get("picks", []))
+                    if n_picks > 0 and len(already_broadcast_indices) >= n_picks:
+                        continue
                 parsed = cached_parse or await claude_parse(text, date_str)
                 if not parsed:
                     failed += 1
