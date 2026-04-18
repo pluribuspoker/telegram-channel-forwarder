@@ -585,7 +585,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 first_pick, _, first_calc, first_sport, first_game_date = verdicts[0]
 
                 edit_failed = False
-                if not dry_run:
+                text_unchanged = (new_text == html_text)
+                if not dry_run and not text_unchanged:
                     ok = await _bot_edit_message(
                         bot_token, channel_id, msg.id, new_text, msg.media is not None,
                     )
