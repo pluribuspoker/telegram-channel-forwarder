@@ -613,8 +613,11 @@ async def main():
     graded = await grade_pending(scoreboard_cache)
 
     # ── 5. Write to sheet ──
-    if graded:
-        await write_results_to_sheet(graded)
+    # Only append results for picks currently on the source sheet
+    sheet_keys = {(_date_to_iso(p["date"]), p["bet"]) for p in picks}
+    graded_on_sheet = [g for g in graded if (g["date"], g["bet"]) in sheet_keys]
+    if graded_on_sheet:
+        await write_results_to_sheet(graded_on_sheet)
 
     if args.grade_only:
         cost = usage_cost()
