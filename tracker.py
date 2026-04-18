@@ -468,7 +468,14 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # Build edited text — odds then emoji inserted inline after each pick's line
                 html_text = _to_bot_html(text, msg.entities)
                 html_text = _insert_odds(html_text, picks, odds_by_pick)
-                new_text = _insert_emojis(html_text, verdicts)
+                # Only insert emojis for picks not already broadcast — their emojis
+                # are already in the text.  Re-inserting them causes _match_pick_line
+                # to fall through to heuristic matching and place emojis on wrong lines.
+                emoji_verdicts = [
+                    v for j, v in enumerate(verdicts)
+                    if j not in already_broadcast_indices
+                ]
+                new_text = _insert_emojis(html_text, emoji_verdicts)
                 graded = [v for v in verdicts if v[1] in _PICK_EMOJI]
                 # Picks resolved this run that haven't been broadcast yet (keep index for odds lookup)
                 newly_resolved_indexed = [
