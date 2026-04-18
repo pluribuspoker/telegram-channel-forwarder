@@ -609,10 +609,11 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 new_leg_verdicts = dict(cached_leg_verdicts)
                 for j, (lpick, lverdict, lcalc, lps, lgd, *_) in enumerate(verdicts):
                     if lverdict in ("WIN", "LOSS", "PUSH"):
+                        already_bc = cached_leg_verdicts.get(str(j), {}).get("broadcasted", False)
                         new_leg_verdicts[str(j)] = {
                             "verdict": lverdict, "calc": lcalc,
                             "sport": lps, "game_date": lgd or date_str,
-                            "broadcasted": not edit_failed,
+                            "broadcasted": already_bc or not edit_failed,
                         }
                 pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
                 all_descs = "\n".join(
