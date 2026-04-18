@@ -480,14 +480,21 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 is_parlay = any(v[0].get("is_parlay_leg") for v in verdicts)
                 # For parlays, don't edit until ALL legs are resolved — a LOSS
                 # resolves the parlay immediately, but PENDING means we must wait.
+                # But if the message also contains standalone (non-parlay) picks
+                # that are newly resolved, we must still edit for those.
                 parlay_pending = is_parlay and overall == "PENDING"
+                newly_resolved_non_parlay = [
+                    v for _, v in newly_resolved_indexed
+                    if not v[0].get("is_parlay_leg")
+                ]
+                parlay_blocks_edit = parlay_pending and not newly_resolved_non_parlay
 
                 # Print all picks with their individual verdicts
                 has_pending = any(v[1] == "PENDING" for v in verdicts)
-                if not newly_resolved or parlay_pending:
-                    if has_espn_error and (has_pending or parlay_pending):
+                if not newly_resolved or parlay_blocks_edit:
+                    if has_espn_error and (has_pending or parlay_blocks_edit):
                         tag = "ESPN"
-                    elif has_pending or parlay_pending:
+                    elif has_pending or parlay_blocks_edit:
                         tag = "WAIT"
                     else:
                         tag = "SKIP"
@@ -526,7 +533,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
                 # Cache the parse result and any resolved leg verdicts to avoid re-calling
                 # Claude on subsequent runs for legs that are already graded.
-                if not graded or parlay_pending:
+                if not graded or parlay_blocks_edit:
                     new_leg_verdicts = dict(cached_leg_verdicts)  # preserve previously cached
                     for j, (lpick, lverdict, lcalc, lps, lgd, *_) in enumerate(verdicts):
                         if lverdict in ("WIN", "LOSS", "PUSH"):
@@ -537,8 +544,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
 
                 # Nothing new to grade this run — log and skip
-                if not newly_resolved or parlay_pending:
-                    if overall == "PENDING" or parlay_pending:
+                if not newly_resolved or parlay_blocks_edit:
+                    if overall == "PENDING" or parlay_blocks_edit:
                         pending += 1
                     else:
                         failed += 1
