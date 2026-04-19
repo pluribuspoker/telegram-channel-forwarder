@@ -665,14 +665,17 @@ async def main():
     except ValueError:
         if not dest.startswith("@"):
             dest = f"@{dest}"
-    print(f"Sending to {dest}...")
+
+    destinations = [dest, -1003977774560]
     client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
     await client.start()
-    entity = await client.get_entity(dest)
-    buf = io.BytesIO(img)
-    buf.name = "sauce_open_bets.png"
-    await client.send_file(entity, buf)
-    print("Sent!")
+    for d in destinations:
+        print(f"Sending to {d}...")
+        entity = await client.get_entity(d)
+        buf = io.BytesIO(img)
+        buf.name = "sauce_open_bets.png"
+        await client.send_file(entity, buf)
+        print(f"Sent to {d}!")
     await client.disconnect()
 
     cost = usage_cost()
