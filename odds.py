@@ -104,14 +104,17 @@ MARKETS_FULL = (
     "h2h_h1,spreads_h1,totals_h1,"
     "h2h_h2,spreads_h2,totals_h2,"
     "h2h_q1,spreads_q1,totals_q1,"
+    "h2h_p1,spreads_p1,totals_p1,alternate_totals_p1,"
+    "h2h_p2,spreads_p2,totals_p2,alternate_totals_p2,"
+    "h2h_p3,spreads_p3,totals_p3,alternate_totals_p3,"
     "h2h_1st_5_innings,spreads_1st_5_innings,totals_1st_5_innings,"
     "alternate_spreads_1st_5_innings,alternate_totals_1st_5_innings"
 )
 
 MARKETS_BY_TYPE: dict[str, str] = {
-    "moneyline":  "h2h,h2h_3_way,h2h_h1,h2h_h2,h2h_q1",
-    "spread":     "spreads,alternate_spreads,spreads_h1,spreads_h2,spreads_q1",
-    "total":      "totals,alternate_totals,totals_h1,totals_h2,totals_q1",
+    "moneyline":  "h2h,h2h_3_way,h2h_h1,h2h_h2,h2h_q1,h2h_p1,h2h_p2,h2h_p3",
+    "spread":     "spreads,alternate_spreads,spreads_h1,spreads_h2,spreads_q1,spreads_p1,spreads_p2,spreads_p3",
+    "total":      "totals,alternate_totals,totals_h1,totals_h2,totals_q1,totals_p1,totals_p2,totals_p3,alternate_totals_p1,alternate_totals_p2,alternate_totals_p3",
     "team_total": "team_totals,alternate_team_totals,team_totals_h1,alternate_team_totals_h1,team_totals_h2,alternate_team_totals_h2",
 }
 
@@ -130,13 +133,15 @@ HALF_POINT_COST: dict[str, float] = {
 
 _PERIOD_RE = re.compile(
     r'\b(1h|2h|1st half|2nd half|first half|second half|'
-    r'1q|2q|3q|4q|1st quarter|2nd quarter|3rd quarter|4th quarter)\b',
+    r'1q|2q|3q|4q|1st quarter|2nd quarter|3rd quarter|4th quarter|'
+    r'1p|2p|3p|1st period|2nd period|3rd period)\b',
     re.IGNORECASE,
 )
 
 _PERIOD_SUFFIX: dict[str, str] = {
     "1h": "_h1", "2h": "_h2",
     "1q": "_q1", "2q": "_q2", "3q": "_q3", "4q": "_q4",
+    "1p": "_p1", "2p": "_p2", "3p": "_p3",
 }
 
 # MLB uses inning-based market keys instead of _h1/_h2.
@@ -539,7 +544,7 @@ def _lookup_spread(sport: str, bookmakers: list[dict], team: str, pick_line: flo
 def _lookup_total(sport: str, bookmakers: list[dict], direction: str, pick_line: float, period: str = "game") -> dict:
     suffix       = _get_period_suffix(period, sport)
     main_mkt     = "totals" + suffix
-    alt_mkt      = ("alternate_totals" + suffix) if (not suffix or suffix.startswith("_1st_")) else None
+    alt_mkt      = ("alternate_totals" + suffix) if (not suffix or suffix.startswith("_1st_") or suffix.startswith("_p")) else None
     outcome_name = "Over" if direction == "over" else "Under"
 
     _empty = {"match_type": "no_total_data", "pick_line": pick_line,
@@ -696,7 +701,8 @@ def lookup_pick_odds(sport: str, pick: dict, bookmakers: list[dict]) -> dict:
         raw = m.group(1).lower().replace(" ", "").replace("st", "").replace("nd", "").replace("rd", "").replace("th", "")
         period = {"half": "1h", "1half": "1h", "2half": "2h",
                   "firsthalf": "1h", "secondhalf": "2h",
-                  "quarter": "1q", "1quarter": "1q"}.get(raw, raw)
+                  "quarter": "1q", "1quarter": "1q",
+                  "1period": "1p", "2period": "2p", "3period": "3p"}.get(raw, raw)
 
     if bet_type == "prop":
         return {"match_type": "player_prop_unavailable", "pick_line": line,

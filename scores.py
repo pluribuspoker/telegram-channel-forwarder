@@ -605,6 +605,7 @@ PERIOD_MAP: dict[tuple[str, str], list[int]] = {
     **{(s, p): v for s in ("NBA", "NCAAB", "NFL", "NCAAF", "UFL") for p, v in _QUARTER_PERIODS.items()},
     **{(s, p): v for s in ("MLB", "KBO") for p, v in _BASEBALL_PERIODS.items()},
     ("NHL", "1h"): [1],
+    ("NHL", "1p"): [1], ("NHL", "2p"): [2], ("NHL", "3p"): [3],
 }
 
 

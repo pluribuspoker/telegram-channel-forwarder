@@ -58,7 +58,7 @@ Return JSON (no markdown fences):
       "sport": null,
       "bet_type": "spread|moneyline|total|team_total|prop",
       "is_parlay_leg": false,
-      "period": "game|1h|2h|1q|2q|3q|4q",
+      "period": "game|1h|2h|1q|2q|3q|4q|1p|2p|3p",
       "teams": ["Full canonical team/player name(s) — e.g. 'Oklahoma City Thunder' not 'OKC Thunder', 'Los Angeles Lakers' not 'LA Lakers'. For player props, this MUST contain the player's current team (e.g. Evan Mobley PRA → teams: ['Cleveland Cavaliers']) so the game can be located — never leave empty for a player prop."],
       "player": "player name if this is a player prop, else null",
       "prop_stat": "stat abbrev if prop (e.g. PTS, REB, AST, PTS+REB, HITS), else null",
@@ -79,7 +79,7 @@ Classification rules:
 - If a single surname with a moneyline has no clear sport context and is not a known boxer or MMA fighter, default to UFC.
 - For parlays: list each leg as a separate pick with its REAL bet_type (moneyline, spread, etc.) and set is_parlay_leg=true on each. Do NOT use bet_type="parlay". When players/teams are slash-separated (e.g. "FAA/Shapovalov MLP" or "SPURS/GARCIA MLP"), split them into ONE pick per player/team — do not put two teams in one pick's teams field.
 - Cross-sport parlays: if legs belong to different sports (e.g. one NBA team + one UFC fighter), set the pick-level "sport" field to override the top-level sport for that leg. Leave pick "sport" as null when it matches the top-level sport.
-- Period: 1h=first half, 2h=second half, 1q=first quarter, game=full game (default).
+- Period: 1h=first half, 2h=second half, 1q=first quarter, 1p/2p/3p=hockey periods, game=full game (default).
 
 Message:
 {text}"""
@@ -103,7 +103,7 @@ Rules by bet type:
 - Total over/under (bet_type=total): ALWAYS add BOTH teams' scores regardless of how the pick is worded. score_A + score_B = combined. Compare combined to line. Even "Drake 1H Over 62.5" means the whole game's H1 combined, not just Drake's score — because bet_type is total, not team_total.
 - Team total (bet_type=team_total, e.g. "Hornets team total over 117.5"): use ONLY the named team's score, not combined.
 - Player prop (bet_type=prop): sum ONLY the stats explicitly named in the "Prop stat:" field. Do NOT include any other stats shown in the box score. Stat abbreviations decompose on '+' and '/'. Basketball: PTS=points, REB=rebounds, AST=assists, STL=steals, BLK=blocks, 3PM/3PT=three pointers, TO/TOV=turnovers. Baseball: H/HITS=hits, HR=homeRuns, R=runs, RBI=RBIs, BB=walks, AB=atBats. Examples: "PTS+REB+AST" → add ONLY PTS+REB+AST (ignore STL/BLK even if shown); "PRA" → PTS+REB+AST; "PR" → PTS+REB; "P+A" → PTS+AST. Show each component number in calc, e.g. "PTS(10)+REB(6)+AST(1)=17 vs 29.5".
-- Period bets (1H, 1Q, 2H): use ONLY the scores for that period shown in the data.
+- Period bets (1H, 1Q, 2H, 1P/2P/3P for hockey): use ONLY the scores for that period shown in the data.
 - UFC/MMA: use LAST NAME matching if the full name doesn't exactly match. "Alex Sola" matches "Axel Sola".
 - Boxing/UFC moneyline: fighter wins the bout → WIN. Loses → LOSS. Scores may show "W"/"L" or numeric points — use winner field or highest score. Draw or No Contest → PUSH.
 - Tennis set bet ("to win 2nd set", "to win a set"): use per-set scores (S1=, S2=, ...) from the data.
