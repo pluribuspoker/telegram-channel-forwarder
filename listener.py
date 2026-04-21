@@ -68,6 +68,7 @@ async def connection_watchdog(client):
 
 
 _DB_PATH = os.path.join(os.path.dirname(__file__), "picks.db")
+_in_flight: set[tuple[int, int]] = set()  # {(channel_id, msg_id)} – prevents race between event handler & catch-up
 
 
 def _probe_db_load() -> dict:
@@ -170,21 +171,34 @@ async def _trigger_tracker_soon():
 
 async def _forward_group(group, mapping, client, sender, dest_entity, use_test, catchup=False):
     """Shared forwarding logic: filter → enrich → log → send → record → trigger tracker."""
-    sent_by_id = mapping.get("_sent_by_user_id")
-    if sent_by_id and group[0].sender_id != sent_by_id:
-        return False
-    if not use_test and not passes_filter(group, mapping):
-        log_group(group, sent=False)
-        return False
-    caption, odds = await enrich_caption(group, mapping, client)
-    log_group(group, sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None, catchup=catchup)
-    await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds))
     ch_id = group[0].peer_id.channel_id
-    for m in group:
-        _forwarded_save(ch_id, m.id)
-    if not use_test:
-        asyncio.create_task(_trigger_tracker_soon())
-    return True
+
+    # Claim messages to prevent duplicate forwarding between event handler and catch-up.
+    # asyncio is single-threaded, so check-and-add is atomic between await points.
+    keys = [(ch_id, m.id) for m in group]
+    if any(k in _in_flight for k in keys):
+        return False
+    for k in keys:
+        _in_flight.add(k)
+
+    try:
+        sent_by_id = mapping.get("_sent_by_user_id")
+        if sent_by_id and group[0].sender_id != sent_by_id:
+            return False
+        if not use_test and not passes_filter(group, mapping):
+            log_group(group, sent=False)
+            return False
+        caption, odds = await enrich_caption(group, mapping, client)
+        log_group(group, sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None, catchup=catchup)
+        await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds))
+        for m in group:
+            _forwarded_save(ch_id, m.id)
+        if not use_test:
+            asyncio.create_task(_trigger_tracker_soon())
+        return True
+    finally:
+        for k in keys:
+            _in_flight.discard(k)
 
 
 async def channel_probe(client, channels, use_test):
