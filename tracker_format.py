@@ -380,3 +380,18 @@ async def _bot_edit_message(
     except Exception as exc:
         print(f"    [bot edit error] {exc}")
         return False
+
+
+async def _user_edit_message(
+    client,
+    channel_id: int,
+    message_id: int,
+    new_text: str,
+) -> bool:
+    """Edit a message via user account (Telethon). For messages sent with send_as_user."""
+    try:
+        await client.edit_message(channel_id, message_id, new_text, parse_mode="html")
+        return True
+    except Exception as exc:
+        print(f"    [user edit error] {exc}")
+        return False

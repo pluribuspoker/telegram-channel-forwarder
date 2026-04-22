@@ -46,6 +46,7 @@ from tracker_format import (
     _insert_odds,
     _fmt_odds_audit,
     _bot_edit_message,
+    _user_edit_message,
     _PICK_EMOJI,
 )
 from tracker_backtest import run_backtest
@@ -116,12 +117,26 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
         if dest and m.get("results_filter"):
             results_filter_map[dest] = m["results_filter"]
 
+    # Channels where messages are sent via user account and need user-account editing
+    user_edit_channels: set[int] = set()
+    for m in json.loads(os.getenv("MAPPINGS_CONFIG", "[]")):
+        if m.get("send_as_user") and m.get("dest_channel"):
+            user_edit_channels.add(m["dest_channel"])
+
     audit         = AuditLog(broadcast_results_mappings=broadcast_results_map)
     pending_cache = _load_pending_cache()
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
     mode   = "DRY RUN" if dry_run else "LIVE"
 
     async with TelegramClient(StringSession(session), api_id, api_hash) as client:
+
+        async def _edit_msg(ch_id: int, msg_id: int, new_text: str, has_media: bool) -> bool:
+            """Edit via bot, falling back to user account for send_as_user channels."""
+            ok = await _bot_edit_message(bot_token, ch_id, msg_id, new_text, has_media)
+            if not ok and ch_id in user_edit_channels:
+                ok = await _user_edit_message(client, ch_id, msg_id, new_text)
+            return ok
+
         # Resolve channel names once up front
         channel_names: dict[int, str] = {}
         for cid in channel_ids:
@@ -250,7 +265,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             _ht = _to_bot_html(text, msg.entities)
                             _odds_text = _insert_odds(_ht, dup_picks, dup_odds)
                             if _odds_text != _ht:
-                                await _bot_edit_message(bot_token, channel_id, msg.id, _odds_text, msg.media is not None)
+                                await _edit_msg(channel_id, msg.id, _odds_text, msg.media is not None)
                                 await asyncio.sleep(0.5)
                     continue  # primary row carries the +N dup annotation
                 # {"_failed": True} is stored after the first audit notification so we
@@ -368,7 +383,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         _ht = _to_bot_html(text, msg.entities)
                         _odds_text = _insert_odds(_ht, dup_picks, dup_odds)
                         if _odds_text != _ht:
-                            await _bot_edit_message(bot_token, channel_id, msg.id, _odds_text, msg.media is not None)
+                            await _edit_msg(channel_id, msg.id, _odds_text, msg.media is not None)
                             await asyncio.sleep(0.5)
                     # Cache the dupe marker so we skip claude_parse on future runs
                     pending_cache[cache_key] = {"_dupe": True, "primary_id": dup_id}
@@ -423,10 +438,10 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     _ht = _to_bot_html(text, msg.entities)
                     _odds_text = _insert_odds(_ht, picks, odds_by_pick)
                     if _odds_text != _ht:
-                        await _bot_edit_message(bot_token, channel_id, msg.id, _odds_text, msg.media is not None)
+                        await _edit_msg(channel_id, msg.id, _odds_text, msg.media is not None)
                         await asyncio.sleep(0.5)
                         for linked_id in cached_entry.get("linked_message_ids", []):
-                            await _bot_edit_message(bot_token, channel_id, linked_id, _odds_text, msg.media is not None)
+                            await _edit_msg(channel_id, linked_id, _odds_text, msg.media is not None)
                             await asyncio.sleep(0.5)
 
                 sb_key = (sport, date_str)
@@ -610,8 +625,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 edit_failed = False
                 text_unchanged = (new_text == html_text)
                 if not dry_run and not text_unchanged:
-                    ok = await _bot_edit_message(
-                        bot_token, channel_id, msg.id, new_text, msg.media is not None,
+                    ok = await _edit_msg(
+                        channel_id, msg.id, new_text, msg.media is not None,
                     )
                     if not ok:
                         errors += 1
@@ -619,8 +634,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     else:
                         await asyncio.sleep(0.5)   # stay under Telegram flood limit
                         for linked_id in pending_cache.get(cache_key, {}).get("linked_message_ids", []):
-                            await _bot_edit_message(
-                                bot_token, channel_id, linked_id, new_text, msg.media is not None,
+                            await _edit_msg(
+                                channel_id, linked_id, new_text, msg.media is not None,
                             )
                             await asyncio.sleep(0.5)
 
