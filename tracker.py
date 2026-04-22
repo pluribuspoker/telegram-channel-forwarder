@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import argparse
+import re
 
 from datetime import date as _date, timedelta
 from zoneinfo import ZoneInfo
@@ -103,6 +104,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
     # In dry-run, route to test_broadcast_results_channel so results can be previewed safely.
     broadcast_results_map: dict[int, int] = {}
     sheets_map: dict[int, str] = {}  # dest_channel → "sheet_id:gid"
+    results_filter_map: dict[int, str] = {}  # dest_channel → regex pattern
     for m in json.loads(os.getenv("MAPPINGS_CONFIG", "[]")):
         dest = m.get("dest_channel")
         bc_key = "test_broadcast_results_channel" if dry_run else "broadcast_results_channel"
@@ -111,6 +113,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
             broadcast_results_map[dest] = bc
         if dest and m.get("sheets_id"):
             sheets_map[dest] = m["sheets_id"]
+        if dest and m.get("results_filter"):
+            results_filter_map[dest] = m["results_filter"]
 
     audit         = AuditLog(broadcast_results_mappings=broadcast_results_map)
     pending_cache = _load_pending_cache()
@@ -217,6 +221,13 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # Skip messages whose first line contains "__" (manually excluded)
                 if "__" in text.splitlines()[0]:
                     continue
+                # Skip messages that don't match results_filter (e.g. leans without
+                # units in DF channel).  Already-cached messages are allowed through
+                # so partially-graded picks can finish.
+                rf = results_filter_map.get(channel_id)
+                if rf and cache_key not in pending_cache:
+                    if not re.search(rf, text):
+                        continue
                 # Skip already graded (check plain text) — but allow re-entry for
                 # partially-graded messages that still have a pending-cache entry.
                 if any(ch in text for ch in ("\u2705", "\u274c", "\u21a9\ufe0f")):
