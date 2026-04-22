@@ -103,6 +103,11 @@ python listener.py --test  # uses test_source/dest channels
 
 **`sent_by_user`** — Telegram username (without `@`). Only messages from this user are forwarded. The username is resolved to a numeric ID at startup. Not bypassed in `--test` mode.
 
+**`results_filter`** — regex applied to message text in the tracker; only matching messages are graded, emoji-edited, and appended to Google Sheets. Messages already in the pending cache are exempt (so partially-graded picks can finish). Use this to exclude leans or commentary that pass `filter_pattern` but shouldn't be tracked as picks.
+```json
+"results_filter": "(?i)\\(\\s*\\d*\\.?\\d+\\s*(?:UNITS?|U)\\s*\\)"
+```
+
 **`send_as_user`** — if `true`, messages are sent via the user account instead of the bot. Useful when the destination channel shouldn't show the bot as author.
 
 ### Logging

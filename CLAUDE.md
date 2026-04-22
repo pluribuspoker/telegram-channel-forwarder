@@ -48,6 +48,8 @@ Two-file split to protect sessions from `syncenv`:
 
 `syncenv` is safe to run freely. `.env.local` is loaded after `.env` in both Python code and systemd, so it always wins.
 
+**Regex escaping in `MAPPINGS_CONFIG`:** The JSON value is inside single quotes in the `.env` file, so regex backslashes need **four** backslashes (`\\\\`) to survive: shell quotes → JSON string → regex. For example, `\d+` becomes `\\\\d+` in `.env`.
+
 **Setting up `.env.local` (first time, on each machine):**
 
 ```bash
