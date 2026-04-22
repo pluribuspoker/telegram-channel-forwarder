@@ -297,7 +297,7 @@ async def main():
             sender_client = bot
             sender_dest_entity = bot_dest_entity
 
-        pair = (source_entity.id, dest_entity.id)
+        pair = (source_entity.id, dest_entity.id, topic_id)
         if pair in registered:
             continue
         registered.add(pair)
