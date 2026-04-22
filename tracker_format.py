@@ -235,22 +235,33 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         _comb = parlay_combined_odds(_leg_odds)
         if _comb is not None:
             combined_tag = f" [{'+' if _comb > 0 else ''}{_comb}]"
-            # Try to find the parlay bet line: a line mentioning multiple leg teams
-            leg_terms = []
-            for i in parlay_idxs:
-                for t in (picks[i].get("teams") or []):
-                    for w in t.lower().split():
-                        if len(w) > 3:
-                            leg_terms.append(w)
-            best_j, best_count = -1, 0
+            # Find the parlay/teaser header line (e.g. "Two Team Teaser / Parlay:")
+            # Prefer this over team-name matching, which can misfire when a leg
+            # line itself mentions multiple teams (e.g. "Pistons / Magic o208.5").
+            header_j = -1
             for j, line in enumerate(lines):
-                ll = line.lower()
-                hits = sum(1 for t in leg_terms if t in ll)
-                if hits > best_count:
-                    best_count = hits
-                    best_j = j
-            if best_j >= 0 and best_count >= 2 and not _ODDS_TAG_RE.search(lines[best_j]):
-                lines[best_j] = f"{lines[best_j].rstrip()}{combined_tag}"
+                if re.search(r'\b(?:parlay|teaser)\b', line, re.IGNORECASE):
+                    header_j = j
+                    break
+            # Fallback: line mentioning multiple leg teams
+            if header_j < 0:
+                leg_terms = []
+                for i in parlay_idxs:
+                    for t in (picks[i].get("teams") or []):
+                        for w in t.lower().split():
+                            if len(w) > 3:
+                                leg_terms.append(w)
+                best_j, best_count = -1, 0
+                for j, line in enumerate(lines):
+                    ll = line.lower()
+                    hits = sum(1 for t in leg_terms if t in ll)
+                    if hits > best_count:
+                        best_count = hits
+                        best_j = j
+                if best_j >= 0 and best_count >= 2:
+                    header_j = best_j
+            if header_j >= 0 and not _ODDS_TAG_RE.search(lines[header_j]):
+                lines[header_j] = f"{lines[header_j].rstrip()}{combined_tag}"
 
         # If no standalone picks, we're done
         if not standalone_idxs:
