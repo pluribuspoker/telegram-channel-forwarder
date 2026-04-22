@@ -211,7 +211,13 @@ async def channel_probe(client, channels, use_test):
             try:
                 probe_key = (source_entity.id, topic_id or 0)
                 kwargs = {"reply_to": topic_id} if topic_id else {}
-                min_id = last_seen.get(probe_key, 0)
+                if probe_key not in last_seen:
+                    # New mapping — seed with newest msg so we don't replay history
+                    seed = await client.get_messages(source_entity, limit=1, **kwargs)
+                    seed_id = seed[0].id if seed else 0
+                    last_seen[probe_key] = seed_id
+                    _probe_db_save(source_entity.id, topic_id, seed_id)
+                min_id = last_seen[probe_key]
                 msgs = await client.get_messages(source_entity, min_id=min_id, limit=50, **kwargs)
                 if not msgs:
                     print(f"\033[2m  ⊙ {src_label}: no new msg\033[0m")
