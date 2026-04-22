@@ -304,7 +304,12 @@ async def main():
 
         src_label = getattr(source_entity, 'title', source)
         if topic_id:
-            src_label += f" #{topic_id}"
+            try:
+                topic_msg = await client.get_messages(source_entity, ids=topic_id)
+                topic_name = topic_msg.action.title
+            except Exception:
+                topic_name = str(topic_id)
+            src_label += f" / {topic_name}"
         dst_label = getattr(dest_entity, 'title', dest_entity)
         channels.append((source_entity, sender_dest_entity, src_label, dst_label, topic_id, mapping, sender_client))
 
