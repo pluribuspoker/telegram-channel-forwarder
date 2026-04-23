@@ -652,7 +652,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         new_leg_verdicts[str(j)] = {
                             "verdict": lverdict, "calc": lcalc,
                             "sport": lps, "game_date": lgd or date_str,
-                            "broadcasted": already_bc or not edit_failed,
+                            "broadcasted": already_bc or (not dry_run and not edit_failed),
                         }
                 pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
                 all_descs = "\n".join(
