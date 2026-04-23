@@ -243,7 +243,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # In forwarded-only channels, skip messages not seeded by the listener
                 if channel_id in forwarded_only_channels:
                     cached_fwd = pending_cache.get(cache_key)
-                    if not (isinstance(cached_fwd, dict) and (cached_fwd.get("_forwarded") or "parsed" in cached_fwd)):
+                    if not (isinstance(cached_fwd, dict) and cached_fwd.get("_forwarded")):
                         continue
                 # Skip messages that don't match results_filter (e.g. leans without
                 # units in DF channel).  Already-cached messages are allowed through
