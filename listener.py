@@ -30,6 +30,7 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
 from common import enrich_caption, log_group, parse_channel, passes_filter, resolve_dest, send_group
+from tracker_cache import _load_pending_cache, _save_pending_cache
 
 load_dotenv(override=True)
 load_dotenv(".env.local", override=True)  # VPS-specific overrides (never synced)
@@ -190,9 +191,17 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
             return False
         caption, odds = await enrich_caption(group, mapping, client)
         log_group(group, sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None, catchup=catchup)
-        await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds))
+        sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds))
         for m in group:
             _forwarded_save(ch_id, m.id)
+        # Seed parse cache so the tracker knows this message was forwarded by us
+        if sent and sent is not True:
+            dest_ch = mapping.get("test_dest_channel") if use_test else mapping.get("dest_channel")
+            sent_ids = [s.id for s in sent] if isinstance(sent, list) else [sent.id]
+            cache = _load_pending_cache()
+            for sid in sent_ids:
+                cache[f"{dest_ch}:{sid}"] = {"_forwarded": True, "mapping_id": mapping.get("id", "")}
+            _save_pending_cache(cache)
         if not use_test:
             asyncio.create_task(_trigger_tracker_soon())
         return True

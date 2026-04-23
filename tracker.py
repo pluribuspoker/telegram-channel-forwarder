@@ -119,9 +119,13 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
     # Channels where messages are sent via user account and need user-account editing
     user_edit_channels: set[int] = set()
+    # Channels where only listener-forwarded messages should be graded
+    forwarded_only_channels: set[int] = set()
     for m in json.loads(os.getenv("MAPPINGS_CONFIG", "[]")):
         if m.get("send_as_user") and m.get("dest_channel"):
             user_edit_channels.add(m["dest_channel"])
+        if m.get("grade_forwarded_only") and m.get("dest_channel"):
+            forwarded_only_channels.add(m["dest_channel"])
 
     audit         = AuditLog(broadcast_results_mappings=broadcast_results_map)
     pending_cache = _load_pending_cache()
@@ -236,6 +240,11 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # Skip messages whose first line contains "__" (manually excluded)
                 if "__" in text.splitlines()[0]:
                     continue
+                # In forwarded-only channels, skip messages not seeded by the listener
+                if channel_id in forwarded_only_channels:
+                    cached_fwd = pending_cache.get(cache_key)
+                    if not (isinstance(cached_fwd, dict) and (cached_fwd.get("_forwarded") or "parsed" in cached_fwd)):
+                        continue
                 # Skip messages that don't match results_filter (e.g. leans without
                 # units in DF channel).  Already-cached messages are allowed through
                 # so partially-graded picks can finish.

@@ -222,8 +222,8 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
     text_only=True skips all media and sends just the caption as a plain message."""
     sender = sender or client
     if text_only and caption_override:
-        await sender.send_message(dest_entity, caption_override, silent=False)
-        return True
+        sent = await sender.send_message(dest_entity, caption_override, silent=False)
+        return sent
     if len(group) > 1:
         files = []
         caption = ""
@@ -243,9 +243,9 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
         if len(caption) > 1024:
             caption, caption_entities = strip_collapsed_blockquotes(caption, caption_entities)
         if len(caption) > 1024:
-            await sender.send_file(dest_entity, files[0], caption=caption, formatting_entities=caption_entities, silent=False)
+            sent = await sender.send_file(dest_entity, files[0], caption=caption, formatting_entities=caption_entities, silent=False)
         else:
-            await sender.send_file(dest_entity, files, caption=caption, formatting_entities=caption_entities, silent=False)
+            sent = await sender.send_file(dest_entity, files, caption=caption, formatting_entities=caption_entities, silent=False)
     else:
         msg = group[0]
         cap = caption_override if caption_override is not None else (msg.text or "")
@@ -254,17 +254,17 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
             photo = await client.download_media(msg.media, file=bytes)
             buf = io.BytesIO(photo)
             buf.name = "photo.jpg"
-            await sender.send_file(dest_entity, buf, caption=cap, formatting_entities=ents, silent=False)
+            sent = await sender.send_file(dest_entity, buf, caption=cap, formatting_entities=ents, silent=False)
 
         elif isinstance(msg.media, MessageMediaDocument):
             doc = await client.download_media(msg.media, file=bytes)
-            await sender.send_file(dest_entity, doc, caption=cap, formatting_entities=ents, silent=False)
+            sent = await sender.send_file(dest_entity, doc, caption=cap, formatting_entities=ents, silent=False)
 
         elif msg.text:
-            await sender.send_message(dest_entity, cap, formatting_entities=ents, silent=False)
+            sent = await sender.send_message(dest_entity, cap, formatting_entities=ents, silent=False)
 
         else:
             print(f"  Skipped message {msg.id} (unsupported type)")
             return False
 
-    return True
+    return sent
