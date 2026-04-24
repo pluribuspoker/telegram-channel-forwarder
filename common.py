@@ -215,14 +215,14 @@ def strip_collapsed_blockquotes(text, entities):
     return text, surviving
 
 
-async def send_group(client, group, dest_entity, sender=None, caption_override=None, text_only=False):
+async def send_group(client, group, dest_entity, sender=None, caption_override=None, text_only=False, reply_to=None):
     """Send a list of messages (album or single) to dest_entity, preserving formatting.
     Uses `sender` client for writing if provided, otherwise uses `client`.
     caption_override replaces the message text (e.g. after OCR enrichment).
     text_only=True skips all media and sends just the caption as a plain message."""
     sender = sender or client
     if text_only and caption_override:
-        sent = await sender.send_message(dest_entity, caption_override, silent=False)
+        sent = await sender.send_message(dest_entity, caption_override, silent=False, reply_to=reply_to)
         return sent
     if len(group) > 1:
         files = []
@@ -243,9 +243,9 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
         if len(caption) > 1024:
             caption, caption_entities = strip_collapsed_blockquotes(caption, caption_entities)
         if len(caption) > 1024:
-            sent = await sender.send_file(dest_entity, files[0], caption=caption, formatting_entities=caption_entities, silent=False)
+            sent = await sender.send_file(dest_entity, files[0], caption=caption, formatting_entities=caption_entities, silent=False, reply_to=reply_to)
         else:
-            sent = await sender.send_file(dest_entity, files, caption=caption, formatting_entities=caption_entities, silent=False)
+            sent = await sender.send_file(dest_entity, files, caption=caption, formatting_entities=caption_entities, silent=False, reply_to=reply_to)
     else:
         msg = group[0]
         cap = caption_override if caption_override is not None else (msg.text or "")
@@ -254,14 +254,14 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
             photo = await client.download_media(msg.media, file=bytes)
             buf = io.BytesIO(photo)
             buf.name = "photo.jpg"
-            sent = await sender.send_file(dest_entity, buf, caption=cap, formatting_entities=ents, silent=False)
+            sent = await sender.send_file(dest_entity, buf, caption=cap, formatting_entities=ents, silent=False, reply_to=reply_to)
 
         elif isinstance(msg.media, MessageMediaDocument):
             doc = await client.download_media(msg.media, file=bytes)
-            sent = await sender.send_file(dest_entity, doc, caption=cap, formatting_entities=ents, silent=False)
+            sent = await sender.send_file(dest_entity, doc, caption=cap, formatting_entities=ents, silent=False, reply_to=reply_to)
 
         elif msg.text:
-            sent = await sender.send_message(dest_entity, cap, formatting_entities=ents, silent=False)
+            sent = await sender.send_message(dest_entity, cap, formatting_entities=ents, silent=False, reply_to=reply_to)
 
         else:
             print(f"  Skipped message {msg.id} (unsupported type)")

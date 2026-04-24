@@ -103,6 +103,59 @@ def _probe_db_save(channel_id: int, topic_id, msg_id: int) -> None:
         pass
 
 
+def _reply_chain_init() -> None:
+    """Create the reply_chains table if needed."""
+    try:
+        conn = sqlite3.connect(_DB_PATH)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS reply_chains"
+            " (dest_channel INTEGER NOT NULL, capper_key TEXT NOT NULL,"
+            " last_msg_id INTEGER NOT NULL, PRIMARY KEY (dest_channel, capper_key))"
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def _reply_chain_get(dest_channel: int, capper_key: str) -> int | None:
+    """Return the last forwarded message ID for this capper in the dest channel."""
+    try:
+        conn = sqlite3.connect(_DB_PATH)
+        row = conn.execute(
+            "SELECT last_msg_id FROM reply_chains WHERE dest_channel = ? AND capper_key = ?",
+            (dest_channel, capper_key),
+        ).fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def _reply_chain_save(dest_channel: int, capper_key: str, msg_id: int) -> None:
+    """Update the last forwarded message ID for this capper."""
+    try:
+        conn = sqlite3.connect(_DB_PATH)
+        conn.execute(
+            "INSERT OR REPLACE INTO reply_chains (dest_channel, capper_key, last_msg_id) VALUES (?,?,?)",
+            (dest_channel, capper_key, msg_id),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def _extract_capper_key(text: str, cappers: list[str]) -> str | None:
+    """Match first line against capper prefixes. Returns None if no match."""
+    first_line = next((l.strip() for l in text.splitlines() if l.strip()), "")
+    fl_lower = first_line.lower()
+    for capper in cappers:
+        if fl_lower.startswith(capper.lower()):
+            return capper.lower()
+    return None
+
+
 def _forwarded_init() -> None:
     """Create the listener_forwarded table if needed and prune entries older than 48h."""
     try:
@@ -191,17 +244,35 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
             return False
         caption, odds = await enrich_caption(group, mapping, client)
         log_group(group, sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None, catchup=catchup)
-        sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds))
+        # Reply-chain: reply to the most recent forwarded message from the same capper
+        reply_to = None
+        chain_cappers = mapping.get("reply_chain_cappers")
+        dest_ch = mapping.get("test_dest_channel") if use_test else mapping.get("dest_channel")
+        capper_key = None
+        if chain_cappers and dest_ch:
+            msg_text = group[0].text or ""
+            capper_key = _extract_capper_key(msg_text, chain_cappers)
+            reply_to = _reply_chain_get(dest_ch, capper_key)
+        try:
+            sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds), reply_to=reply_to)
+        except Exception:
+            if reply_to:
+                # Reply target may have been deleted — retry without reply
+                sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds))
+            else:
+                raise
         for m in group:
             _forwarded_save(ch_id, m.id)
         # Seed parse cache so the tracker knows this message was forwarded by us
         if sent and sent is not True:
-            dest_ch = mapping.get("test_dest_channel") if use_test else mapping.get("dest_channel")
             sent_ids = [s.id for s in sent] if isinstance(sent, list) else [sent.id]
             cache = _load_pending_cache()
             for sid in sent_ids:
                 cache[f"{dest_ch}:{sid}"] = {"_forwarded": True, "mapping_id": mapping.get("id", "")}
             _save_pending_cache(cache)
+            # Update reply chain with the newest sent message
+            if capper_key and dest_ch:
+                _reply_chain_save(dest_ch, capper_key, sent_ids[-1])
         if not use_test:
             asyncio.create_task(_trigger_tracker_soon())
         return True
@@ -333,8 +404,9 @@ async def main():
         dst_label = getattr(dest_entity, 'title', dest_entity)
         channels.append((source_entity, sender_dest_entity, src_label, dst_label, topic_id, mapping, sender_client))
 
-    # ── Init forwarded tracking table ───────────────────────────────────────────
+    # ── Init DB tables ───────────────────────────────────────────────────────────
     _forwarded_init()
+    _reply_chain_init()
 
     # ── Print startup block ───────────────────────────────────────────────────
     print(f"\n{_SEP}")
