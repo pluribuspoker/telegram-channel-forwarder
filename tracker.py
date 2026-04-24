@@ -240,10 +240,15 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # Skip messages whose first line contains "__" (manually excluded)
                 if "__" in text.splitlines()[0]:
                     continue
-                # In forwarded-only channels, skip messages not seeded by the listener
+                # In forwarded-only channels, skip messages not seeded by the listener.
+                # Accept any existing cache entry (parsed/_dupe/_failed) as proof the
+                # message already passed the _forwarded gate on a previous run.
                 if channel_id in forwarded_only_channels:
                     cached_fwd = pending_cache.get(cache_key)
-                    if not (isinstance(cached_fwd, dict) and cached_fwd.get("_forwarded")):
+                    if not (isinstance(cached_fwd, dict) and (
+                        cached_fwd.get("_forwarded") or "parsed" in cached_fwd
+                        or cached_fwd.get("_dupe") or cached_fwd.get("_failed")
+                    )):
                         continue
                 # Skip messages that don't match results_filter (e.g. leans without
                 # units in DF channel).  Already-cached messages are allowed through

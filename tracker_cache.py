@@ -28,6 +28,10 @@ def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict
     }
     if existing.get("_unknown_notified"):
         entry["_unknown_notified"] = True
+    if existing.get("_forwarded"):
+        entry["_forwarded"] = True
+    if existing.get("mapping_id"):
+        entry["mapping_id"] = existing["mapping_id"]
     return entry
 
 
