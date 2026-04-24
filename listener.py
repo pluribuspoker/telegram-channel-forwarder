@@ -293,7 +293,12 @@ async def main():
         source = parse_channel(source_raw)
         topic_id = int(mapping["source_topic_id"]) if mapping.get("source_topic_id") and not use_test else None
 
-        source_entity = await client.get_entity(source)
+        try:
+            source_entity = await client.get_entity(source)
+        except Exception as e:
+            mid = mapping.get("id", source_raw)
+            print(f"  ⚠ Skipping mapping '{mid}': cannot resolve source channel ({e})")
+            continue
         dest_raw = resolve_dest(mapping, use_test)
         dest_entity = await client.get_entity(dest_raw)
         bot_dest_entity = await bot.get_entity(dest_raw)
