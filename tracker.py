@@ -268,11 +268,12 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 cached = pending_cache.get(cache_key)
                 # {"_dupe": True} is stored when this message was identified as a duplicate
                 # so we can skip claude_parse on subsequent runs without re-paying.
+                skip_odds = channel_id in forwarded_only_channels
                 if isinstance(cached, dict) and cached.get("_dupe"):
                     # Edit odds onto the duplicate if the primary has them but this msg doesn't yet
                     primary_key = f"{channel_id}:{cached.get('primary_id')}"
                     primary_entry = pending_cache.get(primary_key, {})
-                    if not dry_run and isinstance(primary_entry, dict):
+                    if not dry_run and not skip_odds and isinstance(primary_entry, dict):
                         dup_odds = primary_entry.get("odds_by_pick", {})
                         if any(v.get("odds") is not None for v in dup_odds.values()):
                             dup_picks = primary_entry.get("parsed", {}).get("picks", [])
@@ -405,12 +406,13 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
                 # ── Fetch odds at first encounter ─────────────────────────────
                 # Only fetch once — if odds_by_pick is already in the cache, reuse it.
+                # Skip odds entirely for forwarded-only channels (results only).
                 cached_entry = pending_cache.get(cache_key) if isinstance(pending_cache.get(cache_key), dict) else {}
-                odds_by_pick: dict = cached_entry.get("odds_by_pick", {})
+                odds_by_pick: dict = {} if skip_odds else cached_entry.get("odds_by_pick", {})
                 odds_were_empty = not odds_by_pick
-                if odds_were_empty:
+                if odds_were_empty and not skip_odds:
                     print(f"  [odds] fetching fresh (no cache) for {cache_key}")
-                if not odds_by_pick:
+                if not odds_by_pick and not skip_odds:
                     for i, pick in enumerate(picks):
                         pick_sport = pick.get("sport") or sport
                         result = await fetch_odds_current(pick_sport, pick)
@@ -448,7 +450,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
                 # Edit odds into the message so they appear while PENDING.
                 # Idempotent — _insert_odds won't re-add if tag already present.
-                if not dry_run and any(v.get("odds") is not None for v in odds_by_pick.values()):
+                if not dry_run and not skip_odds and any(v.get("odds") is not None for v in odds_by_pick.values()):
                     _ht = _to_bot_html(text, msg.entities)
                     _odds_text = _insert_odds(_ht, picks, odds_by_pick)
                     if _odds_text != _ht:
@@ -512,7 +514,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
                 # Build edited text — odds then emoji inserted inline after each pick's line
                 html_text = _to_bot_html(text, msg.entities)
-                html_text = _insert_odds(html_text, picks, odds_by_pick)
+                if not skip_odds:
+                    html_text = _insert_odds(html_text, picks, odds_by_pick)
                 # Only insert emojis for picks not already broadcast — their emojis
                 # are already in the text.  Re-inserting them causes _match_pick_line
                 # to fall through to heuristic matching and place emojis on wrong lines.
