@@ -156,6 +156,23 @@ async def _claude_create_with_retry(**kwargs) -> object:
             await asyncio.sleep(2 ** attempt)
 
 
+def _salvage_truncated(raw: str) -> dict | None:
+    """Try to recover completed picks from truncated JSON output."""
+    # Find the last complete object in the picks array
+    idx = raw.rfind('},')
+    if idx == -1:
+        return None
+    # Close the array and outer object
+    candidate = raw[:idx + 1] + '\n  ]\n}'
+    try:
+        parsed = json.loads(candidate)
+        if parsed.get("picks"):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    return None
+
+
 async def claude_parse(text: str, date: str | None = None) -> dict | None:
     from datetime import date as _d
     d = _d.fromisoformat(date) if date else _d.today()
@@ -163,14 +180,17 @@ async def claude_parse(text: str, date: str | None = None) -> dict | None:
     date_ctx = f"Context: Today is {day_name}, {d.strftime('%B')} {d.day}.\n" if day_name else ""
     resp = await _claude_create_with_retry(
         model="claude-sonnet-4-6",
-        max_tokens=500,
+        max_tokens=1500,
         messages=[{"role": "user", "content": _PARSE_PROMPT.format(text=text, date_context=date_ctx)}],
     )
     raw = re.sub(r"^```(?:json)?\n?|```$", "", resp.content[0].text.strip(), flags=re.MULTILINE).strip()
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        return None
+        # Truncated JSON — try to salvage completed picks
+        parsed = _salvage_truncated(raw)
+        if not parsed:
+            return None
 
     # Deterministic post-parse correction: Claude sometimes annotates the description
     # with "(KBO)" but leaves sport="Other". Override based on raw message text.
