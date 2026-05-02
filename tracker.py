@@ -66,6 +66,36 @@ _TBL_W   = _ID_W + 1 + _CAP_W + 2 + _DESC_W + 1 + _ODDS_W + 1 + 4  # total table
 
 _TAG_ICON = {"WAIT": "⏳", "EDIT": "✏", "DRY ": "🧪", "SKIP": "⚠", "ESPN": "📡"}
 
+_DAY_NAMES = {
+    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+    "friday": 4, "saturday": 5, "sunday": 6,
+}
+_DAY_RE = re.compile(
+    r'\b(' + '|'.join(_DAY_NAMES) + r')\b', re.IGNORECASE,
+)
+
+
+def _day_hint_date(text: str, msg_date: _date) -> str | None:
+    """Extract a day-of-week from message text and return the nearest future date.
+
+    When a capper posts "SATURDAY BEST BET" on Friday evening, the message
+    date (ET) is Friday but the game is Saturday.  This uses the explicit
+    day mention to compute the correct game date so we don't accidentally
+    match a same-matchup game from a consecutive-day series that already
+    completed on the message date.
+
+    Returns YYYY-MM-DD if the hint day differs from msg_date, else None.
+    """
+    m = _DAY_RE.search(text)
+    if not m:
+        return None
+    target_dow = _DAY_NAMES[m.group(1).lower()]
+    msg_dow = msg_date.weekday()
+    delta = (target_dow - msg_dow) % 7
+    if delta == 0:
+        return None  # same day — no override needed
+    return (msg_date + timedelta(days=delta)).isoformat()
+
 
 def _trunc(s: str, w: int) -> str:
     """Truncate string to width w, appending … if trimmed."""
@@ -316,6 +346,15 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     int(k) for k, v in cached_leg_verdicts.items()
                     if isinstance(v, dict) and v.get("broadcasted")
                 }
+                # Day-of-week hint from message text (e.g. "SATURDAY BEST BET"
+                # sent Friday evening).  Invalidate any cached verdicts whose
+                # game_date no longer matches the hint so they get re-graded
+                # against the correct game.
+                day_hint = _day_hint_date(text, _date.fromisoformat(date_str))
+                if day_hint:
+                    for k, v in cached_leg_verdicts.items():
+                        if isinstance(v, dict) and v.get("game_date") and v["game_date"] != day_hint:
+                            already_broadcast_indices.discard(int(k))
                 # Skip fully-resolved messages where every leg has been broadcast
                 if cached_parse and already_broadcast_indices:
                     n_picks = len(cached_parse.get("picks", []))
@@ -460,41 +499,56 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             await _edit_msg(channel_id, linked_id, _odds_text, msg.media is not None)
                             await asyncio.sleep(0.5)
 
-                sb_key = (sport, date_str)
+                base_date = day_hint or date_str
+                sb_key = (sport, base_date)
                 if sb_key not in scoreboard_cache:
-                    scoreboard_cache[sb_key] = await fetch_espn(sport, date_str)
+                    scoreboard_cache[sb_key] = await fetch_espn(sport, base_date)
 
                 verdicts = []
                 has_espn_error = False
                 for i, pick in enumerate(picks):
+                    pick_sport = pick.get("sport") or sport
+                    odds_gd = odds_by_pick.get(str(i), {}).get("game_date")
+                    # Prefer explicit day-of-week mention in the message
+                    # text (e.g. "SATURDAY BEST BET" sent Friday evening),
+                    # then Odds API game_date, then message date.
+                    if day_hint:
+                        eff_date = day_hint
+                    elif odds_gd and odds_gd != date_str:
+                        eff_date = odds_gd
+                    else:
+                        eff_date = date_str
+
                     cached_leg = cached_leg_verdicts.get(str(i))
+                    # Invalidate stale cached verdict if the game date
+                    # changed (day hint now points to the correct game).
+                    if cached_leg and day_hint and cached_leg.get("game_date") and cached_leg["game_date"] != day_hint:
+                        cached_leg = None
                     if cached_leg and cached_leg.get("verdict") in ("WIN", "LOSS", "PUSH"):
                         # Resolved leg — use cached verdict, skip ESPN + Claude calls
                         verdict   = cached_leg["verdict"]
                         calc      = cached_leg["calc"]
-                        pick_sport = cached_leg.get("sport", pick.get("sport") or sport)
-                        game_date  = cached_leg.get("game_date", date_str)
+                        pick_sport = cached_leg.get("sport", pick_sport)
+                        game_date  = cached_leg.get("game_date", eff_date)
                     else:
-                        pick_sport = pick.get("sport") or sport
-                        ps_key = (pick_sport, date_str)
+                        ps_key = (pick_sport, eff_date)
                         if ps_key not in scoreboard_cache:
-                            scoreboard_cache[ps_key] = await fetch_espn(pick_sport, date_str)
+                            scoreboard_cache[ps_key] = await fetch_espn(pick_sport, eff_date)
                         sb = scoreboard_cache[ps_key]
 
                         # Early grade: totals where score already exceeds the line
                         early = try_early_grade_math(pick_sport, pick, sb)
                         if early:
                             verdict, calc = early
-                            game_date = date_str
+                            game_date = eff_date
                         else:
                             # Early context: period bets where the period is complete
                             early_ctx = build_early_context(pick_sport, pick, sb)
                             if early_ctx:
-                                context, game_date = early_ctx, date_str
+                                context, game_date = early_ctx, eff_date
                             else:
-                                odds_gd = odds_by_pick.get(str(i), {}).get("game_date")
                                 context, game_date = await build_context(
-                                    pick_sport, date_str, pick, sb, summary_cache,
+                                    pick_sport, eff_date, pick, sb, summary_cache,
                                     odds_game_date=odds_gd,
                                 )
 
@@ -758,15 +812,21 @@ async def grade_one(text: str, date: str) -> None:
     scoreboard_cache: dict = {}
     summary_cache: dict = {}
 
-    sb_key = (sport, date)
-    scoreboard_cache[sb_key] = await fetch_espn(sport, date)
+    # Day-of-week hint overrides the supplied date
+    day_hint = _day_hint_date(clean, _date.fromisoformat(date))
+    eff_date = day_hint or date
+    if day_hint:
+        print(f"Day hint: {day_hint} (message date: {date})")
+
+    sb_key = (sport, eff_date)
+    scoreboard_cache[sb_key] = await fetch_espn(sport, eff_date)
 
     for i, pick in enumerate(picks, 1):
         pick_sport = pick.get("sport") or sport
         if pick_sport != sport:
-            ps_key = (pick_sport, date)
+            ps_key = (pick_sport, eff_date)
             if ps_key not in scoreboard_cache:
-                scoreboard_cache[ps_key] = await fetch_espn(pick_sport, date)
+                scoreboard_cache[ps_key] = await fetch_espn(pick_sport, eff_date)
             scoreboard = scoreboard_cache[ps_key]
         else:
             scoreboard = scoreboard_cache[sb_key]
@@ -789,9 +849,9 @@ async def grade_one(text: str, date: str) -> None:
             # Try period-complete early context
             early_ctx = build_early_context(pick_sport, pick, scoreboard)
             if early_ctx:
-                context, _game_date = early_ctx, date
+                context, _game_date = early_ctx, eff_date
             else:
-                context, _game_date = await build_context(pick_sport, date, pick, scoreboard, summary_cache)
+                context, _game_date = await build_context(pick_sport, eff_date, pick, scoreboard, summary_cache)
             print()
             print("  CONTEXT:")
             if context == CONTEXT_SKIP:
