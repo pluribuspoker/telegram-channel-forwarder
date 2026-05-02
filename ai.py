@@ -17,6 +17,7 @@ from scores import (
     fetch_espn_summary,
     fetch_kbo_context,
     fetch_odds_api_scores,
+    fetch_soccer_context,
     fetch_tennis_match_context,
     odds_api_context,
     scoreboard_text,
@@ -43,6 +44,12 @@ CONTEXT_SKIP = "__SKIP__"
 CONTEXT_PENDING = "__PENDING__"
 CONTEXT_ESPN_ERROR = "__ESPN_ERROR__"  # ESPN fetch failed (network/SSL); retry next run
 
+# Post-parse hint words that indicate Soccer when Claude returns sport="Other"
+_SOCCER_HINTS = (
+    "bundesliga", "epl", "premier league", "la liga", "serie a",
+    "ligue 1", "champions league", "europa league", "soccer",
+)
+
 
 # ─── Claude prompts ───────────────────────────────────────────────────────────
 
@@ -51,7 +58,7 @@ Extract the sports betting pick(s) from this message. Ignore stats, records, and
 {date_context}
 Return JSON (no markdown fences):
 {{
-  "sport": "NBA|NCAAB|MLB|NFL|NHL|UFL|Tennis|UFC|Boxing|KBO|Other",
+  "sport": "NBA|NCAAB|MLB|NFL|NHL|UFL|Tennis|UFC|Boxing|KBO|Soccer|Other",
   "picks": [
     {{
       "description": "concise one-line summary of the exact bet",
@@ -197,6 +204,11 @@ async def claude_parse(text: str, date: str | None = None) -> dict | None:
     if parsed and parsed.get("sport") == "Other" and "kbo" in text.lower():
         parsed["sport"] = "KBO"
 
+    if parsed and parsed.get("sport") == "Other":
+        tl = text.lower()
+        if any(h in tl for h in _SOCCER_HINTS):
+            parsed["sport"] = "Soccer"
+
     return parsed
 
 
@@ -277,6 +289,15 @@ async def build_context(
         if ctx == "PENDING":
             return CONTEXT_PENDING, game_date
         return (ctx if ctx else CONTEXT_PENDING), game_date
+
+    # Soccer: search ESPN across multiple leagues
+    if sport == "Soccer":
+        if not teams:
+            return CONTEXT_SKIP, date
+        ctx, game_date = await fetch_soccer_context(teams, date)
+        if ctx == "PENDING":
+            return CONTEXT_PENDING, game_date
+        return (ctx if ctx else CONTEXT_SKIP), game_date
 
     # Other unknown sports → skip
     if sport not in ESPN_LEAGUES:

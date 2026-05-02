@@ -2,6 +2,7 @@
 scores.py — Sports data layer: ESPN, Odds API, and score formatting.
 """
 
+import asyncio
 import json
 import os
 import re
@@ -22,6 +23,18 @@ ESPN_LEAGUES: dict[str, tuple[str, str]] = {
     "UFC":   ("mma", "ufc"),
     "UFL":   ("football", "ufl"),
 }
+
+# Soccer: multiple ESPN leagues to search across
+SOCCER_LEAGUES: list[tuple[str, str]] = [
+    ("soccer", "ger.1"),          # Bundesliga
+    ("soccer", "eng.1"),          # EPL
+    ("soccer", "esp.1"),          # La Liga
+    ("soccer", "ita.1"),          # Serie A
+    ("soccer", "fra.1"),          # Ligue 1
+    ("soccer", "usa.1"),          # MLS
+    ("soccer", "uefa.champions"), # Champions League
+    ("soccer", "uefa.europa"),    # Europa League
+]
 
 # Extra query params per sport (e.g. groups=50 for all D1 NCAAB games)
 SPORT_EXTRA_PARAMS: dict[str, dict] = {
@@ -187,6 +200,45 @@ def odds_api_context(fighter: str, events: list[dict]) -> str:
         score_str = "  ".join(f"{s['name']}: {s['score']}" for s in scores) if scores else "(no score data)"
         return f"{home} vs {away}\n{score_str}"
     return ""
+
+
+async def fetch_soccer_context(
+    teams: list[str], date: str,
+) -> tuple[str, str]:
+    """Search ESPN soccer leagues for score context.
+
+    Returns (context_str, game_date).  context_str is "PENDING" if the game
+    exists but isn't finished yet, or "" if not found at all.
+    """
+    if not teams:
+        return "", date
+
+    async def _fetch(http: httpx.AsyncClient, category: str, league: str, date_nodash: str) -> dict | None:
+        url = f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/scoreboard"
+        try:
+            r = await http.get(url, params={"dates": date_nodash, "limit": "200"})
+            r.raise_for_status()
+            return r.json()
+        except Exception:
+            return None
+
+    async with httpx.AsyncClient(timeout=10) as http:
+        for search_date in [date, (_date.fromisoformat(date) - timedelta(days=1)).isoformat()]:
+            date_nodash = search_date.replace("-", "")
+            results = await asyncio.gather(
+                *(_fetch(http, cat, lg, date_nodash) for cat, lg in SOCCER_LEAGUES)
+            )
+            for sb in results:
+                if sb is None:
+                    continue
+                completed = _completed_events(sb)
+                matched = find_event_ids(completed, teams)
+                if matched:
+                    display = {"events": [e for e in completed if e.get("id") in set(matched)]}
+                    return scoreboard_text(display, "Soccer"), search_date
+                if find_event_ids(sb.get("events", []), teams):
+                    return "PENDING", search_date
+    return "", date
 
 
 async def fetch_espn(sport: str, date: str) -> dict | None:
@@ -497,6 +549,12 @@ _TEAM_ALIASES: dict[str, str] = {
     "mel costa":             "melquizael costa",
     # ── UFL ───────────────────────────────────────────────────────────
     "arlington renegades": "dallas renegades",  # rebranded 2025
+    # ── Soccer (German/English city name variants) ────────────────────
+    "koln":              "cologne",
+    "fc koln":           "fc cologne",
+    "1. fc koln":        "fc cologne",
+    "gladbach":          "monchengladbach",
+    "borussia monchengladbach": "monchengladbach",
 }
 
 
