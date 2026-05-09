@@ -32,6 +32,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 import httpx
@@ -854,11 +855,25 @@ def _event_already_started(event_list: list[dict], event_id: str) -> bool:
         return False
 
 
+_ET = ZoneInfo("America/New_York")
+
+
+def _utc_to_eastern_date(commence_time: str) -> str | None:
+    """Convert a UTC ISO timestamp to a YYYY-MM-DD date in US Eastern time."""
+    if not commence_time or len(commence_time) < 10:
+        return None
+    try:
+        dt = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+        return dt.astimezone(_ET).strftime("%Y-%m-%d")
+    except ValueError:
+        return commence_time[:10]
+
+
 def _get_event_date(event_list: list[dict], event_id: str) -> str | None:
-    """Return YYYY-MM-DD from an event's commence_time, or None."""
+    """Return YYYY-MM-DD (US Eastern) from an event's commence_time, or None."""
     event = next((e for e in event_list if e.get("id") == event_id), None)
     ct = (event or {}).get("commence_time", "")
-    return ct[:10] if len(ct) >= 10 else None
+    return _utc_to_eastern_date(ct)
 
 
 async def _try_pregame(
@@ -878,7 +893,7 @@ async def _try_pregame(
     commence_time = event.get("commence_time", "")
     if not commence_time or len(commence_time) < 10:
         return None
-    game_date  = commence_time[:10]
+    game_date  = _utc_to_eastern_date(commence_time) or commence_time[:10]
     cache_date = f"pregame_{game_date}"
 
     bet_type = pick.get("bet_type", "")
