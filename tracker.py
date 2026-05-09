@@ -550,6 +550,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                 context, game_date = await build_context(
                                     pick_sport, eff_date, pick, sb, summary_cache,
                                     odds_game_date=odds_gd,
+                                    msg_date=date_str,
                                 )
 
                             if context in (CONTEXT_ESPN_ERROR, CONTEXT_PENDING):

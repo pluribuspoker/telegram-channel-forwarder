@@ -255,9 +255,11 @@ async def build_context(
     scoreboard: dict | None,
     summary_cache: dict,
     odds_game_date: str | None = None,
+    msg_date: str | None = None,
 ) -> tuple[str, str]:
     """Return (context_str, game_date) for grading this pick.
-    game_date is the actual date the game is/was played (may differ from pick date)."""
+    game_date is the actual date the game is/was played (may differ from pick date).
+    msg_date is the original message date (before odds/day-hint overrides)."""
     bet_type = pick.get("bet_type", "")
     period = pick.get("period", "game")
     player = pick.get("player") or ""
@@ -307,6 +309,9 @@ async def build_context(
     # NHL regulation/3-way moneylines also need line scores to detect OT periods.
     is_reg_ml = sport == "NHL" and is_regulation_ml(pick.get("description", ""))
     needs_summary = period != "game" or bet_type == "prop" or is_reg_ml
+    # True when the date was overridden (e.g. by odds_game_date) from the
+    # original message date — signals that the prev-day fallback is safe.
+    date_was_overridden = msg_date and date != msg_date
 
     if needs_summary and scoreboard:
         events = _completed_events(scoreboard)
@@ -317,6 +322,22 @@ async def build_context(
         # to the scoreboard path below which properly returns CONTEXT_PENDING/SKIP.
         if not event_ids and not (teams or player):
             event_ids = [e.get("id") for e in events if e.get("id")]
+
+        # No completed game on the primary date — try the previous day, but only
+        # when the date was overridden.  This handles consecutive-day series where
+        # the Odds API returns a game_date one day later than the actual game
+        # (message sent May 8, odds say May 9, but the completed game is on
+        # May 8's ESPN schedule).
+        if not event_ids and (teams or player) and date_was_overridden:
+            prev_date = (_date.fromisoformat(date) - timedelta(days=1)).isoformat()
+            prev_sb = await fetch_espn(sport, prev_date)
+            if prev_sb:
+                prev_completed = _completed_events(prev_sb)
+                prev_ids = find_event_ids(prev_completed, teams, player)
+                if prev_ids:
+                    event_ids = prev_ids
+                    scoreboard = prev_sb
+                    date = prev_date
 
         parts = []
         for eid in event_ids:
@@ -346,8 +367,20 @@ async def build_context(
                 # UFC: show the full card so grader sees all bouts; others: filter to the game
                 display = scoreboard if sport == "UFC" else {"events": [e for e in events if e.get("id") in set(relevant_ids)]}
                 return scoreboard_text(display, sport), date
-            # No completed match — check if game/bout exists but hasn't started/finished yet
+            # No completed match — check if game/bout exists but hasn't started/finished yet.
+            # Before returning PENDING, check the previous day for a completed game
+            # when the date was overridden (consecutive-day series with wrong odds date).
             if find_event_ids(scoreboard.get("events", []), teams, player):
+                if date_was_overridden:
+                    prev_date = (_date.fromisoformat(date) - timedelta(days=1)).isoformat()
+                    prev_sb = await fetch_espn(sport, prev_date)
+                    if prev_sb:
+                        prev_events = _completed_events(prev_sb)
+                        prev_ids = find_event_ids(prev_events, teams, player)
+                        prev_ufc_done = sport == "UFC" and not prev_ids and _ufc_bout_completed(prev_sb, teams, player)
+                        if prev_ids or prev_ufc_done:
+                            display = prev_sb if sport == "UFC" else {"events": [e for e in prev_events if e.get("id") in set(prev_ids)]}
+                            return scoreboard_text(display, sport), prev_date
                 return CONTEXT_PENDING, date
             # No match on exact date — try the previous day (handles "sent late" picks)
             prev_date = (_date.fromisoformat(date) - timedelta(days=1)).isoformat()
