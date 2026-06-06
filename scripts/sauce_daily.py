@@ -422,6 +422,8 @@ async def write_results_to_sheet(picks: list[dict]):
         ])
 
     end_row = next_row + len(rows) - 1
+    if end_row > ws.row_count:
+        await asyncio.to_thread(ws.add_rows, end_row - ws.row_count)
     await asyncio.to_thread(
         ws.update, f"A{next_row}:H{end_row}", rows, value_input_option="USER_ENTERED"
     )

@@ -242,7 +242,7 @@ gradetest  # dry run, last 2 days
 5. Grade PENDING picks using ESPN scores + Claude Sonnet
 6. Write results to [Google Sheet](https://docs.google.com/spreadsheets/d/1yozWEoQ5m6rqNC8-E5UGwg0ySjYbAybNHwPmtNTYIzM)
 7. Render screenshot (upcoming + past with ✅/❌ emoji)
-8. Send as DM to @Capperleaked
+8. Send to channel `-1003977774560`
 
 **Usage:**
 ```bash
