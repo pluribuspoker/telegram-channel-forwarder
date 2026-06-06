@@ -232,6 +232,9 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
     keys = [(ch_id, m.id) for m in group]
     if any(k in _in_flight for k in keys):
         return False
+    # Check persistent DB — catches late event-handler fires after catch-up already forwarded
+    if any(_was_forwarded(ch_id, m.id) for m in group):
+        return False
     for k in keys:
         _in_flight.add(k)
 
