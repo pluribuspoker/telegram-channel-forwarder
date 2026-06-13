@@ -34,6 +34,7 @@ SOCCER_LEAGUES: list[tuple[str, str]] = [
     ("soccer", "usa.1"),          # MLS
     ("soccer", "uefa.champions"), # Champions League
     ("soccer", "uefa.europa"),    # Europa League
+    ("soccer", "fifa.world"),     # FIFA World Cup
 ]
 
 # Extra query params per sport (e.g. groups=50 for all D1 NCAAB games)
@@ -203,24 +204,26 @@ def odds_api_context(fighter: str, events: list[dict]) -> str:
 
 
 async def fetch_soccer_context(
-    teams: list[str], date: str,
+    teams: list[str], date: str, include_stats: bool = False,
 ) -> tuple[str, str]:
     """Search ESPN soccer leagues for score context.
 
     Returns (context_str, game_date).  context_str is "PENDING" if the game
     exists but isn't finished yet, or "" if not found at all.
+    When include_stats is True, also fetches match summary for team stats
+    (corners, shots, etc.).
     """
     if not teams:
         return "", date
 
-    async def _fetch(http: httpx.AsyncClient, category: str, league: str, date_nodash: str) -> dict | None:
+    async def _fetch(http: httpx.AsyncClient, category: str, league: str, date_nodash: str) -> tuple[dict | None, str, str]:
         url = f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/scoreboard"
         try:
             r = await http.get(url, params={"dates": date_nodash, "limit": "200"})
             r.raise_for_status()
-            return r.json()
+            return r.json(), category, league
         except Exception:
-            return None
+            return None, category, league
 
     async with httpx.AsyncClient(timeout=10) as http:
         for search_date in [date, (_date.fromisoformat(date) - timedelta(days=1)).isoformat()]:
@@ -228,17 +231,48 @@ async def fetch_soccer_context(
             results = await asyncio.gather(
                 *(_fetch(http, cat, lg, date_nodash) for cat, lg in SOCCER_LEAGUES)
             )
-            for sb in results:
+            for sb, category, league in results:
                 if sb is None:
                     continue
                 completed = _completed_events(sb)
                 matched = find_event_ids(completed, teams)
                 if matched:
                     display = {"events": [e for e in completed if e.get("id") in set(matched)]}
-                    return scoreboard_text(display, "Soccer"), search_date
+                    ctx = scoreboard_text(display, "Soccer")
+                    if include_stats:
+                        stats = await _fetch_soccer_stats(http, category, league, matched[0])
+                        if stats:
+                            ctx += "\n" + stats
+                    return ctx, search_date
                 if find_event_ids(sb.get("events", []), teams):
                     return "PENDING", search_date
     return "", date
+
+
+async def _fetch_soccer_stats(http: httpx.AsyncClient, category: str, league: str, event_id: str) -> str:
+    """Fetch team statistics from ESPN summary for a soccer match."""
+    url = f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/summary"
+    try:
+        r = await http.get(url, params={"event": event_id}, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+    except Exception:
+        return ""
+    box_teams = data.get("boxscore", {}).get("teams", [])
+    if not box_teams:
+        return ""
+    lines = []
+    for team_data in box_teams:
+        team_name = team_data.get("team", {}).get("displayName", "?")
+        stats = {s["name"]: s["displayValue"] for s in team_data.get("statistics", [])}
+        parts = [f"{team_name}:"]
+        for key, label in [("wonCorners", "Corners"), ("foulsCommitted", "Fouls"),
+                           ("totalShots", "Shots"), ("shotsOnTarget", "On Target"),
+                           ("offsides", "Offsides"), ("yellowCards", "Yellows")]:
+            if key in stats:
+                parts.append(f"{label} {stats[key]}")
+        lines.append("  ".join(parts))
+    return "Match Stats:\n" + "\n".join(lines)
 
 
 async def fetch_espn(sport: str, date: str) -> dict | None:

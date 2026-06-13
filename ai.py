@@ -48,6 +48,7 @@ CONTEXT_ESPN_ERROR = "__ESPN_ERROR__"  # ESPN fetch failed (network/SSL); retry 
 _SOCCER_HINTS = (
     "bundesliga", "epl", "premier league", "la liga", "serie a",
     "ligue 1", "champions league", "europa league", "soccer",
+    "world cup", "fifa",
 )
 
 
@@ -296,7 +297,8 @@ async def build_context(
     if sport == "Soccer":
         if not teams:
             return CONTEXT_SKIP, date
-        ctx, game_date = await fetch_soccer_context(teams, date)
+        needs_stats = bool(pick.get("prop_stat"))
+        ctx, game_date = await fetch_soccer_context(teams, date, include_stats=needs_stats)
         if ctx == "PENDING":
             return CONTEXT_PENDING, game_date
         return (ctx if ctx else CONTEXT_SKIP), game_date

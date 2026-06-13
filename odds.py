@@ -61,7 +61,8 @@ SPORT_KEYS: dict[str, str] = {
     "NHL":   "icehockey_nhl",
     "UFC":   "mma_mixed_martial_arts",
     "UFL":   "americanfootball_ufl",
-    "KBO":   "baseball_kbo",
+    "KBO":    "baseball_kbo",
+    "Soccer": "soccer_fifa_world_cup",
 }
 
 PROP_STAT_MARKETS: dict[str, dict[str, str]] = {
@@ -130,6 +131,7 @@ HALF_POINT_COST: dict[str, float] = {
     "NHL":   0.020,
     "UFC":   0.000,
     "UFL":   0.022,
+    "Soccer": 0.020,
 }
 
 _PERIOD_RE = re.compile(
