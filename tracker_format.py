@@ -69,8 +69,19 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
     5. Bet-line heuristic: odds, units, spread/total patterns — pick the
        best candidate line that looks like a pick line
     """
+    # Pre-compute lines inside <blockquote> (stats/records, never picks)
+    bq_lines: set[int] = set()
+    in_bq = False
+    for i, line in enumerate(lines):
+        if "<blockquote" in line:
+            in_bq = True
+        if in_bq:
+            bq_lines.add(i)
+        if "</blockquote>" in line:
+            in_bq = False
+
     def _available(i: int) -> bool:
-        return not any(ch in lines[i] for ch in _PICK_EMOJI.values())
+        return i not in bq_lines and not any(ch in lines[i] for ch in _PICK_EMOJI.values())
 
     # Pass 1: team/player name
     search_terms = _pick_search_terms(pick)
