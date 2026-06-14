@@ -591,6 +591,16 @@ _TEAM_ALIASES: dict[str, str] = {
     "gladbach":          "monchengladbach",
     "borussia monchengladbach": "monchengladbach",
     "turkey":            "turkiye",  # ESPN uses official "Türkiye"
+    # ── Soccer (FIFA World Cup national team aliases) ────────────────
+    "holland":           "netherlands",
+    "czech republic":    "czechia",
+    "usa":               "united states",
+    "us":                "united states",
+    "usmnt":             "united states",
+    "korea republic":    "south korea",
+    "cabo verde":        "cape verde",
+    "drc":               "congo dr",
+    "cote d ivoire":     "ivory coast",
 }
 
 
