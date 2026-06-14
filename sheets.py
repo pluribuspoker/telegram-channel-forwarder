@@ -51,6 +51,10 @@ def _map_bet_type(pick: dict, odds: int | None) -> str:
         if odds is not None:
             return "DOG ML" if odds > 0 else "FAV ML"
         return "FAV ML"
+    if bt == "double_chance":
+        return "DOUBLE CHANCE"
+    if bt == "draw_no_bet":
+        return "DRAW NO BET"
     if bt == "prop":
         if direction == "over":
             return "OVER"

@@ -52,6 +52,12 @@ def _format_pick(pick: dict) -> str:
         sign = "+" if line > 0 else ""
         return f"{team}{period_tag} {sign}{line:g}"
 
+    if bet_type == "double_chance" and team:
+        return f"{team}{period_tag} DC"
+
+    if bet_type == "draw_no_bet" and team:
+        return f"{team}{period_tag} DNB"
+
     if bet_type == "moneyline" and team:
         suffix = " 3-way ML" if is_regulation_ml(pick.get("description", "")) else " ML"
         return f"{team}{period_tag}{suffix}"
@@ -66,7 +72,8 @@ def _format_pick(pick: dict) -> str:
             prefix = f"{team} "
         else:
             prefix = ""
-        return f"{prefix}{d}{line:g}"
+        stat = f" {prop_stat}" if prop_stat else ""
+        return f"{prefix}{d}{line:g}{stat}"
 
     if bet_type == "prop" and player:
         if line is not None and direction:

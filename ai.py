@@ -64,7 +64,7 @@ Return JSON (no markdown fences):
     {{
       "description": "concise one-line summary of the exact bet",
       "sport": null,
-      "bet_type": "spread|moneyline|total|team_total|prop",
+      "bet_type": "spread|moneyline|total|team_total|prop|double_chance|draw_no_bet",
       "is_parlay_leg": false,
       "period": "game|1h|2h|1q|2q|3q|4q|1p|2p|3p",
       "teams": ["Full canonical team/player name(s) — e.g. 'Oklahoma City Thunder' not 'OKC Thunder', 'Los Angeles Lakers' not 'LA Lakers'. For player props, this MUST contain the player's current team (e.g. Evan Mobley PRA → teams: ['Cleveland Cavaliers']) so the game can be located — never leave empty for a player prop."],
@@ -87,6 +87,8 @@ Classification rules:
 - If a single surname with a moneyline has no clear sport context and is not a known boxer or MMA fighter, default to UFC.
 - For parlays: list each leg as a separate pick with its REAL bet_type (moneyline, spread, etc.) and set is_parlay_leg=true on each. Do NOT use bet_type="parlay". When players/teams are slash-separated (e.g. "FAA/Shapovalov MLP" or "SPURS/GARCIA MLP"), split them into ONE pick per player/team — do not put two teams in one pick's teams field.
 - Cross-sport parlays: if legs belong to different sports (e.g. one NBA team + one UFC fighter), set the pick-level "sport" field to override the top-level sport for that leg. Leave pick "sport" as null when it matches the top-level sport.
+- Double chance: "X or Draw", "Draw or X", "X or Y" bets that cover two of three outcomes. Use bet_type="double_chance". Put the first-named team in "teams". line and direction should be null.
+- Draw no bet (DNB): "X draw no bet", "X DNB". Like moneyline but draw = refund. Use bet_type="draw_no_bet". Put the team in "teams". line and direction should be null.
 - Period: 1h=first half, 2h=second half, 1q=first quarter, 1p/2p/3p=hockey periods, game=full game (default).
 
 Message:
@@ -106,6 +108,8 @@ Rules by bet type:
     * Team listed as -X is the FAVORITE. WIN if that team wins by MORE than X. LOSS if they win by less or lose. PUSH if exactly X.
     * Team listed as +X is the UNDERDOG. WIN if that team wins OUTRIGHT (regardless of margin) OR loses by LESS than X. LOSS if they lose by MORE than X. PUSH if they lose by exactly X.
     * Example: Ohio State +8, Ohio State wins outright → WIN (dog won, cover guaranteed).
+- Double chance: covers two of three outcomes (e.g. "team or draw"). WIN if either covered outcome occurs. LOSS only if the one uncovered outcome occurs.
+- Draw no bet (DNB): team wins → WIN. Team loses → LOSS. Draw → PUSH.
 - Moneyline: did the picked team/fighter win outright?
 - NHL regulation/3-way moneyline (pick description contains "3-way", "60 min", "regulation", "reg ML", etc.): team must win in REGULATION only. If the score data shows OT=1 (or any OT column with a non-zero value), or P4 or more periods, the game went to overtime — the pick is a LOSS regardless of who won in OT.
 - Total over/under (bet_type=total): ALWAYS add BOTH teams' scores regardless of how the pick is worded. score_A + score_B = combined. Compare combined to line. Even "Drake 1H Over 62.5" means the whole game's H1 combined, not just Drake's score — because bet_type is total, not team_total.
