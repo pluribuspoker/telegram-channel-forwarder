@@ -52,6 +52,14 @@ def _find_duplicate_cache_key(
             continue
         if entry.get("capper_name", "").lower() != capper_lower:
             continue
+        # Skip fully-resolved entries — a new message matching a completed pick
+        # is a new game, not a duplicate (e.g. same team ML on different days).
+        leg_verdicts = entry.get("leg_verdicts", {})
+        if leg_verdicts and all(
+            isinstance(v, dict) and v.get("verdict") in ("WIN", "LOSS", "PUSH")
+            for v in leg_verdicts.values()
+        ):
+            continue
         existing_picks = entry.get("parsed", {}).get("picks", [])
         if not existing_picks:
             continue
