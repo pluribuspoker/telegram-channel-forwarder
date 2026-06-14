@@ -712,6 +712,10 @@ def lookup_pick_odds(sport: str, pick: dict, bookmakers: list[dict]) -> dict:
                 "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
     if bet_type == "team_total":
+        prop_stat = (pick.get("prop_stat") or "").upper()
+        if prop_stat and prop_stat != "GOALS":
+            return {"match_type": f"prop_stat_unsupported({prop_stat})", "pick_line": line,
+                    "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
         if line is None or not direction:
             return {"match_type": "missing_line_or_direction", "pick_line": line,
                     "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
@@ -732,6 +736,10 @@ def lookup_pick_odds(sport: str, pick: dict, bookmakers: list[dict]) -> dict:
         return _lookup_spread(sport, bookmakers, teams[0] if teams else "", float(line), period)
 
     if bet_type == "total":
+        prop_stat = (pick.get("prop_stat") or "").upper()
+        if prop_stat and prop_stat != "GOALS":
+            return {"match_type": f"prop_stat_unsupported({prop_stat})", "pick_line": line,
+                    "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
         if line is None or not direction:
             return {"match_type": "missing_line_or_direction", "pick_line": line,
                     "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
@@ -813,6 +821,12 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
                 api_line    = r["api_line"],
                 pick_line   = r["pick_line"],
             )
+
+        # ── Non-goals team/game totals (corners, etc.): Odds API has no market ─
+        if bet_type in ("team_total", "total"):
+            prop_stat = (pick.get("prop_stat") or "").upper()
+            if prop_stat and prop_stat != "GOALS":
+                return OddsResult(match_type=f"prop_stat_unsupported({prop_stat})", pick_line=pick.get("line"))
 
         # ── All other bet types ───────────────────────────────────────────────
         bookmakers: list[dict] = []
@@ -905,6 +919,11 @@ async def _try_pregame(
         if not prop_market:
             return None
         markets = prop_market
+    elif bet_type in ("team_total", "total"):
+        prop_stat = (pick.get("prop_stat") or "").upper()
+        if prop_stat and prop_stat != "GOALS":
+            return None
+        markets = _markets_for_pick(pick, sport)
     else:
         markets = _markets_for_pick(pick, sport)
 
@@ -1012,6 +1031,12 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
                 pick_line  = r["pick_line"],
                 game_date  = gd,
             )
+
+        # ── Non-goals team/game totals (corners, etc.): Odds API has no market ─
+        if bet_type in ("team_total", "total"):
+            prop_stat = (pick.get("prop_stat") or "").upper()
+            if prop_stat and prop_stat != "GOALS":
+                return OddsResult(match_type=f"prop_stat_unsupported({prop_stat})", pick_line=pick.get("line"))
 
         # ── All other bet types ───────────────────────────────────────────────
         bookmakers: list[dict] = []
