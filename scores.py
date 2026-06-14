@@ -226,7 +226,8 @@ async def fetch_soccer_context(
             return None, category, league
 
     async with httpx.AsyncClient(timeout=10) as http:
-        for search_date in [date, (_date.fromisoformat(date) - timedelta(days=1)).isoformat()]:
+        d = _date.fromisoformat(date)
+        for search_date in [date, (d - timedelta(days=1)).isoformat(), (d + timedelta(days=1)).isoformat()]:
             date_nodash = search_date.replace("-", "")
             results = await asyncio.gather(
                 *(_fetch(http, cat, lg, date_nodash) for cat, lg in SOCCER_LEAGUES)
@@ -589,6 +590,7 @@ _TEAM_ALIASES: dict[str, str] = {
     "1. fc koln":        "fc cologne",
     "gladbach":          "monchengladbach",
     "borussia monchengladbach": "monchengladbach",
+    "turkey":            "turkiye",  # ESPN uses official "Türkiye"
 }
 
 
