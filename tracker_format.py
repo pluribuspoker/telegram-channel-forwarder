@@ -9,11 +9,26 @@ _PICK_EMOJI = {k: v for k, v in VERDICT_EMOJI.items() if k in ("WIN", "LOSS", "P
 _ODDS_TAG_RE = re.compile(r'\s*\[[+-]\d{3,4}[^\]]*\]')
 # Lines that look like bet lines: contain odds, units, spread/total numbers, or bet-type keywords
 _OU_RE = re.compile(r'\b(over|under)(?:\s+|(?=\d))')
+_F5_RE = re.compile(r'\bfirst\s+5\s+innings\b')
+_1H_RE = re.compile(r'\b(?:first|1st)\s+half\b')
+_2H_RE = re.compile(r'\b(?:second|2nd)\s+half\b')
+_TT_RE = re.compile(r'\bteam\s+total\b')
+_RL_RE = re.compile(r'\brun\s+line\b')
 
-def _norm_ou(s: str) -> str:
-    """Normalize over/under and moneyline abbreviations for matching."""
+def _norm_abbr(s: str) -> str:
+    """Normalize common betting abbreviations for matching.
+
+    Collapses both expanded and abbreviated forms to the short form so that
+    e.g. "Under 7.5" and "U7.5" compare equal after normalization.
+    """
     s = s.replace("moneyline", "ml")
-    return _OU_RE.sub(lambda m: m.group(1)[0], s)
+    s = _OU_RE.sub(lambda m: m.group(1)[0], s)
+    s = _F5_RE.sub("f5", s)
+    s = _1H_RE.sub("1h", s)
+    s = _2H_RE.sub("2h", s)
+    s = _TT_RE.sub("tt", s)
+    s = _RL_RE.sub("rl", s)
+    return s
 
 _BET_LINE_RE = re.compile(
     r'(?i)'
@@ -21,8 +36,10 @@ _BET_LINE_RE = re.compile(
     r'|\b\d+\.5\b'                     # half-point lines (spreads/totals)
     r'|\b\d+\s*units?\b'              # unit sizing
     r'|\bml\b|\bmoneyline\b'          # moneyline keywords
-    r'|\bover\b|\bunder\b'              # totals
+    r'|\bover\b|\bunder\b'            # totals (spelled out)
+    r'|\b[ou]\d'                       # abbreviated totals like U7, O8.5
     r'|\b[+-]\d+(?:\.5)?\b'           # spreads like -3, +7.5
+    r'|\b(?:tt|rl|f5|1h|2h)\b'        # common bet-type abbreviations
     r')'
 )
 
@@ -100,12 +117,12 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
             return i
 
     # Pass 2: full description
-    desc = _norm_ou((pick.get("description") or "").lower().strip())
+    desc = _norm_abbr((pick.get("description") or "").lower().strip())
     if desc:
         for i, line in enumerate(lines):
             if not _available(i):
                 continue
-            if desc in _norm_ou(line.lower()):
+            if desc in _norm_abbr(line.lower()):
                 return i
 
     # Pass 3: description with team/player words stripped
@@ -126,7 +143,7 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
             for i, line in enumerate(lines):
                 if not _available(i):
                     continue
-                if desc_stripped in _norm_ou(line.lower()):
+                if desc_stripped in _norm_abbr(line.lower()):
                     return i
 
     # Pass 4: raw line number (e.g. "-2.5", "236.5")
@@ -309,11 +326,11 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         # false matches on game-info header lines (e.g. "Defenders @ Aviators / 8:00 PM").
         # Normalise common abbreviations so AI-expanded descriptions match message text:
         #   "moneyline" → "ml", "under X" → "uX", "over X" → "oX"
-        desc = _norm_ou((pick.get("description") or "").lower().strip())
+        desc = _norm_abbr((pick.get("description") or "").lower().strip())
         desc_matched = False
         if desc:
             for j, line in enumerate(lines):
-                if desc in _norm_ou(line.lower()):
+                if desc in _norm_abbr(line.lower()):
                     if not _ODDS_TAG_RE.search(line):
                         lines[j] = f"{line.rstrip()}{odds_tag}"
                     desc_matched = True
@@ -321,8 +338,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
 
         if not desc_matched:
             for j, line in enumerate(lines):
-                if " @ " in line:  # skip game-info header (e.g. "Team A @ Team B / 8:00 PM")
-                    continue
+                if " @ " in line and not _BET_LINE_RE.search(line):
+                    continue  # skip game-info headers, but keep pick lines
                 if any(term in line.lower() for term in search_terms):
                     if _ODDS_TAG_RE.search(line):
                         break  # already tagged — idempotent
@@ -347,9 +364,9 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             desc_stripped = " ".join(desc_stripped.split())  # collapse whitespace
             if len(desc_stripped) >= 4:
                 for j, line in enumerate(lines):
-                    if " @ " in line:
+                    if " @ " in line and not _BET_LINE_RE.search(line):
                         continue
-                    if desc_stripped in _norm_ou(line.lower()):
+                    if desc_stripped in _norm_abbr(line.lower()):
                         if not _ODDS_TAG_RE.search(line):
                             lines[j] = f"{line.rstrip()}{odds_tag}"
                         desc_matched = True
@@ -364,7 +381,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 pick_line_f = float(pick_line)
                 line_str = str(int(pick_line_f)) if pick_line_f == int(pick_line_f) else str(pick_line_f)
                 for j, row in enumerate(lines):
-                    if " @ " in row:
+                    if " @ " in row and not _BET_LINE_RE.search(row):
                         continue
                     if line_str in row:
                         if not _ODDS_TAG_RE.search(row):
