@@ -8,6 +8,13 @@ from tracker_grading import _overall_verdict
 _PICK_EMOJI = {k: v for k, v in VERDICT_EMOJI.items() if k in ("WIN", "LOSS", "PUSH")}
 _ODDS_TAG_RE = re.compile(r'\s*\[[+-]\d{3,4}[^\]]*\]')
 # Lines that look like bet lines: contain odds, units, spread/total numbers, or bet-type keywords
+_OU_RE = re.compile(r'\b(over|under)(?:\s+|(?=\d))')
+
+def _norm_ou(s: str) -> str:
+    """Normalize over/under and moneyline abbreviations for matching."""
+    s = s.replace("moneyline", "ml")
+    return _OU_RE.sub(lambda m: m.group(1)[0], s)
+
 _BET_LINE_RE = re.compile(
     r'(?i)'
     r'(?:\[?[+-]\d{3,4}\]?'           # odds like +150, [-110]
@@ -93,12 +100,12 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
             return i
 
     # Pass 2: full description
-    desc = (pick.get("description") or "").lower().strip().replace("moneyline", "ml")
+    desc = _norm_ou((pick.get("description") or "").lower().strip())
     if desc:
         for i, line in enumerate(lines):
             if not _available(i):
                 continue
-            if desc in line.lower():
+            if desc in _norm_ou(line.lower()):
                 return i
 
     # Pass 3: description with team/player words stripped
@@ -119,7 +126,7 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
             for i, line in enumerate(lines):
                 if not _available(i):
                     continue
-                if desc_stripped in line.lower():
+                if desc_stripped in _norm_ou(line.lower()):
                     return i
 
     # Pass 4: raw line number (e.g. "-2.5", "236.5")
@@ -300,12 +307,13 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
 
         # Try description first: more specific than team/player fragments and avoids
         # false matches on game-info header lines (e.g. "Defenders @ Aviators / 8:00 PM").
-        # Normalise "moneyline" → "ml" so AI-expanded descriptions match message abbreviations.
-        desc = (pick.get("description") or "").lower().strip().replace("moneyline", "ml")
+        # Normalise common abbreviations so AI-expanded descriptions match message text:
+        #   "moneyline" → "ml", "under X" → "uX", "over X" → "oX"
+        desc = _norm_ou((pick.get("description") or "").lower().strip())
         desc_matched = False
         if desc:
             for j, line in enumerate(lines):
-                if desc in line.lower():
+                if desc in _norm_ou(line.lower()):
                     if not _ODDS_TAG_RE.search(line):
                         lines[j] = f"{line.rstrip()}{odds_tag}"
                     desc_matched = True
@@ -341,7 +349,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 for j, line in enumerate(lines):
                     if " @ " in line:
                         continue
-                    if desc_stripped in line.lower():
+                    if desc_stripped in _norm_ou(line.lower()):
                         if not _ODDS_TAG_RE.search(line):
                             lines[j] = f"{line.rstrip()}{odds_tag}"
                         desc_matched = True
