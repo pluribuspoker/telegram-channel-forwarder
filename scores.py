@@ -429,18 +429,32 @@ def scoreboard_text(data: dict, sport: str) -> str:
     return "\n".join(lines) or "No games found for this date"
 
 
-def line_scores_text(summary: dict) -> str:
+def line_scores_text(summary: dict, sport: str = "") -> str:
     """Format per-quarter/half scores from a game summary."""
     header = summary.get("header", {})
     comps = header.get("competitions", [{}])[0]
     lines = []
+
+    is_baseball = sport in ("MLB", "KBO")
 
     for c in comps.get("competitors", []):
         team = c.get("team", {}).get("displayName", "?")
         ls = [x.get("displayValue", "?") for x in c.get("linescores", [])]
         final = c.get("score", "?")
 
-        if len(ls) >= 4:
+        if is_baseball and len(ls) >= 5:
+            # Baseball: show each inning + H1 (innings 1-5) and H2 (innings 6-9)
+            try:
+                h1 = str(sum(int(ls[i]) for i in range(5)))
+            except ValueError:
+                h1 = "?"
+            try:
+                h2 = str(sum(int(ls[i]) for i in range(5, len(ls))))
+            except ValueError:
+                h2 = "?"
+            innings = ' '.join(f"I{i+1}={s}" for i, s in enumerate(ls))
+            lines.append(f"{team}: {innings} | H1={h1} H2={h2} | Final={final}")
+        elif len(ls) >= 4:
             # Basketball: Q1 Q2 Q3 Q4 [OT...]
             try:
                 h1 = str(int(ls[0]) + int(ls[1]))

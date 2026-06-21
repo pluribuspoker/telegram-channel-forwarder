@@ -51,6 +51,23 @@ _SOCCER_HINTS = (
     "world cup", "fifa",
 )
 
+# Country/national team names → Soccer (FIFA) when Claude returns sport="Other"
+_FIFA_COUNTRIES = {
+    "japan", "brazil", "france", "germany", "argentina", "mexico", "england",
+    "spain", "italy", "portugal", "netherlands", "holland", "south korea",
+    "korea", "australia", "canada", "usa", "united states", "croatia",
+    "morocco", "senegal", "cameroon", "ghana", "nigeria", "egypt", "tunisia",
+    "saudi arabia", "qatar", "iran", "uruguay", "colombia", "chile", "ecuador",
+    "peru", "paraguay", "costa rica", "panama", "honduras", "jamaica",
+    "sweden", "denmark", "norway", "finland", "belgium", "switzerland",
+    "austria", "poland", "ukraine", "serbia", "wales", "scotland", "ireland",
+    "iceland", "czechia", "czech republic", "turkey", "turkiye", "greece",
+    "romania", "hungary", "slovakia", "slovenia", "bosnia", "albania",
+    "north macedonia", "georgia", "india", "china", "indonesia",
+    "ivory coast", "congo", "algeria", "mali", "south africa",
+    "new zealand", "japan", "venezuela", "bolivia",
+}
+
 
 # ─── Claude prompts ───────────────────────────────────────────────────────────
 
@@ -83,6 +100,7 @@ Classification rules:
 - Tennis: ONLY classify as Tennis if the message contains explicit Tennis indicators — tournament names (Open, Slam, ATP, WTA, Masters, Wimbledon), match format words (sets, tiebreak, deuce), court surfaces, or well-known tennis players (Djokovic, Alcaraz, Sinner, Swiatek, Sabalenka, Medvedev, Zverev, Rune, etc.). Do NOT classify as Tennis based solely on a person's surname.
 - Boxing: if the pick involves known professional boxers (e.g. Ryan Garcia, Canelo, Fury, Usyk, Crawford, Beterbiev, etc.), classify as Boxing, not UFC. If a single surname could be a boxer (e.g. Garcia), prefer Boxing over UFC when no other context is available.
 - KBO = Korean Baseball Organization. Classify as KBO if the pick involves KBO team names or explicit KBO context. KBO teams and their common nicknames/abbreviations (resolve any of these to the canonical full name in "teams"): KT Wiz (WIZ/KT), Samsung Lions (LIONS/SAMSUNG), LG Twins (TWINS/LG), Doosan Bears (BEARS/DOOSAN), Lotte Giants (GIANTS/LOTTE), NC Dinos (DINOS/NC), KIA Tigers (TIGERS/KIA), SSG Landers (LANDERS/SSG), Hanwha Eagles (EAGLES/HANWHA), Kiwoom Heroes (HEROES/KIWOOM). Critically: "LIONS" alone is ALWAYS Samsung Lions (not Lotte Giants), "GIANTS" alone is ALWAYS Lotte Giants, etc. Never invent an opponent that isn't in the message text.
+- Soccer/FIFA: if the pick involves country or national team names (e.g. Japan, Brazil, France, Germany, Argentina, Mexico, England, Spain, Italy, Portugal, Netherlands, USA, South Korea, Australia, Canada, etc.) as the team in a spread, moneyline, or total, classify as Soccer. Country names are never used for NBA/MLB/NFL/NHL/NCAAB teams — they always indicate international soccer (FIFA World Cup, friendlies, qualifiers). Use the full country name in "teams" (e.g. "South Korea" not "Korea").
 - MLB/NFL team name collisions: "Cardinals" can be Arizona Cardinals (NFL) or St. Louis Cardinals (MLB). "Giants" can be New York Giants (NFL) or San Francisco Giants (MLB). To disambiguate: (1) If an opponent team is mentioned and belongs to only one sport (e.g. "Red Sox", "Dodgers" → MLB; "Cowboys", "Eagles" → NFL), use that sport. (2) If no opponent context: outside the NFL season (mid-February through early September), always resolve to MLB. During NFL season overlap (September through early February), prefer NFL on Sunday/Monday/Thursday (typical NFL game days) and MLB on Tuesday/Wednesday/Friday/Saturday. Always use the full canonical MLB name ("St. Louis Cardinals", "San Francisco Giants") or NFL name ("Arizona Cardinals", "New York Giants") in the teams field.
 - If a single surname with a moneyline has no clear sport context and is not a known boxer or MMA fighter, default to UFC.
 - For parlays: list each leg as a separate pick with its REAL bet_type (moneyline, spread, etc.) and set is_parlay_leg=true on each. Do NOT use bet_type="parlay". When players/teams are slash-separated (e.g. "FAA/Shapovalov MLP" or "SPURS/GARCIA MLP"), split them into ONE pick per player/team — do not put two teams in one pick's teams field.
@@ -214,6 +232,13 @@ async def claude_parse(text: str, date: str | None = None) -> dict | None:
         if any(h in tl for h in _SOCCER_HINTS):
             parsed["sport"] = "Soccer"
 
+    # Country/national team names in parsed teams → Soccer (FIFA)
+    if parsed and parsed.get("sport") == "Other":
+        for pick in parsed.get("picks", []):
+            if any(t.lower() in _FIFA_COUNTRIES for t in pick.get("teams", [])):
+                parsed["sport"] = "Soccer"
+                break
+
     return parsed
 
 
@@ -222,13 +247,15 @@ async def claude_grade(pick_desc: str, date: str, context: str, bet_type: str = 
     prop_stat_line = f"\nProp stat: {prop_stat}" if prop_stat else ""
     resp = await _claude_create_with_retry(
         model="claude-sonnet-4-6",
-        max_tokens=150,
+        max_tokens=300,
         messages=[{
             "role": "user",
             "content": _GRADE_PROMPT.format(pick=pick_desc, date=date, context=context, prop_stat_line=prop_stat_line),
         }],
     )
     raw = resp.content[0].text.strip()
+    # If the response was truncated, don't trust the text for verdict extraction
+    truncated = getattr(resp, "stop_reason", None) == "max_tokens"
     # Try to parse JSON verdict first
     calc = ""
     try:
@@ -244,10 +271,16 @@ async def claude_grade(pick_desc: str, date: str, context: str, bet_type: str = 
             return verdict, calc
     except (json.JSONDecodeError, AttributeError):
         pass
-    # Fallback: find first valid verdict word in response
+    # If truncated, JSON was incomplete — don't scan raw text for stray verdict words
+    if truncated:
+        return "UNKNOWN", raw
+    # Fallback: find LAST valid verdict word in response (first may be from rule explanation)
+    last_verdict = None
     for word in re.sub(r"[^A-Z\s]", "", raw.upper()).split():
         if word in ("WIN", "LOSS", "PUSH", "UNKNOWN"):
-            return word, raw
+            last_verdict = word
+    if last_verdict:
+        return last_verdict, raw
     return "UNKNOWN", raw
 
 
@@ -356,7 +389,7 @@ async def build_context(
             if bet_type == "prop":
                 parts.append(box_score_text(summary, player))
             else:
-                parts.append(line_scores_text(summary))
+                parts.append(line_scores_text(summary, sport))
 
         if parts:
             return "\n\n".join(p for p in parts if p.strip()), date
