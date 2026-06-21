@@ -45,7 +45,12 @@ def _format_pick(pick: dict) -> str:
     player    = pick.get("player") or ""
     prop_stat = pick.get("prop_stat") or ""
 
-    period_tag = f" {period.upper()}" if period and period != "game" else ""
+    sport     = pick.get("sport", "")
+    # Baseball "1H" is conventionally called "F5" (first 5 innings)
+    if period == "1h" and sport in ("MLB", "KBO"):
+        period_tag = " F5"
+    else:
+        period_tag = f" {period.upper()}" if period and period != "game" else ""
     team = teams[0] if teams else ""
 
     if bet_type == "spread" and team and line is not None:
