@@ -65,7 +65,7 @@ _FIFA_COUNTRIES = {
     "romania", "hungary", "slovakia", "slovenia", "bosnia", "albania",
     "north macedonia", "georgia", "india", "china", "indonesia",
     "ivory coast", "congo", "algeria", "mali", "south africa",
-    "new zealand", "japan", "venezuela", "bolivia",
+    "new zealand", "venezuela", "bolivia",
 }
 
 
@@ -247,7 +247,7 @@ async def claude_grade(pick_desc: str, date: str, context: str, bet_type: str = 
     prop_stat_line = f"\nProp stat: {prop_stat}" if prop_stat else ""
     resp = await _claude_create_with_retry(
         model="claude-sonnet-4-6",
-        max_tokens=300,
+        max_tokens=500,
         messages=[{
             "role": "user",
             "content": _GRADE_PROMPT.format(pick=pick_desc, date=date, context=context, prop_stat_line=prop_stat_line),
