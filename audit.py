@@ -87,6 +87,11 @@ def _format_pick(pick: dict) -> str:
             return f"{player} {d}{line:g}{stat}"
         return player
 
+    # Team-level props (BTTS, clean sheet, etc.) — no player, but has teams + prop_stat
+    if bet_type == "prop" and prop_stat and teams:
+        matchup = " vs ".join(teams) if len(teams) >= 2 else teams[0]
+        return f"{matchup}{period_tag} {prop_stat}"
+
     # Fallback to cleaned description string
     return _clean_desc(pick.get("description", ""))
 
