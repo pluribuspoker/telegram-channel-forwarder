@@ -424,7 +424,14 @@ def scoreboard_text(data: dict, sport: str) -> str:
             away_score = away.get("score", "?")
             home_score = home.get("score", "?")
             status = event.get("status", {}).get("type", {}).get("description", "")
-            lines.append(f"{away_name} {away_score} at {home_name} {home_score} [{status}]")
+            line = f"{away_name} {away_score} at {home_name} {home_score} [{status}]"
+            # Include penalty/advancement notes (e.g. "Morocco advance 3-2 on penalties")
+            for note in comp.get("notes", []):
+                note_text = note.get("headline") or note.get("text", "")
+                if note_text:
+                    line += f" — {note_text}"
+                    break
+            lines.append(line)
 
     return "\n".join(lines) or "No games found for this date"
 
