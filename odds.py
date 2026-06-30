@@ -114,10 +114,11 @@ MARKETS_FULL = (
 )
 
 MARKETS_BY_TYPE: dict[str, str] = {
-    "moneyline":  "h2h,h2h_3_way,h2h_h1,h2h_h2,h2h_q1,h2h_p1,h2h_p2,h2h_p3",
-    "spread":     "spreads,alternate_spreads,spreads_h1,spreads_h2,spreads_q1,spreads_p1,spreads_p2,spreads_p3",
-    "total":      "totals,alternate_totals,totals_h1,totals_h2,totals_q1,totals_p1,totals_p2,totals_p3,alternate_totals_p1,alternate_totals_p2,alternate_totals_p3",
-    "team_total": "team_totals,alternate_team_totals,team_totals_h1,alternate_team_totals_h1,team_totals_h2,alternate_team_totals_h2",
+    "moneyline":    "h2h,h2h_3_way,h2h_h1,h2h_h2,h2h_q1,h2h_p1,h2h_p2,h2h_p3",
+    "to_advance":   "to_qualify",
+    "spread":       "spreads,alternate_spreads,spreads_h1,spreads_h2,spreads_q1,spreads_p1,spreads_p2,spreads_p3",
+    "total":        "totals,alternate_totals,totals_h1,totals_h2,totals_q1,totals_p1,totals_p2,totals_p3,alternate_totals_p1,alternate_totals_p2,alternate_totals_p3",
+    "team_total":   "team_totals,alternate_team_totals,team_totals_h1,alternate_team_totals_h1,team_totals_h2,alternate_team_totals_h2",
 }
 
 MAX_LINE_GAP = 5
@@ -140,6 +141,11 @@ _PERIOD_RE = re.compile(
     r'1p|2p|3p|1st period|2nd period|3rd period)\b',
     re.IGNORECASE,
 )
+
+# "To advance" / "to qualify" — knockout-stage soccer bets.
+# The Odds API h2h market returns 90-min ML for these games, not advancement odds,
+# so we must skip the h2h lookup to avoid displaying wrong odds.
+_ADVANCE_RE = re.compile(r'\bto\s+(advance|qualify)\b', re.IGNORECASE)
 
 _PERIOD_SUFFIX: dict[str, str] = {
     "1h": "_h1", "2h": "_h2",
@@ -726,6 +732,10 @@ def lookup_pick_odds(sport: str, pick: dict, bookmakers: list[dict]) -> dict:
                 "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
     if bet_type == "moneyline":
+        # "To advance" / "to qualify" in knockout stages — use the to_qualify
+        # market; the h2h market returns 90-min ML which is the wrong price.
+        if _ADVANCE_RE.search(desc):
+            return _lookup_moneyline(bookmakers, teams[0] if teams else "", period, "to_qualify", sport)
         market = "h2h_3_way" if sport == "NHL" and is_regulation_ml(desc) else "h2h"
         return _lookup_moneyline(bookmakers, teams[0] if teams else "", period, market, sport)
 
@@ -758,6 +768,10 @@ _MLB_INNINGS_MARKETS: dict[str, str] = {
 
 def _markets_for_pick(pick: dict, sport: str = "") -> str:
     """Minimal markets string for this pick's bet_type. Falls back to MARKETS_FULL."""
+    desc = pick.get("description", "")
+    # "To advance" / "to qualify" needs the to_qualify market, not h2h.
+    if pick.get("bet_type") == "moneyline" and _ADVANCE_RE.search(desc):
+        return MARKETS_BY_TYPE["to_advance"]
     base = MARKETS_BY_TYPE.get(pick.get("bet_type", ""), MARKETS_FULL)
     if sport == "MLB" and pick.get("period") in _MLB_PERIOD_SUFFIX:
         extra = _MLB_INNINGS_MARKETS.get(pick.get("bet_type", ""), "")
