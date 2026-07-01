@@ -109,11 +109,17 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
 
     # Pass 1: team/player name
     search_terms = _pick_search_terms(pick)
+    prop_stat = (pick.get("prop_stat") or "").lower().strip()
     for i, line in enumerate(lines):
         if not _available(i):
             continue
         line_lower = line.lower()
         if any(term in line_lower for term in search_terms):
+            # For team-level props (BTTS, clean sheet, etc.), team names
+            # may appear on a header line separate from the pick line.
+            # Only match here if the line also contains the prop_stat.
+            if prop_stat and prop_stat not in line_lower:
+                continue
             return i
 
     # Pass 2: full description
