@@ -644,6 +644,7 @@ def _team_matches(term: str, team_name: str) -> bool:
     n = _strip_accents(team_name.lower().strip()).replace("&", "and")
     # Expand common abbreviations before matching
     t = _TEAM_ALIASES.get(t, t)
+    n = _TEAM_ALIASES.get(n, n)
     if not t or not n:
         return False
     t_words = t.split()
