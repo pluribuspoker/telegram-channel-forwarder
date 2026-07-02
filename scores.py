@@ -613,6 +613,8 @@ _TEAM_ALIASES: dict[str, str] = {
     "borussia monchengladbach": "monchengladbach",
     "turkey":            "turkiye",  # ESPN uses official "Türkiye"
     # ── Soccer (FIFA World Cup national team aliases) ────────────────
+    "bosnia and herzegovina": "bosnia",
+    "bosnia-herzegovina":     "bosnia",
     "holland":           "netherlands",
     "czech republic":    "czechia",
     "usa":               "united states",
@@ -638,8 +640,8 @@ def _team_matches(term: str, team_name: str) -> bool:
     'Iowa' matches 'Iowa Hawkeyes' but NOT 'Iowa State Cyclones'
     'Texas' matches 'Texas Longhorns' but NOT 'Texas Tech Red Raiders'
     """
-    t = _strip_accents(term.lower().strip())
-    n = _strip_accents(team_name.lower().strip())
+    t = _strip_accents(term.lower().strip()).replace("&", "and")
+    n = _strip_accents(team_name.lower().strip()).replace("&", "and")
     # Expand common abbreviations before matching
     t = _TEAM_ALIASES.get(t, t)
     if not t or not n:
