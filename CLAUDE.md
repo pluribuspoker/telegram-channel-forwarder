@@ -11,7 +11,7 @@
 - **SSH:** `ssh root@209.38.51.86`
 - **Aliases:** defined in `/root/.server_aliases.sh` — `flogs`, `tlogs`, `logs`, `start`, `stop`, `restart`, `status`, `deploy`, `grade`, `gradetest`
 
-**Never restart or deploy the service yourself.** Rapid bot session restarts trigger Telegram flood waits. Always let the user run `deploy`, `restart`, or `start` manually.
+**Deploy cautiously.** Rapid bot session restarts trigger Telegram flood waits. If you are confident in a fix and have verified it, you may push and deploy. Otherwise let the user handle it.
 
 ### Switching to test mode
 

@@ -78,6 +78,6 @@ If an API call fails, a query returns nothing, or data seems missing — try var
 1. The code, so it won't happen again
 2. The live message/data on the VPS, so the current state is correct
 
-### 6. Never restart or deploy
+### 6. Push and deploy when confident
 
-Do not run `deploy`, `restart`, `start`, or `stop` on the VPS. The user will do that manually after reviewing your fix.
+If you are confident in the fix and have verified it, push and deploy yourself: `git push`, then SSH to VPS and run `cd /home/forwarder/app && git pull && systemctl restart telegram-forwarder`. If unsure, let the user handle it.
