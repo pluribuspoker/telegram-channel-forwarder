@@ -257,6 +257,9 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
         if chain_cappers and dest_ch:
             msg_text = group[0].text or ""
             capper_key = _extract_capper_key(msg_text, chain_cappers)
+            # Single-capper mapping: default to the only capper even if prefix missing
+            if capper_key is None and len(chain_cappers) == 1:
+                capper_key = chain_cappers[0].lower()
             reply_to = _reply_chain_get(dest_ch, capper_key)
         try:
             sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds), reply_to=reply_to, text_suffix=text_suffix)
