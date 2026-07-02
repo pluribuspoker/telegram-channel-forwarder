@@ -215,11 +215,12 @@ def strip_collapsed_blockquotes(text, entities):
     return text, surviving
 
 
-async def send_group(client, group, dest_entity, sender=None, caption_override=None, text_only=False, reply_to=None):
+async def send_group(client, group, dest_entity, sender=None, caption_override=None, text_only=False, reply_to=None, text_suffix=None):
     """Send a list of messages (album or single) to dest_entity, preserving formatting.
     Uses `sender` client for writing if provided, otherwise uses `client`.
     caption_override replaces the message text (e.g. after OCR enrichment).
-    text_only=True skips all media and sends just the caption as a plain message."""
+    text_only=True skips all media and sends just the caption as a plain message.
+    text_suffix appends text (e.g. source label) without discarding original entities."""
     sender = sender or client
     if text_only and caption_override:
         sent = await sender.send_message(dest_entity, caption_override, silent=False, reply_to=reply_to)
@@ -239,6 +240,8 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
         if caption_override is not None:
             caption = caption_override
             caption_entities = None
+        if text_suffix:
+            caption = f"{caption}\n\n{text_suffix}" if caption else text_suffix
         # Telegram enforces a 1024-char limit for album captions (SendMultiMediaRequest).
         if len(caption) > 1024:
             caption, caption_entities = strip_collapsed_blockquotes(caption, caption_entities)
@@ -250,6 +253,8 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
         msg = group[0]
         cap = caption_override if caption_override is not None else (msg.text or "")
         ents = None if caption_override is not None else msg.entities
+        if text_suffix:
+            cap = f"{cap}\n\n{text_suffix}" if cap else text_suffix
         if isinstance(msg.media, MessageMediaPhoto):
             photo = await client.download_media(msg.media, file=bytes)
             buf = io.BytesIO(photo)

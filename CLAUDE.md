@@ -5,6 +5,10 @@
 - When giving shell commands, chain related steps with `&&` on one line rather than separate lines.
 - Use git worktrees for parallel tasks (e.g. a second task while another Claude session is already working). Pattern: `git worktree add ../telegram-forwarder-<slug> -b <branch>`, work there, commit+push the branch, then merge to main from the main repo dir. Name the dir `../telegram-forwarder-<short-slug>`. Clean up with `git worktree remove ../telegram-forwarder-<slug>`.
 
+## Telegram message formatting
+
+When sending/forwarding messages, always preserve `msg.entities` (bold, italic, blockquotes, etc.) via `formatting_entities=`. Never rebuild message text without passing entities through. Use `text_suffix` in `send_group` to append text without dropping entities.
+
 ## VPS
 
 - **Reserved IP:** `209.38.51.86` (always use this, not the droplet IP)

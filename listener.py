@@ -246,6 +246,8 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
             log_group(group, sent=False)
             return False
         caption, odds = await enrich_caption(group, mapping, client)
+        source_label = mapping.get("source_label")
+        text_suffix = f"— {source_label}" if source_label else None
         log_group(group, sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None, catchup=catchup)
         # Reply-chain: reply to the most recent forwarded message from the same capper
         reply_to = None
@@ -257,11 +259,11 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
             capper_key = _extract_capper_key(msg_text, chain_cappers)
             reply_to = _reply_chain_get(dest_ch, capper_key)
         try:
-            sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds), reply_to=reply_to)
+            sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds), reply_to=reply_to, text_suffix=text_suffix)
         except Exception:
             if reply_to:
                 # Reply target may have been deleted — retry without reply
-                sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds))
+                sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds), text_suffix=text_suffix)
             else:
                 raise
         for m in group:
