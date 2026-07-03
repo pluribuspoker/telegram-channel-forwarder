@@ -77,7 +77,7 @@ Lines prefixed with '>' are blockquote commentary by the poster. If the main tex
 {date_context}
 Return JSON (no markdown fences):
 {{
-  "sport": "NBA|NCAAB|MLB|NFL|NHL|UFL|Tennis|UFC|Boxing|KBO|Soccer|Other",
+  "sport": "NBA|NCAAB|MLB|NFL|NHL|UFL|CFL|Tennis|UFC|Boxing|KBO|Soccer|Other",
   "picks": [
     {{
       "description": "concise one-line summary of the exact bet",
@@ -100,6 +100,7 @@ Classification rules:
 - UFC/MMA: if the pick is on individual MMA/UFC fighter names with a moneyline, classify as UFC. Common fighters: Pereira, Gafurov, Souza, Anders, Sola, Murphy, Aswell, Hooper, Bahamondes, Adesanya, etc. UFC events are held almost exclusively on Saturdays — on Saturdays, single-surname moneyline picks with no clear sport context should be classified as UFC, not Tennis. For UFC/Boxing moneylines, put the fighter name in "teams" (NOT "player") — "player" is only for player props (e.g. points over/under).
 - Tennis: ONLY classify as Tennis if the message contains explicit Tennis indicators — tournament names (Open, Slam, ATP, WTA, Masters, Wimbledon), match format words (sets, tiebreak, deuce), court surfaces, or well-known tennis players (Djokovic, Alcaraz, Sinner, Swiatek, Sabalenka, Medvedev, Zverev, Rune, etc.). Do NOT classify as Tennis based solely on a person's surname.
 - Boxing: if the pick involves known professional boxers (e.g. Ryan Garcia, Canelo, Fury, Usyk, Crawford, Beterbiev, etc.), classify as Boxing, not UFC. If a single surname could be a boxer (e.g. Garcia), prefer Boxing over UFC when no other context is available.
+- CFL = Canadian Football League. Classify as CFL if the pick involves CFL team names or explicit CFL context. CFL teams (resolve nicknames to the canonical full name in "teams"): BC Lions, Calgary Stampeders, Edmonton Elks, Hamilton Tiger-Cats (Tiger Cats), Montreal Alouettes, Ottawa Redblacks, Saskatchewan Roughriders (Roughriders/Riders), Toronto Argonauts (Argonauts/Argos), Winnipeg Blue Bombers (Blue Bombers/Bombers). Note: "Lions" alone during CFL season (June–November) with CFL context is BC Lions, not Detroit Lions.
 - KBO = Korean Baseball Organization. Classify as KBO if the pick involves KBO team names or explicit KBO context. KBO teams and their common nicknames/abbreviations (resolve any of these to the canonical full name in "teams"): KT Wiz (WIZ/KT), Samsung Lions (LIONS/SAMSUNG), LG Twins (TWINS/LG), Doosan Bears (BEARS/DOOSAN), Lotte Giants (GIANTS/LOTTE), NC Dinos (DINOS/NC), KIA Tigers (TIGERS/KIA), SSG Landers (LANDERS/SSG), Hanwha Eagles (EAGLES/HANWHA), Kiwoom Heroes (HEROES/KIWOOM). Critically: "LIONS" alone is ALWAYS Samsung Lions (not Lotte Giants), "GIANTS" alone is ALWAYS Lotte Giants, etc. Never invent an opponent that isn't in the message text.
 - Soccer/FIFA: if the pick involves country or national team names (e.g. Japan, Brazil, France, Germany, Argentina, Mexico, England, Spain, Italy, Portugal, Netherlands, USA, South Korea, Australia, Canada, etc.) as the team in a spread, moneyline, or total, classify as Soccer. Country names are never used for NBA/MLB/NFL/NHL/NCAAB teams — they always indicate international soccer (FIFA World Cup, friendlies, qualifiers). Use the full country name in "teams" (e.g. "South Korea" not "Korea").
 - MLB/NFL team name collisions: "Cardinals" can be Arizona Cardinals (NFL) or St. Louis Cardinals (MLB). "Giants" can be New York Giants (NFL) or San Francisco Giants (MLB). To disambiguate: (1) If an opponent team is mentioned and belongs to only one sport (e.g. "Red Sox", "Dodgers" → MLB; "Cowboys", "Eagles" → NFL), use that sport. (2) If no opponent context: outside the NFL season (mid-February through early September), always resolve to MLB. During NFL season overlap (September through early February), prefer NFL on Sunday/Monday/Thursday (typical NFL game days) and MLB on Tuesday/Wednesday/Friday/Saturday. Always use the full canonical MLB name ("St. Louis Cardinals", "San Francisco Giants") or NFL name ("Arizona Cardinals", "New York Giants") in the teams field.
@@ -227,6 +228,9 @@ async def claude_parse(text: str, date: str | None = None) -> dict | None:
     # with "(KBO)" but leaves sport="Other". Override based on raw message text.
     if parsed and parsed.get("sport") == "Other" and "kbo" in text.lower():
         parsed["sport"] = "KBO"
+
+    if parsed and parsed.get("sport") == "Other" and "cfl" in text.lower():
+        parsed["sport"] = "CFL"
 
     if parsed and parsed.get("sport") == "Other":
         tl = text.lower()

@@ -22,6 +22,7 @@ ESPN_LEAGUES: dict[str, tuple[str, str]] = {
     "NCAAF": ("football", "college-football"),
     "UFC":   ("mma", "ufc"),
     "UFL":   ("football", "ufl"),
+    "CFL":   ("football", "cfl"),
 }
 
 # Soccer: multiple ESPN leagues to search across

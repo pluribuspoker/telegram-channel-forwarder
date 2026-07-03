@@ -61,6 +61,7 @@ SPORT_KEYS: dict[str, str] = {
     "NHL":   "icehockey_nhl",
     "UFC":   "mma_mixed_martial_arts",
     "UFL":   "americanfootball_ufl",
+    "CFL":   "americanfootball_cfl",
     "KBO":    "baseball_kbo",
     "Soccer": "soccer_fifa_world_cup",
 }
@@ -132,6 +133,7 @@ HALF_POINT_COST: dict[str, float] = {
     "NHL":   0.020,
     "UFC":   0.000,
     "UFL":   0.022,
+    "CFL":   0.022,
     "Soccer": 0.020,
 }
 
@@ -736,7 +738,7 @@ def lookup_pick_odds(sport: str, pick: dict, bookmakers: list[dict]) -> dict:
         # market; the h2h market returns 90-min ML which is the wrong price.
         if _ADVANCE_RE.search(desc):
             return _lookup_moneyline(bookmakers, teams[0] if teams else "", period, "to_qualify", sport)
-        market = "h2h_3_way" if sport == "NHL" and is_regulation_ml(desc) else "h2h"
+        market = "h2h_3_way" if is_regulation_ml(desc) else "h2h"
         return _lookup_moneyline(bookmakers, teams[0] if teams else "", period, market, sport)
 
     if bet_type == "spread":
