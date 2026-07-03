@@ -13,7 +13,7 @@ When sending/forwarding messages, always preserve `msg.entities` (bold, italic, 
 
 - **Reserved IP:** `209.38.51.86` (always use this, not the droplet IP)
 - **SSH:** `ssh root@209.38.51.86`
-- **Aliases:** defined in `/root/.server_aliases.sh` — `flogs`, `tlogs`, `logs`, `start`, `stop`, `restart`, `status`, `deploy`, `grade`, `gradetest`
+- **Aliases (interactive SSH only):** defined in `/root/.server_aliases.sh` — `flogs`, `tlogs`, `logs`, `start`, `stop`, `restart`, `status`, `deploy`, `grade`, `gradetest`. These are not available via non-interactive `ssh root@... 'command'`.
 
 **Deploy cautiously.** Rapid bot session restarts trigger Telegram flood waits. If you are confident in a fix and have verified it, you may push and deploy. Otherwise let the user handle it.
 
@@ -124,13 +124,13 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/sauce_daily.py --channe
 
 ## Deploy workflow
 
-`syncenv` runs **locally** to push `.env` to the VPS, then `deploy` runs **on the VPS** to pull code and restart services:
+`syncenv` runs **locally** to push `.env` to the VPS, then deploy on the VPS:
 
 ```bash
 # Local
 syncenv
 git push
 
-# On VPS
-deploy
+# On VPS (via SSH)
+ssh root@209.38.51.86 'cd /home/forwarder/app && git pull && systemctl restart telegram-forwarder'
 ```

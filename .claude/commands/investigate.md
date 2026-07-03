@@ -1,3 +1,8 @@
+---
+description: Debug and investigate issues with live data, logs, and Telegram messages
+argument-hint: <issue description, Telegram link, or error message>
+---
+
 # Investigate
 
 Debug and investigate issues in the Telegram Channel Forwarder project.
@@ -25,30 +30,7 @@ The local repo has the code but no live data. Don't try to find logs, DB, or cac
 
 ### 2. Telegram messages are accessible
 
-Never say "I can't access Telegram links." SSH into the VPS and use Telethon to read any message:
-
-```python
-import asyncio, os
-from telethon import TelegramClient
-from telethon.sessions import StringSession
-from dotenv import load_dotenv
-
-load_dotenv("/home/forwarder/app/.env")
-load_dotenv("/home/forwarder/app/.env.local", override=True)
-api_id = int(os.environ["TELEGRAM_API_ID"])
-api_hash = os.environ["TELEGRAM_API_HASH"]
-session_str = os.environ["TELEGRAM_SESSION"]
-
-async def main():
-    client = TelegramClient(StringSession(session_str), api_id, api_hash)
-    await client.connect()
-    # Fetch message, read channel, etc.
-    await client.disconnect()
-
-asyncio.run(main())
-```
-
-Write the script to a temp file on the VPS and run it as forwarder, rather than inlining Python in shell quotes.
+Never say "I can't access Telegram links." SSH into the VPS, write a temp Python script that uses Telethon with the session from `.env.local`, and run it as forwarder. Use `StringSession` — do not inline Python in shell quotes.
 
 ### 3. Don't give up after one failed attempt
 
@@ -58,11 +40,12 @@ If an API call fails, a query returns nothing, or data seems missing — try var
 
 1. **Gather context**: Read the user's description, fetch the relevant Telegram message if linked, check parse_cache and/or DB on VPS
 2. **Read the relevant code locally**: Understand the code path involved before theorizing
-3. **Check VPS logs** if the issue involves runtime behavior (grading, broadcasting, odds, etc.)
-4. **Identify root cause**: Trace the bug through the code with the data you gathered
-5. **Fix the code** and verify the fix (see testing section below)
-6. **Deploy the code fix first** (push + deploy) before touching live data — the running tracker will overwrite live edits if the buggy code is still active.
-7. **Fix the live data** if needed (e.g., correct a wrong emoji on a message, fix a DB entry) — but **never restart the service** (deploy already restarted it).
+3. **Verify deployed version matches local**: Run `ssh root@209.38.51.86 'cd /home/forwarder/app && git log --oneline -1'` and compare with local `git log --oneline -1` before assuming the VPS is running the code you're reading
+4. **Check VPS logs** if the issue involves runtime behavior (grading, broadcasting, odds, etc.)
+5. **Identify root cause**: Trace the bug through the code with the data you gathered
+6. **Fix the code** and verify the fix (see testing section below)
+7. **Deploy the code fix first** (push + deploy) before touching live data — the running tracker will overwrite live edits if the buggy code is still active.
+8. **Fix the live data** if needed (e.g., correct a wrong emoji on a message, fix a DB entry).
    - To edit Telegram messages, use Bot API `editMessageText` with `parse_mode: "HTML"` — Telethon `edit_message` strips formatting.
 
 ### 5. Testing and verification
@@ -79,10 +62,22 @@ If an API call fails, a query returns nothing, or data seems missing — try var
 1. The code, so it won't happen again
 2. The live message/data on the VPS, so the current state is correct
 
-### 6. Deploy command
+### 6. Common queries on VPS
+
+**Parse cache** (find a pick by text substring):
+```bash
+su - forwarder -c "cd ~/app && python -c \"import json; d=json.load(open('parse_cache.json')); [print(k,v['parsed']['pick']) for k,v in d.items() if 'SUBSTRING' in v.get('parsed',{}).get('pick','')]\""
+```
+
+**Picks DB** (recent picks with grading status):
+```bash
+su - forwarder -c "cd ~/app && sqlite3 picks.db \"SELECT pick, result, sport, timestamp FROM picks ORDER BY timestamp DESC LIMIT 20\""
+```
+
+### 7. Deploy command
 
 Deploy: `git push`, then SSH to VPS and run `cd /home/forwarder/app && git pull && systemctl restart telegram-forwarder`. If unsure about the fix, let the user handle deploy.
 
-### 7. Self-improvement
+### 8. Self-improvement
 
-After resolving an investigation, consider whether a mistake or inefficiency you hit could have been avoided with better instructions in THIS file. If so, add a concise rule or update an existing one. Keep changes minimal — one line per lesson learned.
+After resolving an investigation, consider whether a mistake you made could be avoided with a better rule **in this file or in CLAUDE.md**. Add investigation-specific rules here; add project-wide rules to CLAUDE.md. Don't duplicate between the two. One line per lesson.
