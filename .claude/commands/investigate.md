@@ -61,7 +61,8 @@ If an API call fails, a query returns nothing, or data seems missing — try var
 3. **Check VPS logs** if the issue involves runtime behavior (grading, broadcasting, odds, etc.)
 4. **Identify root cause**: Trace the bug through the code with the data you gathered
 5. **Fix the code** and verify the fix (see testing section below)
-6. **Fix the live data** if needed (e.g., correct a wrong emoji on a message, fix a DB entry) — but **never restart the service**
+6. **Deploy the code fix first** (push + deploy) before touching live data — the running tracker will overwrite live edits if the buggy code is still active.
+7. **Fix the live data** if needed (e.g., correct a wrong emoji on a message, fix a DB entry) — but **never restart the service** (deploy already restarted it).
    - To edit Telegram messages, use Bot API `editMessageText` with `parse_mode: "HTML"` — Telethon `edit_message` strips formatting.
 
 ### 5. Testing and verification
@@ -78,6 +79,10 @@ If an API call fails, a query returns nothing, or data seems missing — try var
 1. The code, so it won't happen again
 2. The live message/data on the VPS, so the current state is correct
 
-### 6. Push and deploy when confident
+### 6. Deploy command
 
-If you are confident in the fix and have verified it, push and deploy yourself: `git push`, then SSH to VPS and run `cd /home/forwarder/app && git pull && systemctl restart telegram-forwarder`. If unsure, let the user handle it.
+Deploy: `git push`, then SSH to VPS and run `cd /home/forwarder/app && git pull && systemctl restart telegram-forwarder`. If unsure about the fix, let the user handle deploy.
+
+### 7. Self-improvement
+
+After resolving an investigation, consider whether a mistake or inefficiency you hit could have been avoided with better instructions in THIS file. If so, add a concise rule or update an existing one. Keep changes minimal — one line per lesson learned.
