@@ -669,10 +669,13 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     new_leg_verdicts = dict(cached_leg_verdicts)  # preserve previously cached
                     for j, (lpick, lverdict, lcalc, lps, lgd, *_) in enumerate(verdicts):
                         if lverdict in ("WIN", "LOSS", "PUSH"):
-                            new_leg_verdicts[str(j)] = {
+                            entry = {
                                 "verdict": lverdict, "calc": lcalc,
                                 "sport": lps, "game_date": lgd or date_str,
                             }
+                            if cached_leg_verdicts.get(str(j), {}).get("broadcasted"):
+                                entry["broadcasted"] = True
+                            new_leg_verdicts[str(j)] = entry
                     pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
 
                 # Nothing new to grade this run — log and skip
