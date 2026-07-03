@@ -347,9 +347,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 if " @ " in line and not _BET_LINE_RE.search(line):
                     continue  # skip game-info headers, but keep pick lines
                 if any(term in line.lower() for term in search_terms):
-                    if _ODDS_TAG_RE.search(line):
-                        break  # already tagged — idempotent
-                    lines[j] = f"{line.rstrip()}{odds_tag}"
+                    if not _ODDS_TAG_RE.search(line):
+                        lines[j] = f"{line.rstrip()}{odds_tag}"
                     desc_matched = True
                     break
 
