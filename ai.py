@@ -73,6 +73,7 @@ _FIFA_COUNTRIES = {
 
 _PARSE_PROMPT = """\
 Extract the sports betting pick(s) from this message. Ignore stats, records, and commentary.
+Lines prefixed with '>' are blockquote commentary by the poster. If the main text states a pick and the blockquote contains a different spread/line/variation, extract the pick from the main (non-blockquoted) text.
 {date_context}
 Return JSON (no markdown fences):
 {{

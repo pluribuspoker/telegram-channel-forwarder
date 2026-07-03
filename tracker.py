@@ -101,6 +101,26 @@ def _trunc(s: str, w: int) -> str:
     """Truncate string to width w, appending … if trimmed."""
     return s if len(s) <= w else s[:w - 1] + "…"
 
+def _annotate_blockquotes(text: str, entities) -> str:
+    """Prefix blockquoted portions with '> ' so the AI parser can distinguish them."""
+    if not entities:
+        return text
+    bq_ranges = [(e.offset, e.offset + e.length) for e in entities
+                 if type(e).__name__ == "MessageEntityBlockquote"]
+    if not bq_ranges:
+        return text
+    bq_ranges.sort()
+    parts: list[str] = []
+    pos = 0
+    for start, end in bq_ranges:
+        parts.append(text[pos:start])
+        bq = text[start:end]
+        parts.append("\n".join("> " + line for line in bq.split("\n")))
+        pos = end
+    parts.append(text[pos:])
+    return "".join(parts)
+
+
 def _to_bot_html(text: str, entities) -> str:
     """Convert Telethon message text+entities to Bot API-compatible HTML."""
     from telethon.extensions import html as tl_html
@@ -360,7 +380,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     n_picks = len(cached_parse.get("picks", []))
                     if n_picks > 0 and len(already_broadcast_indices) >= n_picks:
                         continue
-                parsed = cached_parse or await claude_parse(text, date_str)
+                parsed = cached_parse or await claude_parse(
+                    _annotate_blockquotes(text, msg.entities), date_str,
+                )
                 if not parsed:
                     failed += 1
                     print(f"\n{msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'parse failed':<{_DESC_W}} {'':<{_ODDS_W}} {int(date_str[5:7])}/{int(date_str[8:10])} ⚠")
