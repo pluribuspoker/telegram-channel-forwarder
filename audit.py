@@ -64,7 +64,14 @@ def _format_pick(pick: dict) -> str:
         return f"{team}{period_tag} DNB"
 
     if bet_type == "moneyline" and team:
-        suffix = " 3-way ML" if is_regulation_ml(pick.get("description", "")) else " ML"
+        desc_raw = pick.get("description", "")
+        advance_m = re.search(r'\bto\s+(advance|qualify)\b', desc_raw, re.IGNORECASE)
+        if advance_m:
+            suffix = f" to {advance_m.group(1).title()}"
+        elif is_regulation_ml(desc_raw):
+            suffix = " 3-way ML"
+        else:
+            suffix = " ML"
         return f"{team}{period_tag}{suffix}"
 
     if bet_type in ("total", "team_total") and line is not None:
