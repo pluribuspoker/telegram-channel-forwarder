@@ -30,7 +30,7 @@ The local repo has the code but no live data. Don't try to find logs, DB, or cac
 
 ### 2. Telegram messages are accessible
 
-Never say "I can't access Telegram links." SSH into the VPS, write a temp Python script that uses Telethon with the session from `.env.local`, and run it as forwarder. Use `StringSession` — do not inline Python in shell quotes.
+Never say "I can't access Telegram links." Use `scripts/vps_msg.py` on the VPS (see section 6). For anything beyond basic message inspection, write a temp script file locally, `scp` it to the VPS, and run it as forwarder — do not inline Python in shell quotes.
 
 ### 3. Don't give up after one failed attempt
 
@@ -46,7 +46,7 @@ If an API call fails, a query returns nothing, or data seems missing — try var
 6. **Fix the code** and verify the fix (see testing section below)
 7. **Deploy the code fix first** (push + deploy) before touching live data — the running tracker will overwrite live edits if the buggy code is still active.
 8. **Fix the live data** if needed (e.g., correct a wrong emoji on a message, fix a DB entry).
-   - To edit Telegram messages, use Bot API `editMessageText` with `parse_mode: "HTML"` — Telethon `edit_message` strips formatting.
+   - To edit Telegram messages, use Bot API with `parse_mode: "HTML"` — Telethon `edit_message` strips formatting. Check `msg.media` first: use `editMessageCaption` for photo/video messages, `editMessageText` for plain text.
 
 ### 5. Testing and verification
 
@@ -64,14 +64,21 @@ If an API call fails, a query returns nothing, or data seems missing — try var
 
 ### 6. Common queries on VPS
 
+**Fetch a Telegram message:**
+```bash
+su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/vps_msg.py <channel_id> <msg_id>"
+```
+
+**Query grades DB** (`sqlite3` CLI is not installed — these scripts use Python):
+```bash
+su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/vps_grades.py --msg-id 3243"
+su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/vps_grades.py --search Argentina"
+su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/vps_grades.py"  # last 20
+```
+
 **Parse cache** (find a pick by text substring):
 ```bash
 su - forwarder -c "cd ~/app && python -c \"import json; d=json.load(open('parse_cache.json')); [print(k,v['parsed']['pick']) for k,v in d.items() if 'SUBSTRING' in v.get('parsed',{}).get('pick','')]\""
-```
-
-**Picks DB** (recent picks with grading status):
-```bash
-su - forwarder -c "cd ~/app && sqlite3 picks.db \"SELECT pick, result, sport, timestamp FROM picks ORDER BY timestamp DESC LIMIT 20\""
 ```
 
 ### 7. Deploy command
