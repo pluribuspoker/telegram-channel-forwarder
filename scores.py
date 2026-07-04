@@ -432,6 +432,35 @@ def scoreboard_text(data: dict, sport: str) -> str:
                 if note_text:
                     line += f" — {note_text}"
                     break
+            # Soccer AET/PEN: compute regulation-time score from goal details
+            if sport == "Soccer":
+                status_name = (
+                    comp.get("status", {}).get("type", {}).get("name", "")
+                    or event.get("status", {}).get("type", {}).get("name", "")
+                )
+                if "AET" in status_name or "PEN" in status_name:
+                    home_id = home.get("id") or home.get("team", {}).get("id")
+                    away_id = away.get("id") or away.get("team", {}).get("id")
+                    reg_home = reg_away = 0
+                    for detail in comp.get("details", []):
+                        if not detail.get("scoringPlay") or detail.get("shootout"):
+                            continue
+                        dv = detail.get("clock", {}).get("displayValue", "")
+                        m = re.match(r"(\d+)", dv)
+                        if not m or int(m.group(1)) > 90:
+                            continue  # extra-time goal
+                        scored_by = str(detail.get("team", {}).get("id", ""))
+                        if detail.get("ownGoal"):
+                            if scored_by == str(home_id):
+                                reg_away += 1
+                            elif scored_by == str(away_id):
+                                reg_home += 1
+                        else:
+                            if scored_by == str(home_id):
+                                reg_home += 1
+                            elif scored_by == str(away_id):
+                                reg_away += 1
+                    line += f" (Regulation 90': {away_name} {reg_away}, {home_name} {reg_home})"
             lines.append(line)
 
     return "\n".join(lines) or "No games found for this date"
