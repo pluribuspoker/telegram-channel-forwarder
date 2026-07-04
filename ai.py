@@ -15,6 +15,7 @@ from scores import (
     ESPN_LEAGUES,
     fetch_espn,
     fetch_espn_summary,
+    fetch_cfl_context,
     fetch_kbo_context,
     fetch_odds_api_scores,
     fetch_soccer_context,
@@ -332,6 +333,16 @@ async def build_context(
         if not team:
             return CONTEXT_SKIP, date
         ctx, game_date = await fetch_kbo_context(team, date, odds_game_date=odds_game_date)
+        if ctx == "PENDING":
+            return CONTEXT_PENDING, game_date
+        return (ctx if ctx else CONTEXT_PENDING), game_date
+
+    # CFL: cfl.ca scores (ESPN has no CFL data)
+    if sport == "CFL":
+        team = teams[0] if teams else ""
+        if not team:
+            return CONTEXT_SKIP, date
+        ctx, game_date = await fetch_cfl_context(team, date, odds_game_date=odds_game_date)
         if ctx == "PENDING":
             return CONTEXT_PENDING, game_date
         return (ctx if ctx else CONTEXT_PENDING), game_date

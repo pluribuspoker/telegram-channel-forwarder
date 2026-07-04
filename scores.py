@@ -8,7 +8,7 @@ import os
 import re
 
 import httpx
-from datetime import date as _date, timedelta
+from datetime import date as _date, datetime as _datetime, timedelta, timezone
 
 
 # ─── ESPN ─────────────────────────────────────────────────────────────────────
@@ -186,6 +186,159 @@ async def fetch_kbo_context(
             score_str = "  ".join(f"{s['name']}: {s['score']}" for s in scores)
             return f"{home} vs {away}\n{score_str}", game_date_str
         return "PENDING", game_date_str
+
+    return "", date
+
+
+# ─── CFL (cfl.ca) ───────────────────────────────────────────────────────────
+
+CFL_TEAMS: dict[str, str] = {
+    "SSK": "Saskatchewan Roughriders",
+    "OTT": "Ottawa Redblacks",
+    "MTL": "Montreal Alouettes",
+    "HAM": "Hamilton Tiger-Cats",
+    "WPG": "Winnipeg Blue Bombers",
+    "CGY": "Calgary Stampeders",
+    "EDM": "Edmonton Elks",
+    "TOR": "Toronto Argonauts",
+    "BC":  "BC Lions",
+}
+
+# Reverse: full name → abbreviation
+_CFL_ABBR = {v.lower(): k for k, v in CFL_TEAMS.items()}
+
+
+def _parse_cfl_schedule(html: str) -> list[dict]:
+    """Parse CFL.ca schedule page into a list of game dicts with quarter scores."""
+    games: list[dict] = []
+
+    # Split into blocks by timestamp markers
+    blocks = re.split(r'var\s+int_timestamp\s*=\s*Number\(', html)
+    if len(blocks) < 2:
+        return games
+
+    for block in blocks[1:]:
+        ts_m = re.match(r'(\d+)\)', block)
+        if not ts_m:
+            continue
+        timestamp = int(ts_m.group(1))
+        game_date = _datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%d")
+
+        # Find the first <table> in this block (quarter scores)
+        table_m = re.search(r'<table[^>]*>(.*?)</table>', block, re.DOTALL)
+        if not table_m:
+            continue
+
+        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table_m.group(1), re.DOTALL)
+        if len(rows) < 3:
+            continue
+
+        # Header row uses <th> tags (0 <td> cells); data rows use <td>
+        team_rows = []
+        for row in rows:
+            cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
+            cells = [c.strip() for c in cells]
+            if len(cells) < 5:  # need abbr + at least 4 quarters
+                continue
+            abbr = cells[0]
+            # All cells after abbr are quarter scores (no total column)
+            # OT games may have "-" for teams that didn't score in OT
+            quarter_scores = cells[1:]
+            total = str(sum(int(q) for q in quarter_scores if q not in ("-", "")))
+            team_rows.append({"abbr": abbr, "quarters": quarter_scores, "total": total})
+
+        if len(team_rows) != 2:
+            continue
+
+        # Determine if game is final (look for "Final" or "F (OT)" before the table)
+        pre_table = block[:table_m.start()]
+        is_final = bool(re.search(r'\bFinal\b|F\s*\(OT\)', pre_table, re.IGNORECASE))
+        is_ot = bool(re.search(r'F\s*\(OT\)', pre_table, re.IGNORECASE))
+
+        away = team_rows[0]
+        home = team_rows[1]
+        games.append({
+            "date": game_date,
+            "away_abbr": away["abbr"],
+            "home_abbr": home["abbr"],
+            "away_name": CFL_TEAMS.get(away["abbr"], away["abbr"]),
+            "home_name": CFL_TEAMS.get(home["abbr"], home["abbr"]),
+            "away_quarters": away["quarters"],
+            "home_quarters": home["quarters"],
+            "away_total": away["total"],
+            "home_total": home["total"],
+            "final": is_final,
+            "ot": is_ot,
+        })
+
+    return games
+
+
+def _format_cfl_line_scores(game: dict) -> str:
+    """Format a CFL game's quarter scores like line_scores_text for football."""
+    lines = []
+    for side in ("away", "home"):
+        name = game[f"{side}_name"]
+        qs = game[f"{side}_quarters"]
+        total = game[f"{side}_total"]
+        # qs might be [Q1, Q2, Q3, Q4] or [Q1, Q2, Q3, Q4, OT, ...]
+        # Filter out dashes (no OT)
+        clean_qs = [q for q in qs if q not in ("-", "")]
+        if len(clean_qs) >= 4:
+            try:
+                h1 = str(int(clean_qs[0]) + int(clean_qs[1]))
+                h2 = str(int(clean_qs[2]) + int(clean_qs[3]))
+            except ValueError:
+                h1 = h2 = "?"
+            ot = ""
+            if len(clean_qs) > 4:
+                ot = f" OT={'|'.join(clean_qs[4:])}"
+            lines.append(f"{name}: Q1={clean_qs[0]} Q2={clean_qs[1]} H1={h1} | Q3={clean_qs[2]} Q4={clean_qs[3]} H2={h2}{ot} | Final={total}")
+        else:
+            lines.append(f"{name}: Final={total}")
+    status = "F (OT)" if game.get("ot") else "Final"
+    header = f"{game['away_name']} {game['away_total']} at {game['home_name']} {game['home_total']} [{status}]"
+    return header + "\n" + "\n".join(lines)
+
+
+async def fetch_cfl_context(
+    team: str, date: str, *, odds_game_date: str | None = None,
+) -> tuple[str, str]:
+    """Grade a CFL pick by scraping CFL.ca schedule for quarter scores.
+
+    ESPN has no CFL data, so we scrape the official site instead.
+    Returns (context_str, game_date).
+    """
+    game_date = odds_game_date or date
+
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as http:
+        try:
+            r = await http.get("https://www.cfl.ca/schedule/")
+            r.raise_for_status()
+        except Exception as exc:
+            print(f"    [CFL error] schedule fetch: {exc}")
+            return "", date
+
+    games = _parse_cfl_schedule(r.text)
+    team_lower = team.lower().strip()
+    target = _date.fromisoformat(game_date)
+
+    for g in games:
+        if not (_team_matches(team_lower, g["away_name"].lower())
+                or _team_matches(team_lower, g["home_name"].lower())
+                or _team_matches(team_lower, g["away_abbr"].lower())
+                or _team_matches(team_lower, g["home_abbr"].lower())):
+            continue
+        # Match date (±1 day to handle timezone differences)
+        try:
+            gd = _date.fromisoformat(g["date"])
+            if abs((gd - target).days) > 1:
+                continue
+        except ValueError:
+            continue
+        if g["final"]:
+            return _format_cfl_line_scores(g), g["date"]
+        return "PENDING", g["date"]
 
     return "", date
 
@@ -760,7 +913,7 @@ _QUARTER_PERIODS = {"1h": [1, 2], "2h": [3, 4], "1q": [1], "2q": [2], "3q": [3],
 _BASEBALL_PERIODS = {"1h": [1, 2, 3, 4, 5], "2h": [6, 7, 8, 9]}
 
 PERIOD_MAP: dict[tuple[str, str], list[int]] = {
-    **{(s, p): v for s in ("NBA", "NCAAB", "NFL", "NCAAF", "UFL") for p, v in _QUARTER_PERIODS.items()},
+    **{(s, p): v for s in ("NBA", "NCAAB", "NFL", "NCAAF", "UFL", "CFL") for p, v in _QUARTER_PERIODS.items()},
     **{(s, p): v for s in ("MLB", "KBO") for p, v in _BASEBALL_PERIODS.items()},
     ("NHL", "1h"): [1],
     ("NHL", "1p"): [1], ("NHL", "2p"): [2], ("NHL", "3p"): [3],
