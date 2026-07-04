@@ -85,6 +85,12 @@ su - forwarder -c "cd ~/app && python -c \"import json; d=json.load(open('parse_
 
 Deploy: `git push`, then SSH to VPS and run `cd /home/forwarder/app && git pull && systemctl restart telegram-forwarder`. If unsure about the fix, let the user handle deploy.
 
-### 8. Self-improvement
+### 8. Lessons
+
+- Always compare VPS and local git versions (step 3) **before** running any VPS helper scripts — they may not exist on VPS yet.
+- Never inline Python in SSH commands beyond one-liners with no quotes inside strings. For anything with nested quoting, write a temp script locally, `scp` it, and run it.
+- Don't guess DB table/column names. Run `PRAGMA table_info(tablename)` or list tables first.
+
+### 9. Self-improvement
 
 After resolving an investigation, consider whether a mistake you made could be avoided with a better rule **in this file or in CLAUDE.md**. Add investigation-specific rules here; add project-wide rules to CLAUDE.md. Don't duplicate between the two. One line per lesson.
