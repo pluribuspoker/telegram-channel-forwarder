@@ -366,6 +366,9 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             desc_stripped = desc
             for w in team_words:
                 desc_stripped = desc_stripped.replace(w, "")
+            # Strip trailing AI-added bet-type qualifiers like "(spread)", "(moneyline)", "(total)"
+            # that never appear in the actual message text.
+            desc_stripped = re.sub(r'\s*\((?:spread|moneyline|ml|total)\)\s*$', '', desc_stripped)
             desc_stripped = " ".join(desc_stripped.split())  # collapse whitespace
             if len(desc_stripped) >= 4:
                 for j, line in enumerate(lines):
@@ -389,8 +392,9 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                     if " @ " in row and not _BET_LINE_RE.search(row):
                         continue
                     if line_str in row:
-                        if not _ODDS_TAG_RE.search(row):
-                            lines[j] = f"{row.rstrip()}{odds_tag}"
+                        if _ODDS_TAG_RE.search(row):
+                            continue  # line already tagged — may belong to another pick
+                        lines[j] = f"{row.rstrip()}{odds_tag}"
                         desc_matched = True
                         break
 
