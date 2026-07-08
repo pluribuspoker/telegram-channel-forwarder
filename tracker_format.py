@@ -44,6 +44,22 @@ _BET_LINE_RE = re.compile(
     r')'
 )
 
+# Prop-stat abbreviations → expanded forms for matching pick lines
+_PROP_STAT_ALIASES: dict[str, list[str]] = {
+    "btts": ["both to score", "both teams to score"],
+    "clean sheet": ["clean sheet"],
+}
+
+
+def _prop_stat_in_line(prop_stat: str, line_lower: str) -> bool:
+    """Check if a prop_stat (or any of its aliases) appears in a line."""
+    if prop_stat in line_lower:
+        return True
+    for alias in _PROP_STAT_ALIASES.get(prop_stat, []):
+        if alias in line_lower:
+            return True
+    return False
+
 
 def _pick_search_terms(pick: dict) -> list[str]:
     """Build lowercase search terms from a pick's teams/player fields."""
@@ -119,7 +135,7 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
             # For team-level props (BTTS, clean sheet, etc.), team names
             # may appear on a header line separate from the pick line.
             # Only match here if the line also contains the prop_stat.
-            if prop_stat and prop_stat not in line_lower:
+            if prop_stat and not _prop_stat_in_line(prop_stat, line_lower):
                 continue
             return i
 
