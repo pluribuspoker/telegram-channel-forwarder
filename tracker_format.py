@@ -7,6 +7,7 @@ from tracker_grading import _overall_verdict
 
 _PICK_EMOJI = {k: v for k, v in VERDICT_EMOJI.items() if k in ("WIN", "LOSS", "PUSH")}
 _ODDS_TAG_RE = re.compile(r'\s*\[[+-]\d{3,4}[^\]]*\]')
+_SOURCE_ODDS_RE = re.compile(r'[+-]\d{3,4}(?!\.\d)(?!\d)')
 # Lines that look like bet lines: contain odds, units, spread/total numbers, or bet-type keywords
 _OU_RE = re.compile(r'\b(over|under)(?:\s+|(?=\d))')
 _F5_RE = re.compile(r'\bfirst\s+5\s+innings\b')
@@ -301,7 +302,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                         best_j = j
                 if best_j >= 0 and best_count >= 2:
                     header_j = best_j
-            if header_j >= 0 and not _ODDS_TAG_RE.search(lines[header_j]):
+            if header_j >= 0 and not _ODDS_TAG_RE.search(lines[header_j]) and not _SOURCE_ODDS_RE.search(lines[header_j]):
                 lines[header_j] = f"{lines[header_j].rstrip()}{combined_tag}"
 
         # If no standalone picks, we're done
@@ -316,6 +317,9 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             continue  # parlay legs handled above via combined odds
         odds_val = odds_by_pick.get(str(idx), {}).get("odds")
         if odds_val is None:
+            continue
+        # Skip if source already has odds (e.g. "Renegades -4.5 (-110)")
+        if _SOURCE_ODDS_RE.search(pick.get("description") or ""):
             continue
         match_type  = odds_by_pick.get(str(idx), {}).get("match_type", "")
         pregame_val = odds_by_pick.get(str(idx), {}).get("pregame_odds")
