@@ -37,6 +37,7 @@ from tracker_cache import (
     _save_pending_cache,
     _pending_entry,
     _find_duplicate_cache_key,
+    _find_mirror_entry,
 )
 from tracker_grading import _overall_verdict, grade_matches_label
 from tracker_format import (
@@ -361,6 +362,23 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 else:
                     cached_parse = None
                     cached_leg_verdicts = {}
+                # Mirror: reuse parse/odds from same source message forwarded to another channel
+                mirror_source_key = cached.get("_source_key") if isinstance(cached, dict) else None
+                if not cached_parse and mirror_source_key:
+                    mirror = _find_mirror_entry(pending_cache, mirror_source_key, cache_key)
+                    if mirror:
+                        cached_parse = mirror["parsed"]
+                        cached_leg_verdicts = mirror.get("leg_verdicts", {})
+                        capper = mirror.get("capper_name", capper)
+                        # Inject mirror data into cache so downstream odds_by_pick lookup finds it
+                        entry_update = dict(cached) if isinstance(cached, dict) else {}
+                        entry_update["parsed"] = cached_parse
+                        entry_update["leg_verdicts"] = cached_leg_verdicts
+                        entry_update["capper_name"] = capper
+                        if not skip_odds and mirror.get("odds_by_pick"):
+                            entry_update["odds_by_pick"] = mirror["odds_by_pick"]
+                        pending_cache[cache_key] = entry_update
+                        print(f"  [mirror] reusing parse+odds from {mirror_source_key}")
                 # Leg indices that were already broadcast in a previous partial edit
                 already_broadcast_indices = {
                     int(k) for k, v in cached_leg_verdicts.items()

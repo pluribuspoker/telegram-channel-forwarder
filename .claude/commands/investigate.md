@@ -90,6 +90,7 @@ Deploy: `git push`, then SSH to VPS and run `cd /home/forwarder/app && git pull 
 - Always compare VPS and local git versions (step 3) **before** running any VPS helper scripts — they may not exist on VPS yet.
 - Never inline Python in SSH commands beyond one-liners with no quotes inside strings. For anything with nested quoting, write a temp script locally, `scp` it, and run it.
 - Don't guess DB table/column names. Run `PRAGMA table_info(tablename)` or list tables first.
+- When running `tracker.py --live` locally for testing, ALWAYS use `--channel <id>` to scope to the channel under test. Unscoped runs process all GRADE_CHANNELS and broadcast results to production chat channels.
 
 ### 9. Self-improvement
 

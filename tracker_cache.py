@@ -32,7 +32,27 @@ def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict
         entry["_forwarded"] = True
     if existing.get("mapping_id"):
         entry["mapping_id"] = existing["mapping_id"]
+    if existing.get("_source_key"):
+        entry["_source_key"] = existing["_source_key"]
     return entry
+
+
+def _find_mirror_entry(
+    pending_cache: dict,
+    source_key: str,
+    exclude_key: str,
+) -> dict | None:
+    """Find a sibling cache entry from the same source message that already has parsed data.
+
+    Used to share parse results and odds across destinations when the same source
+    message is forwarded to multiple channels.
+    """
+    for key, entry in pending_cache.items():
+        if key == exclude_key:
+            continue
+        if isinstance(entry, dict) and entry.get("_source_key") == source_key and "parsed" in entry:
+            return entry
+    return None
 
 
 def _find_duplicate_cache_key(

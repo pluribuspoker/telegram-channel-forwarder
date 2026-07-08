@@ -69,7 +69,7 @@ async def connection_watchdog(client):
 
 
 _DB_PATH = os.path.join(os.path.dirname(__file__), "picks.db")
-_in_flight: set[tuple[int, int]] = set()  # {(channel_id, msg_id)} – prevents race between event handler & catch-up
+_in_flight: set[tuple[int, int, int]] = set()  # {(channel_id, dest_channel, msg_id)} – prevents race between event handler & catch-up
 
 
 def _probe_db_load() -> dict:
@@ -160,10 +160,15 @@ def _forwarded_init() -> None:
     """Create the listener_forwarded table if needed and prune entries older than 48h."""
     try:
         conn = sqlite3.connect(_DB_PATH)
+        # Migrate from old schema (channel_id, msg_id) to new (channel_id, dest_channel, msg_id)
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(listener_forwarded)").fetchall()]
+        if cols and "dest_channel" not in cols:
+            conn.execute("DROP TABLE listener_forwarded")
         conn.execute(
             "CREATE TABLE IF NOT EXISTS listener_forwarded"
-            " (channel_id INTEGER NOT NULL, msg_id INTEGER NOT NULL, ts REAL NOT NULL,"
-            " PRIMARY KEY (channel_id, msg_id))"
+            " (channel_id INTEGER NOT NULL, dest_channel INTEGER NOT NULL,"
+            " msg_id INTEGER NOT NULL, ts REAL NOT NULL,"
+            " PRIMARY KEY (channel_id, dest_channel, msg_id))"
         )
         cutoff = datetime.datetime.now(datetime.timezone.utc).timestamp() - 48 * 3600
         conn.execute("DELETE FROM listener_forwarded WHERE ts < ?", (cutoff,))
@@ -173,13 +178,13 @@ def _forwarded_init() -> None:
         pass
 
 
-def _forwarded_save(channel_id: int, msg_id: int) -> None:
+def _forwarded_save(channel_id: int, dest_channel: int, msg_id: int) -> None:
     """Record a forwarded message ID in picks.db."""
     try:
         conn = sqlite3.connect(_DB_PATH)
         conn.execute(
-            "INSERT OR IGNORE INTO listener_forwarded (channel_id, msg_id, ts) VALUES (?,?,?)",
-            (channel_id, msg_id, datetime.datetime.now(datetime.timezone.utc).timestamp()),
+            "INSERT OR IGNORE INTO listener_forwarded (channel_id, dest_channel, msg_id, ts) VALUES (?,?,?,?)",
+            (channel_id, dest_channel, msg_id, datetime.datetime.now(datetime.timezone.utc).timestamp()),
         )
         conn.commit()
         conn.close()
@@ -187,13 +192,13 @@ def _forwarded_save(channel_id: int, msg_id: int) -> None:
         pass
 
 
-def _was_forwarded(channel_id: int, msg_id: int) -> bool:
-    """Check if a message was already forwarded."""
+def _was_forwarded(channel_id: int, dest_channel: int, msg_id: int) -> bool:
+    """Check if a message was already forwarded to a specific destination."""
     try:
         conn = sqlite3.connect(_DB_PATH)
         row = conn.execute(
-            "SELECT 1 FROM listener_forwarded WHERE channel_id = ? AND msg_id = ?",
-            (channel_id, msg_id),
+            "SELECT 1 FROM listener_forwarded WHERE channel_id = ? AND dest_channel = ? AND msg_id = ?",
+            (channel_id, dest_channel, msg_id),
         ).fetchone()
         conn.close()
         return row is not None
@@ -226,14 +231,15 @@ async def _trigger_tracker_soon():
 async def _forward_group(group, mapping, client, sender, dest_entity, use_test, catchup=False):
     """Shared forwarding logic: filter → enrich → log → send → record → trigger tracker."""
     ch_id = group[0].peer_id.channel_id
+    dest_ch = mapping.get("test_dest_channel") if use_test else mapping.get("dest_channel")
 
     # Claim messages to prevent duplicate forwarding between event handler and catch-up.
     # asyncio is single-threaded, so check-and-add is atomic between await points.
-    keys = [(ch_id, m.id) for m in group]
+    keys = [(ch_id, dest_ch, m.id) for m in group]
     if any(k in _in_flight for k in keys):
         return False
     # Check persistent DB — catches late event-handler fires after catch-up already forwarded
-    if any(_was_forwarded(ch_id, m.id) for m in group):
+    if any(_was_forwarded(ch_id, dest_ch, m.id) for m in group):
         return False
     for k in keys:
         _in_flight.add(k)
@@ -252,7 +258,6 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
         # Reply-chain: reply to the most recent forwarded message from the same capper
         reply_to = None
         chain_cappers = mapping.get("reply_chain_cappers")
-        dest_ch = mapping.get("test_dest_channel") if use_test else mapping.get("dest_channel")
         capper_key = None
         if chain_cappers and dest_ch:
             msg_text = group[0].text or ""
@@ -270,13 +275,14 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
             else:
                 raise
         for m in group:
-            _forwarded_save(ch_id, m.id)
+            _forwarded_save(ch_id, dest_ch, m.id)
         # Seed parse cache so the tracker knows this message was forwarded by us
         if sent and sent is not True:
             sent_ids = [s.id for s in sent] if isinstance(sent, list) else [sent.id]
             cache = _load_pending_cache()
             for sid in sent_ids:
-                cache[f"{dest_ch}:{sid}"] = {"_forwarded": True, "mapping_id": mapping.get("id", "")}
+                source_key = f"{ch_id}:{group[0].id}"
+            cache[f"{dest_ch}:{sid}"] = {"_forwarded": True, "mapping_id": mapping.get("id", ""), "_source_key": source_key}
             _save_pending_cache(cache)
             # Update reply chain with the newest sent message
             if capper_key and dest_ch:
@@ -295,6 +301,10 @@ async def channel_probe(client, channels, use_test):
     last_seen: dict = _probe_db_load()
     while True:
         await asyncio.sleep(60)
+        # Snapshot min_ids so all mappings sharing a probe_key use the same
+        # starting point within one cycle (otherwise the first mapping to
+        # process updates last_seen and the second mapping misses catch-ups).
+        min_ids_snapshot = dict(last_seen)
         for source_entity, sender_dest_entity, src_label, _, topic_id, mapping, sender_client in channels:
             try:
                 probe_key = (source_entity.id, topic_id or 0)
@@ -304,8 +314,9 @@ async def channel_probe(client, channels, use_test):
                     seed = await client.get_messages(source_entity, limit=1, **kwargs)
                     seed_id = seed[0].id if seed else 0
                     last_seen[probe_key] = seed_id
+                    min_ids_snapshot[probe_key] = seed_id
                     _probe_db_save(source_entity.id, topic_id, seed_id)
-                min_id = last_seen[probe_key]
+                min_id = min_ids_snapshot[probe_key]
                 msgs = await client.get_messages(source_entity, min_id=min_id, limit=50, **kwargs)
                 if not msgs:
                     print(f"\033[2m  ⊙ {src_label}: no new msg\033[0m")
@@ -325,8 +336,9 @@ async def channel_probe(client, channels, use_test):
                 # Separate into singles and albums (grouped_id)
                 albums: dict[int, list] = {}
                 singles = []
+                probe_dest = mapping.get("test_dest_channel") if use_test else mapping.get("dest_channel")
                 for msg in sorted(msgs, key=lambda m: m.id):
-                    if _was_forwarded(source_entity.id, msg.id):
+                    if _was_forwarded(source_entity.id, probe_dest, msg.id):
                         continue
                     if msg.grouped_id:
                         albums.setdefault(msg.grouped_id, []).append(msg)
