@@ -103,6 +103,7 @@ Classification rules:
 - Boxing: if the pick involves known professional boxers (e.g. Ryan Garcia, Canelo, Fury, Usyk, Crawford, Beterbiev, etc.), classify as Boxing, not UFC. If a single surname could be a boxer (e.g. Garcia), prefer Boxing over UFC when no other context is available.
 - CFL = Canadian Football League. Classify as CFL if the pick involves CFL team names or explicit CFL context. CFL teams (resolve nicknames to the canonical full name in "teams"): BC Lions, Calgary Stampeders, Edmonton Elks, Hamilton Tiger-Cats (Tiger Cats), Montreal Alouettes, Ottawa Redblacks, Saskatchewan Roughriders (Roughriders/Riders), Toronto Argonauts (Argonauts/Argos), Winnipeg Blue Bombers (Blue Bombers/Bombers). Note: "Lions" alone during CFL season (June–November) with CFL context is BC Lions, not Detroit Lions.
 - KBO = Korean Baseball Organization. Classify as KBO if the pick involves KBO team names or explicit KBO context. KBO teams and their common nicknames/abbreviations (resolve any of these to the canonical full name in "teams"): KT Wiz (WIZ/KT), Samsung Lions (LIONS/SAMSUNG), LG Twins (TWINS/LG), Doosan Bears (BEARS/DOOSAN), Lotte Giants (GIANTS/LOTTE), NC Dinos (DINOS/NC), KIA Tigers (TIGERS/KIA), SSG Landers (LANDERS/SSG), Hanwha Eagles (EAGLES/HANWHA), Kiwoom Heroes (HEROES/KIWOOM). Critically: "LIONS" alone is ALWAYS Samsung Lions (not Lotte Giants), "GIANTS" alone is ALWAYS Lotte Giants, etc. Never invent an opponent that isn't in the message text.
+- KBO/MLB team name collisions: "Tigers" (KIA Tigers KBO / Detroit Tigers MLB), "Giants" (Lotte Giants KBO / San Francisco Giants MLB), "Twins" (LG Twins KBO / Minnesota Twins MLB). When these names appear alone without explicit KBO context (the word "KBO", a Korean team prefix like KIA/LG/Lotte, or another KBO team as opponent), default to MLB. Only classify as KBO when the message explicitly says "KBO" or uses the full Korean team name (e.g. "KIA Tigers", "LG Twins", "Lotte Giants").
 - Soccer/FIFA: if the pick involves country or national team names (e.g. Japan, Brazil, France, Germany, Argentina, Mexico, England, Spain, Italy, Portugal, Netherlands, USA, South Korea, Australia, Canada, etc.) as the team in a spread, moneyline, or total, classify as Soccer. Country names are never used for NBA/MLB/NFL/NHL/NCAAB teams — they always indicate international soccer (FIFA World Cup, friendlies, qualifiers). Use the full country name in "teams" (e.g. "South Korea" not "Korea").
 - MLB/NFL team name collisions: "Cardinals" can be Arizona Cardinals (NFL) or St. Louis Cardinals (MLB). "Giants" can be New York Giants (NFL) or San Francisco Giants (MLB). To disambiguate: (1) If an opponent team is mentioned and belongs to only one sport (e.g. "Red Sox", "Dodgers" → MLB; "Cowboys", "Eagles" → NFL), use that sport. (2) If no opponent context: outside the NFL season (mid-February through early September), always resolve to MLB. During NFL season overlap (September through early February), prefer NFL on Sunday/Monday/Thursday (typical NFL game days) and MLB on Tuesday/Wednesday/Friday/Saturday. Always use the full canonical MLB name ("St. Louis Cardinals", "San Francisco Giants") or NFL name ("Arizona Cardinals", "New York Giants") in the teams field.
 - If a single surname with a moneyline has no clear sport context and is not a known boxer or MMA fighter, default to UFC.
@@ -230,6 +231,20 @@ async def claude_parse(text: str, date: str | None = None) -> dict | None:
     # with "(KBO)" but leaves sport="Other". Override based on raw message text.
     if parsed and parsed.get("sport") == "Other" and "kbo" in text.lower():
         parsed["sport"] = "KBO"
+
+    # Reverse: KBO with ambiguous team names (Tigers/Giants/Twins) but no explicit
+    # KBO context in the message → default to MLB. Real KBO picks say "KBO" or use
+    # full Korean names (KIA Tigers, LG Twins, Lotte Giants).
+    _KBO_MLB_OVERLAP = {"tigers", "giants", "twins"}
+    if parsed and parsed.get("sport") == "KBO" and "kbo" not in text.lower():
+        all_teams = []
+        for pick in parsed.get("picks", []):
+            all_teams.extend(t.lower() for t in pick.get("teams", []))
+        # Only override if every team is an ambiguous overlap name
+        if all_teams and all(
+            any(frag in t for frag in _KBO_MLB_OVERLAP) for t in all_teams
+        ):
+            parsed["sport"] = "MLB"
 
     if parsed and parsed.get("sport") == "Other" and "cfl" in text.lower():
         parsed["sport"] = "CFL"
