@@ -431,6 +431,13 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         parsed["sport"] = sport
                     if new_teams != teams:
                         picks[0]["teams"] = new_teams
+                        # Team was corrected to match top-level sport —
+                        # clear any conflicting pick-level sport override
+                        # (e.g., AI said KBO "KIA Tigers" but ESPN confirmed MLB "Detroit Tigers")
+                        ps0 = picks[0].get("sport")
+                        if ps0 and ps0 != sport:
+                            print(f"  Clearing pick[0] sport override: {ps0} -> inherit {sport}")
+                            del picks[0]["sport"]
 
                     # Also validate per-pick sport overrides (cross-sport parlays)
                     for pick in picks[1:]:

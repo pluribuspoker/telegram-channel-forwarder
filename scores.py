@@ -1256,8 +1256,29 @@ async def validate_sport(
         scoreboard_cache[sb_key] = await fetch_espn(sport, date_str)
     sb = scoreboard_cache[sb_key]
 
+    # Raw fragments from the bet text for fuzzy matching
+    raw_terms = re.split(r'[\s/]+', bet_text)
+    raw_terms = [t for t in raw_terms if len(t) > 2 and t not in ("Over", "Under", "ML", "TT")]
+    search_teams = list(set(teams + raw_terms))
+
     if sb and find_event_ids(sb.get("events", []), teams):
-        return sport, teams  # confirmed
+        return sport, teams  # confirmed (exact match)
+
+    # Fuzzy match: team name fragments (e.g. "Tigers") against the SAME sport
+    # before trying alternatives — catches cases like "KIA Tigers" → "Detroit Tigers"
+    if sb:
+        matched_ids = find_event_ids(sb.get("events", []), search_teams)
+        if matched_ids:
+            corrected_teams = teams
+            for evt in sb.get("events", []):
+                if evt.get("id") in matched_ids:
+                    for comp in evt.get("competitions", [{}]):
+                        for c in comp.get("competitors", []):
+                            name = c.get("team", {}).get("displayName", "")
+                            if name and any(f.lower() in name.lower() for f in raw_terms):
+                                corrected_teams = [name]
+                                break
+            return sport, corrected_teams
 
     # Build set of alternative sports to check
     needs_check: set[str] = set()
@@ -1273,11 +1294,6 @@ async def validate_sport(
         for alt in ["MLB", "NBA", "NHL", "NFL"]:
             if alt != sport and alt in ESPN_LEAGUES:
                 needs_check.add(alt)
-
-    # Raw fragments from the bet text for fuzzy matching
-    raw_terms = re.split(r'[\s/]+', bet_text)
-    raw_terms = [t for t in raw_terms if len(t) > 2 and t not in ("Over", "Under", "ML", "TT")]
-    search_teams = list(set(teams + raw_terms))
 
     for alt_sport in needs_check:
         alt_key = (alt_sport, date_str)
