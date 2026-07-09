@@ -357,7 +357,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         if desc:
             for j, line in enumerate(lines):
                 if desc in _norm_abbr(line.lower()):
-                    if not _ODDS_TAG_RE.search(line):
+                    if not _ODDS_TAG_RE.search(line) and not _SOURCE_ODDS_RE.search(line):
                         lines[j] = f"{line.rstrip()}{odds_tag}"
                     desc_matched = True
                     break
@@ -367,7 +367,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 if " @ " in line and not _BET_LINE_RE.search(line):
                     continue  # skip game-info headers, but keep pick lines
                 if any(term in line.lower() for term in search_terms):
-                    if not _ODDS_TAG_RE.search(line):
+                    if not _ODDS_TAG_RE.search(line) and not _SOURCE_ODDS_RE.search(line):
                         lines[j] = f"{line.rstrip()}{odds_tag}"
                     desc_matched = True
                     break
@@ -395,7 +395,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                     if " @ " in line and not _BET_LINE_RE.search(line):
                         continue
                     if desc_stripped in _norm_abbr(line.lower()):
-                        if not _ODDS_TAG_RE.search(line):
+                        if not _ODDS_TAG_RE.search(line) and not _SOURCE_ODDS_RE.search(line):
                             lines[j] = f"{line.rstrip()}{odds_tag}"
                         desc_matched = True
                         break
@@ -412,7 +412,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                     if " @ " in row and not _BET_LINE_RE.search(row):
                         continue
                     if line_str in row:
-                        if _ODDS_TAG_RE.search(row):
+                        if _ODDS_TAG_RE.search(row) or _SOURCE_ODDS_RE.search(row):
                             continue  # line already tagged — may belong to another pick
                         lines[j] = f"{row.rstrip()}{odds_tag}"
                         desc_matched = True
