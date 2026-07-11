@@ -309,8 +309,6 @@ async def fetch_cfl_context(
     ESPN has no CFL data, so we scrape the official site instead.
     Returns (context_str, game_date).
     """
-    game_date = odds_game_date or date
-
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as http:
         try:
             r = await http.get("https://www.cfl.ca/schedule/")
@@ -321,24 +319,33 @@ async def fetch_cfl_context(
 
     games = _parse_cfl_schedule(r.text)
     team_lower = team.lower().strip()
-    target = _date.fromisoformat(game_date)
 
-    for g in games:
-        if not (_team_matches(team_lower, g["away_name"].lower())
-                or _team_matches(team_lower, g["home_name"].lower())
-                or _team_matches(team_lower, g["away_abbr"].lower())
-                or _team_matches(team_lower, g["home_abbr"].lower())):
-            continue
-        # Match date (±1 day to handle timezone differences)
-        try:
-            gd = _date.fromisoformat(g["date"])
-            if abs((gd - target).days) > 1:
+    # Try odds_game_date first, then pick date — odds API sometimes returns
+    # the NEXT game date instead of the played game date.
+    search_dates = []
+    if odds_game_date:
+        search_dates.append(odds_game_date)
+    if date not in search_dates:
+        search_dates.append(date)
+
+    for target_date in search_dates:
+        target = _date.fromisoformat(target_date)
+        for g in games:
+            if not (_team_matches(team_lower, g["away_name"].lower())
+                    or _team_matches(team_lower, g["home_name"].lower())
+                    or _team_matches(team_lower, g["away_abbr"].lower())
+                    or _team_matches(team_lower, g["home_abbr"].lower())):
                 continue
-        except ValueError:
-            continue
-        if g["final"]:
-            return _format_cfl_line_scores(g), g["date"]
-        return "PENDING", g["date"]
+            # Match date (±1 day to handle timezone differences)
+            try:
+                gd = _date.fromisoformat(g["date"])
+                if abs((gd - target).days) > 1:
+                    continue
+            except ValueError:
+                continue
+            if g["final"]:
+                return _format_cfl_line_scores(g), g["date"]
+            return "PENDING", g["date"]
 
     return "", date
 
