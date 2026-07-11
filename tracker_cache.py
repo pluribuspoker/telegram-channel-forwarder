@@ -34,6 +34,11 @@ def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict
         entry["mapping_id"] = existing["mapping_id"]
     if existing.get("_source_key"):
         entry["_source_key"] = existing["_source_key"]
+    # Preserve html_text + has_media for grade daemon (Bot API edits without Telethon)
+    if existing.get("html_text") is not None:
+        entry["html_text"] = existing["html_text"]
+    if existing.get("has_media") is not None:
+        entry["has_media"] = existing["has_media"]
     return entry
 
 
@@ -99,8 +104,10 @@ def _load_pending_cache() -> dict:
 
 def _save_pending_cache(cache: dict) -> None:
     _evict_stale(cache)
-    with open(_PENDING_CACHE_PATH, "w") as f:
+    tmp = _PENDING_CACHE_PATH + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(cache, f)
+    os.replace(tmp, _PENDING_CACHE_PATH)
 
 
 def _evict_stale(cache: dict) -> None:

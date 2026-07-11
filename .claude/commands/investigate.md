@@ -56,6 +56,11 @@ If an API call fails, a query returns nothing, or data seems missing — try var
 - Write a test that feeds that exact data through the fixed code path and asserts the correct result
 - Don't just test the happy path — confirm the specific scenario that broke
 
+**Run the tracker manually to verify grading fixes.** After deploying and clearing cache, run the tracker on the VPS scoped to the affected channel for instant feedback — don't wait for the 5-minute systemd timer:
+```bash
+su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.py --live --channel <channel_id>"
+```
+
 **Send test messages to the TEST channel only.** If verification requires sending or editing Telegram messages (e.g., testing emoji placement, broadcast formatting), use the test channel — never the production channel. Use `--test` mode when running `listener.py` or `tracker.py` locally.
 
 **Verify both the code fix and the live correction.** When a bug produced wrong output on a live message (wrong emoji, wrong label, wrong odds), fix both:
@@ -91,7 +96,9 @@ Deploy: `git push`, then SSH to VPS and run `cd /home/forwarder/app && git pull 
 - Never inline Python in SSH commands beyond one-liners with no quotes inside strings. For anything with nested quoting, write a temp script locally, `scp` it, and run it.
 - Don't guess DB table/column names. Run `PRAGMA table_info(tablename)` or list tables first.
 - When running `tracker.py --live` locally for testing, ALWAYS use `--channel <id>` to scope to the channel under test. Unscoped runs process all GRADE_CHANNELS and broadcast results to production chat channels.
+- For grading bugs, trace the ENTIRE pipeline (`claude_parse` → post-parse corrections → `validate_sport` → `build_context` → sport-specific fetcher → `claude_grade`) before writing any fix. Identify all failure points, fix them in one commit.
+- After deploying a fix, run the tracker manually on VPS (`tracker.py --live --channel <id>`) for instant verification — don't wait for the 5-minute systemd timer.
 
 ### 9. Self-improvement
 
-After resolving an investigation, consider whether a mistake you made could be avoided with a better rule **in this file or in CLAUDE.md**. Add investigation-specific rules here; add project-wide rules to CLAUDE.md. Don't duplicate between the two. One line per lesson.
+After resolving an investigation, you MUST review mistakes made and add lessons to section 8 above and/or CLAUDE.md. Also save relevant feedback to memory. Do NOT skip this step — it is required before the conversation ends.

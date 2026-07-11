@@ -46,12 +46,37 @@ alias gradetest='su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.py --l
 EOF
 source /root/.bash_aliases
 
-echo "=== 5. Enable timer ==="
+echo "=== 5. Grade daemon service ==="
+chmod +x $APP/run_grade_daemon.sh
+cat > /etc/systemd/system/grade-daemon.service << 'EOF'
+[Unit]
+Description=Pick Grade Daemon (Bot API only, no Telethon)
+After=network.target
+
+[Service]
+Type=simple
+User=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+ExecStart=/home/forwarder/app/run_grade_daemon.sh
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "=== 6. Enable timer + daemon ==="
 systemctl daemon-reload
 systemctl enable --now telegram-tracker.timer
+systemctl enable --now grade-daemon.service
 
-echo "=== 6. Timer status ==="
+echo "=== 7. Status ==="
 systemctl list-timers telegram-tracker.timer
+systemctl status grade-daemon.service --no-pager
 
 echo ""
 echo "Setup complete. Run the backfill with:"

@@ -560,6 +560,15 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             await _edit_msg(channel_id, linked_id, _odds_text, msg.media is not None)
                             await asyncio.sleep(0.5)
 
+                # Cache HTML text + media flag so the grade daemon can edit
+                # via Bot API without needing Telethon.
+                _cur_html = _to_bot_html(text, msg.entities)
+                if not skip_odds:
+                    _cur_html = _insert_odds(_cur_html, picks, odds_by_pick)
+                cached_entry["html_text"] = _cur_html
+                cached_entry["has_media"] = msg.media is not None
+                cached_entry["msg_date"] = date_str
+
                 base_date = day_hint or date_str
                 sb_key = (sport, base_date)
                 if sb_key not in scoreboard_cache:
@@ -716,6 +725,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                 entry["broadcasted"] = True
                             new_leg_verdicts[str(j)] = entry
                     pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
+                    pending_cache[cache_key]["html_text"] = _cur_html
+                    pending_cache[cache_key]["has_media"] = msg.media is not None
+                    pending_cache[cache_key]["msg_date"] = date_str
 
                 # Nothing new to grade this run — log and skip
                 if not newly_resolved or parlay_blocks_edit:
@@ -791,6 +803,13 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             "broadcasted": already_bc or (not dry_run and not edit_failed),
                         }
                 pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
+                # Update HTML text after emoji edit so daemon sees current state
+                if not edit_failed and not dry_run:
+                    pending_cache[cache_key]["html_text"] = new_text
+                else:
+                    pending_cache[cache_key]["html_text"] = _cur_html
+                pending_cache[cache_key]["has_media"] = msg.media is not None
+                pending_cache[cache_key]["msg_date"] = date_str
                 all_descs = "\n".join(
                     f"{v[1]}: {v[0].get('description', '')}|{v[3]}|{v[4]}|{v[2]}" for v in verdicts if v[1] in _PICK_EMOJI
                 )

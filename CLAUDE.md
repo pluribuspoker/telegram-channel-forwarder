@@ -37,9 +37,13 @@ start
 
 In both cases, `test_source_channel` → `test_dest_channel` from `MAPPINGS_CONFIG`, and all `filter_pattern` checks are bypassed.
 
-### Service name
+### Service names
 
-The systemd unit is `telegram-forwarder.service`. Use `flogs` / `tlogs` aliases for logs on the VPS, or `journalctl -u telegram-forwarder` for raw access.
+- `telegram-forwarder.service` — listener (persistent). Aliases: `flogs` / `tlogs`.
+- `telegram-tracker.timer` — pick grader, every 5 min. Scans Telegram for new picks, parses, fetches odds, applies cached verdicts.
+- `grade-daemon.service` — grade daemon (persistent). Grades pending picks every 10s via ESPN + Claude, edits emoji + broadcasts via Bot API. **Zero Telethon** — no session/flood risk. Logs: `journalctl -u grade-daemon`.
+
+The tracker and grade daemon share `parse_cache.json` (atomic writes via `os.replace`). The daemon grades picks fast; the tracker handles Telegram reads, parsing, and odds. When the daemon grades a pick, it sets `broadcasted=True` in the cache so the tracker skips it.
 
 ### Environment files
 
