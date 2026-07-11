@@ -144,6 +144,18 @@ Key design decisions:
 - Team name normalization (`_normalize_team`) handles variant spellings for dedup (e.g. "Bosnia" vs "Bosnia and Herzegovina")
 - No hardcoded exclude lists — all filtering is via prompt rules and algorithmic dedup so the script works for any capper's account
 
+## CSV pick grading
+
+`scripts/grade_csv.py` batch-grades a parsed CSV (from `parse_posts_csv.py`) using the live grading pipeline (ESPN scores + Claude). Filters by sport and adds `grade`/`calc` columns.
+
+```bash
+python scripts/grade_csv.py                  # Soccer rows (default)
+python scripts/grade_csv.py --sport NBA      # NBA rows
+python scripts/grade_csv.py --limit 5        # first 5 matching
+```
+
+**Soccer moneyline grading:** Soccer moneyline is 3-way — a draw is a LOSS, not a push. Only DNB (draw no bet) pushes on draws. "To advance" / "to qualify" picks use the final result (including extra time / penalties). This rule is in `_GRADE_PROMPT` in `ai.py`.
+
 ## Deploy workflow
 
 `syncenv` runs **locally** to push `.env` to the VPS, then deploy on the VPS:

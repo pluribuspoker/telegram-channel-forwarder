@@ -22,6 +22,7 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 | `scripts/scrape_kirms.py` | Fetches open-bets from Kirms' published Google Sheet |
 | `scripts/audit_odds.py` | Backtest odds lookup against graded picks — fetches historical closing lines from Odds API and outputs CSV |
 | `scripts/fetch_x_posts.py` | Fetches X/Twitter posts (text + images) for a user to CSV via `twscrape` |
+| `scripts/grade_csv.py` | Batch-grades parsed CSV picks against ESPN scores via Claude |
 
 ---
 
@@ -124,7 +125,7 @@ python listener.py --test  # uses test_source/dest channels
 
 `tracker.py` grades sports picks by fetching game results from ESPN and using Claude Sonnet to determine win/loss. Appends ✅/❌ inline after each pick line in the Telegram message, preserving original formatting.
 
-**Sports supported:** NBA, NCAAB, MLB, NFL, NHL, NCAAF, UFC, UFL, Tennis (ESPN core API). Period picks (1H, 2H, Q1) are graded using per-quarter line scores from the ESPN game summary.
+**Sports supported:** NBA, NCAAB, MLB, NFL, NHL, NCAAF, UFC, UFL, Tennis (ESPN core API), Soccer (9 ESPN leagues), KBO (koreabaseball.com), CFL (cfl.ca), Boxing (Odds API). Period picks (1H, 2H, Q1) are graded using per-quarter line scores from the ESPN game summary.
 
 **Verdict types:**
 - `✅ WIN` / `❌ LOSS` / `↩️ PUSH` — graded, message edited in Telegram
@@ -256,6 +257,23 @@ python scripts/sauce_daily.py --no-send              # scrape+grade+sheet, skip 
 **VPS cron:** runs daily at 6:00 AM ET as `forwarder` user. Logs at `/tmp/sauce_daily_cron.log`.
 
 **ESPN sport validation:** `validate_sport()` in `scores.py` cross-references Claude's sport classification against the actual ESPN schedule. If a team has no game in the classified sport on that date, it checks alternative sports. Also integrated into the core tracker flow (`tracker.py`).
+
+---
+
+## CSV Pick Grading
+
+`scripts/grade_csv.py` batch-grades picks from a parsed CSV (output of `parse_posts_csv.py`) using the same ESPN + Claude grading pipeline as the live tracker. Adds `grade` and `calc` columns to the output.
+
+```bash
+python scripts/grade_csv.py                  # grade all Soccer rows (default)
+python scripts/grade_csv.py --sport NBA      # grade NBA rows
+python scripts/grade_csv.py --limit 5        # grade first 5 matching rows
+```
+
+**Input:** `scripts/output/BookitWithTrent_parsed.csv`
+**Output:** `scripts/output/BookitWithTrent_graded.csv`
+
+Picks with no teams are skipped. Games not found on ESPN grade as UNKNOWN. Prints a win/loss summary and Claude API cost at the end.
 
 ---
 
