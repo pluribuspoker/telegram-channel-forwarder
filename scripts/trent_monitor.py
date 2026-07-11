@@ -106,9 +106,16 @@ async def _fetch_impl(since: datetime, limit: int) -> list[dict]:
     user = await api.user_by_login(USERNAME)
 
     results = []
+    old_streak = 0
     async for tw in api.user_tweets(user.id, limit=limit):
         if tw.date < since:
-            break
+            old_streak += 1
+            # Pinned tweets come first and may be old — skip them.
+            # Stop after 3 consecutive old tweets (past the pinned ones).
+            if old_streak >= 3:
+                break
+            continue
+        old_streak = 0
         photos = [m.url for m in tw.media.photos] if tw.media else []
         results.append({
             "id": str(tw.id),
