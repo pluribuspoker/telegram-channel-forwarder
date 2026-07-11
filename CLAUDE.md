@@ -122,6 +122,28 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/sauce_daily.py --channe
 
 **ESPN sport validation:** `validate_sport()` in `scores.py` verifies Claude's sport classification against ESPN game schedules. Catches ambiguous teams (Rangers, Cardinals, Giants, etc.). Also wired into the core tracker flow in `tracker.py`.
 
+## Twitter/X pick parsing
+
+`scripts/parse_posts_csv.py` parses a capper's tweets CSV (from `fetch_x_posts.py`) to extract official pick placements. Three-phase pipeline:
+
+1. **Text parse** — sends each tweet to Claude to determine if it's an official pick announcement (not commentary, celebration, or reaction)
+2. **Image parse** — for posts with pick signals in text but no extractable pick (bet slip in attached image), downloads the image and sends it to Claude
+3. **Dedup** — removes duplicate tweet IDs and duplicate picks (same day + normalized teams + same bet_type)
+
+```bash
+python scripts/parse_posts_csv.py              # full run
+python scripts/parse_posts_csv.py --limit 10   # test on first 10 rows
+python scripts/parse_posts_csv.py --skip-images # text-only (cheaper)
+```
+
+**Input:** `scripts/output/<Account>_posts.csv` (from `fetch_x_posts.py`)
+**Output:** `scripts/output/<Account>_parsed.csv` with structured columns: sport, description, bet_type, teams, player, prop_stat, line, direction, period.
+
+Key design decisions:
+- RT filter (`_is_retweet`) skips retweets before hitting the API
+- Team name normalization (`_normalize_team`) handles variant spellings for dedup (e.g. "Bosnia" vs "Bosnia and Herzegovina")
+- No hardcoded exclude lists — all filtering is via prompt rules and algorithmic dedup so the script works for any capper's account
+
 ## Deploy workflow
 
 `syncenv` runs **locally** to push `.env` to the VPS, then deploy on the VPS:
