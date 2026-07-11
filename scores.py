@@ -1256,6 +1256,12 @@ async def validate_sport(
         scoreboard_cache[sb_key] = await fetch_espn(sport, date_str)
     sb = scoreboard_cache[sb_key]
 
+    # CFL: ESPN has no current CFL data — don't fall through to alternative
+    # sport matching which would wrongly reassign CFL teams (e.g., "Blue
+    # Bombers" fuzzy-matching MLB "Blue Jays"). CFL uses cfl.ca for scoring.
+    if sport == "CFL" and (not sb or not sb.get("events")):
+        return sport, teams
+
     # Raw fragments from the bet text for fuzzy matching
     raw_terms = re.split(r'[\s/]+', bet_text)
     raw_terms = [t for t in raw_terms if len(t) > 2 and t not in ("Over", "Under", "ML", "TT")]
