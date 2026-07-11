@@ -6,4 +6,4 @@ APP_DIR="/home/forwarder/app"
 PYTHON="/home/forwarder/venv/bin/python"
 
 cd "$APP_DIR"
-exec $PYTHON grade_daemon.py
+exec $PYTHON -u grade_daemon.py
