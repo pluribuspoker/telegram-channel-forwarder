@@ -269,9 +269,15 @@ async def is_pick_image(tweet: dict) -> bool:
 
 # ─── Telegram ────────────────────────────────────────────────────────────────
 
+def _strip_tco(text: str) -> str:
+    """Remove trailing t.co media links from tweet text."""
+    import re
+    return re.sub(r'\s*https://t\.co/\S+', '', text).strip()
+
+
 async def send_pick(tweet: dict, dest: int | str, dry_run: bool = False):
     """Send original tweet content (text + images) to Telegram channel."""
-    text = tweet.get("text", "").strip()
+    text = _strip_tco(tweet.get("text", "").strip())
     url = tweet["url"]
     msg = f"\u25fc\ufe0f Trent \u2022 {text}\n\n{url}"
     if dry_run:
