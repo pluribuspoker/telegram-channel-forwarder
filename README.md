@@ -23,6 +23,7 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 | `scripts/audit_odds.py` | Backtest odds lookup against graded picks — fetches historical closing lines from Odds API and outputs CSV |
 | `scripts/fetch_x_posts.py` | Fetches X/Twitter posts (text + images) for a user to CSV via `twscrape` |
 | `scripts/grade_csv.py` | Batch-grades parsed CSV picks against ESPN scores via Claude |
+| `scripts/format_graded_csv.py` | Converts graded CSV to spreadsheet format with odds from Odds API |
 
 ---
 
@@ -274,6 +275,15 @@ python scripts/grade_csv.py --limit 5        # grade first 5 matching rows
 **Output:** `scripts/output/BookitWithTrent_graded.csv`
 
 Picks with no teams are skipped. Games not found on ESPN grade as UNKNOWN. Prints a win/loss summary and Claude API cost at the end.
+
+`scripts/format_graded_csv.py` converts the graded CSV into a spreadsheet-ready format (matching the Sharp Syndicate sheet layout). Fetches closing odds from the Odds API for picks missing odds in the description, defaulting to -110 for any remaining gaps.
+
+```bash
+python scripts/format_graded_csv.py
+```
+
+**Input:** `scripts/output/BookitWithTrent_graded.csv`
+**Output:** `scripts/output/BookitWithTrent_sheet.csv` — columns: Game date, League, Play, Wagered Units, Bet type, Odds, W/L, Return, Position
 
 ---
 

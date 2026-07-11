@@ -156,6 +156,8 @@ python scripts/grade_csv.py --limit 5        # first 5 matching
 
 **Soccer moneyline grading:** Soccer moneyline is 3-way — a draw is a LOSS, not a push. Only DNB (draw no bet) pushes on draws. "To advance" / "to qualify" picks use the final result (including extra time / penalties). This rule is in `_GRADE_PROMPT` in `ai.py`.
 
+`scripts/format_graded_csv.py` converts graded CSV → spreadsheet format (Sharp Syndicate layout). Odds sourced from: description text first, then Odds API historical closing lines (exact matches only), then -110 default for any gaps.
+
 ## Deploy workflow
 
 `syncenv` runs **locally** to push `.env` to the VPS, then deploy on the VPS:
