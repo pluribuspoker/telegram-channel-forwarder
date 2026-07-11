@@ -158,6 +158,26 @@ python scripts/grade_csv.py --limit 5        # first 5 matching
 
 `scripts/format_graded_csv.py` converts graded CSV → spreadsheet format (Sharp Syndicate layout). Odds sourced from: description text first, then Odds API historical closing lines (exact matches only), then -110 default for any gaps.
 
+## Trent monitor (@BookitWithTrent)
+
+`scripts/trent_monitor.py` polls @BookitWithTrent on X/Twitter every 15 minutes via systemd timer, detects official pick announcements using Claude (yes/no classification), and forwards the original tweet content (text + images) to channel `-1004394797084`.
+
+- **Systemd:** `trent-monitor.timer` (15 min) → `trent-monitor.service`
+- **DB table:** `trent_seen` in `picks.db` (tracks processed tweet IDs, pruned after 7 days)
+- **X credentials:** `X_AUTH_TOKEN` and `X_CT0` in `.env` (browser cookies from x.com, may expire)
+- **Lookback:** 2 hours per run (covers missed runs / gaps)
+- **Channel grading:** Channel is in `GRADE_CHANNELS` — tracker handles odds + result emojis
+
+**Manual run on VPS:**
+```bash
+su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/trent_monitor.py --dry-run 2>&1"
+su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/trent_monitor.py --lookback 24 2>&1"
+```
+
+**Message format:** `◼️ Trent\n\n{original tweet text}\n\n{tweet URL}` with images attached. t.co media links stripped from text.
+
+**Rate limits:** Twitter's UserTweets endpoint has a ~15 min cooldown. Script wraps fetch in a 90s timeout — exits cleanly if rate-limited, retries next run.
+
 ## Deploy workflow
 
 `syncenv` runs **locally** to push `.env` to the VPS, then deploy on the VPS:
