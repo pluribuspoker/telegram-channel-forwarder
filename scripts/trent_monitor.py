@@ -153,6 +153,7 @@ YES signals:
 - Explicit first-person declaration of placing a specific bet
 
 NO — return false for:
+- Multi-leg parlays: "FUGAZI 5", "[N]-man nuke" with multiple legs listed, "Last Chance U slip" with multiple legs — we only want SINGLE-GAME bets
 - Celebrations/results: "BANGGGG", "✅✅✅", "CASH THE MORTAL MEGA", win announcements
 - Loss reactions: "chalked", "GGs", "dead", "horrible wager"
 - In-game commentary, hopes/wishes without placement
