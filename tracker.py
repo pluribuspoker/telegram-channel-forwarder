@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 
 from common import VERDICT_EMOJI, parlay_combined_odds
 from scores import fetch_espn, odds_requests_used, try_early_grade_math, build_early_context, validate_sport
-from odds import fetch_odds_current, quota_used as odds_quota_used
+from odds import fetch_odds, fetch_odds_current, quota_used as odds_quota_used
 from ai import (
     claude_parse,
     claude_grade,
@@ -502,6 +502,20 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     for i, pick in enumerate(picks):
                         pick_sport = pick.get("sport") or sport
                         result = await fetch_odds_current(pick_sport, pick)
+                        # If the current-endpoint matched a game far from
+                        # the message date, the real game likely already
+                        # ended and we matched a future event.  Fall back
+                        # to historical odds for the message date.
+                        if result.game_date and date_str:
+                            try:
+                                delta = abs((_date.fromisoformat(result.game_date) - _date.fromisoformat(date_str)).days)
+                            except ValueError:
+                                delta = 0
+                            if delta > 2:
+                                hist = await fetch_odds(pick_sport, date_str, pick)
+                                if hist.odds is not None:
+                                    print(f"  [odds] current matched wrong game ({result.game_date}), using historical ({date_str})")
+                                    result = hist
                         display_odds, warn = result.validate_for_display()
                         pick_desc = pick.get("description", "")
                         if display_odds is None:
