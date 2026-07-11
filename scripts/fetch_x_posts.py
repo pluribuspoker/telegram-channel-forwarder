@@ -1,0 +1,81 @@
+"""Fetch posts from an X/Twitter user and write to CSV.
+
+Usage:
+    X_AUTH_TOKEN=xxx X_CT0=yyy python scripts/fetch_x_posts.py
+    X_AUTH_TOKEN=xxx X_CT0=yyy python scripts/fetch_x_posts.py --username SomeUser --since 2025-07-01
+    X_AUTH_TOKEN=xxx X_CT0=yyy python scripts/fetch_x_posts.py --output scripts/output/custom.csv
+"""
+
+import argparse
+import asyncio
+import csv
+import os
+from datetime import datetime, timezone
+
+from twscrape import API, gather
+
+
+async def fetch_tweets(username: str, since: datetime, limit: int = 2000):
+    api = API()
+
+    auth_token = os.environ.get("X_AUTH_TOKEN", "")
+    ct0 = os.environ.get("X_CT0", "")
+    if not auth_token or not ct0:
+        print("Set X_AUTH_TOKEN and X_CT0 env vars")
+        print("DevTools (F12) → Application → Cookies → https://x.com")
+        return []
+
+    await api.pool.add_account_cookies("me", f"auth_token={auth_token}; ct0={ct0}")
+
+    user = await api.user_by_login(username)
+    print(f"Fetching tweets for @{user.username} (id={user.id}) since {since.date()}")
+
+    results = []
+    async for tw in api.user_tweets(user.id, limit=limit):
+        if tw.date < since:
+            break
+        photos = [m.url for m in tw.media.photos] if tw.media else []
+        videos = [m.thumbnailUrl for m in tw.media.videos] if tw.media else []
+        results.append({
+            "id": tw.id,
+            "date": tw.date.isoformat(),
+            "text": tw.rawContent,
+            "photos": "|".join(photos),
+            "videos": "|".join(videos),
+            "url": f"https://x.com/{user.username}/status/{tw.id}",
+        })
+
+    print(f"Fetched {len(results)} tweets")
+    return results
+
+
+def write_csv(rows: list[dict], path: str):
+    if not rows:
+        return
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Wrote {path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Fetch X/Twitter user posts to CSV")
+    parser.add_argument("--username", default="BookitWithTrent")
+    parser.add_argument("--since", default="2025-06-12", help="YYYY-MM-DD cutoff date")
+    parser.add_argument("--output", default=None, help="Output CSV path")
+    parser.add_argument("--limit", type=int, default=2000, help="Max tweets to scan")
+    args = parser.parse_args()
+
+    since = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    output_dir = os.path.join(os.path.dirname(__file__), "output")
+    os.makedirs(output_dir, exist_ok=True)
+    output = args.output or os.path.join(output_dir, f"{args.username}_posts.csv")
+
+    rows = asyncio.run(fetch_tweets(args.username, since, args.limit))
+    if rows:
+        write_csv(rows, output)
+
+
+if __name__ == "__main__":
+    main()

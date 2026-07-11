@@ -21,6 +21,7 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 | `scripts/sauce_daily.py` | Kyle Kirms (Sauce) daily scraper — scrape, grade, screenshot, send DM |
 | `scripts/scrape_kirms.py` | Fetches open-bets from Kirms' published Google Sheet |
 | `scripts/audit_odds.py` | Backtest odds lookup against graded picks — fetches historical closing lines from Odds API and outputs CSV |
+| `scripts/fetch_x_posts.py` | Fetches X/Twitter posts (text + images) for a user to CSV via `twscrape` |
 
 ---
 
