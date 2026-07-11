@@ -342,13 +342,14 @@ async def main():
     parser = argparse.ArgumentParser(description="Poll @BookitWithTrent for new picks")
     parser.add_argument("--dry-run", action="store_true", help="Parse only, don't send to Telegram")
     parser.add_argument("--channel", type=int, default=DEST_CHANNEL, help="Destination Telegram channel ID")
+    parser.add_argument("--lookback", type=int, default=LOOKBACK_HOURS, help="Hours to look back for tweets")
     args = parser.parse_args()
 
     con = _db()
     _prune_old(con)
     seen = _get_seen(con)
 
-    since = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
+    since = datetime.now(timezone.utc) - timedelta(hours=args.lookback)
     print(f"Fetching @{USERNAME} tweets since {since.strftime('%H:%M UTC')}...")
     tweets = await fetch_recent_tweets(since)
     print(f"  {len(tweets)} tweets fetched")
