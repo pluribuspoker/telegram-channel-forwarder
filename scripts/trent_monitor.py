@@ -94,7 +94,7 @@ def _prune_old(con: sqlite3.Connection, days: int = 7):
 
 # ─── Tweet fetching ──────────────────────────────────────────────────────────
 
-async def fetch_recent_tweets(since: datetime, limit: int = 50) -> list[dict]:
+async def _fetch_impl(since: datetime, limit: int) -> list[dict]:
     api = API()
     auth_token = os.environ.get("X_AUTH_TOKEN", "")
     ct0 = os.environ.get("X_CT0", "")
@@ -119,6 +119,15 @@ async def fetch_recent_tweets(since: datetime, limit: int = 50) -> list[dict]:
         })
 
     return results
+
+
+async def fetch_recent_tweets(since: datetime, limit: int = 50) -> list[dict]:
+    """Fetch tweets with a timeout so we don't block when rate-limited."""
+    try:
+        return await asyncio.wait_for(_fetch_impl(since, limit), timeout=90)
+    except asyncio.TimeoutError:
+        print("  Rate-limited by Twitter, skipping this run")
+        return []
 
 
 # ─── Pick parsing (reuses parse_posts_csv prompts) ──────────────────────────
