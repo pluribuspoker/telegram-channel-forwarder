@@ -327,16 +327,19 @@ async def parse_tweet_image(tweet: dict) -> dict | None:
 
 async def send_pick(pick: dict, dest: int | str, dry_run: bool = False):
     """Send a pick to Telegram channel."""
-    msg = f"TRENT\n\n{pick['description']}\n{pick['url']}"
+    import html as _html
+    desc = _html.escape(pick["description"])
+    url = pick["url"]
+    msg = f'<a href="{url}">{desc}</a>'
     if dry_run:
-        print(f"  [dry-run] Would send:\n    {msg}")
+        print(f"  [dry-run] Would send: {pick['description']} ({url})")
         return
 
     client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
     await client.start()
     try:
         entity = await client.get_entity(dest)
-        await client.send_message(entity, msg)
+        await client.send_message(entity, msg, parse_mode="html", link_preview=False)
         print(f"  Sent pick to {dest}")
     finally:
         await client.disconnect()
