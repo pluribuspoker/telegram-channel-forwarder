@@ -279,7 +279,7 @@ async def send_pick(tweet: dict, dest: int | str, dry_run: bool = False):
     """Send original tweet content (text + images) to Telegram channel."""
     text = _strip_tco(tweet.get("text", "").strip())
     url = tweet["url"]
-    msg = f"\u25fc\ufe0f Trent \u2022 {text}\n\n{url}"
+    msg = f"\u25fc\ufe0f Trent\n\n{text}\n\n{url}"
     if dry_run:
         print(f"  [dry-run] Would send:\n    {msg[:120]}...")
         return
