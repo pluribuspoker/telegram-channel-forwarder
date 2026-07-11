@@ -250,6 +250,27 @@ async def claude_parse(text: str, date: str | None = None) -> dict | None:
     if parsed and parsed.get("sport") == "Other" and "cfl" in text.lower():
         parsed["sport"] = "CFL"
 
+    # CFL team names misclassified as another sport (e.g., "Blue Bombers" parsed
+    # as MLB "Blue Jays"). Check pick descriptions for uniquely-CFL fragments.
+    _CFL_UNIQUE_TEAMS = [
+        ("blue bombers", "Winnipeg Blue Bombers"),
+        ("stampeders", "Calgary Stampeders"),
+        ("argonauts", "Toronto Argonauts"),
+        ("alouettes", "Montreal Alouettes"),
+        ("redblacks", "Ottawa Redblacks"),
+        ("roughriders", "Saskatchewan Roughriders"),
+        ("tiger-cats", "Hamilton Tiger-Cats"),
+        ("tiger cats", "Hamilton Tiger-Cats"),
+    ]
+    if parsed and parsed.get("sport") != "CFL":
+        for pick in parsed.get("picks", []):
+            desc_lower = pick.get("description", "").lower()
+            for frag, canonical in _CFL_UNIQUE_TEAMS:
+                if frag in desc_lower:
+                    parsed["sport"] = "CFL"
+                    pick["teams"] = [canonical]
+                    break
+
     if parsed and parsed.get("sport") == "Other":
         tl = text.lower()
         if any(h in tl for h in _SOCCER_HINTS):
