@@ -39,6 +39,8 @@ def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict
         entry["html_text"] = existing["html_text"]
     if existing.get("has_media") is not None:
         entry["has_media"] = existing["has_media"]
+    if existing.get("reply_to_id") is not None:
+        entry["reply_to_id"] = existing["reply_to_id"]
     return entry
 
 

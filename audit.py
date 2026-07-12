@@ -364,6 +364,7 @@ class AuditLog:
         pick_results: list[tuple[dict, str, int | None]],  # (pick_dict, verdict, odds) per pick
         capper_name: str = "",
         client=None,
+        reply_to_id: int | None = None,
     ) -> None:
         """Post a compact result message to the broadcast results channel for this source channel."""
         target = self.broadcast_results_mappings.get(channel_id)
@@ -429,8 +430,8 @@ class AuditLog:
             text = capper_linked + "\n" + "\n".join(lines)
 
         # Try to find the auto-forwarded message in the discussion group so we can reply to it.
-        reply_to_id: int | None = None
-        if client is not None:
+        # Use pre-cached reply_to_id if provided (from grade daemon); fall back to Telethon lookup.
+        if reply_to_id is None and client is not None:
             try:
                 from telethon.tl.functions.messages import GetDiscussionMessageRequest
                 disc = await client(GetDiscussionMessageRequest(peer=channel_id, msg_id=message_id))

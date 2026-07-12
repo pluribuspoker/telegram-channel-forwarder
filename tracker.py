@@ -569,6 +569,16 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 cached_entry["has_media"] = msg.media is not None
                 cached_entry["msg_date"] = date_str
 
+                # Cache discussion-group reply ID for threaded broadcasts.
+                # Only fetch once — the ID never changes for a given channel post.
+                if not cached_entry.get("reply_to_id"):
+                    try:
+                        from telethon.tl.functions.messages import GetDiscussionMessageRequest
+                        disc = await client(GetDiscussionMessageRequest(peer=channel_id, msg_id=msg.id))
+                        cached_entry["reply_to_id"] = disc.messages[0].id
+                    except Exception:
+                        pass  # no linked discussion group or message not found
+
                 base_date = day_hint or date_str
                 sb_key = (sport, base_date)
                 if sb_key not in scoreboard_cache:

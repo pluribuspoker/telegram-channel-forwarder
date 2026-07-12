@@ -133,6 +133,7 @@ async def _grade_cycle(
         if not msg_date:
             continue  # pre-daemon cache entry — tracker will handle it
         capper = entry.get("capper_name", "")
+        reply_to_id = entry.get("reply_to_id")  # pre-cached by tracker for threaded broadcasts
 
         # Figure out which legs still need grading
         unresolved_indices = []
@@ -163,7 +164,7 @@ async def _grade_cycle(
                     message_id=msg_id,
                     pick_results=nr_pick_results,
                     capper_name=capper,
-                    client=None,
+                    reply_to_id=reply_to_id,
                 )
                 if channel_id in sheets_map:
                     try:
@@ -332,7 +333,7 @@ async def _grade_cycle(
                 message_id=msg_id,
                 pick_results=nr_pick_results,
                 capper_name=capper,
-                client=None,  # no Telethon — skips reply threading
+                reply_to_id=reply_to_id,
             )
 
             # ── Google Sheets ─────────────────────────────────────────────
