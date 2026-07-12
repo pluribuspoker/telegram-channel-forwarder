@@ -19,6 +19,7 @@ This avoids session/flood-wait risk entirely.
 import asyncio
 import json
 import os
+import socket
 import sys
 import time
 import traceback
@@ -50,8 +51,29 @@ from sheets import append_pick_rows
 
 LOOP_INTERVAL = int(os.getenv("GRADE_DAEMON_INTERVAL", "10"))
 ESPN_CACHE_TTL = 30  # seconds — don't re-fetch same sport/date faster than this
+# Backstop: if a single grade cycle runs longer than this it is aborted and
+# retried next cycle, so no hung network call can freeze the daemon (see the
+# ~35-min silent hang caused by an untimed Claude request). Should comfortably
+# exceed a normal cycle (seconds) and the worst-case per-request time.
+CYCLE_TIMEOUT = int(os.getenv("GRADE_DAEMON_CYCLE_TIMEOUT", "300"))
 
 _CACHE_PATH = os.path.join(os.path.dirname(__file__), "parse_cache.json")
+
+
+def _sd_notify(state: str) -> None:
+    """Best-effort systemd notification (e.g. WATCHDOG=1). No-op when not run
+    under systemd. Pure stdlib — avoids a python-systemd dependency."""
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return
+    if addr[0] == "@":  # abstract-namespace socket
+        addr = "\0" + addr[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.connect(addr)
+            sock.sendall(state.encode())
+    except OSError:
+        pass
 
 
 def _build_broadcast_map() -> dict[int, int]:
@@ -200,6 +222,9 @@ async def _grade_cycle(
                     leg_verdicts[str(i)]["broadcasted"] = True
                 entry["leg_verdicts"] = leg_verdicts
                 dirty = True
+                # Persist immediately so a mid-cycle abort/restart can never
+                # re-broadcast this result (broadcast is not idempotent).
+                _save_pending_cache(cache)
                 graded_count += len(unbroadcast)
                 for i in unbroadcast:
                     pick = picks[i]
@@ -336,6 +361,9 @@ async def _grade_cycle(
 
         graded_count += len(newly_resolved)
         dirty = True
+        # Persist immediately so a mid-cycle abort/restart can never re-broadcast
+        # this result (broadcast is not idempotent).
+        _save_pending_cache(cache)
 
         # Pretty print
         for i, pick, verdict, calc, ps, gd in newly_resolved:
@@ -414,13 +442,18 @@ async def run_daemon() -> None:
     audit = AuditLog(broadcast_results_mappings=broadcast_map)
     espn_cache = _ESPNCache(ttl=ESPN_CACHE_TTL)
 
-    print(f"grade_daemon started (interval={LOOP_INTERVAL}s, espn_ttl={ESPN_CACHE_TTL}s)")
+    print(f"grade_daemon started (interval={LOOP_INTERVAL}s, espn_ttl={ESPN_CACHE_TTL}s, "
+          f"cycle_timeout={CYCLE_TIMEOUT}s)")
 
     cache_mtime: float = 0
     cycle = 0
 
     while True:
         cycle += 1
+        # Feed the systemd watchdog every iteration (~LOOP_INTERVAL). If the
+        # process ever wedges so hard the loop stops turning, systemd's
+        # WatchdogSec restarts it. No-op when not run under systemd.
+        _sd_notify("WATCHDOG=1")
         try:
             # Only run if cache file changed (or every 6th cycle as safety net)
             try:
@@ -434,9 +467,19 @@ async def run_daemon() -> None:
                 continue
             cache_mtime = new_mtime
 
-            graded, pending = await _grade_cycle(
-                bot_token, audit, espn_cache, broadcast_map, sheets_map,
-            )
+            try:
+                graded, pending = await asyncio.wait_for(
+                    _grade_cycle(bot_token, audit, espn_cache, broadcast_map, sheets_map),
+                    timeout=CYCLE_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                # A network call hung past CYCLE_TIMEOUT. The cycle is cancelled
+                # (already-broadcast results were persisted incrementally, so no
+                # double-post). Force a re-process next cycle and carry on.
+                print(f"[cycle {cycle}] ⚠ grade cycle exceeded {CYCLE_TIMEOUT}s — aborted, retrying next cycle")
+                cache_mtime = 0
+                await asyncio.sleep(LOOP_INTERVAL)
+                continue
 
             if graded:
                 cost = usage_cost()

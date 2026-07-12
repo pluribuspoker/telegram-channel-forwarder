@@ -36,7 +36,12 @@ _claude: anthropic.AsyncAnthropic | None = None
 def claude() -> anthropic.AsyncAnthropic:
     global _claude
     if _claude is None:
-        _claude = anthropic.AsyncAnthropic()
+        # Explicit per-request timeout so a stalled request can never wedge a
+        # caller indefinitely (the SDK default is 600s). The grade daemon runs
+        # a persistent loop; without this a single hung request froze it for
+        # ~35 min while systemd still reported it "active". 120s is ample for
+        # grade/parse calls, which normally complete in a few seconds.
+        _claude = anthropic.AsyncAnthropic(timeout=120.0)
     return _claude
 
 
