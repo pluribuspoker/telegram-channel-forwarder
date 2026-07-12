@@ -802,7 +802,11 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     edited += 1
                 # If some picks are still pending, keep the cache entry (with broadcasted
                 # markers) so we can re-enter this message next run; otherwise evict.
-                # Cache resolved legs with broadcasted=True to prevent double-broadcast.
+                # NOTE: the tracker grades + edits emojis but does NOT broadcast — the grade
+                # daemon is the sole broadcaster. So we must never set broadcasted=True here;
+                # doing so would suppress the daemon's catch-up (grade_daemon.py) and the
+                # result would never be broadcast (e.g. when the tracker grades a pick while
+                # the daemon is down). Preserve any flag the daemon already set, nothing more.
                 # Keep full entry if some picks are still pending; minimal entry otherwise.
                 new_leg_verdicts = dict(cached_leg_verdicts)
                 for j, (lpick, lverdict, lcalc, lps, lgd, *_) in enumerate(verdicts):
@@ -811,7 +815,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         new_leg_verdicts[str(j)] = {
                             "verdict": lverdict, "calc": lcalc,
                             "sport": lps, "game_date": lgd or date_str,
-                            "broadcasted": already_bc or (not dry_run and not edit_failed),
+                            "broadcasted": already_bc,
                         }
                 pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
                 # Update HTML text after emoji edit so daemon sees current state
