@@ -107,8 +107,6 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.py --live --days 2 2>&1
 
 **KBO (Korean Baseball):** Graded via `koreabaseball.com` ASMX endpoint (`fetch_kbo_context` in `scores.py`). The Odds API has KBO odds but never populates scores, so we scrape the official site instead. Picks are always sent the US evening before the game day, so the code fetches `date+1` to find the correct game. Team ID map (`KBO_TEAM_IDS`) is in `scores.py`. If a pick re-parses as `sport: "Other"` despite the message containing "kbo", the post-parse correction in `claude_parse` (`ai.py`) should catch it.
 
-**Referer header required:** `koreabaseball.com` rejects requests to `GetKboGameList` without a `Referer` header — it returns its HTML homepage instead of JSON (silently → 0 games → picks ungraded). `_fetch_kbo_day` sends `Referer: https://www.koreabaseball.com/`. If KBO grading suddenly returns 0 games, check whether the endpoint is returning HTML.
-
 ## Odds integration
 
 To force a re-fetch after manually restoring a cache entry: delete the `odds_by_pick` key from the relevant `parse_cache.json` entry — the next run will re-fetch and re-edit.
