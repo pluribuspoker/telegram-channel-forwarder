@@ -142,7 +142,50 @@ async def _grade_cycle(
                 unresolved_indices.append(i)
 
         if not unresolved_indices:
-            continue  # fully resolved
+            # ── Broadcast picks graded by tracker but not yet broadcast ────
+            unbroadcast = [
+                i for i in range(len(picks))
+                if leg_verdicts.get(str(i), {}).get("verdict") in ("WIN", "LOSS", "PUSH")
+                and not leg_verdicts.get(str(i), {}).get("broadcasted")
+            ]
+            if unbroadcast:
+                channel_id = int(cache_key.split(":")[0])
+                msg_id = int(cache_key.split(":")[1])
+                nr_pick_results = []
+                for i in unbroadcast:
+                    pick = picks[i]
+                    lv = leg_verdicts[str(i)]
+                    if not pick.get("sport"):
+                        pick["sport"] = lv.get("sport", sport)
+                    nr_pick_results.append((pick, lv["verdict"], odds_by_pick.get(str(i), {}).get("odds")))
+                await audit.broadcast_results(
+                    channel_id=channel_id,
+                    message_id=msg_id,
+                    pick_results=nr_pick_results,
+                    capper_name=capper,
+                    client=None,
+                )
+                if channel_id in sheets_map:
+                    try:
+                        await append_pick_rows(
+                            pick_results=nr_pick_results,
+                            date_str=msg_date,
+                            raw_text=html_text or "",
+                            sheets_id=sheets_map[channel_id],
+                        )
+                    except Exception as exc:
+                        print(f"  [sheets] warn: {exc}")
+                for i in unbroadcast:
+                    leg_verdicts[str(i)]["broadcasted"] = True
+                entry["leg_verdicts"] = leg_verdicts
+                dirty = True
+                graded_count += len(unbroadcast)
+                for i in unbroadcast:
+                    pick = picks[i]
+                    emoji = VERDICT_EMOJI.get(leg_verdicts[str(i)]["verdict"], "")
+                    desc = pick.get("description", "")[:40]
+                    print(f"  {emoji} {cache_key} {capper[:15]:<15} {desc} (broadcast-only)")
+            continue
 
         # Check if all resolved legs are already broadcast
         already_broadcast = {

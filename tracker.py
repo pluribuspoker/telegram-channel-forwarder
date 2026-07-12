@@ -51,7 +51,7 @@ from tracker_format import (
     _PICK_EMOJI,
 )
 from tracker_backtest import run_backtest
-from sheets import append_pick_rows
+
 
 load_dotenv()
 load_dotenv(".env.local", override=True)  # VPS-specific overrides (never synced)
@@ -835,30 +835,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     odds_match_type=first_odds.get("match_type"),
                     edit_failed=edit_failed,
                 )
-                if newly_resolved:
-                    _nr_pick_results = []
-                    for j, v in newly_resolved_indexed:
-                        pick_dict = v[0]
-                        if not pick_dict.get("sport"):
-                            pick_dict["sport"] = v[3]  # pick_sport from verdicts
-                        _nr_pick_results.append((pick_dict, v[1], odds_by_pick.get(str(j), {}).get("odds")))
-                    await audit.broadcast_results(
-                        channel_id=channel_id,
-                        message_id=msg.id,
-                        pick_results=_nr_pick_results,
-                        capper_name=capper,
-                        client=client,
-                    )
-                    if not dry_run and channel_id in sheets_map:
-                        try:
-                            await append_pick_rows(
-                                pick_results=_nr_pick_results,
-                                date_str=date_str,
-                                raw_text=text,
-                                sheets_id=sheets_map[channel_id],
-                            )
-                        except Exception as exc:
-                            print(f"[sheets] warn: {exc}")
+                # Broadcasting + sheets handled by grade_daemon to avoid
+                # race conditions with concurrent tracker runs.
+                pass
 
         print(f"  ─ edit:{edited} pend:{pending} fail:{failed} err:{errors}" +
               (f" odds:{odds_found}/{odds_total}" if odds_total else ""))

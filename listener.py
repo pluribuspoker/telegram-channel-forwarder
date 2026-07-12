@@ -206,26 +206,32 @@ def _was_forwarded(channel_id: int, dest_channel: int, msg_id: int) -> bool:
         return False
 
 
+_trigger_lock = asyncio.Lock()
+
 async def _trigger_tracker_soon():
-    """Fire a quick tracker run ~3s after a pick is forwarded to get odds into the message fast."""
-    await asyncio.sleep(3)
-    for attempt in range(2):
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, "tracker.py", "--live", "--days", "0.1",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.wait()
-            if proc.returncode != 0 and attempt == 0:
-                print(f"[trigger] tracker quick-run exited {proc.returncode}, retrying in 5s")
-                await asyncio.sleep(5)
-                continue
-        except Exception as e:
-            print(f"[trigger] tracker quick-run failed: {e}")
-            return
-        if attempt == 0:
-            await asyncio.sleep(5)  # second pass: catches "message not yet in window" edge case
+    """Fire a quick tracker run ~3s after a pick is forwarded to get odds into the message fast.
+    Debounced: only one trigger runs at a time; concurrent callers are silently skipped."""
+    if _trigger_lock.locked():
+        return  # another trigger is already running
+    async with _trigger_lock:
+        await asyncio.sleep(3)
+        for attempt in range(2):
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, "tracker.py", "--live", "--days", "0.1",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.wait()
+                if proc.returncode != 0 and attempt == 0:
+                    print(f"[trigger] tracker quick-run exited {proc.returncode}, retrying in 5s")
+                    await asyncio.sleep(5)
+                    continue
+            except Exception as e:
+                print(f"[trigger] tracker quick-run failed: {e}")
+                return
+            if attempt == 0:
+                await asyncio.sleep(5)  # second pass: catches "message not yet in window" edge case
 
 
 async def _forward_group(group, mapping, client, sender, dest_entity, use_test, catchup=False):
