@@ -127,7 +127,12 @@ async def _fetch_kbo_day(http: httpx.AsyncClient, date_str: str) -> list[dict]:
         r = await http.post(
             "https://www.koreabaseball.com/ws/Main.asmx/GetKboGameList",
             json={"leId": "1", "srId": "0,1,3,4,5,7,8,9", "date": date_str},
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                # koreabaseball.com now rejects requests without a Referer
+                # (returns an HTML error page → JSON decode fails). See #KBO.
+                "Referer": "https://www.koreabaseball.com/",
+            },
             timeout=15,
         )
         r.raise_for_status()
