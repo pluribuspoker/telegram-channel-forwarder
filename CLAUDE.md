@@ -199,6 +199,15 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/trent_watcher.py --look
 
 **Rate limits:** Twitter's UserTweets endpoint has a ~15 min cooldown. Script wraps fetch in a 90s timeout — exits cleanly if rate-limited, retries next run.
 
+## Infra sync
+
+`deploy/` is the source of truth for systemd units and Claude Code hooks. Edit files there, commit, then push to live:
+
+- **Systemd units:** `sudo cp deploy/systemd/<unit> /etc/systemd/system/<unit> && sudo systemctl daemon-reload && sudo systemctl restart <unit>`
+- **Hooks:** `cp deploy/hooks/<hook> ~/.claude/hooks/<hook> && chmod +x ~/.claude/hooks/<hook>`
+
+**Detect drift:** `bash scripts/check_deploy_sync.sh` — diffs every file under `deploy/` vs its live VPS copy, prints OK/DRIFT per file, exits non-zero on drift.
+
 ## Deploy workflow
 
 `syncenv` runs **locally** to push `.env` to the VPS, then deploy on the VPS:
