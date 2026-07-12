@@ -98,6 +98,21 @@ def _build_sheets_map() -> dict[int, str]:
     return result
 
 
+def _build_user_send_channels() -> set[int]:
+    """dest_channels forwarded as the user (send_as_user=True). Their messages
+    are sent by the Telethon userbot, NOT the bot, so the Bot API cannot edit
+    them ("message can't be edited"). This daemon is Zero-Telethon, so it leaves
+    these channels entirely to the tracker, which has a Telethon edit fallback
+    (`_user_edit_message`). Grading/editing/marking them here only fails the edit
+    and — worse — marks them broadcasted, which blocks the tracker from applying
+    the emoji. (All current send_as_user channels have no broadcast target.)"""
+    result: set[int] = set()
+    for m in json.loads(os.getenv("MAPPINGS_CONFIG", "[]")):
+        if m.get("send_as_user") and m.get("dest_channel"):
+            result.add(m["dest_channel"])
+    return result
+
+
 # ─── ESPN cache with TTL ─────────────────────────────────────────────────────
 
 class _ESPNCache:
@@ -128,6 +143,7 @@ async def _grade_cycle(
     espn_cache: _ESPNCache,
     broadcast_map: dict[int, int],
     sheets_map: dict[int, str],
+    user_send_channels: set[int],
 ) -> tuple[int, int]:
     """Run one grading cycle.  Returns (graded_count, pending_count)."""
     cache = _load_pending_cache()
@@ -140,6 +156,15 @@ async def _grade_cycle(
             continue
         # Skip dupes, failures
         if entry.get("_dupe") or entry.get("_failed"):
+            continue
+        # Skip send_as_user channels — their messages aren't bot-editable, so
+        # the tracker (with its Telethon fallback) owns them. See
+        # _build_user_send_channels for why touching them here breaks grading.
+        try:
+            _ch = int(cache_key.split(":")[0])
+        except (ValueError, IndexError):
+            _ch = 0
+        if _ch in user_send_channels:
             continue
 
         parsed = entry["parsed"]
@@ -439,6 +464,7 @@ async def run_daemon() -> None:
 
     broadcast_map = _build_broadcast_map()
     sheets_map = _build_sheets_map()
+    user_send_channels = _build_user_send_channels()
     audit = AuditLog(broadcast_results_mappings=broadcast_map)
     espn_cache = _ESPNCache(ttl=ESPN_CACHE_TTL)
 
@@ -469,7 +495,8 @@ async def run_daemon() -> None:
 
             try:
                 graded, pending = await asyncio.wait_for(
-                    _grade_cycle(bot_token, audit, espn_cache, broadcast_map, sheets_map),
+                    _grade_cycle(bot_token, audit, espn_cache, broadcast_map, sheets_map,
+                                 user_send_channels),
                     timeout=CYCLE_TIMEOUT,
                 )
             except asyncio.TimeoutError:
