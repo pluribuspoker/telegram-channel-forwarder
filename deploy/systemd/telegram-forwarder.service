@@ -1,0 +1,21 @@
+  [Unit]                                                                                                                                                                             
+  Description=Telegram Channel Forwarder
+  After=network-online.target
+  Wants=network-online.target
+
+  [Service]
+  Type=simple
+  User=forwarder
+  WorkingDirectory=/home/forwarder/app
+  EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+  ExecStart=/home/forwarder/venv/bin/python listener.py
+  Restart=on-failure
+  RestartSec=10
+  SyslogIdentifier=listener
+StandardOutput=journal
+  StandardError=journal
+  Environment=PYTHONUNBUFFERED=1
+
+  [Install]
+  WantedBy=multi-user.target

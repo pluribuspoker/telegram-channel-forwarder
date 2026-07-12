@@ -1,0 +1,23 @@
+[Unit]
+Description=Pick Grade Daemon (Bot API only, no Telethon)
+After=network.target
+
+[Service]
+Type=simple
+User=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+ExecStart=/home/forwarder/app/run_grade_daemon.sh
+Restart=on-failure
+RestartSec=5
+# Watchdog: the daemon sends WATCHDOG=1 every loop iteration (~10s). If it
+# wedges and stops notifying for this long, systemd restarts it. Set well
+# above CYCLE_TIMEOUT (300s) so a single slow cycle never trips it.
+WatchdogSec=600
+NotifyAccess=main
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

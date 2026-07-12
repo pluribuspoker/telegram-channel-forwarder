@@ -1,0 +1,17 @@
+[Unit]
+Description=Trent Pick Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=/home/forwarder/app/.env.local
+ExecStart=/home/forwarder/app/run_trent_watcher.sh
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
