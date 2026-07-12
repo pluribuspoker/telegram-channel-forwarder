@@ -152,6 +152,26 @@ async def _grade_cycle(
             if unbroadcast:
                 channel_id = int(cache_key.split(":")[0])
                 msg_id = int(cache_key.split(":")[1])
+
+                # Retry emoji edit if not already on the message
+                if html_text and not any(ch in html_text for ch in _PICK_EMOJI.values()):
+                    all_v = []
+                    for i in range(len(picks)):
+                        lv2 = leg_verdicts.get(str(i))
+                        if lv2 and lv2.get("verdict") in ("WIN", "LOSS", "PUSH"):
+                            all_v.append((picks[i], lv2["verdict"], lv2.get("calc", ""), lv2.get("sport", sport)))
+                        else:
+                            all_v.append((picks[i], "PENDING", "", picks[i].get("sport") or sport))
+                    new_text = _insert_emojis(html_text, all_v)
+                    if new_text != html_text:
+                        ok = await _bot_edit_message(bot_token, channel_id, msg_id, new_text, has_media)
+                        if ok:
+                            entry["html_text"] = new_text
+                            await asyncio.sleep(0.5)
+                            for linked_id in entry.get("linked_message_ids", []):
+                                await _bot_edit_message(bot_token, channel_id, linked_id, new_text, has_media)
+                                await asyncio.sleep(0.5)
+
                 nr_pick_results = []
                 for i in unbroadcast:
                     pick = picks[i]
