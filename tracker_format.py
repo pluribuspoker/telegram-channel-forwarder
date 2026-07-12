@@ -462,14 +462,29 @@ async def _bot_edit_message(
     """Edit a message via Bot API. Returns True on success."""
     method = "editMessageCaption" if has_media else "editMessageText"
     field  = "caption"            if has_media else "text"
+    payload: dict = {"chat_id": channel_id, "message_id": message_id,
+                     field: new_text, "parse_mode": "HTML"}
+    if not has_media:
+        payload["disable_web_page_preview"] = True
     try:
         async with httpx.AsyncClient(timeout=10) as http:
             r = await http.post(
                 f"https://api.telegram.org/bot{bot_token}/{method}",
-                json={"chat_id": channel_id, "message_id": message_id,
-                      field: new_text, "parse_mode": "HTML"},
+                json=payload,
             )
             if not r.is_success:
+                # Fallback: WebPage previews have has_media=True but no caption
+                if has_media and "no caption" in r.text:
+                    r2 = await http.post(
+                        f"https://api.telegram.org/bot{bot_token}/editMessageText",
+                        json={"chat_id": channel_id, "message_id": message_id,
+                              "text": new_text, "parse_mode": "HTML",
+                              "disable_web_page_preview": True},
+                    )
+                    if r2.is_success:
+                        return True
+                    print(f"    [bot edit error] {r2.status_code}: {r2.text[:120]}")
+                    return False
                 print(f"    [bot edit error] {r.status_code}: {r.text[:120]}")
                 return False
             return True

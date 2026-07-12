@@ -133,6 +133,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
     import datetime as dt
     from telethon import TelegramClient
     from telethon.sessions import StringSession
+    from telethon.tl.types import MessageMediaWebPage
     from audit import AuditLog
 
     api_id    = int(os.getenv("TELEGRAM_API_ID", "0"))
@@ -331,7 +332,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             _ht = _to_bot_html(text, msg.entities)
                             _odds_text = _insert_odds(_ht, dup_picks, dup_odds)
                             if _odds_text != _ht:
-                                await _edit_msg(channel_id, msg.id, _odds_text, msg.media is not None)
+                                await _edit_msg(channel_id, msg.id, _odds_text, msg.media is not None and not isinstance(msg.media, MessageMediaWebPage))
                                 await asyncio.sleep(0.5)
                     continue  # primary row carries the +N dup annotation
                 # {"_failed": True} is stored after the first audit notification so we
@@ -484,7 +485,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         _ht = _to_bot_html(text, msg.entities)
                         _odds_text = _insert_odds(_ht, dup_picks, dup_odds)
                         if _odds_text != _ht:
-                            await _edit_msg(channel_id, msg.id, _odds_text, msg.media is not None)
+                            await _edit_msg(channel_id, msg.id, _odds_text, msg.media is not None and not isinstance(msg.media, MessageMediaWebPage))
                             await asyncio.sleep(0.5)
                     # Cache the dupe marker so we skip claude_parse on future runs
                     pending_cache[cache_key] = {"_dupe": True, "primary_id": dup_id}
@@ -554,10 +555,10 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     _ht = _to_bot_html(text, msg.entities)
                     _odds_text = _insert_odds(_ht, picks, odds_by_pick)
                     if _odds_text != _ht:
-                        await _edit_msg(channel_id, msg.id, _odds_text, msg.media is not None)
+                        await _edit_msg(channel_id, msg.id, _odds_text, msg.media is not None and not isinstance(msg.media, MessageMediaWebPage))
                         await asyncio.sleep(0.5)
                         for linked_id in cached_entry.get("linked_message_ids", []):
-                            await _edit_msg(channel_id, linked_id, _odds_text, msg.media is not None)
+                            await _edit_msg(channel_id, linked_id, _odds_text, msg.media is not None and not isinstance(msg.media, MessageMediaWebPage))
                             await asyncio.sleep(0.5)
 
                 # Cache HTML text + media flag so the grade daemon can edit
@@ -566,7 +567,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 if not skip_odds:
                     _cur_html = _insert_odds(_cur_html, picks, odds_by_pick)
                 cached_entry["html_text"] = _cur_html
-                cached_entry["has_media"] = msg.media is not None
+                cached_entry["has_media"] = msg.media is not None and not isinstance(msg.media, MessageMediaWebPage)
                 cached_entry["msg_date"] = date_str
 
                 # Cache discussion-group reply ID for threaded broadcasts.
@@ -736,7 +737,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             new_leg_verdicts[str(j)] = entry
                     pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
                     pending_cache[cache_key]["html_text"] = _cur_html
-                    pending_cache[cache_key]["has_media"] = msg.media is not None
+                    pending_cache[cache_key]["has_media"] = msg.media is not None and not isinstance(msg.media, MessageMediaWebPage)
                     pending_cache[cache_key]["msg_date"] = date_str
 
                 # Nothing new to grade this run — log and skip
@@ -818,7 +819,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     pending_cache[cache_key]["html_text"] = new_text
                 else:
                     pending_cache[cache_key]["html_text"] = _cur_html
-                pending_cache[cache_key]["has_media"] = msg.media is not None
+                pending_cache[cache_key]["has_media"] = msg.media is not None and not isinstance(msg.media, MessageMediaWebPage)
                 pending_cache[cache_key]["msg_date"] = date_str
                 all_descs = "\n".join(
                     f"{v[1]}: {v[0].get('description', '')}|{v[3]}|{v[4]}|{v[2]}" for v in verdicts if v[1] in _PICK_EMOJI
