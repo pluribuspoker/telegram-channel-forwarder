@@ -50,6 +50,9 @@ ssh root@209.38.51.86 'su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.
 - Never inline Python in SSH commands beyond simple one-liners. Write a temp script, `scp` it, run it.
 - For grading bugs, trace the ENTIRE pipeline (`claude_parse` → post-parse → `validate_sport` → `build_context` → fetcher → `claude_grade`) before fixing.
 - Always use `--channel <id>` when running `tracker.py --live` locally — unscoped runs broadcast to production.
+- **Log queries: mind the timezone.** `journalctl --since/--until` uses the VPS **local time (America/New_York, EDT)**, but `graded_at` (DB/cache) and Telegram `ts` are **UTC**. Subtract 4h (UTC→EDT) or the query returns "-- No entries --" and you'll wrongly conclude a service was idle. Confirm with `timedatectl`.
+- **`systemctl is-active` lies about hangs.** A wedged process (e.g. blocked on an untimed network call) still shows `active`. Verify liveness by the recency of its last log line, or `systemctl show <svc> -p WatchdogTimestamp` — not `is-active` alone.
+- **Broadcasting is daemon-only.** The tracker grades + edits emojis but must never set `broadcasted=True` (it doesn't broadcast). If a result got its emoji but no broadcast, suspect the daemon was down when the tracker graded it — check the daemon's log continuity around the grade time.
 
 ## Self-improvement
 
