@@ -1,7 +1,7 @@
 """
-trent_monitor.py — Poll @BookitWithTrent for new picks, send to Telegram.
+trent_watcher.py — Poll @BookitWithTrent for new picks, send to Telegram.
 
-Designed to run every 5 minutes via systemd timer.
+Designed to run every 15 minutes via systemd timer.
 
 Flow:
   1. Fetch recent tweets via twscrape
@@ -11,9 +11,9 @@ Flow:
   5. Mark all processed tweets as seen
 
 Usage:
-    python scripts/trent_monitor.py                  # run once (prod channel)
-    python scripts/trent_monitor.py --dry-run        # parse only, don't send
-    python scripts/trent_monitor.py --channel ID     # send to specific channel
+    python scripts/trent_watcher.py                  # run once (prod channel)
+    python scripts/trent_watcher.py --dry-run        # parse only, don't send
+    python scripts/trent_watcher.py --channel ID     # send to specific channel
 """
 
 import asyncio
@@ -151,6 +151,8 @@ YES signals:
 - "play of year" / "square of year" / "play of the day"
 - "FUGAZI 5" / "[N]-man nuke" / "Last Chance U slip" — named bet formats
 - Explicit first-person declaration of placing a specific bet
+- Terse pick announcement: "[team/player] ML", "[team/player] moneyline", "[team/player] +/-spread" — naming a specific bet even without fanfare
+- Short tweet stating a pick with a bet type (ML, spread, over, under, total, 1H, o/u) counts as an announcement
 
 NO — return false for:
 - Multi-leg parlays: "FUGAZI 5", "[N]-man nuke" with multiple legs listed, "Last Chance U slip" with multiple legs — we only want SINGLE-GAME bets
@@ -163,7 +165,7 @@ NO — return false for:
 - Referencing a PAST bet: "I lost $X on...", "mom has no clue I have $5k on [team]"
 - Corrections of a prior pick (not a new announcement)
 
-The KEY distinction: the tweet must be the ORIGINAL ANNOUNCEMENT where the bettor declares they are placing the wager.
+The KEY distinction: the tweet must be the ORIGINAL ANNOUNCEMENT where the bettor declares they are placing the wager. Even a very short/casual tweet counts if it names a specific team/player and bet type.
 
 A tweet that mentions "3 STRAIGHT WINNERS ✅✅✅" at the top but then announces the NEXT pick below IS a pick.
 
@@ -173,9 +175,11 @@ Tweet:
 {text}"""
 
 _IMAGE_IS_PICK_PROMPT = """\
-This tweet has pick signals in the text but the actual bet may be in the attached image (bet slip).
+This tweet has an attached image. Does it show a SINGLE sports bet being placed (bet slip, wager confirmation)?
 
-Does the image show a SINGLE sports bet being placed? Return false if:
+Return true if the image shows a single-game bet slip with real money.
+
+Return false if:
 - Multi-leg parlay (multiple bets on one slip)
 - Multiple separate bets
 - No bet slip / not a pick image
@@ -188,19 +192,6 @@ Return only: true or false"""
 def _is_retweet(text: str) -> bool:
     return text.lstrip().startswith("RT @")
 
-
-_PICK_SIGNALS = [
-    "mortal mega", "mortal", "mega max", "nuke", "nuking",
-    "official", "play of", "square of", "last chance u",
-    "i'm on", "i'll be on", "i will be taking", "i'm riding",
-    "i have $", "dropping", "10u", "10 unit",
-    "slip", "fugazi",
-]
-
-
-def _has_pick_signal(text: str) -> bool:
-    tl = text.lower()
-    return any(s in tl for s in _PICK_SIGNALS)
 
 
 def _parse_bool(raw: str) -> bool:
@@ -348,8 +339,8 @@ async def main():
     for tw in new_tweets:
         is_pick = await is_pick_text(tw)
 
-        # Image fallback: text has pick signals but Claude said no pick from text
-        if not is_pick and tw.get("photos") and _has_pick_signal(tw.get("text", "")):
+        # Image fallback: always check images if text check said no pick
+        if not is_pick and tw.get("photos"):
             is_pick = await is_pick_image(tw)
 
         if is_pick:

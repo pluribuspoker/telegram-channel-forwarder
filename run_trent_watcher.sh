@@ -1,11 +1,11 @@
 #!/bin/bash
-# Trent pick monitor — invoked by systemd timer every 5 minutes
+# Trent pick watcher — invoked by systemd timer every 15 minutes
 # Signals healthchecks.io on start / success / failure (with log output)
-# Retries once on failure (next scheduled run is only 5 min away anyway)
+# Retries once on failure (next scheduled run is only 15 min away anyway)
 
 APP_DIR="/home/forwarder/app"
 PYTHON="/home/forwarder/venv/bin/python"
-LOGFILE="/tmp/trent_monitor_last_run.log"
+LOGFILE="/tmp/trent_watcher_last_run.log"
 
 log() { echo "$*"; }
 
@@ -23,12 +23,12 @@ ping_hc() {
 cd "$APP_DIR"
 
 ping_hc "/start"
-log "Starting Trent monitor"
+log "Starting Trent watcher"
 SUCCESS=0
 
 for attempt in 1 2; do
     [ "$attempt" -gt 1 ] && log "Retry (attempt 2/2)..."
-    if $PYTHON scripts/trent_monitor.py 2>&1 | tee "$LOGFILE"; then
+    if $PYTHON scripts/trent_watcher.py 2>&1 | tee "$LOGFILE"; then
         SUCCESS=1
         break
     fi

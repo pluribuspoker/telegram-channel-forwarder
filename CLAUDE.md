@@ -164,9 +164,9 @@ python scripts/grade_csv.py --limit 5        # first 5 matching
 
 `scripts/format_graded_csv.py` converts graded CSV → spreadsheet format (Sharp Syndicate layout). Odds sourced from: description text first, then Odds API historical closing lines (exact matches only), then -110 default for any gaps.
 
-## Trent monitor (@BookitWithTrent)
+## Trent watcher (@BookitWithTrent)
 
-`scripts/trent_monitor.py` polls @BookitWithTrent on X/Twitter every 15 minutes via systemd timer, detects official pick announcements using Claude (yes/no classification), and forwards the original tweet content (text + images) to channel `-1004394797084`.
+`scripts/trent_watcher.py` polls @BookitWithTrent on X/Twitter every 15 minutes via systemd timer, detects official pick announcements using Claude (yes/no classification), and forwards the original tweet content (text + images) to channel `-1004394797084`.
 
 - **Systemd:** `trent-monitor.timer` (15 min) → `trent-monitor.service`
 - **DB table:** `trent_seen` in `picks.db` (tracks processed tweet IDs, pruned after 7 days)
@@ -176,8 +176,8 @@ python scripts/grade_csv.py --limit 5        # first 5 matching
 
 **Manual run on VPS:**
 ```bash
-su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/trent_monitor.py --dry-run 2>&1"
-su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/trent_monitor.py --lookback 24 2>&1"
+su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/trent_watcher.py --dry-run 2>&1"
+su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/trent_watcher.py --lookback 24 2>&1"
 ```
 
 **Message format:** `◼️ Trent\n\n{original tweet text}\n\n{tweet URL}` with images attached. t.co media links stripped from text.

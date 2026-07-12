@@ -21,8 +21,8 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 | `scripts/sauce_daily.py` | Kyle Kirms (Sauce) daily scraper — scrape, grade, screenshot, send DM |
 | `scripts/scrape_kirms.py` | Fetches open-bets from Kirms' published Google Sheet |
 | `scripts/audit_odds.py` | Backtest odds lookup against graded picks — fetches historical closing lines from Odds API and outputs CSV |
-| `scripts/trent_monitor.py` | Polls @BookitWithTrent on X/Twitter, sends picks to Telegram via systemd timer |
-| `run_trent_monitor.sh` | Timer wrapper for trent_monitor with retry logic and healthchecks.io signals |
+| `scripts/trent_watcher.py` | Polls @BookitWithTrent on X/Twitter, sends picks to Telegram via systemd timer |
+| `run_trent_watcher.sh` | Timer wrapper for trent_watcher with retry logic and healthchecks.io signals |
 | `scripts/fetch_x_posts.py` | Fetches X/Twitter posts (text + images) for a user to CSV via `twscrape` |
 | `scripts/grade_csv.py` | Batch-grades parsed CSV picks against ESPN scores via Claude |
 | `scripts/format_graded_csv.py` | Converts graded CSV to spreadsheet format with odds from Odds API |
@@ -289,9 +289,9 @@ python scripts/format_graded_csv.py
 
 ---
 
-## Trent Monitor (@BookitWithTrent)
+## Trent Watcher (@BookitWithTrent)
 
-`scripts/trent_monitor.py` polls @BookitWithTrent on X/Twitter for new pick announcements and forwards them to a Telegram channel with the original tweet content (text + images).
+`scripts/trent_watcher.py` polls @BookitWithTrent on X/Twitter for new pick announcements and forwards them to a Telegram channel with the original tweet content (text + images).
 
 **How it works:**
 1. Fetch recent tweets via `twscrape` (last 2 hours per run)
@@ -315,10 +315,10 @@ https://x.com/BookitWithTrent/status/2075621098662576379
 
 **Usage:**
 ```bash
-python scripts/trent_monitor.py                  # run once (prod channel)
-python scripts/trent_monitor.py --dry-run        # parse only, don't send
-python scripts/trent_monitor.py --lookback 24    # look back 24 hours
-python scripts/trent_monitor.py --channel ID     # send to specific channel
+python scripts/trent_watcher.py                  # run once (prod channel)
+python scripts/trent_watcher.py --dry-run        # parse only, don't send
+python scripts/trent_watcher.py --lookback 24    # look back 24 hours
+python scripts/trent_watcher.py --channel ID     # send to specific channel
 ```
 
 **VPS:** runs as `trent-monitor.timer` (every 15 minutes). Requires `X_AUTH_TOKEN` and `X_CT0` in `.env` (browser cookies from x.com — may need periodic refresh).
