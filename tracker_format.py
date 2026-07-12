@@ -220,6 +220,7 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
     standalone_verdicts = [v for v in verdicts if not v[0].get("is_parlay_leg")]
 
     # ── Standalone picks: per-pick emoji ──────────────────────────────────────
+    unmatched_standalone: list[tuple] = []
     for pick, verdict, _calc, _sport, *_ in standalone_verdicts:
         emoji = _PICK_EMOJI.get(verdict)
         if not emoji:
@@ -228,6 +229,28 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
         matched = _match_pick_line(lines, pick)
         if matched is not None:
             lines[matched] = f"{lines[matched].rstrip()}{emoji}"
+        else:
+            unmatched_standalone.append((pick, verdict))
+
+    # Fallback: single unmatched standalone pick — place emoji on the best
+    # content line (handles tweets with flag emojis instead of team names, etc.)
+    if len(unmatched_standalone) == 1 and len(standalone_verdicts) == 1:
+        _pick, _verdict = unmatched_standalone[0]
+        _emoji = _PICK_EMOJI.get(_verdict)
+        if _emoji:
+            _URL_RE = re.compile(r'^\s*(?:<a\s|https?://)', re.IGNORECASE)
+            best = None
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if not stripped or i == 0:
+                    continue  # skip empty lines and capper name
+                if _URL_RE.match(stripped):
+                    continue
+                if any(ch in line for ch in _PICK_EMOJI.values()):
+                    continue
+                best = i  # keep scanning — use last content line
+            if best is not None:
+                lines[best] = f"{lines[best].rstrip()}{_emoji}"
 
     # ── Parlay: single overall emoji ──────────────────────────────────────────
     if parlay_verdicts:

@@ -301,6 +301,9 @@ async def _grade_cycle(
                 else:
                     edit_failed = True
                     print(f"  [grade_daemon] edit failed {cache_key}")
+            else:
+                edit_failed = True
+                print(f"  [grade_daemon] emoji insert failed (no line match) {cache_key}")
 
         # ── Mark legs as broadcasted ──────────────────────────────────────
         for i, pick, verdict, calc, ps, gd in newly_resolved:
