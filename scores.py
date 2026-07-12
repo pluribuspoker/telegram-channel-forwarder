@@ -830,8 +830,8 @@ def _team_matches(term: str, team_name: str) -> bool:
     'Iowa' matches 'Iowa Hawkeyes' but NOT 'Iowa State Cyclones'
     'Texas' matches 'Texas Longhorns' but NOT 'Texas Tech Red Raiders'
     """
-    t = _strip_accents(term.lower().strip()).replace("&", "and")
-    n = _strip_accents(team_name.lower().strip()).replace("&", "and")
+    t = _strip_accents(term.lower().strip()).replace("&", "and").replace("-", " ")
+    n = _strip_accents(team_name.lower().strip()).replace("&", "and").replace("-", " ")
     # Expand common abbreviations before matching
     t = _TEAM_ALIASES.get(t, t)
     n = _TEAM_ALIASES.get(n, n)
