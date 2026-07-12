@@ -53,6 +53,8 @@ ssh root@209.38.51.86 'su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.
 - **Log queries: mind the timezone.** `journalctl --since/--until` uses the VPS **local time (America/New_York, EDT)**, but `graded_at` (DB/cache) and Telegram `ts` are **UTC**. Subtract 4h (UTC→EDT) or the query returns "-- No entries --" and you'll wrongly conclude a service was idle. Confirm with `timedatectl`.
 - **`systemctl is-active` lies about hangs.** A wedged process (e.g. blocked on an untimed network call) still shows `active`. Verify liveness by the recency of its last log line, or `systemctl show <svc> -p WatchdogTimestamp` — not `is-active` alone.
 - **Broadcasting is daemon-only.** The tracker grades + edits emojis but must never set `broadcasted=True` (it doesn't broadcast). If a result got its emoji but no broadcast, suspect the daemon was down when the tracker graded it — check the daemon's log continuity around the grade time.
+- **`send_as_user` channels are NOT bot-editable.** Their messages are sent by the Telethon userbot, so the Bot API returns `400: message can't be edited`. Only the tracker can edit them (via its `_user_edit_message` Telethon fallback for `user_edit_channels`). The grade daemon (Bot-API-only) skips these channels entirely. If a pick in such a channel graded but shows no emoji, it's this class of bug — check for `edit failed <ch>:<msg>` in the daemon log.
+- **Don't trust cached `html_text` to decide if a pick is "ungraded".** Old cache entries often have empty/stale `html_text`, so scanning the cache for "no emoji" produces false positives. Verify against the **live** Telegram message text (`vps_msg.py` / `iter_messages`) before concluding a pick is stuck.
 
 ## Self-improvement
 
