@@ -43,10 +43,14 @@ If an API call fails, a query returns nothing, or data seems missing — try var
 3. **Verify deployed version matches local**: Run `ssh root@209.38.51.86 'cd /home/forwarder/app && git log --oneline -1'` and compare with local `git log --oneline -1` before assuming the VPS is running the code you're reading
 4. **Check VPS logs** if the issue involves runtime behavior (grading, broadcasting, odds, etc.)
 5. **Identify root cause**: Trace the bug through the code with the data you gathered
-6. **Fix the code** and verify the fix (see testing section below)
+6. **Fix the code in a git worktree** (see section below) and verify the fix
 7. **Deploy the code fix first** (push + deploy) before touching live data — the running tracker will overwrite live edits if the buggy code is still active.
 8. **Fix the live data** if needed (e.g., correct a wrong emoji on a message, fix a DB entry).
    - To edit Telegram messages, use Bot API with `parse_mode: "HTML"` — Telethon `edit_message` strips formatting. Check `msg.media` first: use `editMessageCaption` for photo/video messages, `editMessageText` for plain text.
+
+### 4a. Use a git worktree for code changes
+
+All code fixes MUST use a worktree (see CLAUDE.md worktree pattern). Do ALL commits in the worktree before merging — don't commit directly on main after the merge.
 
 ### 5. Testing and verification
 
@@ -98,6 +102,7 @@ Deploy: `git push`, then SSH to VPS and run `cd /home/forwarder/app && git pull 
 - When running `tracker.py --live` locally for testing, ALWAYS use `--channel <id>` to scope to the channel under test. Unscoped runs process all GRADE_CHANNELS and broadcast results to production chat channels.
 - For grading bugs, trace the ENTIRE pipeline (`claude_parse` → post-parse corrections → `validate_sport` → `build_context` → sport-specific fetcher → `claude_grade`) before writing any fix. Identify all failure points, fix them in one commit.
 - After deploying a fix, run the tracker manually on VPS (`tracker.py --live --channel <id>`) for instant verification — don't wait for the 5-minute systemd timer.
+- When `_insert_emojis` can't match a pick line (returns unchanged text), the daemon silently sets `broadcasted=True` and moves on. Always check both the daemon edit logs AND the actual message to confirm the emoji landed.
 
 ### 9. Self-improvement
 
