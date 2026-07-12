@@ -230,7 +230,15 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
         if matched is not None:
             lines[matched] = f"{lines[matched].rstrip()}{emoji}"
         else:
-            unmatched_standalone.append((pick, verdict))
+            # Only add to unmatched if no line already carries a pick emoji —
+            # avoids double-emoji when re-editing a message that was already
+            # graded (the matching line is "unavailable" because it has ✅/❌).
+            any_line_has_emoji = any(
+                any(ch in line for ch in _PICK_EMOJI.values())
+                for line in lines
+            )
+            if not any_line_has_emoji:
+                unmatched_standalone.append((pick, verdict))
 
     # Fallback: single unmatched standalone pick — place emoji on the best
     # content line (handles tweets with flag emojis instead of team names, etc.)

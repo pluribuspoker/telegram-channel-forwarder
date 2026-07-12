@@ -62,9 +62,9 @@ async def main():
     msgs = await client.get_messages(CHANNEL_ID, limit=300)
     tagged = []
     for msg in msgs:
-        if not msg.text:
+        if not msg.raw_text:
             continue
-        ht = tl_html.unparse(msg.text, msg.entities or [])
+        ht = tl_html.unparse(msg.raw_text, msg.entities or [])
         if find_tagged_lines(ht):
             tagged.append((msg.id, ht))
 

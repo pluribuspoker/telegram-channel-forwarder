@@ -278,7 +278,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 if msg_date.tzinfo is None:
                     msg_date = msg_date.replace(tzinfo=dt.timezone.utc)
 
-                text = msg.text or ""
+                text = msg.raw_text or ""
                 # Convert to US Eastern so late-night picks (e.g. 9:38 PM ET =
                 # next day UTC) map to the correct ESPN game date.
                 date_str = msg_date.astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")

@@ -82,7 +82,7 @@ async def run(days: int, channel: int | None, dry_run: bool) -> None:
             async for msg in client.iter_messages(channel_id, limit=500):
                 if msg.date < cutoff:
                     break
-                text = msg.text or ""
+                text = msg.raw_text or ""
                 if not text:
                     continue
 

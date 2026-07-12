@@ -80,11 +80,11 @@ async def main():
 
             # Fetch current message from Telegram
             msg = await client.get_messages(entity, ids=mid)
-            if not msg or not msg.text:
+            if not msg or not msg.raw_text:
                 print(f"  {mid}  SKIP (message not found)")
                 continue
 
-            html_text = _to_bot_html(msg.text, msg.entities)
+            html_text = _to_bot_html(msg.raw_text, msg.entities)
             new_text = _insert_emojis(html_text, verdicts)
 
             if new_text == html_text:

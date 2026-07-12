@@ -38,7 +38,7 @@ async def main():
         await client.disconnect()
         return
 
-    print(f"TEXT: {msg.text!r}")
+    print(f"TEXT: {msg.raw_text!r}")
     print(f"DATE: {msg.date}")
     print(f"SENDER: {msg.sender_id}")
     print(f"MEDIA: {type(msg.media).__name__ if msg.media else None}")
