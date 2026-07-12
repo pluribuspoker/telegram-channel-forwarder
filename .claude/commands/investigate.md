@@ -5,105 +5,44 @@ argument-hint: <issue description, Telegram link, or error message>
 
 # Investigate
 
-Debug and investigate issues in the Telegram Channel Forwarder project.
+$ARGUMENTS
 
-## Arguments
+## Rules
 
-$ARGUMENTS - Description of the issue, optionally with a Telegram message link, screenshot, or error message.
+1. **Live data is on the VPS, not local.** SSH to VPS for logs, DB, parse cache (see CLAUDE.md for paths/aliases/deploy).
+2. **Telegram messages are accessible.** Use `scripts/vps_msg.py` on VPS. For complex queries, write a temp script locally, `scp` it, run as forwarder.
+3. **Don't give up after one failed attempt.** Try variations before concluding data doesn't exist.
+4. **Use a git worktree for code changes** (see CLAUDE.md worktree pattern). Do ALL commits in the worktree before merging.
 
-## Instructions
+## Workflow
 
-You are investigating a bug or issue in the Telegram Channel Forwarder. Follow these rules:
+1. **Gather context**: Fetch the Telegram message if linked, check parse_cache and/or DB on VPS
+2. **Read the relevant code locally** before theorizing
+3. **Verify VPS matches local**: `ssh root@209.38.51.86 'cd /home/forwarder/app && git log --oneline -1'` — VPS helper scripts may not exist yet if versions differ
+4. **Check VPS logs** (`journalctl -u telegram-tracker`, `journalctl -u grade-daemon`, etc.)
+5. **Identify root cause**: Trace the full pipeline before fixing
+6. **Fix and verify** with the real data that triggered the bug (replay actual inputs through the fixed code)
+7. **Deploy code fix first** (push + deploy) before touching live data
+8. **Fix live data** if needed (wrong emoji, DB entry, etc.). Use Bot API with `parse_mode: "HTML"` — check `msg.media`: use `editMessageCaption` for photo/video, `editMessageText` for plain text
+9. **Run tracker manually** on VPS scoped to the affected channel for instant verification:
+   `su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.py --live --channel <channel_id>"`
 
-### 1. Live data lives on the VPS, not locally
+## VPS queries
 
-**Always SSH into the VPS (`ssh root@209.38.51.86`) to access:**
-- Service logs: use `flogs` / `tlogs` aliases, or `journalctl -u telegram-forwarder`
-- Database: `picks.db` is at `/home/forwarder/app/picks.db`
-- Parse cache: `/home/forwarder/app/parse_cache.json`
-- Cron logs: `/tmp/sauce_daily_cron.log`
-- Any runtime state or data files
-
-Run commands as the forwarder user when needed: `su - forwarder -c "cd ~/app && ..."`
-
-The local repo has the code but no live data. Don't try to find logs, DB, or cache locally.
-
-### 2. Telegram messages are accessible
-
-Never say "I can't access Telegram links." Use `scripts/vps_msg.py` on the VPS (see section 6). For anything beyond basic message inspection, write a temp script file locally, `scp` it to the VPS, and run it as forwarder — do not inline Python in shell quotes.
-
-### 3. Don't give up after one failed attempt
-
-If an API call fails, a query returns nothing, or data seems missing — try variations before concluding it doesn't exist. Check different key formats, parameter names, date ranges, etc.
-
-### 4. Investigation workflow
-
-1. **Gather context**: Read the user's description, fetch the relevant Telegram message if linked, check parse_cache and/or DB on VPS
-2. **Read the relevant code locally**: Understand the code path involved before theorizing
-3. **Verify deployed version matches local**: Run `ssh root@209.38.51.86 'cd /home/forwarder/app && git log --oneline -1'` and compare with local `git log --oneline -1` before assuming the VPS is running the code you're reading
-4. **Check VPS logs** if the issue involves runtime behavior (grading, broadcasting, odds, etc.)
-5. **Identify root cause**: Trace the bug through the code with the data you gathered
-6. **Fix the code in a git worktree** (see section below) and verify the fix
-7. **Deploy the code fix first** (push + deploy) before touching live data — the running tracker will overwrite live edits if the buggy code is still active.
-8. **Fix the live data** if needed (e.g., correct a wrong emoji on a message, fix a DB entry).
-   - To edit Telegram messages, use Bot API with `parse_mode: "HTML"` — Telethon `edit_message` strips formatting. Check `msg.media` first: use `editMessageCaption` for photo/video messages, `editMessageText` for plain text.
-
-### 4a. Use a git worktree for code changes
-
-All code fixes MUST use a worktree (see CLAUDE.md worktree pattern). Do ALL commits in the worktree before merging — don't commit directly on main after the merge.
-
-### 5. Testing and verification
-
-**Use the real data that triggered the bug.** After identifying root cause and writing a fix, verify it end-to-end by replaying the same inputs that caused the failure:
-
-- Extract the actual message text, parse cache entry, or API response that exposed the bug
-- Write a test that feeds that exact data through the fixed code path and asserts the correct result
-- Don't just test the happy path — confirm the specific scenario that broke
-
-**Run the tracker manually to verify grading fixes.** After deploying and clearing cache, run the tracker on the VPS scoped to the affected channel for instant feedback — don't wait for the 5-minute systemd timer:
 ```bash
-su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.py --live --channel <channel_id>"
-```
-
-**Send test messages to the TEST channel only.** If verification requires sending or editing Telegram messages (e.g., testing emoji placement, broadcast formatting), use the test channel — never the production channel. Use `--test` mode when running `listener.py` or `tracker.py` locally.
-
-**Verify both the code fix and the live correction.** When a bug produced wrong output on a live message (wrong emoji, wrong label, wrong odds), fix both:
-1. The code, so it won't happen again
-2. The live message/data on the VPS, so the current state is correct
-
-### 6. Common queries on VPS
-
-**Fetch a Telegram message:**
-```bash
+# Telegram message
 su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/vps_msg.py <channel_id> <msg_id>"
+# Grades DB
+su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/vps_grades.py --msg-id <id>"
+su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/vps_grades.py --search <term>"
 ```
 
-**Query grades DB** (`sqlite3` CLI is not installed — these scripts use Python):
-```bash
-su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/vps_grades.py --msg-id 3243"
-su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/vps_grades.py --search Argentina"
-su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/vps_grades.py"  # last 20
-```
+## Lessons
 
-**Parse cache** (find a pick by text substring):
-```bash
-su - forwarder -c "cd ~/app && python -c \"import json; d=json.load(open('parse_cache.json')); [print(k,v['parsed']['pick']) for k,v in d.items() if 'SUBSTRING' in v.get('parsed',{}).get('pick','')]\""
-```
+- Never inline Python in SSH commands beyond simple one-liners. Write a temp script, `scp` it, run it.
+- For grading bugs, trace the ENTIRE pipeline (`claude_parse` → post-parse → `validate_sport` → `build_context` → fetcher → `claude_grade`) before fixing.
+- Always use `--channel <id>` when running `tracker.py --live` locally — unscoped runs broadcast to production.
 
-### 7. Deploy command
+## Self-improvement
 
-Deploy: `git push`, then SSH to VPS and run `cd /home/forwarder/app && git pull && systemctl restart telegram-forwarder`. If unsure about the fix, let the user handle deploy.
-
-### 8. Lessons
-
-- Always compare VPS and local git versions (step 3) **before** running any VPS helper scripts — they may not exist on VPS yet.
-- Never inline Python in SSH commands beyond one-liners with no quotes inside strings. For anything with nested quoting, write a temp script locally, `scp` it, and run it.
-- Don't guess DB table/column names. Run `PRAGMA table_info(tablename)` or list tables first.
-- When running `tracker.py --live` locally for testing, ALWAYS use `--channel <id>` to scope to the channel under test. Unscoped runs process all GRADE_CHANNELS and broadcast results to production chat channels.
-- For grading bugs, trace the ENTIRE pipeline (`claude_parse` → post-parse corrections → `validate_sport` → `build_context` → sport-specific fetcher → `claude_grade`) before writing any fix. Identify all failure points, fix them in one commit.
-- After deploying a fix, run the tracker manually on VPS (`tracker.py --live --channel <id>`) for instant verification — don't wait for the 5-minute systemd timer.
-- When `_insert_emojis` can't match a pick line (returns unchanged text), the daemon silently sets `broadcasted=True` and moves on. Always check both the daemon edit logs AND the actual message to confirm the emoji landed.
-
-### 9. Self-improvement
-
-After resolving an investigation, you MUST review mistakes made and add lessons to section 8 above and/or CLAUDE.md. Also save relevant feedback to memory. Do NOT skip this step — it is required before the conversation ends.
+After resolving, review mistakes and add lessons above and/or to CLAUDE.md. Save relevant feedback to memory. If a lesson describes a code bug, fix the code instead of adding the lesson — lessons should document unavoidable constraints, not workarounds.
