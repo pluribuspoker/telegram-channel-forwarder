@@ -32,6 +32,20 @@ chmod +x ~/.claude/hooks/post_investigate.sh
 
 No restart needed — Claude Code reads the hook script fresh on each fire.
 
+## Windows / Git Bash port
+
+`post_investigate.win.sh` is the local-machine port for Windows + Git Bash.
+Only difference from the Linux version: `python` instead of `python3` (Windows
+has no working bare `python3` — the Store stub errors out). Everything else
+(`md5sum`, `/tmp` flag files) works transparently via Git Bash.
+
+Install locally:
+
+```bash
+cp deploy/hooks/post_investigate.win.sh ~/.claude/hooks/post_investigate.sh
+chmod +x ~/.claude/hooks/post_investigate.sh
+```
+
 ## Registration (in `~/.claude/settings.json`)
 
 The hook is wired as a `Stop` hook. `settings.json` is not in this repo (it
