@@ -64,11 +64,15 @@ def main():
         log("no token")
         return
 
+    # The whole message is designed to be copy-pasted verbatim: the first line
+    # is a harmless note to the human, and everything after it reads as a direct
+    # instruction to the next Claude, so pasting the entire message just works.
     msg = (
-        "🔄 Channels session restarted.\n\n"
-        "To resume the previous conversation, paste this back to me:\n\n"
-        f"Resume previous session — Read {prev} , "
-        "summarize where we left off, then continue."
+        "🔄 Channels session restarted. To pick up where we left off, "
+        "copy this ENTIRE message and send it back to me.\n\n"
+        "Resume previous session: read the transcript at\n"
+        f"{prev}\n"
+        "then summarize where we left off and continue from there."
     )
     if os.environ.get("TG_RESUME_DRYRUN") == "1":
         print(f"[DRYRUN] chat={chat_id} prev={prev_id}\n{msg}")
