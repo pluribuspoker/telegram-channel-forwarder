@@ -807,7 +807,17 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # doing so would suppress the daemon's catch-up (grade_daemon.py) and the
                 # result would never be broadcast (e.g. when the tracker grades a pick while
                 # the daemon is down). Preserve any flag the daemon already set, nothing more.
+                #
+                # EXCEPTION — send_as_user (user_edit) channels: the daemon explicitly SKIPS
+                # these (their messages aren't bot-editable) and they have no broadcast target,
+                # so the tracker is their terminal handler. Once it has graded + successfully
+                # edited the emoji, nothing else will ever touch the pick. Leaving broadcasted
+                # False keeps it perpetually "newly resolved", so the tracker re-posts it to
+                # the audit channel every run (audit spam). Mark it broadcasted here so the
+                # message is treated as fully done and skipped on subsequent runs. Safe ONLY
+                # for user_edit_channels — there is no daemon catch-up to suppress.
                 # Keep full entry if some picks are still pending; minimal entry otherwise.
+                terminal_channel = channel_id in user_edit_channels and not edit_failed
                 new_leg_verdicts = dict(cached_leg_verdicts)
                 for j, (lpick, lverdict, lcalc, lps, lgd, *_) in enumerate(verdicts):
                     if lverdict in ("WIN", "LOSS", "PUSH"):
@@ -815,7 +825,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         new_leg_verdicts[str(j)] = {
                             "verdict": lverdict, "calc": lcalc,
                             "sport": lps, "game_date": lgd or date_str,
-                            "broadcasted": already_bc,
+                            "broadcasted": already_bc or terminal_channel,
                         }
                 pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
                 # Update HTML text after emoji edit so daemon sees current state
