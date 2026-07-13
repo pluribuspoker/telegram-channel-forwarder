@@ -51,6 +51,26 @@ Notes:
 
 Sync: `cp deploy/hooks/telegram_delivery_guard.py ~/.claude/hooks/ && chmod +x ~/.claude/hooks/telegram_delivery_guard.py`
 
+## `telegram_resume_notify.py`
+
+A **SessionStart hook** (VPS only) that DMs the resume command for the *previous*
+session every time the channels session starts. Closes the crash/external-restart
+gap: a planned restart lets the model post a resume pointer as its last message,
+but a crash or `systemctl restart` has no last message. On each fresh start this
+hook finds the most-recently-modified transcript that isn't the current session
+and sends the one-line prompt that reloads it.
+
+- **Gated to the VPS** (`hostname == pickbot`) per user request — no-op locally.
+- Skips `resume` / `clear` / `compact` starts; only fires on a genuine startup.
+- `chat_id` read from `~/.claude/channels/telegram/access.json` (`allowFrom[0]`),
+  bot token from `~/.claude/channels/telegram/.env`. `python3` only.
+- Dry-run: `echo '{"session_id":"x","source":"startup"}' | TG_RESUME_DRYRUN=1 python3 telegram_resume_notify.py`
+- Debug log: `/tmp/tg_resume_notify.log`.
+
+Sync: `cp deploy/hooks/telegram_resume_notify.py ~/.claude/hooks/ && chmod +x ~/.claude/hooks/telegram_resume_notify.py`
+
+Registered as a `SessionStart` hook in `~/.claude/settings.json`.
+
 ## Sync a changed hook to the VPS
 
 ```bash
