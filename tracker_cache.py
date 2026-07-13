@@ -104,8 +104,37 @@ def _load_pending_cache() -> dict:
         return {}
 
 
+def _merge_broadcasted_flags(cache: dict) -> None:
+    """Preserve `broadcasted: True` flags set on disk since `cache` was loaded.
+
+    The tracker loads the whole cache once per run and rewrites it in full,
+    while the grade daemon concurrently sets `broadcasted=True` on legs it has
+    just broadcast. Without this merge, the tracker's full-dict write clobbers
+    those flags, so the daemon re-broadcasts next cycle (duplicate result).
+
+    `broadcasted` is monotonic (a leg broadcasts exactly once, False→True), so
+    OR-ing the on-disk flag into the in-memory copy is always safe: it can only
+    suppress a duplicate, never drop a legitimate broadcast. Only legs still
+    present in memory are touched — a leg the caller intentionally cleared
+    (e.g. a forced re-grade) is left cleared.
+    """
+    disk = _load_pending_cache()
+    for key, entry in cache.items():
+        if not isinstance(entry, dict):
+            continue
+        disk_lv = disk.get(key, {}).get("leg_verdicts")
+        mem_lv = entry.get("leg_verdicts")
+        if not isinstance(disk_lv, dict) or not isinstance(mem_lv, dict):
+            continue
+        for leg, dv in disk_lv.items():
+            mv = mem_lv.get(leg)
+            if isinstance(dv, dict) and dv.get("broadcasted") and isinstance(mv, dict):
+                mv["broadcasted"] = True
+
+
 def _save_pending_cache(cache: dict) -> None:
     _evict_stale(cache)
+    _merge_broadcasted_flags(cache)
     tmp = _PENDING_CACHE_PATH + ".tmp"
     with open(tmp, "w") as f:
         json.dump(cache, f)
