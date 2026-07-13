@@ -23,6 +23,34 @@ Key behaviors:
 - Uses `python3` (this VPS has **no bare `python`** — a bare `python` call here
   silently no-op'd the hook for a while).
 
+## `telegram_delivery_guard.py`
+
+A **Stop hook** that guarantees every Telegram turn actually delivers something.
+
+In the Telegram-channels setup, plain model output is **not** sent to the user —
+only an explicit `reply` (or `edit_message`) tool call reaches Telegram. If a
+turn ends without one, the user sees nothing, which is indistinguishable from a
+crash. (This bit us once: a "which one is best" answer was generated as prose but
+never sent, so it looked like the bot died.)
+
+At Stop, the guard:
+- finds the last inbound `<channel source="plugin:telegram:telegram" …>` message
+  and its `chat_id` (self-gating — exits silently on non-Telegram sessions);
+- scans the turn after it for a `…__reply` / `…__edit_message` tool call;
+- if none was made, **recovers the assistant text from that turn and sends it**
+  via the Bot API, prefixed with an "⚠️ Auto-recovered…" marker — so the user
+  gets the real answer, not just a warning. If there's no text either (genuine
+  crash/empty turn), it sends a short "re-send your message" diagnostic instead.
+
+Notes:
+- Never blocks, always exits 0. Does not duplicate: if a `reply` was made, it
+  stays silent.
+- `python3` only. Bot token read from `~/.claude/channels/telegram/.env`.
+- Dry-run test: `echo '{"transcript_path":"<jsonl>"}' | TG_GUARD_DRYRUN=1 python3 telegram_delivery_guard.py`
+- Debug log: `/tmp/tg_delivery_guard.log`.
+
+Sync: `cp deploy/hooks/telegram_delivery_guard.py ~/.claude/hooks/ && chmod +x ~/.claude/hooks/telegram_delivery_guard.py`
+
 ## Sync a changed hook to the VPS
 
 ```bash
