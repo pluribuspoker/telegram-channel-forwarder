@@ -10,6 +10,9 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/forwarder/.bun/bin
 ExecStartPre=-/usr/bin/tmux kill-session -t claude
 ExecStart=/home/forwarder/app/deploy/run_claude_channels.sh
 ExecStop=/usr/bin/tmux kill-session -t claude
+# Kill all processes in the cgroup on stop (including orphan bun).
+KillMode=control-group
+TimeoutStopSec=15
 # Check every 30s that the tmux session and claude process are alive.
 # If either dies, systemd restarts us.
 WatchdogSec=60
