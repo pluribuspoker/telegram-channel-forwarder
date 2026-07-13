@@ -3,7 +3,7 @@ Description=Claude Code with Telegram Channel (tmux-supervised)
 After=network.target
 
 [Service]
-Type=forking
+Type=simple
 User=forwarder
 Environment=HOME=/home/forwarder
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/forwarder/.bun/bin
