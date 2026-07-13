@@ -67,7 +67,7 @@ def main():
     # Copy-paste-verbatim: line 1 is a note to the human, everything after reads
     # as a direct instruction to the next Claude, so pasting the whole thing works.
     msg = (
-        "🔄 Restarted. Copy this whole message back to me to resume:\n\n"
+        "▶️ Restarted. Copy this whole message back to me to resume:\n\n"
         f"Read {prev} — summarize where we left off, then continue."
     )
     if os.environ.get("TG_RESUME_DRYRUN") == "1":
