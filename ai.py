@@ -83,7 +83,7 @@ Lines prefixed with '>' are blockquote commentary by the poster. If the main tex
 {date_context}
 Return JSON (no markdown fences):
 {{
-  "sport": "NBA|NCAAB|MLB|NFL|NHL|UFL|CFL|Tennis|UFC|Boxing|KBO|Soccer|Other",
+  "sport": "NBA|WNBA|NCAAB|MLB|NFL|NHL|UFL|CFL|Tennis|UFC|Boxing|KBO|Soccer|Other",
   "picks": [
     {{
       "description": "concise one-line summary of the exact bet",
@@ -102,6 +102,7 @@ Return JSON (no markdown fences):
 
 Classification rules:
 - NCAAB = college basketball. NCAAF = college football. The football season ends in January. In February, March, and April there is NO college football. Any college team name appearing in a Feb/Mar/Apr pick is ALWAYS NCAAB, never NCAAF. College team examples: Iowa, Ohio State, Indiana, Texas, Tennessee, Iowa State, Missouri, Florida, Arizona, Duke, Kentucky, UConn, Michigan, Auburn, Houston, Purdue, Illinois, Arkansas, St. Joseph's, New Mexico, Marquette, etc. Critically: bare city/state names like "Arizona", "Florida", "Michigan", "Texas" in a spread or moneyline context during Feb–Apr refer to their COLLEGE team (NCAAB), NOT the pro team (MLB/NFL/NHL). Only classify as a pro sport when the full pro team name is used (e.g. "Arizona Diamondbacks", "Florida Marlins", "Michigan none") or when context makes the pro team unambiguous.
+- WNBA = Women's National Basketball Association. Classify as WNBA (never NBA) if the pick involves WNBA team names or explicit WNBA context. WNBA teams (resolve nicknames to the canonical full name in "teams"): Atlanta Dream, Chicago Sky, Connecticut Sun, Dallas Wings, Golden State Valkyries, Indiana Fever (Fever), Las Vegas Aces (Aces), Los Angeles Sparks (Sparks), Minnesota Lynx (Lynx), New York Liberty (Liberty), Phoenix Mercury (Mercury), Seattle Storm (Storm), Toronto Tempo (Tempo), Washington Mystics (Mystics). These nicknames (Fever, Aces, Liberty, Sky, Sun, Lynx, Mercury, Wings, Storm, Sparks, Dream, Mystics, Valkyries, Tempo) are WNBA-only and never NBA — any pick using them is WNBA.
 - This NCAAB rule applies to TEAM names only, NOT individual player props. If a pick names a single NBA/NHL/MLB player (e.g. Matas Buzelis, Stephon Castle, Tyler Herro), use their actual professional league (NBA, NHL, MLB, etc.), regardless of the month.
 - UFC/MMA: if the pick is on individual MMA/UFC fighter names with a moneyline, classify as UFC. Common fighters: Pereira, Gafurov, Souza, Anders, Sola, Murphy, Aswell, Hooper, Bahamondes, Adesanya, etc. UFC events are held almost exclusively on Saturdays — on Saturdays, single-surname moneyline picks with no clear sport context should be classified as UFC, not Tennis. For UFC/Boxing moneylines, put the fighter name in "teams" (NOT "player") — "player" is only for player props (e.g. points over/under).
 - Tennis: ONLY classify as Tennis if the message contains explicit Tennis indicators — tournament names (Open, Slam, ATP, WTA, Masters, Wimbledon), match format words (sets, tiebreak, deuce), court surfaces, or well-known tennis players (Djokovic, Alcaraz, Sinner, Swiatek, Sabalenka, Medvedev, Zverev, Rune, etc.). Do NOT classify as Tennis based solely on a person's surname.
@@ -254,6 +255,25 @@ async def claude_parse(text: str, date: str | None = None) -> dict | None:
 
     if parsed and parsed.get("sport") == "Other" and "cfl" in text.lower():
         parsed["sport"] = "CFL"
+
+    # WNBA: explicit "wnba" context but Claude left sport="Other" or "NBA".
+    if parsed and parsed.get("sport") in ("Other", "NBA") and "wnba" in text.lower():
+        parsed["sport"] = "WNBA"
+
+    # WNBA team names misclassified as NBA/Other (e.g. "Fever", "Aces"). These
+    # nicknames are WNBA-only and never collide with NBA team names.
+    _WNBA_UNIQUE_TEAMS = {
+        "fever", "aces", "liberty", "sky", "sun", "lynx", "mercury",
+        "wings", "storm", "sparks", "dream", "mystics", "valkyries", "tempo",
+    }
+    if parsed and parsed.get("sport") in ("Other", "NBA"):
+        for pick in parsed.get("picks", []):
+            tokens = {
+                tok for t in pick.get("teams", []) for tok in t.lower().split()
+            }
+            if tokens & _WNBA_UNIQUE_TEAMS:
+                parsed["sport"] = "WNBA"
+                break
 
     # CFL team names misclassified as another sport (e.g., "Blue Bombers" parsed
     # as MLB "Blue Jays"). Check pick descriptions for uniquely-CFL fragments.

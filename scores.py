@@ -15,6 +15,7 @@ from datetime import date as _date, datetime as _datetime, timedelta, timezone
 
 ESPN_LEAGUES: dict[str, tuple[str, str]] = {
     "NBA":   ("basketball", "nba"),
+    "WNBA":  ("basketball", "wnba"),
     "NCAAB": ("basketball", "mens-college-basketball"),
     "MLB":   ("baseball", "mlb"),
     "NFL":   ("football", "nfl"),

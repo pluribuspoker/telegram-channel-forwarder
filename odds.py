@@ -54,6 +54,7 @@ ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 
 SPORT_KEYS: dict[str, str] = {
     "NBA":   "basketball_nba",
+    "WNBA":  "basketball_wnba",
     "NCAAB": "basketball_ncaab",
     "NFL":   "americanfootball_nfl",
     "NCAAF": "americanfootball_ncaaf",
@@ -76,6 +77,17 @@ PROP_STAT_MARKETS: dict[str, dict[str, str]] = {
         "STRIKEOUTS": "pitcher_strikeouts",
     },
     "NBA": {
+        "PTS":         "player_points",
+        "REB":         "player_rebounds",
+        "AST":         "player_assists",
+        "PTS+REB":     "player_points_rebounds",
+        "PTS+AST":     "player_points_assists",
+        "PTS+REB+AST": "player_points_rebounds_assists",
+        "3PM":         "player_threes",
+        "BLK":         "player_blocks",
+        "STL":         "player_steals",
+    },
+    "WNBA": {
         "PTS":         "player_points",
         "REB":         "player_rebounds",
         "AST":         "player_assists",
@@ -128,6 +140,7 @@ HALF_POINT_COST: dict[str, float] = {
     "NFL":   0.022,
     "NCAAF": 0.020,
     "NBA":   0.022,
+    "WNBA":  0.022,
     "NCAAB": 0.020,
     "MLB":   0.020,
     "NHL":   0.020,

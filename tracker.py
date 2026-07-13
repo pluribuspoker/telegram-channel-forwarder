@@ -443,7 +443,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     # Also validate per-pick sport overrides (cross-sport parlays)
                     for pick in picks[1:]:
                         ps = pick.get("sport")
-                        if ps and ps in ("NBA", "NCAAB", "MLB", "NFL", "NHL"):
+                        if ps and ps in ("NBA", "WNBA", "NCAAB", "MLB", "NFL", "NHL"):
                             pt = pick.get("teams", [])
                             pd = pick.get("description", "")
                             new_ps, new_pt = await validate_sport(
