@@ -268,11 +268,17 @@ def _strip_tco(text: str) -> str:
 
 async def send_pick(tweet: dict, dest: int | str, dry_run: bool = False):
     """Send original tweet content (text + images) to Telegram channel."""
+    import html as _html
     text = _strip_tco(tweet.get("text", "").strip())
     url = tweet["url"]
-    msg = f"\u25fc\ufe0f Trent\n\n{text}\n\n{url}"
+    # Variant #2: hide the raw URL behind a "\ud83d\udd17 View on X" footer link.
+    # Tweet text is plain (no Telegram entities to preserve), so escape it for HTML.
+    msg = (
+        f"\u25fc\ufe0f Trent\n\n{_html.escape(text)}\n\n"
+        f'<a href="{_html.escape(url, quote=True)}">\U0001f517 View on X</a>'
+    )
     if dry_run:
-        print(f"  [dry-run] Would send:\n    {msg[:120]}...")
+        print(f"  [dry-run] Would send:\n    {msg[:160]}...")
         return
 
     client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
@@ -295,10 +301,13 @@ async def send_pick(tweet: dict, dest: int | str, dry_run: bool = False):
 
         if photo_files:
             await client.send_file(
-                entity, photo_files, caption=msg, link_preview=False,
+                entity, photo_files, caption=msg, parse_mode="html",
+                link_preview=False,
             )
         else:
-            await client.send_message(entity, msg, link_preview=False)
+            await client.send_message(
+                entity, msg, parse_mode="html", link_preview=False,
+            )
         print(f"  Sent pick to {dest}")
     finally:
         await client.disconnect()
