@@ -102,7 +102,7 @@ Return JSON (no markdown fences):
 
 Classification rules:
 - NCAAB = college basketball. NCAAF = college football. The football season ends in January. In February, March, and April there is NO college football. Any college team name appearing in a Feb/Mar/Apr pick is ALWAYS NCAAB, never NCAAF. College team examples: Iowa, Ohio State, Indiana, Texas, Tennessee, Iowa State, Missouri, Florida, Arizona, Duke, Kentucky, UConn, Michigan, Auburn, Houston, Purdue, Illinois, Arkansas, St. Joseph's, New Mexico, Marquette, etc. Critically: bare city/state names like "Arizona", "Florida", "Michigan", "Texas" in a spread or moneyline context during Feb–Apr refer to their COLLEGE team (NCAAB), NOT the pro team (MLB/NFL/NHL). Only classify as a pro sport when the full pro team name is used (e.g. "Arizona Diamondbacks", "Florida Marlins", "Michigan none") or when context makes the pro team unambiguous.
-- WNBA = Women's National Basketball Association. Classify as WNBA (never NBA) if the pick involves WNBA team names or explicit WNBA context. WNBA teams (resolve nicknames to the canonical full name in "teams"): Atlanta Dream, Chicago Sky, Connecticut Sun, Dallas Wings, Golden State Valkyries, Indiana Fever (Fever), Las Vegas Aces (Aces), Los Angeles Sparks (Sparks), Minnesota Lynx (Lynx), New York Liberty (Liberty), Phoenix Mercury (Mercury), Seattle Storm (Storm), Toronto Tempo (Tempo), Washington Mystics (Mystics). These nicknames (Fever, Aces, Liberty, Sky, Sun, Lynx, Mercury, Wings, Storm, Sparks, Dream, Mystics, Valkyries, Tempo) are WNBA-only and never NBA — any pick using them is WNBA.
+- WNBA = Women's National Basketball Association. Classify as WNBA (never NBA) if the pick involves WNBA team names or explicit WNBA context. WNBA teams (resolve nicknames to the canonical full name in "teams"): Atlanta Dream, Chicago Sky, Connecticut Sun, Dallas Wings, Golden State Valkyries, Indiana Fever (Fever), Las Vegas Aces (Aces), Los Angeles Sparks (Sparks), Minnesota Lynx (Lynx), New York Liberty (Liberty), Phoenix Mercury (Mercury), Portland Fire (Fire), Seattle Storm (Storm), Toronto Tempo (Tempo), Washington Mystics (Mystics). These nicknames (Fever, Aces, Liberty, Sky, Sun, Lynx, Mercury, Wings, Storm, Sparks, Dream, Mystics, Valkyries, Tempo) are WNBA-only and never NBA — any pick using them is WNBA. Note: "Portland Fire" is the WNBA team, but "Chicago Fire" is MLS soccer — disambiguate by city.
 - This NCAAB rule applies to TEAM names only, NOT individual player props. If a pick names a single NBA/NHL/MLB player (e.g. Matas Buzelis, Stephon Castle, Tyler Herro), use their actual professional league (NBA, NHL, MLB, etc.), regardless of the month.
 - UFC/MMA: if the pick is on individual MMA/UFC fighter names with a moneyline, classify as UFC. Common fighters: Pereira, Gafurov, Souza, Anders, Sola, Murphy, Aswell, Hooper, Bahamondes, Adesanya, etc. UFC events are held almost exclusively on Saturdays — on Saturdays, single-surname moneyline picks with no clear sport context should be classified as UFC, not Tennis. For UFC/Boxing moneylines, put the fighter name in "teams" (NOT "player") — "player" is only for player props (e.g. points over/under).
 - Tennis: ONLY classify as Tennis if the message contains explicit Tennis indicators — tournament names (Open, Slam, ATP, WTA, Masters, Wimbledon), match format words (sets, tiebreak, deuce), court surfaces, or well-known tennis players (Djokovic, Alcaraz, Sinner, Swiatek, Sabalenka, Medvedev, Zverev, Rune, etc.). Do NOT classify as Tennis based solely on a person's surname.
@@ -261,17 +261,22 @@ async def claude_parse(text: str, date: str | None = None) -> dict | None:
         parsed["sport"] = "WNBA"
 
     # WNBA team names misclassified as NBA/Other (e.g. "Fever", "Aces"). These
-    # nicknames are WNBA-only and never collide with NBA team names.
+    # single-word nicknames are WNBA-only and never collide with NBA team names.
+    # ("fire" is deliberately excluded here — Portland Fire collides with the
+    # MLS Chicago Fire; it's matched by full name below instead.)
     _WNBA_UNIQUE_TEAMS = {
         "fever", "aces", "liberty", "sky", "sun", "lynx", "mercury",
         "wings", "storm", "sparks", "dream", "mystics", "valkyries", "tempo",
     }
+    # Full names for WNBA teams whose bare nickname is ambiguous with another sport.
+    _WNBA_FULL_NAMES = {"portland fire"}
     if parsed and parsed.get("sport") in ("Other", "NBA"):
         for pick in parsed.get("picks", []):
-            tokens = {
-                tok for t in pick.get("teams", []) for tok in t.lower().split()
-            }
-            if tokens & _WNBA_UNIQUE_TEAMS:
+            teams_lc = [t.lower() for t in pick.get("teams", [])]
+            tokens = {tok for t in teams_lc for tok in t.split()}
+            if tokens & _WNBA_UNIQUE_TEAMS or any(
+                full in t for full in _WNBA_FULL_NAMES for t in teams_lc
+            ):
                 parsed["sport"] = "WNBA"
                 break
 
