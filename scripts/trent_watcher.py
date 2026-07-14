@@ -48,6 +48,19 @@ DEST_CHANNEL = -1004394797084
 DB_PATH = str(ROOT / "picks.db")
 # How far back to look for tweets each run (covers missed runs / gaps)
 LOOKBACK_HOURS = 2
+# Pick classifier: temperature=0 so the same tweet gets the same verdict every
+# run (temp defaults to 1.0 = flaky). Model must be one that still accepts a
+# temperature param — Sonnet 5 / Opus 4.7+ / Fable 5 REJECT it (400). Sonnet 4.6
+# keeps both strong judgment and temperature support, so it's the right pick.
+CLASSIFY_MODEL = "claude-sonnet-4-6"
+
+
+class _ClassifyError(Exception):
+    """Transient failure classifying a tweet (API/network/image download).
+
+    Raised (not returned as False) so main() can SKIP marking the tweet seen
+    and retry it next run — a transient blip must never permanently drop a pick.
+    """
 
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
@@ -152,7 +165,8 @@ YES signals:
 - "FUGAZI 5" / "[N]-man nuke" / "Last Chance U slip" — named bet formats
 - Explicit first-person declaration of placing a specific bet
 - Terse pick announcement: "[team/player] ML", "[team/player] moneyline", "[team/player] +/-spread" — naming a specific bet even without fanfare
-- Short tweet stating a pick with a bet type (ML, spread, over, under, total, 1H, o/u) counts as an announcement
+- Short tweet stating a pick with a bet type (ML, spread, over, under, total, 1H, o/u, BTTS / both teams to score, corners, cards) counts as an announcement
+- A named matchup ("[Team] x [Team]" / "[Team] vs [Team]") paired with "mortal mega" / "mega" / "nuke" branding IS a single-game pick announcement, even if the specific bet lives in an attached slip image
 
 NO — return false for:
 - Multi-leg parlays: "FUGAZI 5", "[N]-man nuke" with multiple legs listed, "Last Chance U slip" with multiple legs — we only want SINGLE-GAME bets
@@ -205,13 +219,14 @@ async def is_pick_text(tweet: dict) -> bool:
         return False
     try:
         resp = await _claude_create_with_retry(
-            model="claude-sonnet-4-6",
+            model=CLASSIFY_MODEL,
             max_tokens=10,
+            temperature=0,
             messages=[{"role": "user", "content": _IS_PICK_PROMPT.format(text=text)}],
         )
     except Exception as e:
         print(f"  ERROR text-check {tweet['id']}: {e}")
-        return False
+        raise _ClassifyError(str(e)) from e
     return _parse_bool(resp.content[0].text)
 
 
@@ -238,15 +253,17 @@ async def is_pick_image(tweet: dict) -> bool:
 
     img = await download_image(img_url)
     if not img:
-        return False
+        # Download failure is transient — don't let it silently drop a pick.
+        raise _ClassifyError(f"image download failed for {tweet['id']}")
     media_type, img_bytes = img
     img_b64 = base64.b64encode(img_bytes).decode()
 
     text = tweet.get("text", "").strip()
     try:
         resp = await _claude_create_with_retry(
-            model="claude-sonnet-4-6",
+            model=CLASSIFY_MODEL,
             max_tokens=10,
+            temperature=0,
             messages=[{"role": "user", "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_b64}},
                 {"type": "text", "text": _IMAGE_IS_PICK_PROMPT.format(text=text)},
@@ -254,7 +271,7 @@ async def is_pick_image(tweet: dict) -> bool:
         )
     except Exception as e:
         print(f"  ERROR image-check {tweet['id']}: {e}")
-        return False
+        raise _ClassifyError(str(e)) from e
     return _parse_bool(resp.content[0].text)
 
 
@@ -346,11 +363,17 @@ async def main():
 
     picks_sent = 0
     for tw in new_tweets:
-        is_pick = await is_pick_text(tw)
+        try:
+            is_pick = await is_pick_text(tw)
 
-        # Image fallback: always check images if text check said no pick
-        if not is_pick and tw.get("photos"):
-            is_pick = await is_pick_image(tw)
+            # Image fallback: always check images if text check said no pick
+            if not is_pick and tw.get("photos"):
+                is_pick = await is_pick_image(tw)
+        except _ClassifyError as e:
+            # Transient blip — leave the tweet UNSEEN so it retries next run
+            # (bounded: it stops being fetched once it ages out of the window).
+            print(f"  transient classify failure on {tw['id']}, will retry next run: {e}")
+            continue
 
         if is_pick:
             await send_pick(tw, args.channel, dry_run=args.dry_run)
