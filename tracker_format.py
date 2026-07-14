@@ -212,6 +212,31 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
     return None
 
 
+_LINK_LINE_RE = re.compile(r'^\s*(?:<a\s|https?://)', re.IGNORECASE)
+
+
+def _best_content_line(lines: list[str]) -> int | None:
+    """Last usable content line for placing an odds tag / verdict emoji when a
+    pick matches no line by name or number (pure-slang tweets like "nuking the
+    AL for my coin back", tweets with flag emojis instead of team names, etc.).
+
+    Skips the capper-name line (index 0), blank lines, hyperlink/attribution
+    lines (e.g. "🔗 View on X"), and lines already carrying a verdict emoji.
+    Returns None if no such line exists.
+    """
+    best = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or i == 0:
+            continue
+        if _LINK_LINE_RE.match(stripped) or "<a " in line:
+            continue
+        if any(ch in line for ch in _PICK_EMOJI.values()):
+            continue
+        best = i
+    return best
+
+
 def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
     """
     Insert verdict emoji(s) into the message text.
@@ -258,17 +283,7 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
         _pick, _verdict = unmatched_standalone[0]
         _emoji = _PICK_EMOJI.get(_verdict)
         if _emoji:
-            _URL_RE = re.compile(r'^\s*(?:<a\s|https?://)', re.IGNORECASE)
-            best = None
-            for i, line in enumerate(lines):
-                stripped = line.strip()
-                if not stripped or i == 0:
-                    continue  # skip empty lines and capper name
-                if _URL_RE.match(stripped):
-                    continue
-                if any(ch in line for ch in _PICK_EMOJI.values()):
-                    continue
-                best = i  # keep scanning — use last content line
+            best = _best_content_line(lines)
             if best is not None:
                 lines[best] = f"{lines[best].rstrip()}{_emoji}"
 
@@ -371,23 +386,27 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     def _fmt(v: int) -> str:
         return f"+{v}" if v > 0 else str(v)
 
+    def _odds_tag(idx: int) -> str | None:
+        odds_val = odds_by_pick.get(str(idx), {}).get("odds")
+        if odds_val is None:
+            return None
+        match_type = odds_by_pick.get(str(idx), {}).get("match_type", "")
+        if match_type.startswith("live_"):
+            return f" [{_fmt(odds_val)} live]"
+        if match_type.startswith("pregame_"):
+            return f" [{_fmt(odds_val)} pre]"
+        return f" [{_fmt(odds_val)}]"
+
+    standalone_unmatched: list[int] = []
     for idx, pick in enumerate(picks):
         if pick.get("is_parlay_leg"):
             continue  # parlay legs handled above via combined odds
-        odds_val = odds_by_pick.get(str(idx), {}).get("odds")
-        if odds_val is None:
+        odds_tag = _odds_tag(idx)
+        if odds_tag is None:
             continue
         # Skip if source already has odds (e.g. "Renegades -4.5 (-110)")
         if _SOURCE_ODDS_RE.search(pick.get("description") or ""):
             continue
-        match_type  = odds_by_pick.get(str(idx), {}).get("match_type", "")
-        pregame_val = odds_by_pick.get(str(idx), {}).get("pregame_odds")
-        if match_type.startswith("live_"):
-            odds_tag = f" [{_fmt(odds_val)} live]"
-        elif match_type.startswith("pregame_"):
-            odds_tag = f" [{_fmt(odds_val)} pre]"
-        else:
-            odds_tag = f" [{_fmt(odds_val)}]"
 
         search_terms = _pick_search_terms(pick)
 
@@ -460,6 +479,21 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                         lines[j] = f"{row.rstrip()}{odds_tag}"
                         desc_matched = True
                         break
+
+        if not desc_matched:
+            standalone_unmatched.append(idx)
+
+    # Final fallback: a single standalone pick that matched no line — pure-slang
+    # tweets with no team name or bet number (e.g. "i'm nuking the AL for my coin
+    # back"). Place the odds tag on the best content line, the same anchor
+    # _insert_emojis uses, so the odds and the later verdict emoji land together.
+    if len(standalone_idxs) == 1 and len(standalone_unmatched) == 1:
+        idx = standalone_unmatched[0]
+        odds_tag = _odds_tag(idx)
+        if odds_tag is not None:
+            best = _best_content_line(lines)
+            if best is not None and not _ODDS_TAG_RE.search(lines[best]) and not _SOURCE_ODDS_RE.search(lines[best]):
+                lines[best] = f"{lines[best].rstrip()}{odds_tag}"
 
     return "\n".join(lines)
 
