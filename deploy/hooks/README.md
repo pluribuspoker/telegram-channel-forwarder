@@ -71,6 +71,32 @@ Sync: `cp deploy/hooks/telegram_resume_notify.py ~/.claude/hooks/ && chmod +x ~/
 
 Registered as a `SessionStart` hook in `~/.claude/settings.json`.
 
+## `telegram_seen_react.py`
+
+A **UserPromptSubmit hook** that reacts 👀 to every inbound Telegram message the
+instant the harness receives it — a hard **delivery receipt** at the harness
+level, not a model tool call.
+
+Why: the Bot API has no history/backfill, so a message sent during a restart
+window (before the new process's poll loop connects) is silently dropped and
+looks identical to an unanswered one. With this hook, **reaction present = the
+session received it; reaction absent = it was dropped, resend.** Because it fires
+below the model, it can't be forgotten or lost to a mid-turn crash. (It cannot
+*prevent* drops — no hook fires for a message the process never received — which
+is exactly why the *absence* of the 👀 is the signal.)
+
+- **Self-gating**: only acts when the prompt carries a
+  `source="plugin:telegram:telegram"` `<channel>` tag; no-op locally.
+- Parses `chat_id` + `message_id` from the tag (order-independent), calls the Bot
+  API `setMessageReaction`. `python3` only; bot token from
+  `~/.claude/channels/telegram/.env`. Never blocks, always exits 0.
+- Dry-run: `echo '{"prompt":"<channel source=\"plugin:telegram:telegram\" chat_id=\"123\" message_id=\"9\">hi</channel>"}' | TG_SEEN_DRYRUN=1 python3 telegram_seen_react.py`
+- Debug log: `/tmp/tg_seen_react.log`.
+
+Sync: `cp deploy/hooks/telegram_seen_react.py ~/.claude/hooks/ && chmod +x ~/.claude/hooks/telegram_seen_react.py`
+
+Registered as a `UserPromptSubmit` hook in `~/.claude/settings.json`.
+
 ## Sync a changed hook to the VPS
 
 ```bash
