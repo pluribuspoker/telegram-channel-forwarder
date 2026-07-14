@@ -139,6 +139,18 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
                 continue
             return i
 
+    # Pass 1b: team-level prop (BTTS, clean sheet, etc.) where the prop keyword
+    # sits on its own pick line, separate from the team-name header (common in
+    # forwarded tweets: "FRANCE x SPAIN" header, then "…CLICK BTTS AND MOVE.").
+    # Pass 1 misses this because the header has teams-but-no-prop and the pick
+    # line has prop-but-no-teams. Match on the prop_stat alone.
+    if prop_stat:
+        for i, line in enumerate(lines):
+            if not _available(i):
+                continue
+            if _prop_stat_in_line(prop_stat, line.lower()):
+                return i
+
     # Pass 2: full description
     desc = _norm_abbr((pick.get("description") or "").lower().strip())
     if desc:
