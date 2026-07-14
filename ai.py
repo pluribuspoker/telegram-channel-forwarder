@@ -117,6 +117,7 @@ Classification rules:
 - Cross-sport parlays: if legs belong to different sports (e.g. one NBA team + one UFC fighter), set the pick-level "sport" field to override the top-level sport for that leg. Leave pick "sport" as null when it matches the top-level sport.
 - Double chance: "X or Draw", "Draw or X", "X or Y" bets that cover two of three outcomes. Use bet_type="double_chance". Put the first-named team in "teams". line and direction should be null.
 - Draw no bet (DNB): "X draw no bet", "X DNB". Like moneyline but draw = refund. Use bet_type="draw_no_bet". Put the team in "teams". line and direction should be null.
+- Colloquial moneyline slang: phrases like "nuking/hammering/pounding/smashing/blasting/tailing/riding/loving the X", "all over the X", or "X for the win" express a MONEYLINE pick on team/side X (bet_type=moneyline), even with no explicit bet type, line, or odds stated — extract it. Ignore surrounding bankroll slang (e.g. "for my coin back", "to get well"). Still return no picks for pure commentary with no team/side named. "AL"/"NL" in an MLB All-Star context = American League All-Stars / National League All-Stars.
 - Period: 1h=first half, 2h=second half, 1q=first quarter, 1p/2p/3p=hockey periods, game=full game (default).
 
 Message:
