@@ -397,6 +397,19 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             return f" [{_fmt(odds_val)} pre]"
         return f" [{_fmt(odds_val)}]"
 
+    def _place(j: int, odds_tag: str):
+        """Place odds_tag on line j. Returns True if the tag was placed OR our
+        own tag is already there (pick is done); returns None if the line
+        already carries a DIFFERENT pick's tag, so the caller should keep
+        searching. This stops one pick from claiming another pick's already-
+        tagged line when they share a team name (e.g. an "Over 2.5" total
+        matching the already-tagged "England to advance" line by "England")."""
+        line = lines[j]
+        if _ODDS_TAG_RE.search(line) or _SOURCE_ODDS_RE.search(line):
+            return True if odds_tag.strip() in line else None
+        lines[j] = f"{line.rstrip()}{odds_tag}"
+        return True
+
     standalone_unmatched: list[int] = []
     for idx, pick in enumerate(picks):
         if pick.get("is_parlay_leg"):
@@ -419,20 +432,18 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         if desc:
             for j, line in enumerate(lines):
                 if desc in _norm_abbr(line.lower()):
-                    if not _ODDS_TAG_RE.search(line) and not _SOURCE_ODDS_RE.search(line):
-                        lines[j] = f"{line.rstrip()}{odds_tag}"
-                    desc_matched = True
-                    break
+                    if _place(j, odds_tag):
+                        desc_matched = True
+                        break
 
         if not desc_matched:
             for j, line in enumerate(lines):
                 if " @ " in line and not _BET_LINE_RE.search(line):
                     continue  # skip game-info headers, but keep pick lines
                 if any(term in line.lower() for term in search_terms):
-                    if not _ODDS_TAG_RE.search(line) and not _SOURCE_ODDS_RE.search(line):
-                        lines[j] = f"{line.rstrip()}{odds_tag}"
-                    desc_matched = True
-                    break
+                    if _place(j, odds_tag):
+                        desc_matched = True
+                        break
 
         # Third fallback: strip team/player names from desc and search for the remainder.
         # Catches abbreviations like "Dbacks ML (2 units)" when AI parsed "Arizona Diamondbacks ML".
@@ -457,10 +468,9 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                     if " @ " in line and not _BET_LINE_RE.search(line):
                         continue
                     if desc_stripped in _norm_abbr(line.lower()):
-                        if not _ODDS_TAG_RE.search(line) and not _SOURCE_ODDS_RE.search(line):
-                            lines[j] = f"{line.rstrip()}{odds_tag}"
-                        desc_matched = True
-                        break
+                        if _place(j, odds_tag):
+                            desc_matched = True
+                            break
 
         # Fourth fallback: search for the raw bet line number (e.g. "236.5" or "-7.5").
         # Catches heavily abbreviated team names (e.g. "Twolves / Sixers under 236.5")
@@ -474,11 +484,9 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                     if " @ " in row and not _BET_LINE_RE.search(row):
                         continue
                     if line_str in row:
-                        if _ODDS_TAG_RE.search(row) or _SOURCE_ODDS_RE.search(row):
-                            continue  # line already tagged — may belong to another pick
-                        lines[j] = f"{row.rstrip()}{odds_tag}"
-                        desc_matched = True
-                        break
+                        if _place(j, odds_tag):
+                            desc_matched = True
+                            break
 
         if not desc_matched:
             standalone_unmatched.append(idx)
