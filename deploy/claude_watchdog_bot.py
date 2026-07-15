@@ -12,6 +12,7 @@ Commands (only responds to ALLOWED_USER_ID):
   /logs     — show last 20 lines of claude-channels journal
   /kill     — force-kill all claude/bun processes and restart
   /ping     — responds "pong" (liveness check)
+  /tmux     — capture last 50 lines of Claude's tmux pane (see what it's doing)
 
 Requires: pip install python-telegram-bot (already in venv)
 Env: WATCHDOG_BOT_TOKEN, WATCHDOG_USER_ID in .env
@@ -106,6 +107,14 @@ async def handle_message(update, context):
             logs = logs[-4000:]
         await msg.reply_text(f"```\n{logs}\n```", parse_mode="Markdown")
 
+    elif text == "/tmux":
+        out = run("tmux capture-pane -t claude -p -S -50 2>&1")
+        if not out:
+            out = "(empty pane or no tmux session)"
+        if len(out) > 4000:
+            out = out[-4000:]
+        await msg.reply_text(f"```\n{out}\n```", parse_mode="Markdown")
+
     elif text == "/help":
         await msg.reply_text(
             "Emergency watchdog commands:\n"
@@ -113,7 +122,8 @@ async def handle_message(update, context):
             "/status — service status\n"
             "/restart — restart claude-channels\n"
             "/kill — force-kill and restart\n"
-            "/logs — last 20 journal lines"
+            "/logs — last 20 journal lines\n"
+            "/tmux — see what Claude is doing right now"
         )
 
 
