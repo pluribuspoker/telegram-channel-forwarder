@@ -1,0 +1,15 @@
+[Unit]
+Description=Claude Channels Watchdog Bot (emergency restart via Telegram)
+After=network.target
+
+[Service]
+Type=simple
+User=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/deploy/claude_watchdog_bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

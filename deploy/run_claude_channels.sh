@@ -34,5 +34,11 @@ while true; do
         exit 1
     fi
 
+    # Check bun (Telegram plugin) is running
+    if ! pgrep -f "bun server.ts" >/dev/null 2>&1; then
+        echo "claude-channels: bun/telegram plugin gone, exiting for restart" >&2
+        exit 1
+    fi
+
     systemd-notify WATCHDOG=1
 done
