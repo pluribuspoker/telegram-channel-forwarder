@@ -57,6 +57,11 @@ _SOCCER_HINTS = (
     "world cup", "fifa",
 )
 
+# Canonical advancement stems a description must carry so odds.py's _ADVANCE_RE
+# routes a knockout-soccer moneyline to the to_qualify market (not the 90-min
+# h2h line). Kept in sync with _ADVANCE_RE in odds.py.
+_ADVANCE_STEM_RE = re.compile(r'\b(advanc\w*|qualif\w*)\b', re.IGNORECASE)
+
 # Country/national team names → Soccer (FIFA) when Claude returns sport="Other"
 _FIFA_COUNTRIES = {
     "japan", "brazil", "france", "germany", "argentina", "mexico", "england",
@@ -347,6 +352,31 @@ async def claude_parse(
             if any(t.lower() in _FIFA_COUNTRIES for t in pick.get("teams", [])):
                 parsed["sport"] = "Soccer"
                 break
+
+    # Deterministic advancement-market correction. If the message TEXT explicitly
+    # says a team is "to advance/qualify/progress" (knockout soccer), the market is
+    # the team-advances price, not the 90-min moneyline. Stamp the "advance" stem
+    # onto that team's moneyline pick so odds routing (_ADVANCE_RE in odds.py) uses
+    # the to_qualify market. The text is authoritative here: an image re-parse can
+    # rewrite the market to the slip's button label ("Game Winner" / "Win against
+    # X") and drop the stem the text made explicit (regression from fd896c9). Only
+    # stamp the team the text names as advancing (team-gated), so a plain 90-min ML
+    # on another team in the same message is untouched.
+    if parsed:
+        for pick in parsed.get("picks", []):
+            if pick.get("bet_type") != "moneyline":
+                continue
+            desc = pick.get("description", "")
+            if _ADVANCE_STEM_RE.search(desc):
+                continue  # already carries the advance stem
+            for team in pick.get("teams", []):
+                if re.search(
+                    re.escape(team) + r"\b[^.\n]{0,20}?\b(?:to\s+)?"
+                    r"(?:advanc\w*|qualif\w*|progress|reach\s+the\s+final)",
+                    text, re.IGNORECASE,
+                ):
+                    pick["description"] = desc.rstrip(". ") + " to advance"
+                    break
 
     return parsed
 
