@@ -157,10 +157,21 @@ _PERIOD_RE = re.compile(
     re.IGNORECASE,
 )
 
-# "To advance" / "to qualify" — knockout-stage soccer bets.
-# The Odds API h2h market returns 90-min ML for these games, not advancement odds,
-# so we must skip the h2h lookup to avoid displaying wrong odds.
-_ADVANCE_RE = re.compile(r'\bto\s+(advance|qualify)\b', re.IGNORECASE)
+# "To advance" / "to qualify" — knockout-stage soccer bets, including trophy/
+# advancement slang ("it's coming home", "to the final", "lift the trophy",
+# "win it all"). The Odds API h2h market returns the 90-min ML for these games,
+# not advancement odds, so we route to the to_qualify market to avoid displaying
+# the wrong price (e.g. England +172 on the 90-min line vs -126 to advance).
+# These phrases never appear on a pure 90-min moneyline, so they are safe to
+# treat as advancement bets.
+_ADVANCE_RE = re.compile(
+    r'\bto\s+(advance|qualify)\b'
+    r'|\b(it\'?s\s+)?coming\s+home\b'
+    r'|\b(reach(es|ing)?|into|to)\s+the\s+final\b'
+    r'|\bbook(s|ing)?\s+(a|their|its)\s+(spot|place|ticket)\b'
+    r'|\b(lift|win)\s+(it\s+all|the\s+(trophy|cup|title|world\s+cup|euros?|tournament))\b',
+    re.IGNORECASE,
+)
 
 _PERIOD_SUFFIX: dict[str, str] = {
     "1h": "_h1", "2h": "_h2",
