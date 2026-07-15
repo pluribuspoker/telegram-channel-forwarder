@@ -26,6 +26,19 @@ ESPN_LEAGUES: dict[str, tuple[str, str]] = {
     "CFL":   ("football", "cfl"),
 }
 
+# Fallback ESPN leagues, searched only when the primary scoreboard has no events
+# (i.e. the offseason). NBA Summer League games live on separate league endpoints,
+# never overlapping the regular season by date, so merging them in is unambiguous.
+ESPN_FALLBACK_LEAGUES: dict[str, list[tuple[str, str]]] = {
+    "NBA": [
+        ("basketball", "nba-summer-las-vegas"),
+        ("basketball", "nba-summer-sacramento"),
+        ("basketball", "nba-summer-california"),
+        ("basketball", "nba-summer-utah"),
+        ("basketball", "nba-summer-orlando"),
+    ],
+}
+
 # Soccer: multiple ESPN leagues to search across
 SOCCER_LEAGUES: list[tuple[str, str]] = [
     ("soccer", "ger.1"),          # Bundesliga
@@ -443,10 +456,7 @@ async def _fetch_soccer_stats(http: httpx.AsyncClient, category: str, league: st
     return "Match Stats:\n" + "\n".join(lines)
 
 
-async def fetch_espn(sport: str, date: str) -> dict | None:
-    if sport not in ESPN_LEAGUES:
-        return None
-    category, league = ESPN_LEAGUES[sport]
+async def _fetch_espn_scoreboard(sport: str, category: str, league: str, date: str) -> dict | None:
     url = f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/scoreboard"
     params = {"dates": date.replace("-", ""), "limit": "200"}
     params.update(SPORT_EXTRA_PARAMS.get(sport, {}))
@@ -456,8 +466,26 @@ async def fetch_espn(sport: str, date: str) -> dict | None:
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            print(f"    [ESPN error] {sport} {date}: {e}")
+            print(f"    [ESPN error] {sport} {category}/{league} {date}: {e}")
             return None
+
+
+async def fetch_espn(sport: str, date: str) -> dict | None:
+    if sport not in ESPN_LEAGUES:
+        return None
+    category, league = ESPN_LEAGUES[sport]
+    data = await _fetch_espn_scoreboard(sport, category, league, date)
+    # Offseason fallback: when the primary scoreboard is empty, merge in events from
+    # fallback leagues (e.g. NBA Summer League) so downstream matching is transparent.
+    if (not data or not data.get("events")) and sport in ESPN_FALLBACK_LEAGUES:
+        for cat, lg in ESPN_FALLBACK_LEAGUES[sport]:
+            fb = await _fetch_espn_scoreboard(sport, cat, lg, date)
+            if fb and fb.get("events"):
+                if data is None:
+                    data = fb
+                else:
+                    data.setdefault("events", []).extend(fb["events"])
+    return data
 
 
 async def fetch_tennis_match_context(player: str, date: str, CONTEXT_SKIP: str) -> str:
@@ -543,16 +571,20 @@ async def fetch_tennis_match_context(player: str, date: str, CONTEXT_SKIP: str) 
 async def fetch_espn_summary(sport: str, event_id: str) -> dict | None:
     if sport not in ESPN_LEAGUES:
         return None
-    category, league = ESPN_LEAGUES[sport]
-    url = f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/summary"
+    # Summary is league-sensitive: a Summer League event id 404s on the /nba endpoint,
+    # so try the primary league first, then any fallback leagues (see ESPN_FALLBACK_LEAGUES).
+    leagues = [ESPN_LEAGUES[sport]] + ESPN_FALLBACK_LEAGUES.get(sport, [])
     async with httpx.AsyncClient(timeout=15) as http:
-        try:
-            r = await http.get(url, params={"event": event_id})
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            print(f"    [ESPN summary error] {sport}/{event_id}: {e}")
-            return None
+        for category, league in leagues:
+            url = f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/summary"
+            try:
+                r = await http.get(url, params={"event": event_id})
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:
+                print(f"    [ESPN summary error] {sport} {category}/{league}/{event_id}: {e}")
+                continue
+    return None
 
 
 def scoreboard_text(data: dict, sport: str) -> str:
