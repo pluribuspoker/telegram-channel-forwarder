@@ -478,9 +478,17 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                    or _parlay_structure_uncertain(parsed, text)):
                         _img = await _download_image_b64(client, msg)
                         if _img:
-                            _img_parsed = await claude_parse(
-                                _ptext, date_str, image_b64=_img[0], image_media_type=_img[1],
-                            )
+                            # The image parse occasionally returns None/no picks
+                            # (model emits non-JSON); retry once so a transient
+                            # miss doesn't silently fall back to the text parse
+                            # (which would e.g. re-collapse a card into a parlay).
+                            _img_parsed = None
+                            for _attempt in range(2):
+                                _img_parsed = await claude_parse(
+                                    _ptext, date_str, image_b64=_img[0], image_media_type=_img[1],
+                                )
+                                if _img_parsed and _img_parsed.get("picks"):
+                                    break
                             if _img_parsed and _img_parsed.get("picks"):
                                 print(f"  [image] re-parsed slang pick from bet slip ({msg.id})")
                                 parsed = _img_parsed
