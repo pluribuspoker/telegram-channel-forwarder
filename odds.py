@@ -157,21 +157,18 @@ _PERIOD_RE = re.compile(
     re.IGNORECASE,
 )
 
-# "To advance" / "to qualify" — knockout-stage soccer bets, including trophy/
-# advancement slang ("it's coming home", "to the final", "lift the trophy",
-# "win it all"). The Odds API h2h market returns the 90-min ML for these games,
-# not advancement odds, so we route to the to_qualify market to avoid displaying
-# the wrong price (e.g. England +172 on the 90-min line vs -126 to advance).
-# These phrases never appear on a pure 90-min moneyline, so they are safe to
-# treat as advancement bets.
-_ADVANCE_RE = re.compile(
-    r'\bto\s+(advance|qualify)\b'
-    r'|\b(it\'?s\s+)?coming\s+home\b'
-    r'|\b(reach(es|ing)?|into|to)\s+the\s+final\b'
-    r'|\bbook(s|ing)?\s+(a|their|its)\s+(spot|place|ticket)\b'
-    r'|\b(lift|win)\s+(it\s+all|the\s+(trophy|cup|title|world\s+cup|euros?|tournament))\b',
-    re.IGNORECASE,
-)
+# "To advance" / "to qualify" — knockout-stage soccer bets. The Odds API h2h
+# market is the 90-min line (draw is a separate outcome), not the advancement
+# price, so a moneyline described as an advancement bet must route to the
+# to_qualify market to avoid the wrong price (e.g. England +172 on the 90-min
+# line vs -126 to advance). We match the canonical "advance"/"qualify" stems the
+# parser emits — from the message text, or from the bet slip image when the text
+# is slang like "it's coming home" (claude_parse's image path resolves the slang
+# to explicit wording, e.g. "England to advance (Game Winner)"). Matching the
+# vocabulary rather than a hand-maintained slang list keeps this robust. Only
+# consulted for moneyline bet_type, so "advance"/"qualify" in a description is
+# reliably an advancement bet.
+_ADVANCE_RE = re.compile(r'\b(advanc\w*|qualif\w*)\b|\bto\s+the\s+final\b', re.IGNORECASE)
 
 _PERIOD_SUFFIX: dict[str, str] = {
     "1h": "_h1", "2h": "_h2",

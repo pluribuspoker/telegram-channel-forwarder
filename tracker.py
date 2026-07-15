@@ -129,6 +129,48 @@ def _to_bot_html(text: str, entities) -> str:
     return ht.replace("<spoiler>", "<tg-spoiler>").replace("</spoiler>", "</tg-spoiler>")
 
 
+# Explicit betting signals. If the message text carries any of these, the pick
+# came from the text and we don't need the attached image. If NONE are present
+# but a pick was still extracted (from slang like "it's coming home"), the bet
+# slip photo is the ground truth for the exact market — see _is_text_thin.
+_BET_SIGNAL_RE = re.compile(
+    r'\b(m(?:oney)?l(?:ine)?|spread|total|over|under|o/?u|parlay|teaser|prop|'
+    r'advance|qualif|to\s+win|double\s+chance|dnb|draw\s+no\s+bet|btts|'
+    r'clean\s+sheet|puck\s*line|run\s*line|first\s+half|1h|2h|1q|2q|3q|4q)\b'
+    r'|[+-]\d{2,}'          # american odds / signed lines (+150, -3)
+    r'|\b[ou]\d'            # abbreviated totals (u7, o8.5)
+    r'|\b\d+\.5\b',        # half-point lines
+    re.IGNORECASE,
+)
+# Our own appended odds tag, e.g. " [+172]" / " [-120 live]" — stripped before
+# the thin check so a re-run doesn't count our tag as a betting signal.
+_OWN_ODDS_TAG_RE = re.compile(r'\[[+-]\d{3,4}[^\]]*\]')
+
+
+def _is_text_thin(text: str) -> bool:
+    """True if the message has no explicit betting signal (pure slang). Any pick
+    was inferred from context, so an attached bet slip image is the reliable
+    ground truth for the exact market."""
+    return not _BET_SIGNAL_RE.search(_OWN_ODDS_TAG_RE.sub("", text))
+
+
+async def _download_image_b64(client, msg) -> tuple[str, str] | None:
+    """Download a photo message's image as (base64, media_type), or None if the
+    message has no photo / download fails."""
+    from telethon.tl.types import MessageMediaPhoto
+    if not isinstance(getattr(msg, "media", None), MessageMediaPhoto):
+        return None
+    try:
+        data = await client.download_media(msg, file=bytes)
+    except Exception as e:
+        print(f"  [image] download failed {msg.id}: {e}")
+        return None
+    if not data:
+        return None
+    import base64
+    return base64.b64encode(data).decode(), "image/jpeg"
+
+
 async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = None) -> None:
     import datetime as dt
     from telethon import TelegramClient
@@ -399,9 +441,25 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     n_picks = len(cached_parse.get("picks", []))
                     if n_picks > 0 and len(already_broadcast_indices) >= n_picks:
                         continue
-                parsed = cached_parse or await claude_parse(
-                    _annotate_blockquotes(text, msg.entities), date_str,
-                )
+                if cached_parse:
+                    parsed = cached_parse
+                else:
+                    _ptext = _annotate_blockquotes(text, msg.entities)
+                    parsed = await claude_parse(_ptext, date_str)
+                    # Slang-only text ("it's coming home") + a bet slip photo:
+                    # re-parse with the image as ground truth so the exact market
+                    # (e.g. "England to advance") drives odds/grading instead of a
+                    # brittle text guess. Only fires when the text carries no
+                    # explicit betting signal, so clean text parses pay no image cost.
+                    if parsed and _is_text_thin(text):
+                        _img = await _download_image_b64(client, msg)
+                        if _img:
+                            _img_parsed = await claude_parse(
+                                _ptext, date_str, image_b64=_img[0], image_media_type=_img[1],
+                            )
+                            if _img_parsed and _img_parsed.get("picks"):
+                                print(f"  [image] re-parsed slang pick from bet slip ({msg.id})")
+                                parsed = _img_parsed
                 if not parsed:
                     failed += 1
                     print(f"\n{msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  {'parse failed':<{_DESC_W}} {'':<{_ODDS_W}} {int(date_str[5:7])}/{int(date_str[8:10])} ⚠")

@@ -216,15 +216,42 @@ def _salvage_truncated(raw: str) -> dict | None:
     return None
 
 
-async def claude_parse(text: str, date: str | None = None) -> dict | None:
+async def claude_parse(
+    text: str,
+    date: str | None = None,
+    image_b64: str | None = None,
+    image_media_type: str = "image/jpeg",
+) -> dict | None:
     from datetime import date as _d
     d = _d.fromisoformat(date) if date else _d.today()
     day_name = d.strftime("%A")
     date_ctx = f"Context: Today is {day_name}, {d.strftime('%B')} {d.day}.\n" if day_name else ""
+    prompt = _PARSE_PROMPT.format(text=text, date_context=date_ctx)
+    if image_b64:
+        # The text is slang-only; the attached bet slip is the ground truth for
+        # the exact market. Tell Claude to describe the market using the slip's
+        # own wording (e.g. a slip reading "England advances / Game Winner" is a
+        # to-advance bet — the description must contain the word "advance" so the
+        # odds fetcher routes it to the to_qualify market, not the 90-min h2h).
+        prompt = (
+            "This message has an attached bet slip image. The message text may be "
+            "vague slang that omits the exact bet — treat the IMAGE as the ground "
+            "truth for the market, teams, and bet type. Describe the market using "
+            "the slip's own wording; if the slip says a team 'advances' or is the "
+            "'Game Winner' of a knockout tie, the description MUST use the word "
+            "'advance'. Do NOT read odds/prices off the slip.\n\n" + prompt
+        )
+        content = [
+            {"type": "image", "source": {"type": "base64",
+                                         "media_type": image_media_type, "data": image_b64}},
+            {"type": "text", "text": prompt},
+        ]
+    else:
+        content = prompt
     resp = await _claude_create_with_retry(
         model="claude-sonnet-4-6",
         max_tokens=1500,
-        messages=[{"role": "user", "content": _PARSE_PROMPT.format(text=text, date_context=date_ctx)}],
+        messages=[{"role": "user", "content": content}],
     )
     raw = re.sub(r"^```(?:json)?\n?|```$", "", resp.content[0].text.strip(), flags=re.MULTILINE).strip()
     try:
