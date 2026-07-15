@@ -234,12 +234,19 @@ async def claude_parse(
         # to-advance bet — the description must contain the word "advance" so the
         # odds fetcher routes it to the to_qualify market, not the 90-min h2h).
         prompt = (
-            "This message has an attached bet slip image. The message text may be "
-            "vague slang that omits the exact bet — treat the IMAGE as the ground "
-            "truth for the market, teams, and bet type. Describe the market using "
-            "the slip's own wording; if the slip says a team 'advances' or is the "
+            "This message has an attached bet slip image. Treat the IMAGE as the "
+            "ground truth for the market, teams, bet type, AND whether the bets are "
+            "separate straight bets or a single parlay. The message text may be "
+            "vague slang that omits the exact bet — describe each market using the "
+            "slip's own wording; if the slip says a team 'advances' or is the "
             "'Game Winner' of a knockout tie, the description MUST use the word "
-            "'advance'. Do NOT read odds/prices off the slip.\n\n" + prompt
+            "'advance'. "
+            "PARLAY vs SEPARATE: if the image shows multiple SEPARATE slips — each "
+            "with its own stake/wager and payout (often labeled '1-Pick' / 'Single' "
+            "/ 'Straight') — emit each as its own pick with is_parlay_leg=false. "
+            "Only set is_parlay_leg=true when the slip is ONE combined ticket (a "
+            "single stake and one combined payout across all legs). "
+            "Do NOT read odds/prices off the slip.\n\n" + prompt
         )
         content = [
             {"type": "image", "source": {"type": "base64",

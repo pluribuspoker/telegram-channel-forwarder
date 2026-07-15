@@ -154,6 +154,27 @@ def _is_text_thin(text: str) -> bool:
     return not _BET_SIGNAL_RE.search(_OWN_ODDS_TAG_RE.sub("", text))
 
 
+# Explicit "this is a parlay" wording: the word parlay/teaser/SGP, or bets
+# combined with a spaced "+"/"&" (e.g. "Egypt Double Chance + Under 2.5"). If
+# present, the text states the structure and we trust it. If ABSENT but the
+# parse still produced multiple parlay legs, the parlay was *inferred* from a
+# vertically-listed "card" (e.g. "England to advance / BTTS / Over 2.5") and the
+# attached slip is the ground truth for whether those are separate straight bets
+# or one combined ticket — see _parlay_structure_uncertain.
+_PARLAY_EXPLICIT_RE = re.compile(
+    r'\b(parlay|teaser|sgp|round\s*robin)\b|\s[+&]\s', re.IGNORECASE)
+
+
+def _parlay_structure_uncertain(parsed: dict, text: str) -> bool:
+    """True if the parse inferred a multi-leg parlay but the text never says so —
+    a vertically-listed 'card' that may actually be separate straight bets. The
+    slip image resolves it (single combined ticket vs. separate '1-Pick' slips)."""
+    picks = parsed.get("picks", []) if parsed else []
+    if len(picks) < 2 or not any(p.get("is_parlay_leg") for p in picks):
+        return False
+    return not _PARLAY_EXPLICIT_RE.search(text)
+
+
 async def _download_image_b64(client, msg) -> tuple[str, str] | None:
     """Download a photo message's image as (base64, media_type), or None if the
     message has no photo / download fails."""
@@ -446,12 +467,15 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 else:
                     _ptext = _annotate_blockquotes(text, msg.entities)
                     parsed = await claude_parse(_ptext, date_str)
-                    # Slang-only text ("it's coming home") + a bet slip photo:
-                    # re-parse with the image as ground truth so the exact market
-                    # (e.g. "England to advance") drives odds/grading instead of a
-                    # brittle text guess. Only fires when the text carries no
-                    # explicit betting signal, so clean text parses pay no image cost.
-                    if parsed and _is_text_thin(text):
+                    # Consult the bet slip photo as ground truth when the text parse
+                    # is unreliable: (a) slang-only text ("it's coming home") where
+                    # the exact market was guessed, or (b) a multi-leg parlay that
+                    # was *inferred* from a vertically-listed card the text never
+                    # calls a parlay — the slip says whether they're separate
+                    # straight bets or one combined ticket. Clean, explicit text
+                    # parses skip the image so they pay no extra cost.
+                    if parsed and (_is_text_thin(text)
+                                   or _parlay_structure_uncertain(parsed, text)):
                         _img = await _download_image_b64(client, msg)
                         if _img:
                             _img_parsed = await claude_parse(
