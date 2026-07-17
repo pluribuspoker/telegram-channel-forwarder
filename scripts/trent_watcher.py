@@ -330,6 +330,36 @@ async def send_pick(tweet: dict, dest: int | str, dry_run: bool = False):
         await client.disconnect()
 
 
+async def _trigger_tracker_soon(channel):
+    """Fire a quick tracker run to pull odds into freshly-sent Trent picks
+    near-instantly, instead of waiting up to 5 min for the next timer cycle.
+
+    Mirrors listener._trigger_tracker_soon, but scoped to the Trent channel so
+    it stays fast (a few seconds) instead of grading every channel. This runs
+    inside a oneshot systemd service, so we must AWAIT the subprocess — a
+    fire-and-forget child would be killed when the service's main process exits
+    (KillMode=control-group)."""
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for attempt in range(2):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "tracker.py", "--live", "--days", "0.1",
+                "--channel", str(channel),
+                cwd=repo_root,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+            if proc.returncode != 0 and attempt == 0:
+                print(f"  [trigger] tracker quick-run exited {proc.returncode}, retrying in 5s")
+                await asyncio.sleep(5)
+                continue
+        except Exception as e:
+            print(f"  [trigger] tracker quick-run failed: {e}")
+            return
+        return
+
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 async def main():
@@ -383,6 +413,13 @@ async def main():
 
     con.close()
     print(f"Done: {picks_sent} picks sent, {len(new_tweets)} tweets processed")
+
+    # Pull odds into the freshly-sent picks now instead of waiting up to 5 min
+    # for the next tracker timer cycle. Only worth it if we actually sent picks.
+    if picks_sent and not args.dry_run:
+        print("  Triggering tracker quick-run for odds...")
+        await _trigger_tracker_soon(args.channel)
+
     cost = usage_cost()
     if cost > 0:
         print(f"[Claude cost] {fmt_cost(cost)}")
