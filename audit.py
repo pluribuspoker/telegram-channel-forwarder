@@ -389,8 +389,15 @@ class AuditLog:
         channel_bare = str(abs(channel_id))[3:]
         link = f"https://t.me/c/{channel_bare}/{message_id}"
 
+        # The capper label is the message's first line, which for analytics-source
+        # channels is often a paragraph of reasoning rather than a short handle.
+        # Cap it so the label stays handle-sized and never swallows the result line.
+        capper_label = " ".join(capper_name.split())
+        if len(capper_label) > 40:
+            capper_label = capper_label[:39].rstrip() + "…"
+
         # Capper name is the link; bold if present, plain link if not
-        capper_linked = f'<b><a href="{link}">{e(capper_name)}</a></b>' if capper_name else f'<a href="{link}">view</a>'
+        capper_linked = f'<b><a href="{link}">{e(capper_label)}</a></b>' if capper_label else f'<a href="{link}">view</a>'
 
         is_parlay = any(p.get("is_parlay_leg") for p, _, _o in resolved)
         picks = [(_format_pick(p), v, fmt_odds(o)) for p, v, o in resolved]
