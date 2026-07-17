@@ -556,15 +556,49 @@ def render_html(upcoming: list[dict], past: list[dict]) -> str:
     return html
 
 
-async def render_image(html: str) -> bytes:
+async def _render_once(html: str) -> bytes:
     from playwright.async_api import async_playwright
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page(viewport={"width": 600, "height": 100})
-        await page.set_content(html)
-        img_bytes = await page.locator("body").screenshot(type="png")
-        await browser.close()
-        return img_bytes
+        # Low-memory flags: the VPS has ~1GB RAM / no swap, so Chromium can
+        # stall mid-screenshot under memory pressure. These reduce its
+        # footprint and avoid /dev/shm contention.
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-background-networking",
+            ],
+        )
+        try:
+            page = await browser.new_page(viewport={"width": 600, "height": 100})
+            page.set_default_timeout(60_000)
+            await page.set_content(html, wait_until="load")
+            # Wait for web fonts (incl. emoji) so the screenshot doesn't block
+            # on font layout mid-capture.
+            try:
+                await page.evaluate("document.fonts.ready")
+            except Exception:
+                pass
+            img_bytes = await page.locator("body").screenshot(type="png", timeout=60_000)
+            return img_bytes
+        finally:
+            await browser.close()
+
+
+async def render_image(html: str, attempts: int = 3) -> bytes:
+    """Render with retries — an intermittent Chromium screenshot stall must not
+    kill the whole daily send. Each attempt uses a fresh browser process."""
+    last_err = None
+    for i in range(1, attempts + 1):
+        try:
+            return await _render_once(html)
+        except Exception as e:
+            last_err = e
+            print(f"  render_image attempt {i}/{attempts} failed: {e}")
+    raise last_err
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
