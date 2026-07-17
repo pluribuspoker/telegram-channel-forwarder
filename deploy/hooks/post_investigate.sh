@@ -67,5 +67,5 @@ case "$LAST" in ''|*[!0-9]*) LAST=0;; esac
 # Re-fire only when a NEW investigation has appeared since the last reminder.
 if [ "$COUNT" -gt "$LAST" ]; then
   echo "$COUNT" > "$FLAG"
-  printf '{"decision":"block","reason":"POST-INVESTIGATION CHECKLIST: You just completed an /investigate task. You MUST now: (1) Review .claude/commands/investigate.md Lessons section and add any lessons from mistakes made during this investigation. (2) Save relevant feedback to memory. Do NOT skip this step — do it NOW before the conversation ends."}'
+  printf '{"decision":"block","reason":"POST-INVESTIGATION REVIEW: You just completed an /investigate task. (1) Review whether you made any mistakes that represent GENERALIZABLE lessons — operational traps, debugging principles, or constraints that would apply to unrelated future investigations. If yes, add to .claude/commands/investigate.md Lessons. If the fix was code-only or too incident-specific, skip — no lesson needed. Do NOT add a lesson just to have one. (2) Save relevant feedback to memory if appropriate."}'
 fi
