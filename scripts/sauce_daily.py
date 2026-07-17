@@ -8,7 +8,7 @@ Flow:
   4. Upsert into sauce_picks DB table
   5. Grade PENDING picks where games are complete
   6. Write results to Google Sheet
-  7. Render screenshot (upcoming + past with result emoji)
+  7. Render image via Pillow (upcoming + past with vector result marks)
   8. Send image to Telegram channel
 
 Usage:
@@ -43,7 +43,6 @@ from ai import (
     build_context, claude, claude_grade, fmt_cost, usage_cost,
     CONTEXT_PENDING, CONTEXT_SKIP, CONTEXT_ESPN_ERROR,
 )
-from common import VERDICT_EMOJI
 from scores import ESPN_LEAGUES, fetch_espn, find_event_ids, validate_sport
 from sheets import _get_client as get_sheets_client, _map_bet_type
 
@@ -440,20 +439,31 @@ def _parse_unit(unit_str: str) -> float:
         return 0.0
 
 
+def _sauce_iso(d: str) -> str:
+    """Normalize a pick date ('7/17' or 'YYYY-MM-DD') to ISO for sorting."""
+    for fmt in ("%m/%d", "%m/%d/%Y", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(d, fmt)
+            if fmt == "%m/%d":
+                dt = dt.replace(year=_date.today().year)
+            return dt.strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    return d
+
+
 def _group_and_sort(pick_list: list[dict]) -> list[tuple[str, list[dict]]]:
     by_sport: dict[str, list[dict]] = {}
     for p in pick_list:
-        by_sport.setdefault(p.get("sport", "Other"), []).append(p)
+        by_sport.setdefault(p.get("sport") or "Other", []).append(p)
+    # within each sport: date ascending, then units descending
     for sport in by_sport:
-        by_sport[sport].sort(key=lambda p: _parse_unit(p.get("unit", "0")), reverse=True)
-    sport_order = ["NBA", "MLB", "NHL", "NFL", "NCAAB", "UFC", "Tennis", "Boxing", "KBO", "Other"]
-    result = []
-    for s in sport_order:
-        if s in by_sport:
-            result.append((s, by_sport[s]))
-    for s in by_sport:
-        if s not in sport_order:
-            result.append((s, by_sport[s]))
+        by_sport[sport].sort(
+            key=lambda p: (_sauce_iso(p.get("date", "")), -_parse_unit(p.get("unit", "0")))
+        )
+    sport_order = ["NBA", "MLB", "NHL", "NFL", "NCAAF", "NCAAB", "UFC", "Tennis", "Boxing", "KBO", "Other"]
+    result = [(s, by_sport[s]) for s in sport_order if s in by_sport]
+    result += [(s, ps) for s, ps in by_sport.items() if s not in sport_order]
     return result
 
 
@@ -467,138 +477,111 @@ def _format_date(p: dict) -> str:
     return d
 
 
-def render_html(upcoming: list[dict], past: list[dict]) -> str:
-    """Render HTML table with 6 aligned columns throughout."""
+# PIL/Pillow renderer — replaces the former Playwright/Chromium screenshot.
+# The VPS has ~1GB RAM and no swap, where Chromium's multi-process render tree
+# stalled or OOM'd intermittently. Pillow renders in-process with a tiny, fixed
+# footprint and no browser subprocess to hang.
+from PIL import Image, ImageDraw, ImageFont
 
-    def make_rows(pick_list, include_result=False):
-        groups = _group_and_sort(pick_list)
-        rows = ""
-        for sport, sport_picks in groups:
-            rows += f'<tr class="sport"><td colspan="6">{sport}</td></tr>'
-            for p in sport_picks:
-                emoji = ""
-                if include_result:
-                    emoji = VERDICT_EMOJI.get(p.get("verdict", ""), "")
-                rows += f"""<tr>
-                    <td>{_format_date(p)}</td>
-                    <td>Sauce</td>
-                    <td class="bet">{p['bet']}</td>
-                    <td>{p.get('odds', '')}</td>
-                    <td>{p.get('unit', '')}</td>
-                    <td class="result">{emoji}</td>
-                </tr>"""
-        return rows
+_FONT_DIR = "/usr/share/fonts/truetype/liberation/"
+_S = 2  # supersample factor for crisp text; downscaled at the end
 
-    html = """<!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: Arial, Helvetica, sans-serif;
-    background: white;
-    display: inline-block;
-  }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-  }
-  th, td {
-    border: 1px solid #ccc;
-    padding: 4px 10px;
-    font-size: 13px;
-    font-weight: 700;
-    text-align: center;
-    white-space: nowrap;
-  }
-  th {
-    background: #f3f3f3;
-    font-size: 11px;
-    font-weight: 700;
-    color: #333;
-    padding: 3px 10px;
-  }
-  tr.section td {
-    font-weight: 700;
-    font-size: 13px;
-    background: white;
-  }
-  tr.sport td {
-    font-weight: 700;
-    font-size: 11px;
-    color: #7c4dff;
-    background: #f5f0ff;
-    letter-spacing: 1px;
-    text-align: left;
-    padding: 3px 10px;
-  }
-  td.bet {
-    min-width: 180px;
-  }
-  td.result {
-    font-size: 16px;
-    min-width: 30px;
-  }
-</style>
-</head><body>
-<table>
-  <tr><th>DATE</th><th>NAME</th><th>BET</th><th>ODDS</th><th>UNIT</th><th></th></tr>
-"""
+_PURPLE = (124, 77, 255); _PURPLE_BG = (245, 240, 255)
+_INK = (30, 30, 35); _GREY = (120, 120, 128)
+_WHITE = (255, 255, 255); _BAND = (247, 247, 250)
+_GREEN = (22, 163, 74); _RED = (220, 38, 38); _AMBER = (217, 119, 6)
 
-    if upcoming:
-        html += '<tr class="section"><td></td><td></td><td>Upcoming</td><td></td><td></td><td></td></tr>'
-        html += make_rows(upcoming)
-
-    if past:
-        html += '<tr class="section"><td></td><td></td><td>Past</td><td></td><td></td><td></td></tr>'
-        html += make_rows(past, include_result=True)
-
-    html += "</table></body></html>"
-    return html
+_FONT_CACHE: dict[tuple[str, int], "ImageFont.FreeTypeFont"] = {}
 
 
-async def _render_once(html: str) -> bytes:
-    from playwright.async_api import async_playwright
-    async with async_playwright() as p:
-        # Low-memory flags: the VPS has ~1GB RAM / no swap, so Chromium can
-        # stall mid-screenshot under memory pressure. These reduce its
-        # footprint and avoid /dev/shm contention.
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-extensions",
-                "--disable-background-networking",
-            ],
-        )
-        try:
-            page = await browser.new_page(viewport={"width": 600, "height": 100})
-            page.set_default_timeout(60_000)
-            await page.set_content(html, wait_until="load")
-            # Wait for web fonts (incl. emoji) so the screenshot doesn't block
-            # on font layout mid-capture.
-            try:
-                await page.evaluate("document.fonts.ready")
-            except Exception:
-                pass
-            img_bytes = await page.locator("body").screenshot(type="png", timeout=60_000)
-            return img_bytes
-        finally:
-            await browser.close()
+def _font(name: str, size: int):
+    key = (name, size)
+    if key not in _FONT_CACHE:
+        _FONT_CACHE[key] = ImageFont.truetype(_FONT_DIR + name, size * _S)
+    return _FONT_CACHE[key]
 
 
-async def render_image(html: str, attempts: int = 3) -> bytes:
-    """Render with retries — an intermittent Chromium screenshot stall must not
-    kill the whole daily send. Each attempt uses a fresh browser process."""
-    last_err = None
-    for i in range(1, attempts + 1):
-        try:
-            return await _render_once(html)
-        except Exception as e:
-            last_err = e
-            print(f"  render_image attempt {i}/{attempts} failed: {e}")
-    raise last_err
+def _draw_mark(dr, x, y, verdict, sz):
+    """Crisp vector result mark for a graded pick (check/cross/circle/?)."""
+    if verdict == "WIN":
+        dr.line([(x, y + sz * 0.55), (x + sz * 0.38, y + sz * 0.9), (x + sz, y)], fill=_GREEN, width=_S * 2)
+    elif verdict == "LOSS":
+        dr.line([(x, y), (x + sz, y + sz)], fill=_RED, width=_S * 2)
+        dr.line([(x + sz, y), (x, y + sz)], fill=_RED, width=_S * 2)
+    elif verdict == "PUSH":
+        dr.ellipse([x, y, x + sz, y + sz], outline=_GREY, width=_S * 2)
+    elif verdict == "UNKNOWN":
+        dr.text((x, y - sz * 0.15), "?", font=_font("LiberationSans-Bold.ttf", 13), fill=_AMBER)
+
+
+def render_image_pil(upcoming: list[dict], past: list[dict], header_date: str) -> bytes:
+    """Render the open-bets table as a PNG via Pillow. Returns raw PNG bytes."""
+    f_title = _font("LiberationSans-Bold.ttf", 15)
+    f_hdr = _font("LiberationSans-Bold.ttf", 10)
+    f_sport = _font("LiberationSans-Bold.ttf", 10)
+    f_bet = _font("LiberationSans-Bold.ttf", 12)
+    f_cell = _font("LiberationSans-Regular.ttf", 12)
+
+    PAD = 10 * _S; row_h = 19 * _S; sec_h = 17 * _S; sport_h = 16 * _S; title_h = 28 * _S
+    col_date = PAD
+    col_bet = col_date + 40 * _S
+
+    tmp = Image.new("RGB", (10, 10)); td = ImageDraw.Draw(tmp)
+    maxbet = 120 * _S
+    for p in upcoming + past:
+        maxbet = max(maxbet, td.textlength(p["bet"], font=f_bet))
+    col_odds = col_bet + maxbet + 18 * _S
+    col_unit = col_odds + 46 * _S
+    col_mark = col_unit + 46 * _S
+    W = col_mark + 30 * _S + PAD
+
+    H = title_h + PAD
+    for _label, plist in (("UPCOMING", upcoming), ("RECENT RESULTS", past)):
+        if not plist:
+            continue
+        H += sec_h
+        for _sport, ps in _group_and_sort(plist):
+            H += sport_h + row_h * len(ps)
+    H += PAD
+
+    img = Image.new("RGB", (int(W), int(H)), _WHITE)
+    dr = ImageDraw.Draw(img)
+    y = PAD
+    dr.text((PAD, y), "SAUCE", font=f_title, fill=_PURPLE)
+    wsauce = dr.textlength("SAUCE", font=f_title)
+    dr.text((PAD + wsauce + 8 * _S, y + 2 * _S), "Open Bets", font=f_hdr, fill=_INK)
+    dr.text((W - PAD - td.textlength(header_date, font=f_hdr), y + 2 * _S), header_date, font=f_hdr, fill=_GREY)
+    y += title_h
+
+    def section(label, plist, result=False):
+        nonlocal y
+        if not plist:
+            return
+        dr.rectangle([PAD, y, W - PAD, y + sec_h - 4 * _S], fill=_PURPLE_BG)
+        dr.text((PAD + 8 * _S, y + 4 * _S), label, font=f_hdr, fill=_PURPLE)
+        y += sec_h
+        for sport, ps in _group_and_sort(plist):
+            dr.text((PAD + 2 * _S, y + 4 * _S), sport.upper(), font=f_sport, fill=_PURPLE)
+            y += sport_h
+            for i, p in enumerate(ps):
+                if i % 2 == 1:
+                    dr.rectangle([PAD, y, W - PAD, y + row_h], fill=_BAND)
+                cy = y + (row_h - 13 * _S) // 2
+                dr.text((col_date, cy), _format_date(p), font=f_cell, fill=_GREY)
+                dr.text((col_bet, cy), p["bet"], font=f_bet, fill=_INK)
+                dr.text((col_odds, cy), str(p.get("odds", "")), font=f_cell, fill=_INK)
+                dr.text((col_unit, cy), str(p.get("unit", "")), font=f_cell, fill=_GREY)
+                if result:
+                    _draw_mark(dr, col_mark, y + (row_h - 14 * _S) // 2, p.get("verdict", ""), 14 * _S)
+                y += row_h
+
+    section("UPCOMING", upcoming)
+    section("RECENT RESULTS", past, result=True)
+
+    img = img.resize((int(W // _S), int(H // _S)), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -680,8 +663,8 @@ async def main():
     print(f"\nScreenshot: {len(upcoming_picks)} upcoming, {len(past_picks)} past")
 
     # ── 7. Render ──
-    html = render_html(upcoming_picks, past_picks)
-    img = await render_image(html)
+    header_date = f"{_date.today().month}/{_date.today().day}"
+    img = render_image_pil(upcoming_picks, past_picks, header_date)
     print(f"Image rendered ({len(img)} bytes)")
 
     preview_path = ROOT / "data" / "kirms_browser_state" / "preview.png"
