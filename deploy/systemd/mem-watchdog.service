@@ -1,0 +1,11 @@
+[Unit]
+Description=VPS memory watchdog (alerts operator via Telegram on OOM / swap pressure)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/deploy/mem_watchdog.py
