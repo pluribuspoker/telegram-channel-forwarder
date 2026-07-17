@@ -12,6 +12,7 @@ Commands (only responds to ALLOWED_USER_ID):
   /logs     — show last 20 lines of claude-channels journal
   /kill     — force-kill all claude/bun processes and restart
   /ping     — responds "pong" (liveness check)
+  /mem      — live RAM + swap usage + top consumers (alias /ram)
   /tmux     — capture last 50 lines of Claude's tmux pane (see what it's doing)
 
 Requires: pip install python-telegram-bot (already in venv)
@@ -56,6 +57,45 @@ def run(cmd: str, timeout: int = 30) -> str:
         return "(command timed out)"
 
 
+def mem_summary() -> str:
+    """Live RAM + swap snapshot with the top consumers and a health flag."""
+    info = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        p = line.split()
+        if len(p) >= 2:
+            info[p[0].rstrip(":")] = int(p[1])  # kB
+    tot = info.get("MemTotal", 0) // 1024
+    avail = info.get("MemAvailable", 0) // 1024
+    used = tot - avail
+    stot = info.get("SwapTotal", 0) // 1024
+    sused = (info.get("SwapTotal", 0) - info.get("SwapFree", 0)) // 1024
+
+    # top RSS consumers (real command, truncated)
+    top_lines = []
+    raw = run("ps -eo rss,args --sort=-rss --no-headers | head -6")
+    for l in raw.splitlines():
+        parts = l.split(None, 1)
+        if len(parts) == 2:
+            rss_mb = int(parts[0]) // 1024
+            cmd = parts[1][:42]
+            top_lines.append(f"  {rss_mb:>4}MB  {cmd}")
+
+    if sused > 1024:
+        flag = "🟡 swap under pressure"
+    elif avail < 80:
+        flag = "🟡 low free RAM"
+    else:
+        flag = "🟢 healthy"
+
+    swap_note = f"{sused}MB used / {stot}MB" if stot else "none configured"
+    return (
+        f"🧠 Memory — {flag}\n"
+        f"RAM:  {used}MB used / {tot}MB  ({avail}MB available)\n"
+        f"Swap: {swap_note}\n"
+        f"Top:\n" + "\n".join(top_lines)
+    )
+
+
 async def handle_message(update, context):
     """Handle incoming messages."""
     msg = update.message
@@ -66,6 +106,9 @@ async def handle_message(update, context):
 
     if text == "/ping":
         await msg.reply_text("pong")
+
+    elif text in ("/mem", "/ram"):
+        await msg.reply_text(f"```\n{mem_summary()}\n```", parse_mode="Markdown")
 
     elif text == "/status":
         status = run(f"systemctl status {SERVICE} 2>&1 | head -12")
@@ -119,6 +162,7 @@ async def handle_message(update, context):
         await msg.reply_text(
             "Emergency watchdog commands:\n"
             "/ping — liveness check\n"
+            "/mem — live RAM + swap usage (alias /ram)\n"
             "/status — service status\n"
             "/restart — restart claude-channels\n"
             "/kill — force-kill and restart\n"
