@@ -15,6 +15,7 @@ import datetime
 import json
 import logging
 import os
+import hashlib
 import sqlite3
 import sys
 import urllib.request
@@ -70,6 +71,8 @@ async def connection_watchdog(client):
 
 _DB_PATH = os.path.join(os.path.dirname(__file__), "picks.db")
 _in_flight: set[tuple[int, int, int]] = set()  # {(channel_id, dest_channel, msg_id)} – prevents race between event handler & catch-up
+_content_in_flight: set[tuple[int, str]] = set()  # {(dest_channel, text_hash)} – prevents forwarding an identical repost (capper delete-and-repost / double-post)
+_CONTENT_DEDUP_WINDOW = 15 * 60  # seconds: suppress a byte-identical repost to the same dest within this window
 
 
 def _probe_db_load() -> dict:
@@ -170,8 +173,14 @@ def _forwarded_init() -> None:
             " msg_id INTEGER NOT NULL, ts REAL NOT NULL,"
             " PRIMARY KEY (channel_id, dest_channel, msg_id))"
         )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS listener_content_seen"
+            " (dest_channel INTEGER NOT NULL, text_hash TEXT NOT NULL, ts REAL NOT NULL,"
+            " PRIMARY KEY (dest_channel, text_hash))"
+        )
         cutoff = datetime.datetime.now(datetime.timezone.utc).timestamp() - 48 * 3600
         conn.execute("DELETE FROM listener_forwarded WHERE ts < ?", (cutoff,))
+        conn.execute("DELETE FROM listener_content_seen WHERE ts < ?", (cutoff,))
         conn.commit()
         conn.close()
     except Exception:
@@ -204,6 +213,49 @@ def _was_forwarded(channel_id: int, dest_channel: int, msg_id: int) -> bool:
         return row is not None
     except Exception:
         return False
+
+
+def _content_sig(group) -> str | None:
+    """Normalized-text signature for a message group, or None if there is no text.
+
+    Used to suppress an identical repost (capper deletes a pick and re-posts it, or
+    double-taps send). Whitespace-collapsed + lowercased so trivial edits still match.
+    Returns None for media-only posts (no text) so distinct images are never deduped.
+    """
+    text = " ".join((m.text or "").strip() for m in group).strip()
+    if not text:
+        return None
+    norm = " ".join(text.split()).lower()
+    return hashlib.sha1(norm.encode("utf-8")).hexdigest()
+
+
+def _content_recent(dest_channel: int, text_hash: str) -> bool:
+    """True if identical content was forwarded to this dest within the dedup window."""
+    try:
+        conn = sqlite3.connect(_DB_PATH)
+        cutoff = datetime.datetime.now(datetime.timezone.utc).timestamp() - _CONTENT_DEDUP_WINDOW
+        row = conn.execute(
+            "SELECT 1 FROM listener_content_seen WHERE dest_channel = ? AND text_hash = ? AND ts > ?",
+            (dest_channel, text_hash, cutoff),
+        ).fetchone()
+        conn.close()
+        return row is not None
+    except Exception:
+        return False
+
+
+def _content_save(dest_channel: int, text_hash: str) -> None:
+    """Record forwarded content so an identical repost within the window is suppressed."""
+    try:
+        conn = sqlite3.connect(_DB_PATH)
+        conn.execute(
+            "INSERT OR REPLACE INTO listener_content_seen (dest_channel, text_hash, ts) VALUES (?,?,?)",
+            (dest_channel, text_hash, datetime.datetime.now(datetime.timezone.utc).timestamp()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 _trigger_lock = asyncio.Lock()
@@ -247,8 +299,18 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
     # Check persistent DB — catches late event-handler fires after catch-up already forwarded
     if any(_was_forwarded(ch_id, dest_ch, m.id) for m in group):
         return False
+    # Content dedup — a capper deleting a pick and re-posting it (or double-tapping send)
+    # produces a NEW message id, so the id-based guards above don't catch it. Suppress a
+    # byte-identical repost to the same dest within the window. Skipped in test mode.
+    sig = None if use_test else _content_sig(group)
+    content_key = (dest_ch, sig) if sig else None
+    if content_key and (content_key in _content_in_flight or _content_recent(dest_ch, sig)):
+        print(f"  ⊘ duplicate content, skipping msg {group[0].id} → {dest_ch}")
+        return False
     for k in keys:
         _in_flight.add(k)
+    if content_key:
+        _content_in_flight.add(content_key)
 
     try:
         sent_by_id = mapping.get("_sent_by_user_id")
@@ -282,6 +344,8 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
                 raise
         for m in group:
             _forwarded_save(ch_id, dest_ch, m.id)
+        if content_key:
+            _content_save(dest_ch, sig)
         # Seed parse cache so the tracker knows this message was forwarded by us
         if sent and sent is not True:
             sent_ids = [s.id for s in sent] if isinstance(sent, list) else [sent.id]
@@ -299,6 +363,8 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
     finally:
         for k in keys:
             _in_flight.discard(k)
+        if content_key:
+            _content_in_flight.discard(content_key)
 
 
 async def channel_probe(client, channels, use_test):
