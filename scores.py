@@ -41,15 +41,36 @@ ESPN_FALLBACK_LEAGUES: dict[str, list[tuple[str, str]]] = {
 
 # Soccer: multiple ESPN leagues to search across
 SOCCER_LEAGUES: list[tuple[str, str]] = [
-    ("soccer", "ger.1"),          # Bundesliga
-    ("soccer", "eng.1"),          # EPL
-    ("soccer", "esp.1"),          # La Liga
-    ("soccer", "ita.1"),          # Serie A
-    ("soccer", "fra.1"),          # Ligue 1
-    ("soccer", "usa.1"),          # MLS
-    ("soccer", "uefa.champions"), # Champions League
-    ("soccer", "uefa.europa"),    # Europa League
-    ("soccer", "fifa.world"),     # FIFA World Cup
+    ("soccer", "ger.1"),           # Bundesliga
+    ("soccer", "eng.1"),           # EPL
+    ("soccer", "esp.1"),           # La Liga
+    ("soccer", "ita.1"),           # Serie A
+    ("soccer", "fra.1"),           # Ligue 1
+    ("soccer", "usa.1"),           # MLS
+    ("soccer", "uefa.champions"),  # Champions League
+    ("soccer", "uefa.europa"),     # Europa League
+    ("soccer", "uefa.champions_qual"),  # Champions League Qualifying
+    ("soccer", "uefa.europa_qual"),     # Europa League Qualifying
+    ("soccer", "uefa.conf"),       # Conference League
+    ("soccer", "fifa.world"),      # FIFA World Cup
+    # Domestic leagues cappers bet that aren't in the top 5 — ESPN covers
+    # scores for all of these. Missing them made picks grade as UNKNOWN.
+    ("soccer", "swe.1"),           # Swedish Allsvenskan
+    ("soccer", "nor.1"),           # Norwegian Eliteserien
+    ("soccer", "den.1"),           # Danish Superliga
+    ("soccer", "fin.1"),           # Finnish Veikkausliga
+    ("soccer", "ned.1"),           # Dutch Eredivisie
+    ("soccer", "por.1"),           # Portuguese Primeira Liga
+    ("soccer", "bel.1"),           # Belgian Pro League
+    ("soccer", "tur.1"),           # Turkish Super Lig
+    ("soccer", "sco.1"),           # Scottish Premiership
+    ("soccer", "aut.1"),           # Austrian Bundesliga
+    ("soccer", "sui.1"),           # Swiss Super League
+    ("soccer", "gre.1"),           # Greek Super League
+    ("soccer", "bra.1"),           # Brazilian Serie A
+    ("soccer", "arg.1"),           # Argentine Liga Profesional
+    ("soccer", "mex.1"),           # Mexican Liga MX
+    ("soccer", "jpn.1"),           # Japanese J.League
 ]
 
 # Extra query params per sport (e.g. groups=50 for all D1 NCAAB games)
