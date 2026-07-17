@@ -138,7 +138,7 @@ python tracker.py --live --channel -100xxxxxxxxxx        # re-grade + broadcast
 - **Source data:** Published Google Sheet embedded at kylekirms.com/open-bets (sheet ID `1yjaN85i-WRhRrBcozOG70vTX6cTNpJzFmuNJ8KgL-14`)
 - **DB table:** `sauce_picks` in `picks.db`
 - **Cron log:** `/tmp/sauce_daily_cron.log`
-- **Screenshot rendering:** Uses Playwright (headless Chromium). Requires `fonts-liberation` and `fonts-noto-color-emoji` on VPS for correct font/emoji rendering.
+- **Image rendering:** Uses **Pillow** (`render_image_pil` in `sauce_daily.py`), rendered in-process — no Chromium. Switched off Playwright (commit e252302) because the headless-Chromium render tree OOM'd on the ~1GB/no-swap VPS. Requires `fonts-liberation` on the VPS (`/usr/share/fonts/truetype/liberation/`); result marks are vector-drawn (check/cross/circle/?), not emoji.
 
 **Manual run on VPS:**
 ```bash
