@@ -132,7 +132,7 @@ python tracker.py --live --channel -100xxxxxxxxxx        # re-grade + broadcast
 
 ## Sauce daily (Kyle Kirms)
 
-`scripts/sauce_daily.py` scrapes the SAUCE tab, grades picks, renders a screenshot, and sends it to channel `-1003977774560`. Runs daily at **6 AM ET** via cron on the VPS (`run_sauce_daily.sh`).
+`scripts/sauce_daily.py` scrapes the SAUCE tab, grades picks, renders an image (Pillow), and sends it to channel `-1003977774560`. Runs daily at **6 AM ET** via cron on the VPS (`run_sauce_daily.sh`).
 
 - **Google Sheet:** `1yozWEoQ5m6rqNC8-E5UGwg0ySjYbAybNHwPmtNTYIzM` (shared with service account)
 - **Source data:** Published Google Sheet embedded at kylekirms.com/open-bets (sheet ID `1yjaN85i-WRhRrBcozOG70vTX6cTNpJzFmuNJ8KgL-14`)

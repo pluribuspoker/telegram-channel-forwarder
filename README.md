@@ -18,7 +18,7 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 | `audit.py` | Audit log — writes to SQLite + Telegram audit channel |
 | `common.py` | Shared utilities (Anthropic client, OCR, channel parsing, emoji map, regulation ML detection) |
 | `run_tracker.sh` | Timer wrapper with retry logic and healthchecks.io signals |
-| `scripts/sauce_daily.py` | Kyle Kirms (Sauce) daily scraper — scrape, grade, screenshot, send DM |
+| `scripts/sauce_daily.py` | Kyle Kirms (Sauce) daily scraper — scrape, grade, render image (Pillow), send DM |
 | `scripts/scrape_kirms.py` | Fetches open-bets from Kirms' published Google Sheet |
 | `scripts/audit_odds.py` | Backtest odds lookup against graded picks — fetches historical closing lines from Odds API and outputs CSV |
 | `scripts/trent_watcher.py` | Polls @BookitWithTrent on X/Twitter, sends picks to Telegram via systemd timer |
@@ -237,7 +237,7 @@ gradetest  # dry run, last 2 days
 
 ## Sauce Daily (Kyle Kirms)
 
-`scripts/sauce_daily.py` scrapes the SAUCE tab from Kyle Kirms' open-bets page (a publicly embedded Google Sheet), grades past picks, renders a screenshot, and sends it as a Telegram DM.
+`scripts/sauce_daily.py` scrapes the SAUCE tab from Kyle Kirms' open-bets page (a publicly embedded Google Sheet), grades past picks, renders an image (Pillow), and sends it as a Telegram DM.
 
 **Daily flow:**
 1. Fetch SAUCE tab data via HTTP (no login/browser needed — the sheet is published)
@@ -246,7 +246,7 @@ gradetest  # dry run, last 2 days
 4. Store in `sauce_picks` table in `picks.db`
 5. Grade PENDING picks using ESPN scores + Claude Sonnet
 6. Write results to [Google Sheet](https://docs.google.com/spreadsheets/d/1yozWEoQ5m6rqNC8-E5UGwg0ySjYbAybNHwPmtNTYIzM)
-7. Render screenshot (upcoming + past with ✅/❌ emoji)
+7. Render image via Pillow (upcoming + past with vector result marks: ✓/✗/○/?)
 8. Send to channel `-1003977774560`
 
 **Usage:**
