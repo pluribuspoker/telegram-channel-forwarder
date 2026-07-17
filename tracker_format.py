@@ -387,12 +387,21 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         return f"+{v}" if v > 0 else str(v)
 
     def _odds_tag(idx: int) -> str | None:
-        odds_val = odds_by_pick.get(str(idx), {}).get("odds")
+        entry = odds_by_pick.get(str(idx), {})
+        odds_val = entry.get("odds")
         if odds_val is None:
             return None
-        match_type = odds_by_pick.get(str(idx), {}).get("match_type", "")
+        match_type = entry.get("match_type", "")
         if match_type.startswith("live_"):
-            return f" [{_fmt(odds_val)} live]"
+            # The game had already started at grade time, so the primary line is
+            # the in-game (live) price. When odds.py also captured the pregame
+            # closing line (_try_pregame), show both — the live price the capper
+            # saw plus the pre-game closing line — e.g. "[+1200 live] [-107 pre]".
+            tag = f" [{_fmt(odds_val)} live]"
+            pre = entry.get("pregame_odds")
+            if pre is not None and pre != odds_val:
+                tag += f" [{_fmt(pre)} pre]"
+            return tag
         if match_type.startswith("pregame_"):
             return f" [{_fmt(odds_val)} pre]"
         return f" [{_fmt(odds_val)}]"
