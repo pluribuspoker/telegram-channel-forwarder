@@ -222,6 +222,50 @@ def _salvage_truncated(raw: str) -> dict | None:
     return None
 
 
+def _extract_first_json_object(raw: str) -> dict | None:
+    """Extract the first complete, balanced {...} JSON object embedded in prose.
+
+    Sonnet sometimes wraps the JSON in a reasoning preamble (or trailing
+    commentary) instead of emitting it bare — e.g. an ambiguous message
+    ("OVER 3.5 IN THE FIESTA BOWL") makes it "think out loud" before committing
+    to JSON. A plain json.loads() then fails on the leading prose. Scan for a
+    complete top-level object (respecting string literals so braces inside
+    values don't confuse the depth count) and parse that. Tries each '{' as a
+    candidate start so a stray brace in the prose can't derail extraction."""
+    start = 0
+    while True:
+        start = raw.find('{', start)
+        if start == -1:
+            return None
+        depth = 0
+        in_str = False
+        esc = False
+        for i in range(start, len(raw)):
+            c = raw[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == '\\':
+                    esc = True
+                elif c == '"':
+                    in_str = False
+            elif c == '"':
+                in_str = True
+            elif c == '{':
+                depth += 1
+            elif c == '}':
+                depth -= 1
+                if depth == 0:
+                    try:
+                        obj = json.loads(raw[start:i + 1])
+                        if isinstance(obj, dict):
+                            return obj
+                    except json.JSONDecodeError:
+                        pass
+                    break  # this start didn't parse; advance to the next '{'
+        start += 1
+
+
 async def claude_parse(
     text: str,
     date: str | None = None,
@@ -270,8 +314,13 @@ async def claude_parse(
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        # Truncated JSON — try to salvage completed picks
-        parsed = _salvage_truncated(raw)
+        # The model didn't emit bare JSON. Two known shapes: (a) a reasoning
+        # preamble / trailing prose wrapping an otherwise-complete object, or
+        # (b) genuinely truncated output. Try to lift out a complete object
+        # first (handles the preamble case), then fall back to salvaging a
+        # truncated one. Without this, an ambiguous message that makes Sonnet
+        # "think out loud" fails to parse entirely and is logged as UNKNOWN.
+        parsed = _extract_first_json_object(raw) or _salvage_truncated(raw)
         if not parsed:
             return None
 

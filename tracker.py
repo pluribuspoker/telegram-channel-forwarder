@@ -175,6 +175,20 @@ def _parlay_structure_uncertain(parsed: dict, text: str) -> bool:
     return not _PARLAY_EXPLICIT_RE.search(text)
 
 
+def _parse_incomplete(parsed: dict) -> bool:
+    """True if the text parse produced picks but they're too incomplete to grade —
+    the sport couldn't be classified (Other) or a pick has no teams (the game
+    can't be located). Happens on ambiguous slang text where the market is stated
+    ("OVER 3.5") but the teams live only in flag emoji / a nickname the model
+    didn't resolve. An attached bet slip is the ground truth in these cases."""
+    picks = parsed.get("picks", []) if parsed else []
+    if not picks:
+        return False  # the no-picks path handles this separately
+    if parsed.get("sport") == "Other":
+        return True
+    return any(not p.get("teams") for p in picks)
+
+
 async def _download_image_b64(client, msg) -> tuple[str, str] | None:
     """Download a photo message's image as (base64, media_type), or None if the
     message has no photo / download fails."""
@@ -469,13 +483,17 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     parsed = await claude_parse(_ptext, date_str)
                     # Consult the bet slip photo as ground truth when the text parse
                     # is unreliable: (a) slang-only text ("it's coming home") where
-                    # the exact market was guessed, or (b) a multi-leg parlay that
+                    # the exact market was guessed, (b) a multi-leg parlay that
                     # was *inferred* from a vertically-listed card the text never
                     # calls a parlay — the slip says whether they're separate
-                    # straight bets or one combined ticket. Clean, explicit text
-                    # parses skip the image so they pay no extra cost.
+                    # straight bets or one combined ticket, or (c) an incomplete
+                    # parse (sport=Other or no teams) that can't be graded — e.g.
+                    # "OVER 3.5 IN THE FIESTA BOWL" with the teams only in flag
+                    # emoji. Clean, complete text parses skip the image so they
+                    # pay no extra cost.
                     if parsed and (_is_text_thin(text)
-                                   or _parlay_structure_uncertain(parsed, text)):
+                                   or _parlay_structure_uncertain(parsed, text)
+                                   or _parse_incomplete(parsed)):
                         _img = await _download_image_b64(client, msg)
                         if _img:
                             # The image parse occasionally returns None/no picks
