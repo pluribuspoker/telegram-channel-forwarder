@@ -13,7 +13,7 @@ _SOURCE_ODDS_RE = re.compile(r'[+-]\d{3,4}(?!\.\d)(?!\d)')
 # don't tag it. But if the fetched line has moved far from the stated price we
 # show the current number anyway. Threshold is an implied-probability swing so
 # it scales sensibly across favorites and dogs.
-_ODDS_MOVE_THRESHOLD = 0.05
+_ODDS_MOVE_THRESHOLD = 0.03
 
 
 def _american_to_prob(odds: int) -> float:
@@ -456,7 +456,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         # If the source already states its own price (e.g. "Renegades -4.5
         # (-110)") we normally skip — the capper already showed the number.
         # Exception: if the fetched line has moved far from the stated price
-        # (>5% implied-prob swing), show the current number with a "now" marker
+        # (>3% implied-prob swing), show the current number with a "now" marker
         # so readers see the move.
         moved = False
         src_odds = _extract_source_odds(pick.get("description") or "")
