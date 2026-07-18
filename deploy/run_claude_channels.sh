@@ -6,7 +6,7 @@
 set -euo pipefail
 
 SESSION="claude"
-CLAUDE_CMD="claude --channels plugin:telegram@claude-plugins-official --dangerously-skip-permissions --model opus[1m]"
+CLAUDE_CMD="claude --channels plugin:telegram@claude-plugins-official --dangerously-skip-permissions --model opus[1m] --effort max"
 
 # Kill orphan bun processes from a previous crash. The Telegram plugin's
 # bot.pid cleanup only works on graceful shutdown — a SIGKILL leaves the
