@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=forwarder
 Environment=HOME=/home/forwarder
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/forwarder/.bun/bin
+Environment=PATH=/home/forwarder/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:/home/forwarder/.bun/bin
 ExecStartPre=-/usr/bin/tmux kill-session -t claude
 ExecStart=/home/forwarder/app/deploy/run_claude_channels.sh
 ExecStop=/usr/bin/tmux kill-session -t claude
