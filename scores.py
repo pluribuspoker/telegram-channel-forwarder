@@ -909,7 +909,13 @@ def _team_matches(term: str, team_name: str) -> bool:
             if next_idx < len(n_words) and n_words[next_idx] in _QUALIFIERS:
                 return False  # e.g., "Iowa" before "State" → skip
             return True
-    return True  # term contained in name but not as a clean word sequence
+    # No contiguous word-sequence match. Only accept when the API name is a
+    # subset/reordering of the pick term — the pick carries extra qualifiers
+    # ("Inter Miami CF" ⊇ "Inter Miami") or the two are word-order swaps
+    # ("Guilherme Pat" ↔ "Pat Guilherme"). Reject a bare substring buried inside
+    # a single word (e.g. "Ko" inside "Balko"/"Guskov"/"Shevchenko"), a false
+    # positive that made short fighter/team tokens hijack the wrong event.
+    return n in t or sorted(t_words) == sorted(n_words)
 
 
 def find_event_ids(events: list[dict], teams: list[str], player: str = "") -> list[str]:
