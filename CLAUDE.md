@@ -49,7 +49,7 @@ In both cases, `test_source_channel` → `test_dest_channel` from `MAPPINGS_CONF
 Claude Code runs on VPS in a tmux session with the official Telegram channels plugin. The user DMs `@ForwarderClaudeBot` on Telegram to interact with Claude Code — full CLI features (skills, hooks, memory, dangerous mode) work.
 
 - **tmux session:** `tmux attach -t claude` (as forwarder user)
-- **Restart:** `su - forwarder -c "tmux kill-session -t claude; tmux new-session -d -s claude 'cd ~/app && claude --channels plugin:telegram@claude-plugins-official --dangerously-skip-permissions --model opus[1m]'"`
+- **Restart:** `su - forwarder -c "tmux kill-session -t claude; tmux new-session -d -s claude 'cd ~/app && claude --channels plugin:telegram@claude-plugins-official --dangerously-skip-permissions --model opus[1m] --effort max'"`
 - **Logs:** `su - forwarder -c "tmux capture-pane -t claude -p -S -50"`
 - **Bot token:** `~/.claude/channels/telegram/.env` (forwarder home)
 - **Access config:** `~/.claude/channels/telegram/access.json`
