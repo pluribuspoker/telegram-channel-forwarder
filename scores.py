@@ -24,6 +24,7 @@ ESPN_LEAGUES: dict[str, tuple[str, str]] = {
     "UFC":   ("mma", "ufc"),
     "UFL":   ("football", "ufl"),
     "CFL":   ("football", "cfl"),
+    "Lacrosse": ("lacrosse", "pll"),
 }
 
 # Fallback ESPN leagues, searched only when the primary scoreboard has no events
