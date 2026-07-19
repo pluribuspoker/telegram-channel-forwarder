@@ -316,7 +316,8 @@ function loadJSON(data) {
   allPicks = (data.picks || []).filter(p => p.angles && p.angles.length > 0);
   document.getElementById('empty-state').classList.add('hidden');
   document.getElementById('dashboard').classList.remove('hidden');
-  document.getElementById('header-subtitle').textContent = `${allPicks.length} picks \u00b7 extracted ${data.extracted_at ? data.extracted_at.slice(0,16).replace('T',' ') : '?'}`;
+  const ext = data.extracted_at ? new Date(data.extracted_at).toLocaleString(undefined, {month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}) : '?';
+  document.getElementById('header-subtitle').textContent = `${allPicks.length} picks \u00b7 updated ${ext}`;
   buildFilterOptions();
   applyFilters();
 }
