@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Angle Analyzer dashboard server.
 
-Serves the static dashboard and provides a POST /api/refresh endpoint
-that streams real-time progress via Server-Sent Events.
+Serves the static dashboard behind Telegram-based authentication and provides
+a POST /api/refresh endpoint that streams real-time progress via SSE.
 
 Uses only Python stdlib — zero additional dependencies.
 
 Env vars:
     ANGLES_PORT            Port to listen on (default 8080)
-    ANGLES_REFRESH_TOKEN   Bearer token for the refresh endpoint (required)
+    ANGLES_AUTH_SECRET     HMAC secret for signing auth tokens/cookies (required)
 """
 
 import http.server
@@ -20,6 +20,19 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+# auth module lives in the same directory
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from auth import (  # noqa: E402
+    COOKIE_NAME,
+    SESSION_TTL,
+    get_secret,
+    make_session_cookie,
+    parse_cookie_header,
+    set_cookie_header,
+    verify_session_cookie,
+    verify_token,
+)
 
 log = logging.getLogger("angles")
 
@@ -35,6 +48,9 @@ _refresh_lock = threading.Lock()
 _last_refresh = 0.0
 COOLDOWN_SECS = 60
 
+# Paths that bypass authentication
+_PUBLIC_PATHS = frozenset(("/login", "/auth", "/logout"))
+
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -43,9 +59,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0].split("#")[0]
         name = path.rstrip("/").rsplit("/", 1)[-1]
+
+        # Block sensitive files
         if name.startswith(".") or Path(name).suffix.lower() in BLOCKED_EXTENSIONS:
             self.send_error(403)
             return
+
+        # Public routes (no auth required)
+        if path == "/login":
+            return self._serve_file("login.html")
+        if path == "/auth":
+            return self._handle_auth()
+        if path == "/logout":
+            return self._handle_logout()
+
+        # Everything else requires a valid session
+        if not self._check_session():
+            return self._redirect("/login")
+
         super().do_GET()
 
     def do_POST(self):
@@ -59,24 +90,70 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_error(403)
         return None
 
+    # ── authentication ────────────────────────────────────────────────
+
+    def _check_session(self) -> bool:
+        """Return True if the request carries a valid session cookie."""
+        cookie_header = self.headers.get("Cookie", "")
+        token = parse_cookie_header(cookie_header, COOKIE_NAME)
+        if not token:
+            return False
+        return verify_session_cookie(token, get_secret()) is not None
+
+    def _handle_auth(self):
+        """Validate a magic-link token and set a session cookie."""
+        qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+        params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+        token = params.get("token", "")
+
+        secret = get_secret()
+        user_id = verify_token(token, secret)
+        if user_id is None:
+            self.send_response(302)
+            self.send_header("Location", "/login?error=expired")
+            self.end_headers()
+            return
+
+        cookie = make_session_cookie(user_id, secret)
+        self.send_response(302)
+        self.send_header("Set-Cookie", set_cookie_header(COOKIE_NAME, cookie, SESSION_TTL))
+        self.send_header("Location", "/")
+        self.end_headers()
+
+    def _handle_logout(self):
+        """Clear the session cookie and redirect to /login."""
+        self.send_response(302)
+        self.send_header("Set-Cookie", set_cookie_header(COOKIE_NAME, "", 0))
+        self.send_header("Location", "/login")
+        self.end_headers()
+
+    # ── helpers ───────────────────────────────────────────────────────
+
+    def _redirect(self, location):
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.end_headers()
+
+    def _serve_file(self, filename):
+        """Serve a specific file from BASE_DIR (bypasses auth)."""
+        filepath = BASE_DIR / filename
+        if not filepath.is_file():
+            self.send_error(404)
+            return
+        content = filepath.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
     # ── refresh endpoint (SSE) ────────────────────────────────────────
-
-    def _client_ip(self):
-        return (self.headers.get("CF-Connecting-IP")
-                or self.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-                or self.client_address[0])
-
-    def _is_trusted(self):
-        trusted = os.environ.get("ANGLES_TRUSTED_IPS", "")
-        return self._client_ip() in set(filter(None, trusted.split(",")))
 
     def _handle_refresh(self):
         global _last_refresh
-        if not self._is_trusted():
-            token = os.environ.get("ANGLES_REFRESH_TOKEN", "")
-            auth = self.headers.get("Authorization", "")
-            if not token or auth != f"Bearer {token}":
-                return self._json(401, {"error": "Unauthorized"})
+
+        if not self._check_session():
+            return self._json(401, {"error": "Unauthorized"})
 
         now = time.time()
         if now - _last_refresh < COOLDOWN_SECS:
@@ -152,8 +229,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 
 def main():
-    if not os.environ.get("ANGLES_REFRESH_TOKEN"):
-        sys.exit("ANGLES_REFRESH_TOKEN is required")
+    if not os.environ.get("ANGLES_AUTH_SECRET"):
+        sys.exit("ANGLES_AUTH_SECRET is required")
 
     logging.basicConfig(
         level=logging.INFO,

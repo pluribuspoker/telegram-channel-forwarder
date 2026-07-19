@@ -543,6 +543,51 @@ async def main():
             except Exception as e:
                 print(f"  ✗ Album send failed: {e}", file=sys.stderr)
 
+    # ── Auth: /access command handler on bot ────────────────────────────
+    FIGHT_CLUB_CHANNEL = -1002486251914
+
+    def _check_membership(user_id: int) -> str:
+        """Check Fight Club membership via Bot API getChatMember. Returns status string."""
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember"
+        data = json.dumps({"chat_id": FIGHT_CLUB_CHANNEL, "user_id": user_id}).encode()
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        resp = urllib.request.urlopen(req, timeout=10)
+        result = json.loads(resp.read().decode())
+        return result["result"]["status"]
+
+    async def _handle_auth_request(event):
+        if not event.is_private:
+            return
+        user_id = event.sender_id
+        try:
+            status = await asyncio.get_event_loop().run_in_executor(None, _check_membership, user_id)
+        except Exception:
+            await event.respond("Something went wrong checking your membership. Try again later.")
+            return
+        if status not in ("member", "administrator", "creator"):
+            await event.respond("You must be a member of the Fight Club channel to access the dashboard.")
+            return
+        try:
+            from angles.auth import make_token, get_secret, MAGIC_LINK_TTL
+            secret = get_secret()
+            token = make_token(user_id, MAGIC_LINK_TTL, secret)
+        except Exception:
+            await event.respond("Auth is not configured on the server. Contact admin.")
+            return
+        url = f"https://fightclubpicks.cc/auth?token={token}"
+        await event.respond(
+            f"Here's your access link (valid for 5 minutes):\n\n{url}\n\n"
+            "Click it to log in to the Angle Analyzer dashboard."
+        )
+
+    @bot.on(events.NewMessage(pattern=r'^/access$', incoming=True, func=lambda e: e.is_private))
+    async def handle_access(event):
+        await _handle_auth_request(event)
+
+    @bot.on(events.NewMessage(pattern=r'^/start\s+access$', incoming=True, func=lambda e: e.is_private))
+    async def handle_start_access(event):
+        await _handle_auth_request(event)
+
     asyncio.create_task(heartbeat())
     asyncio.create_task(channel_probe(client, channels, use_test))
     watchdog = asyncio.create_task(connection_watchdog(client))

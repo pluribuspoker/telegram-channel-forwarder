@@ -102,27 +102,15 @@
       Upload JSON
       <input type="file" accept=".json" id="file-upload" class="hidden">
     </label>
+    <a href="/logout" class="text-xs text-slate-500 hover:text-slate-300 ml-1">Logout</a>
   </div>
 </header>
 
 <!-- Refresh modal -->
 <div id="refresh-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 hidden" onclick="if(event.target===this)closeRefreshModal()">
   <div id="rm-card" class="card p-6 w-96">
-    <!-- Auth view -->
-    <div id="rm-auth">
-      <h3 class="font-semibold text-sm mb-4">Refresh Data</h3>
-      <div class="mb-4">
-        <label class="text-xs text-slate-400">API Key</label>
-        <input type="password" id="rm-key" class="search-input mt-1" placeholder="Enter refresh token" onkeydown="if(event.key==='Enter')doRefresh()">
-      </div>
-      <p id="rm-auth-err" class="text-sm text-red-400 mb-3 hidden"></p>
-      <div class="flex justify-end gap-2">
-        <button onclick="closeRefreshModal()" class="filter-btn text-sm">Cancel</button>
-        <button id="rm-go" onclick="doRefresh()" class="filter-btn text-sm !bg-indigo-600 !border-indigo-500">Refresh</button>
-      </div>
-    </div>
     <!-- Progress view -->
-    <div id="rm-progress" class="hidden">
+    <div id="rm-progress">
       <div class="flex items-center justify-between mb-3">
         <h3 id="rm-title" class="font-semibold text-sm text-slate-200 transition-colors duration-500">Refreshing data</h3>
         <span id="rm-pct" class="text-[11px] text-slate-500 mono tabular-nums transition-opacity">0%</span>
@@ -894,35 +882,25 @@ document.getElementById('export-csv').addEventListener('click', () => {
 // ── Refresh data via SSE ─────────────────────────────────────────────────
 const RM_EST_TOTAL = 3500;
 
-function showAuthModal(errMsg) {
-  document.getElementById('rm-auth').classList.remove('hidden');
-  document.getElementById('rm-progress').classList.add('hidden');
-  document.getElementById('rm-go').disabled = false;
-  document.getElementById('rm-go').textContent = 'Refresh';
-  document.getElementById('rm-key').value = localStorage.getItem('_aa_key') || '';
-  const err = document.getElementById('rm-auth-err');
-  if (errMsg) { err.textContent = errMsg; err.classList.remove('hidden'); }
-  else err.classList.add('hidden');
-  document.getElementById('refresh-modal').classList.remove('hidden');
-  document.getElementById('rm-key').focus();
-}
 async function showRefreshModal() {
-  // Try without auth first (IP whitelist), then with saved key
-  const saved = localStorage.getItem('_aa_key') || '';
-  for (const key of [null, saved || null]) {
-    if (key === null && saved) continue; // skip empty-then-saved duplicate
-    try {
-      const h = {}; if (key) h.Authorization = 'Bearer ' + key;
-      const r = await fetch('/api/refresh', { method: 'POST', headers: h });
-      if (r.ok) { showProgressAndStream(r); return; }
-      if (r.status !== 401) {
-        let msg = 'Refresh failed'; try { msg = (await r.json()).error || msg; } catch {}
-        showAuthModal(msg); return;
-      }
-    } catch (e) { showAuthModal('Connection error: ' + e.message); return; }
-    break; // 401 — fall through to auth modal
+  try {
+    const r = await fetch('/api/refresh', { method: 'POST' });
+    if (r.status === 401) { window.location.href = '/login?error=expired'; return; }
+    if (!r.ok) {
+      let msg = 'Refresh failed'; try { msg = (await r.json()).error || msg; } catch {}
+      document.getElementById('refresh-modal').classList.remove('hidden');
+      const err = document.getElementById('rm-stream-err');
+      err.textContent = msg; err.classList.remove('hidden');
+      document.getElementById('rm-close').textContent = 'Close';
+      return;
+    }
+    showProgressAndStream(r);
+  } catch (e) {
+    document.getElementById('refresh-modal').classList.remove('hidden');
+    const err = document.getElementById('rm-stream-err');
+    err.textContent = 'Connection error: ' + e.message; err.classList.remove('hidden');
+    document.getElementById('rm-close').textContent = 'Close';
   }
-  showAuthModal();
 }
 function closeRefreshModal() { document.getElementById('refresh-modal').classList.add('hidden'); }
 
@@ -943,28 +921,8 @@ function rmDetail(name, text) {
   if (d) d.textContent = text;
 }
 
-async function doRefresh() {
-  const key = document.getElementById('rm-key').value.trim();
-  if (!key) return;
-  localStorage.setItem('_aa_key', key);
-  try {
-    const r = await fetch('/api/refresh', { method: 'POST', headers: { Authorization: 'Bearer ' + key } });
-    if (!r.ok) {
-      let msg = 'Refresh failed'; try { msg = (await r.json()).error || msg; } catch {}
-      document.getElementById('rm-auth-err').textContent = msg;
-      document.getElementById('rm-auth-err').classList.remove('hidden');
-      return;
-    }
-    showProgressAndStream(r);
-  } catch (e) {
-    document.getElementById('rm-auth-err').textContent = 'Connection error: ' + e.message;
-    document.getElementById('rm-auth-err').classList.remove('hidden');
-  }
-}
-
 async function showProgressAndStream(r) {
   document.getElementById('refresh-modal').classList.remove('hidden');
-  document.getElementById('rm-auth').classList.add('hidden');
   document.getElementById('rm-progress').classList.remove('hidden');
   document.getElementById('rm-stream-err').classList.add('hidden');
   document.getElementById('rm-close').textContent = 'Cancel';

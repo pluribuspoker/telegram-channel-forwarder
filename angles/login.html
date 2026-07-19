@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Angle Analyzer — Login</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0a0a1a; color: #e2e8f0;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh;
+  }
+  .card {
+    background: #111827; border: 1px solid #1e293b; border-radius: 12px;
+    padding: 40px; max-width: 400px; width: 90%; text-align: center;
+  }
+  .logo {
+    width: 48px; height: 48px; border-radius: 12px; background: #4f46e5;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 20px; margin: 0 auto 16px; color: #fff;
+  }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  .desc { color: #94a3b8; font-size: 14px; line-height: 1.6; margin: 0 0 24px; }
+  .btn {
+    display: inline-block; background: #4f46e5; color: white;
+    padding: 12px 32px; border-radius: 10px; text-decoration: none;
+    font-weight: 600; font-size: 15px; transition: background .15s;
+  }
+  .btn:hover { background: #4338ca; }
+  .error { color: #f87171; font-size: 13px; margin-bottom: 16px; }
+  .note { color: #64748b; font-size: 12px; margin-top: 20px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">A</div>
+    <h1>Angle Analyzer</h1>
+    <p class="desc">Access is restricted to Fight Club channel members.
+      Tap the button below to verify your membership via Telegram.</p>
+    <div id="error" class="error" style="display:none"></div>
+    <a href="https://t.me/forwarder_fc_bot?start=access" class="btn">Open Telegram to Log In</a>
+    <p class="note">The bot will send you a one-time login link.</p>
+  </div>
+  <script>
+    const p = new URLSearchParams(location.search);
+    if (p.get('error') === 'expired') {
+      const el = document.getElementById('error');
+      el.textContent = 'Your login link has expired. Tap the button to get a new one.';
+      el.style.display = 'block';
+    }
+  </script>
+</body>
+</html>
