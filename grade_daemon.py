@@ -137,6 +137,24 @@ class _ESPNCache:
 
 # ─── Main loop ───────────────────────────────────────────────────────────────
 
+def _parlay_broadcast_legs(picks, leg_verdicts, odds_by_pick, default_sport):
+    """Every leg of a parlay with its current verdict + odds, in message order.
+
+    A parlay is one ticket, so its broadcast must show all legs and the combined
+    price — even legs that aren't individually resolved (e.g. a leg voided when a
+    sibling already lost). Resolved legs carry their WIN/LOSS/PUSH verdict; the
+    rest carry PENDING so broadcast_results lists + prices them without counting
+    them toward the settled result.
+    """
+    out = []
+    for i, pick in enumerate(picks):
+        lv = leg_verdicts.get(str(i)) or {}
+        if not pick.get("sport"):
+            pick["sport"] = lv.get("sport", default_sport)
+        out.append((pick, lv.get("verdict", "PENDING"), odds_by_pick.get(str(i), {}).get("odds")))
+    return out
+
+
 async def _grade_cycle(
     bot_token: str,
     audit: AuditLog,
@@ -257,10 +275,16 @@ async def _grade_cycle(
                     if not pick.get("sport"):
                         pick["sport"] = lv.get("sport", sport)
                     nr_pick_results.append((pick, lv["verdict"], odds_by_pick.get(str(i), {}).get("odds")))
+                # A parlay broadcasts as one ticket — send all legs so the result
+                # shows every leg and the combined price, not just the settled one.
+                bc_results = (
+                    _parlay_broadcast_legs(picks, leg_verdicts, odds_by_pick, sport)
+                    if any(p.get("is_parlay_leg") for p in picks) else nr_pick_results
+                )
                 await audit.broadcast_results(
                     channel_id=channel_id,
                     message_id=msg_id,
-                    pick_results=nr_pick_results,
+                    pick_results=bc_results,
                     capper_name=capper,
                     reply_to_id=reply_to_id,
                 )
@@ -435,10 +459,16 @@ async def _grade_cycle(
                     pick["sport"] = ps
                 nr_pick_results.append((pick, verdict, odds_by_pick.get(str(i), {}).get("odds")))
 
+            # A parlay broadcasts as one ticket — send all legs so the result
+            # shows every leg and the combined price, not just the settled one.
+            bc_results = (
+                _parlay_broadcast_legs(picks, leg_verdicts, odds_by_pick, sport)
+                if any(p.get("is_parlay_leg") for p in picks) else nr_pick_results
+            )
             await audit.broadcast_results(
                 channel_id=channel_id,
                 message_id=msg_id,
-                pick_results=nr_pick_results,
+                pick_results=bc_results,
                 capper_name=capper,
                 reply_to_id=reply_to_id,
             )

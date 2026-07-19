@@ -399,7 +399,10 @@ class AuditLog:
         # Capper name is the link; bold if present, plain link if not
         capper_linked = f'<b><a href="{link}">{e(capper_label)}</a></b>' if capper_label else f'<a href="{link}">view</a>'
 
-        is_parlay = any(p.get("is_parlay_leg") for p, _, _o in resolved)
+        # Detect a parlay from ALL passed legs, not just the resolved ones: a
+        # parlay that settled on one lost leg still passes its other (voided /
+        # pending) legs so the whole ticket can be shown and priced.
+        is_parlay = any(p.get("is_parlay_leg") for p, _, _o in pick_results)
         picks = [(_format_pick(p), v, fmt_odds(o)) for p, v, o in resolved]
 
         def _pick_line(desc: str, verdict: str, odds_str: str) -> str:
@@ -423,11 +426,15 @@ class AuditLog:
         # a single lost leg (siblings still pending/dropped) has len(picks)==1 but
         # must still render as a Parlay, not a lone straight pick.
         if is_parlay:
-            verdicts_only = [v for _, v, _ in picks]
+            # One ticket: list every leg and price the whole parlay from every
+            # leg's odds — not just the individually-resolved legs. The verdict
+            # emoji still comes from the resolved legs (a LOSS settles it).
+            parlay_all = [(p, v, o) for p, v, o in pick_results if p.get("is_parlay_leg")]
+            verdicts_only = [v for _, v, _ in parlay_all if v in ("WIN", "LOSS", "PUSH")]
             overall_emoji = _overall_emoji(verdicts_only)
-            combined = _parlay_combined_odds([o for p, _, o in resolved if p.get("is_parlay_leg")])
+            combined = _parlay_combined_odds([o for _, _, o in parlay_all])
             combined_part = f" [{e(fmt_odds(combined))}]" if combined is not None else ""
-            legs = "\n".join(f"• {e(d)}" for d, _, _ in picks)
+            legs = "\n".join(f"• {e(_format_pick(p))}" for p, _, _ in parlay_all)
             text = f"{overall_emoji} {capper_linked} · Parlay{combined_part}\n{legs}"
         elif len(picks) == 1:
             desc, verdict, odds_str = picks[0]
