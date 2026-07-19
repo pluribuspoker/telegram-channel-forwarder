@@ -29,6 +29,7 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 | `angles/extract_angles.py` | Scrapes angle records from pick channel, parses into structured data, outputs JSON |
 | `angles/index.html` | Single-file web dashboard for angle performance analysis |
 | `angles/server.py` | Lightweight HTTP server for the dashboard with SSE refresh endpoint |
+| `angles/auth.py` | Stateless HMAC auth module for Telegram-based dashboard login |
 
 ---
 
@@ -344,7 +345,9 @@ python scripts/trent_watcher.py --channel ID     # send to specific channel
 
 **Hosted at:** [`https://fightclubpicks.cc`](https://fightclubpicks.cc) — served by `angles/server.py` (Python stdlib HTTP server, ~10MB RAM) behind Cloudflare. The "Refresh Data" button streams real-time extraction progress via Server-Sent Events.
 
-**VPS service:** `angles-dashboard.service` (port 80). Env vars: `ANGLES_REFRESH_TOKEN`, `ANGLES_TRUSTED_IPS`, `ANGLES_PORT`.
+**Authentication:** Access requires Fight Club channel membership. Users send `/access` to `@forwarder_fc_bot` (or click the deep link on the login page) to get a magic link that sets a 30-day session cookie. Auth is HMAC-SHA256, stateless, stdlib-only (`angles/auth.py`).
+
+**VPS service:** `angles-dashboard.service` (port 80). Env vars: `ANGLES_AUTH_SECRET`, `ANGLES_PORT`.
 
 ```bash
 # Manual data pull (on VPS):
