@@ -214,6 +214,9 @@ parse_cache.json
 data/
 scripts/output/
 accounts.db
+angles/data/activity.db
+angles/data/activity.db-wal
+angles/data/activity.db-shm
 
 # Marimo
 marimo/_static/

@@ -11,6 +11,9 @@ Env vars:
     ANGLES_AUTH_SECRET     HMAC secret for signing auth tokens/cookies (required)
     ANGLES_REFRESH_USERS   Comma-separated Telegram user IDs allowed to refresh
                            (empty = all authenticated users can refresh)
+    ANGLES_ADMIN_IDS       Comma-separated Telegram user IDs that can access /activity
+                           (empty = all authenticated users can access)
+    BOT_TOKEN              Bot API token for resolving user display names (optional)
 """
 
 import http.server
@@ -35,6 +38,7 @@ from auth import (  # noqa: E402
     verify_session_cookie,
     verify_token,
 )
+from activity import init_db as init_activity_db, log_visit, get_activity  # noqa: E402
 
 log = logging.getLogger("angles")
 
@@ -56,8 +60,17 @@ _raw = os.environ.get("ANGLES_REFRESH_USERS", "")
 if _raw:
     _REFRESH_ALLOWED_IDS = {int(x.strip()) for x in _raw.split(",") if x.strip()}
 
+# Admin user IDs (can access /activity)
+_ADMIN_IDS: set[int] = set()
+_raw_admin = os.environ.get("ANGLES_ADMIN_IDS", "")
+if _raw_admin:
+    _ADMIN_IDS = {int(x.strip()) for x in _raw_admin.split(",") if x.strip()}
+
 # Paths that bypass authentication
 _PUBLIC_PATHS = frozenset(("/login", "/auth", "/logout"))
+
+# Only log visits for these paths (main page loads, not assets)
+_TRACKED_PATHS = frozenset(("/", "/index.html"))
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -85,10 +98,31 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not self._check_session():
             return self._redirect("/login")
 
+        user_id = self._get_session_user_id()
+
         if self.path.rstrip("/") == "/api/me":
-            user_id = self._get_session_user_id()
             can_refresh = not _REFRESH_ALLOWED_IDS or user_id in _REFRESH_ALLOWED_IDS
             return self._json(200, {"can_refresh": can_refresh})
+
+        # Activity dashboard (admin-only)
+        if path == "/activity":
+            if _ADMIN_IDS and user_id not in _ADMIN_IDS:
+                self.send_error(403)
+                return
+            return self._serve_file("activity.html")
+
+        if path.startswith("/api/activity"):
+            if _ADMIN_IDS and user_id not in _ADMIN_IDS:
+                return self._json(403, {"error": "Forbidden"})
+            return self._handle_activity()
+
+        # Log page view (server-side only, no client overhead)
+        if path in _TRACKED_PATHS:
+            ip = self.headers.get("X-Forwarded-For", "").split(",")[0].strip() or self.client_address[0]
+            ua = self.headers.get("User-Agent", "")
+            threading.Thread(
+                target=log_visit, args=(user_id, path, ip, ua), daemon=True
+            ).start()
 
         super().do_GET()
 
@@ -163,6 +197,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)
+
+    # ── activity endpoint ─────────────────────────────────────────────
+
+    def _handle_activity(self):
+        """Return activity JSON for the admin dashboard."""
+        qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+        params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+        days = min(int(params.get("days", "30")), 365)
+        data = get_activity(days)
+        return self._json(200, data)
 
     # ── refresh endpoint (SSE) ────────────────────────────────────────
 
@@ -252,6 +296,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 def main():
     if not os.environ.get("ANGLES_AUTH_SECRET"):
         sys.exit("ANGLES_AUTH_SECRET is required")
+
+    init_activity_db()
 
     logging.basicConfig(
         level=logging.INFO,

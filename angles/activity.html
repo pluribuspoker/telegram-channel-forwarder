@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Activity — Angle Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <style>
+        body { background: #0f172a; color: #e2e8f0; }
+        .card { background: #1e293b; border: 1px solid #334155; border-radius: 0.75rem; }
+    </style>
+</head>
+<body class="min-h-screen p-6">
+    <div class="max-w-6xl mx-auto space-y-6">
+        <!-- Header -->
+        <div class="flex items-center justify-between">
+            <h1 class="text-2xl font-bold text-white">Activity Dashboard</h1>
+            <div class="flex gap-3 items-center">
+                <select id="days-filter" class="bg-slate-700 text-sm rounded px-3 py-1.5 border border-slate-600">
+                    <option value="7">Last 7 days</option>
+                    <option value="30" selected>Last 30 days</option>
+                    <option value="90">Last 90 days</option>
+                </select>
+                <a href="/" class="text-sm text-blue-400 hover:text-blue-300">&larr; Dashboard</a>
+            </div>
+        </div>
+
+        <!-- KPIs -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div class="card p-5">
+                <div class="text-sm text-slate-400">Total Page Views</div>
+                <div id="kpi-views" class="text-3xl font-bold text-white mt-1">—</div>
+            </div>
+            <div class="card p-5">
+                <div class="text-sm text-slate-400">Unique Visitors</div>
+                <div id="kpi-unique" class="text-3xl font-bold text-white mt-1">—</div>
+            </div>
+            <div class="card p-5">
+                <div class="text-sm text-slate-400">Avg. Views / Day</div>
+                <div id="kpi-avg" class="text-3xl font-bold text-white mt-1">—</div>
+            </div>
+        </div>
+
+        <!-- Chart -->
+        <div class="card p-5">
+            <h2 class="text-sm font-medium text-slate-400 mb-3">Daily Unique Visitors</h2>
+            <canvas id="chart" height="120"></canvas>
+        </div>
+
+        <!-- Users table -->
+        <div class="card p-5">
+            <h2 class="text-sm font-medium text-slate-400 mb-3">Visitors</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="text-left text-slate-400 border-b border-slate-700">
+                            <th class="pb-2 pr-4">User</th>
+                            <th class="pb-2 pr-4">Visits</th>
+                            <th class="pb-2">Last Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Recent visits -->
+        <div class="card p-5">
+            <h2 class="text-sm font-medium text-slate-400 mb-3">Recent Visits</h2>
+            <div class="overflow-x-auto max-h-96 overflow-y-auto">
+                <table class="w-full text-sm">
+                    <thead class="sticky top-0 bg-slate-800">
+                        <tr class="text-left text-slate-400 border-b border-slate-700">
+                            <th class="pb-2 pr-4">User</th>
+                            <th class="pb-2 pr-4">Time</th>
+                            <th class="pb-2">Path</th>
+                        </tr>
+                    </thead>
+                    <tbody id="visits-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    let chart = null;
+
+    function timeAgo(ts) {
+        const diff = Date.now() / 1000 - ts;
+        if (diff < 60) return 'just now';
+        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+        return Math.floor(diff / 86400) + 'd ago';
+    }
+
+    function formatDate(ts) {
+        return new Date(ts * 1000).toLocaleString();
+    }
+
+    async function load(days) {
+        const resp = await fetch('/api/activity?days=' + days);
+        if (!resp.ok) { alert('Failed to load activity data'); return; }
+        const data = await resp.json();
+
+        // KPIs
+        document.getElementById('kpi-views').textContent = data.total_visits.toLocaleString();
+        document.getElementById('kpi-unique').textContent = data.unique_visitors.toLocaleString();
+        const avg = data.daily_uniques.length ? (data.total_visits / data.daily_uniques.length).toFixed(1) : '0';
+        document.getElementById('kpi-avg').textContent = avg;
+
+        // Chart
+        const labels = data.daily_uniques.map(d => d.date.slice(5)); // MM-DD
+        const values = data.daily_uniques.map(d => d.count);
+
+        if (chart) chart.destroy();
+        chart = new Chart(document.getElementById('chart'), {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Unique Visitors',
+                    data: values,
+                    backgroundColor: 'rgba(59, 130, 246, 0.6)',
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 1,
+                    borderRadius: 3,
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: '#94a3b8' }, grid: { display: false } },
+                    y: { beginAtZero: true, ticks: { color: '#94a3b8', stepSize: 1 }, grid: { color: '#334155' } }
+                }
+            }
+        });
+
+        // Users table
+        const ubody = document.getElementById('users-body');
+        ubody.innerHTML = data.users.map(u => `
+            <tr class="border-b border-slate-700/50">
+                <td class="py-2 pr-4 text-white">${esc(u.display_name)}</td>
+                <td class="py-2 pr-4">${u.visits}</td>
+                <td class="py-2 text-slate-400">${timeAgo(u.last_seen)}</td>
+            </tr>
+        `).join('');
+
+        // Recent visits
+        const vbody = document.getElementById('visits-body');
+        vbody.innerHTML = data.recent.map(v => `
+            <tr class="border-b border-slate-700/50">
+                <td class="py-1.5 pr-4 text-white">${esc(v.display_name)}</td>
+                <td class="py-1.5 pr-4 text-slate-400">${formatDate(v.ts)}</td>
+                <td class="py-1.5 text-slate-500">${esc(v.path)}</td>
+            </tr>
+        `).join('');
+    }
+
+    function esc(s) {
+        const d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    document.getElementById('days-filter').addEventListener('change', e => load(e.target.value));
+    load(30);
+    </script>
+</body>
+</html>
