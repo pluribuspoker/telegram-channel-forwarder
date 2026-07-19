@@ -988,6 +988,7 @@ function rmFinish(e) {
 }
 
 autoLoad();
+fetch('/api/me').then(r => r.json()).then(d => { if (!d.can_refresh) document.getElementById('refresh-btn').style.display = 'none'; }).catch(() => {});
 </script>
 </body>
 </html>

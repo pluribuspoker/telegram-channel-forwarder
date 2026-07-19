@@ -85,6 +85,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not self._check_session():
             return self._redirect("/login")
 
+        if self.path.rstrip("/") == "/api/me":
+            user_id = self._get_session_user_id()
+            can_refresh = not _REFRESH_ALLOWED_IDS or user_id in _REFRESH_ALLOWED_IDS
+            return self._json(200, {"can_refresh": can_refresh})
+
         super().do_GET()
 
     def do_POST(self):
