@@ -46,7 +46,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if name.startswith(".") or Path(name).suffix.lower() in BLOCKED_EXTENSIONS:
             self.send_error(403)
             return
-        super().do_GET(self)
+        super().do_GET()
 
     def do_POST(self):
         if self.path.rstrip("/") == "/api/refresh":
