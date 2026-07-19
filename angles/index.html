@@ -71,6 +71,18 @@
   @keyframes rmPop { 0% { transform:scale(0); } 50% { transform:scale(1.4); } 100% { transform:scale(1); } }
   @keyframes rmGlow { 0% { box-shadow:0 0 0 0 rgba(34,197,94,.25); } 50% { box-shadow:0 0 24px 6px rgba(34,197,94,.12); } 100% { box-shadow:none; } }
   .rm-glow { animation: rmGlow .8s ease; }
+  /* ── Confidence intervals ── */
+  .ci-bar-track { width: 48px; height: 4px; background: #1e293b; border-radius: 2px; position: relative; margin-left: auto; margin-top: 3px; }
+  .ci-bar-fill { position: absolute; top: 0; height: 100%; border-radius: 2px; min-width: 2px; }
+  .ci-bar-fill.ci-pos { background: rgba(34,197,94,.5); }
+  .ci-bar-fill.ci-neg { background: rgba(239,68,68,.5); }
+  .ci-bar-fill.ci-neu { background: rgba(245,158,11,.35); }
+  .ci-bar-ref { position: absolute; top: -1px; width: 1px; height: 6px; background: #64748b; }
+  .ci-tip { position: absolute; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; font-size: 11px; font-family: 'Inter', system-ui, sans-serif; font-weight: 400; color: #cbd5e1; white-space: pre-line; max-width: 280px; min-width: 200px; line-height: 1.5; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .15s, visibility .15s; z-index: 50; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  .ci-tip.show { opacity: 1; visibility: visible; }
+  .kpi .ci-sub { font-size: 10px; color: #64748b; margin-top: 2px; font-family: 'JetBrains Mono', monospace; }
+  .kpi .ci-sub:empty { display: none; }
+  [data-ci-tip] { cursor: help; }
 </style>
 </head>
 <body class="min-h-screen">
@@ -184,9 +196,9 @@
   <!-- KPI cards -->
   <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3" id="kpi-row">
     <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Record</p><p class="text-xl font-bold mono mt-1" id="kpi-record">-</p></div>
-    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Win Rate</p><p class="text-xl font-bold mono mt-1" id="kpi-winrate">-</p></div>
+    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Win Rate</p><p class="text-xl font-bold mono mt-1" id="kpi-winrate">-</p><p class="ci-sub" id="kpi-winrate-ci"></p></div>
     <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Net Units</p><p class="text-xl font-bold mono mt-1" id="kpi-units">-</p></div>
-    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">ROI</p><p class="text-xl font-bold mono mt-1" id="kpi-roi">-</p></div>
+    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">ROI</p><p class="text-xl font-bold mono mt-1" id="kpi-roi">-</p><p class="ci-sub" id="kpi-roi-ci"></p></div>
     <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Picks</p><p class="text-xl font-bold mono mt-1" id="kpi-picks">-</p></div>
     <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Angles</p><p class="text-xl font-bold mono mt-1" id="kpi-angles">-</p></div>
   </div>
@@ -221,7 +233,7 @@
       </div>
       <table class="w-full text-xs" id="breakdown-table">
         <thead><tr class="text-left text-[11px] text-slate-500 uppercase tracking-wider">
-          <th class="py-1.5 px-2" data-bcol="label" id="breakdown-col-label">Type</th><th class="py-1.5 px-2 text-right" data-bcol="total">Record</th><th class="py-1.5 px-2 text-right" data-bcol="winrate">Win%</th><th class="py-1.5 px-2 text-right" data-bcol="units">Units</th><th class="py-1.5 px-2 text-right" data-bcol="roi">ROI</th>
+          <th class="py-1.5 px-2" data-bcol="label" id="breakdown-col-label">Type</th><th class="py-1.5 px-2 text-right" data-bcol="total">Record</th><th class="py-1.5 px-2 text-right" data-bcol="winrate" data-ci-tip="Win rate with 95% confidence range.&#10;&#10;Green = statistically significant edge&#10;Yellow = inconclusive (need more picks)&#10;Red = statistically losing&#10;&#10;Bar shows the likely range.&#10;Vertical line = 50% (break-even).">Win%</th><th class="py-1.5 px-2 text-right" data-bcol="units">Units</th><th class="py-1.5 px-2 text-right" data-bcol="roi" data-ci-tip="ROI with 95% confidence range.&#10;&#10;Green = statistically profitable&#10;Yellow = inconclusive (need more picks)&#10;Red = statistically unprofitable&#10;&#10;Hover any row for details.">ROI</th>
         </tr></thead>
         <tbody id="type-breakdown-body"></tbody>
       </table>
@@ -306,7 +318,7 @@ function loadJSON(data) {
   allPicks = (data.picks || []).filter(p => p.angles && p.angles.length > 0);
   document.getElementById('empty-state').classList.add('hidden');
   document.getElementById('dashboard').classList.remove('hidden');
-  document.getElementById('header-subtitle').textContent = `${allPicks.length} picks \u00b7 extracted ${data.extracted_at ? data.extracted_at.slice(0,10) : '?'}`;
+  document.getElementById('header-subtitle').textContent = `${allPicks.length} picks \u00b7 extracted ${data.extracted_at ? data.extracted_at.slice(0,16).replace('T',' ') : '?'}`;
   buildFilterOptions();
   applyFilters();
 }
@@ -500,7 +512,16 @@ function calcMetrics(picks) {
   const winrate = decisions > 0 ? w / decisions : 0;
   const units = graded.reduce((s, p) => s + (p.profit || 0), 0);
   const roi = total > 0 ? (units / total) * 100 : 0;
-  return { w, l, push, total, decisions, winrate, units, roi };
+  const wrCI = wilsonCI(w, decisions);
+  let roiCI = { lo: 0, hi: 0 };
+  if (total >= 2) {
+    const profits = graded.map(p => p.profit || 0);
+    const mean = units / total;
+    const v = profits.reduce((s, x) => s + (x - mean) ** 2, 0) / (total - 1);
+    const se = Math.sqrt(v / total);
+    roiCI = { lo: (mean - 1.96 * se) * 100, hi: (mean + 1.96 * se) * 100 };
+  }
+  return { w, l, push, total, decisions, winrate, units, roi, wrCI, roiCI };
 }
 
 function fmtPct(v) { return (v * 100).toFixed(1) + '%'; }
