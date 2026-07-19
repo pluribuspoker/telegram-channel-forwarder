@@ -447,16 +447,23 @@ def _profit(odds: int | None, verdict: str) -> float:
     return 0.0
 
 
+def _progress(stage, **kw):
+    """Emit structured progress for the dashboard server (SSE)."""
+    print("PROGRESS:" + json.dumps({"stage": stage, **kw}), flush=True)
+
+
 # ── Main extraction ───────────────────────────────────────────────────────
 
 
 async def extract(limit: int | None = None, output_path: str | None = None):
+    _progress("connecting")
     client = TelegramClient(
         StringSession(os.environ["TELEGRAM_SESSION"]),
         int(os.environ["TELEGRAM_API_ID"]),
         os.environ["TELEGRAM_API_HASH"],
     )
     await client.start()
+    _progress("connected")
 
     # Load grades from picks.db for enrichment
     db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "picks.db")
@@ -472,6 +479,7 @@ async def extract(limit: int | None = None, output_path: str | None = None):
             grades[row["message_id"]] = dict(row)
         db.close()
         print(f"Loaded {len(grades)} grades from picks.db")
+        _progress("grades", count=len(grades))
 
     picks: list[dict] = []
     seen_msg_ids: set[int] = set()
@@ -549,9 +557,12 @@ async def extract(limit: int | None = None, output_path: str | None = None):
             }
         )
 
+        if total_scanned % 100 == 0:
+            _progress("scan", scanned=total_scanned, angles=total_with_angles)
         if total_scanned % 500 == 0:
             print(f"  scanned {total_scanned}, found {total_with_angles} with angles …")
 
+    _progress("enriching")
     # Also pick up any graded messages we missed (no text / entities edge cases)
     for mid, gd in grades.items():
         if mid in seen_msg_ids:
@@ -593,11 +604,14 @@ async def extract(limit: int | None = None, output_path: str | None = None):
         output_path = os.path.join(
             os.path.dirname(__file__), "data", "angles.json"
         )
+    _progress("writing")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
 
     n_angles = sum(len(p["angles"]) for p in picks)
+    _progress("done", scanned=total_scanned, angles=total_with_angles,
+              picks=len(picks), graded=output["total_graded"])
     print(f"\nDone — scanned {total_scanned} messages")
     print(f"  {total_with_angles} messages with angles")
     print(f"  {len(picks)} picks extracted ({n_angles} angle entries)")

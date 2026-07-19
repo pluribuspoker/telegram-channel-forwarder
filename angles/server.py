@@ -2,7 +2,7 @@
 """Angle Analyzer dashboard server.
 
 Serves the static dashboard and provides a POST /api/refresh endpoint
-to re-extract angle data from Telegram.
+that streams real-time progress via Server-Sent Events.
 
 Uses only Python stdlib — zero additional dependencies.
 
@@ -59,7 +59,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_error(403)
         return None
 
-    # ── refresh endpoint ──────────────────────────────────────────────
+    # ── refresh endpoint (SSE) ────────────────────────────────────────
 
     def _handle_refresh(self):
         global _last_refresh
@@ -71,34 +71,63 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         now = time.time()
         if now - _last_refresh < COOLDOWN_SECS:
             wait = int(COOLDOWN_SECS - (now - _last_refresh))
-            return self._json(429, {"error": f"Cooldown — retry in {wait}s"})
+            return self._json(429, {"error": f"Cooldown \u2014 retry in {wait}s"})
 
         if not _refresh_lock.acquire(blocking=False):
             return self._json(429, {"error": "Refresh already in progress"})
 
+        _last_refresh = now
+
+        # Start SSE stream
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
         try:
-            _last_refresh = now
-            log.info("Starting data refresh")
-            proc = subprocess.run(
+            log.info("Starting data refresh (SSE)")
+            proc = subprocess.Popen(
                 [sys.executable, str(EXTRACT_SCRIPT)],
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                timeout=300,
+                bufsize=1,
                 cwd=str(PROJECT_ROOT),
             )
-            if proc.returncode == 0:
-                log.info("Refresh complete")
-                return self._json(200, {"status": "ok"})
-            else:
-                log.error("Refresh failed: %s", proc.stderr[-500:])
-                return self._json(500, {"error": "Extraction failed"})
+
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if line.startswith("PROGRESS:"):
+                    self._sse(line[9:])
+
+            proc.wait(timeout=300)
+            if proc.returncode != 0:
+                self._sse(json.dumps({"stage": "error",
+                                      "error": "Extraction failed"}))
         except subprocess.TimeoutExpired:
-            return self._json(504, {"error": "Timed out (5 min limit)"})
+            proc.kill()
+            self._sse(json.dumps({"stage": "error",
+                                  "error": "Timed out (5 min limit)"}))
+        except (BrokenPipeError, ConnectionResetError):
+            log.info("Client disconnected during refresh")
+            proc.kill()
         except Exception as exc:
             log.exception("Refresh error")
-            return self._json(500, {"error": str(exc)})
+            try:
+                self._sse(json.dumps({"stage": "error", "error": str(exc)}))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
         finally:
             _refresh_lock.release()
+
+    def _sse(self, data):
+        """Send one SSE event. Lets BrokenPipeError propagate."""
+        self.wfile.write(f"data: {data}\n\n".encode())
+        self.wfile.flush()
 
     def _json(self, code, data):
         body = json.dumps(data).encode()
