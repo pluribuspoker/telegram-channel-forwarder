@@ -203,6 +203,24 @@ async def _grade_cycle(
                 unresolved_indices.append(i)
 
         if not unresolved_indices:
+            # A parlay settled on a lost leg: its still-pending legs are moot and
+            # will never resolve or broadcast. Mark them VOID + broadcasted so
+            # every leg counts as broadcast — otherwise the tracker's
+            # fully-broadcast skip never fires and it re-records the dead parlay
+            # to the audit channel every run.
+            if parlay_lost:
+                for i in range(len(picks)):
+                    lv = leg_verdicts.get(str(i))
+                    if (not lv or lv.get("verdict") not in ("WIN", "LOSS", "PUSH")) \
+                            and not (lv and lv.get("broadcasted")):
+                        leg_verdicts[str(i)] = {
+                            "verdict": "VOID", "calc": "",
+                            "sport": picks[i].get("sport") or sport,
+                            "game_date": msg_date, "broadcasted": True,
+                        }
+                        entry["leg_verdicts"] = leg_verdicts
+                        dirty = True
+
             # ── Broadcast picks graded by tracker but not yet broadcast ────
             unbroadcast = [
                 i for i in range(len(picks))
