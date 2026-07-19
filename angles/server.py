@@ -9,6 +9,8 @@ Uses only Python stdlib — zero additional dependencies.
 Env vars:
     ANGLES_PORT            Port to listen on (default 8080)
     ANGLES_AUTH_SECRET     HMAC secret for signing auth tokens/cookies (required)
+    ANGLES_REFRESH_USERS   Comma-separated Telegram user IDs allowed to refresh
+                           (empty = all authenticated users can refresh)
 """
 
 import http.server
@@ -47,6 +49,12 @@ BLOCKED_EXTENSIONS = frozenset(
 _refresh_lock = threading.Lock()
 _last_refresh = 0.0
 COOLDOWN_SECS = 60
+
+# Telegram user IDs allowed to trigger refresh
+_REFRESH_ALLOWED_IDS: set[int] = set()
+_raw = os.environ.get("ANGLES_REFRESH_USERS", "")
+if _raw:
+    _REFRESH_ALLOWED_IDS = {int(x.strip()) for x in _raw.split(",") if x.strip()}
 
 # Paths that bypass authentication
 _PUBLIC_PATHS = frozenset(("/login", "/auth", "/logout"))
@@ -94,11 +102,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _check_session(self) -> bool:
         """Return True if the request carries a valid session cookie."""
+        return self._get_session_user_id() is not None
+
+    def _get_session_user_id(self) -> int | None:
+        """Return the Telegram user ID from the session cookie, or None."""
         cookie_header = self.headers.get("Cookie", "")
         token = parse_cookie_header(cookie_header, COOKIE_NAME)
         if not token:
-            return False
-        return verify_session_cookie(token, get_secret()) is not None
+            return None
+        return verify_session_cookie(token, get_secret())
 
     def _handle_auth(self):
         """Validate a magic-link token and set a session cookie."""
@@ -152,8 +164,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _handle_refresh(self):
         global _last_refresh
 
-        if not self._check_session():
+        user_id = self._get_session_user_id()
+        if not user_id:
             return self._json(401, {"error": "Unauthorized"})
+
+        if _REFRESH_ALLOWED_IDS and user_id not in _REFRESH_ALLOWED_IDS:
+            return self._json(403, {"error": "You don't have permission to refresh data"})
 
         now = time.time()
         if now - _last_refresh < COOLDOWN_SECS:
