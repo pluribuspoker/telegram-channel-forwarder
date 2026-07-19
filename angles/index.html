@@ -82,6 +82,8 @@
   .ci-tip { position: absolute; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; font-size: 11px; font-family: 'Inter', system-ui, sans-serif; font-weight: 400; color: #cbd5e1; white-space: pre-line; max-width: 280px; min-width: 200px; line-height: 1.5; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .15s, visibility .15s; z-index: 50; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
   .ci-tip.show { opacity: 1; visibility: visible; }
   [data-ci-tip] { cursor: help; }
+  td[title] { cursor: help; }
+  .dropdown-menu label[title] { cursor: help; }
   /* KPI confidence interval bar */
   .kpi-ci-track { width: 100%; height: 3px; background: #1e293b; border-radius: 9px; position: relative; }
   .kpi-ci-fill { position: absolute; top: 0; height: 100%; border-radius: 9px; min-width: 2px; transition: left .4s ease, width .4s ease; }
@@ -318,6 +320,18 @@ const TYPE_LABELS = {
   day_record: 'Day of Week Angle', time_scoped: 'Recent Form Angle',
   unit_record: 'Unit Record Angle', commentary: 'Commentary', no_angle: 'No Angle In Message',
 };
+const TYPE_TOOLTIPS = {
+  run: 'A W-L record over a general stretch \u2014 heater, run, tear, skid, etc.',
+  off_losses: 'Record after a specific number of losses (e.g. 5-2 off 2 losses)',
+  off_wins: 'Record after a specific number of wins (e.g. 3-1 off 3 wins)',
+  sport_record: 'Record in a specific sport (e.g. 12-4 in MLB)',
+  bet_type_record: 'Record with a specific bet type (e.g. 8-3 on over/unders)',
+  day_record: 'Record on a specific day of the week (e.g. 6-1 on Fridays)',
+  time_scoped: 'Record within a recent time window (e.g. 9-2 last 30 days)',
+  unit_record: 'Record at a specific unit size (e.g. 5-0 on 2u plays)',
+  no_angle: 'No angle record was included in the message',
+  commentary: 'Non-angle commentary text',
+};
 const VERDICT_COLORS = { WIN: '#22c55e', LOSS: '#ef4444', PUSH: '#f59e0b', PENDING: '#64748b', UNKNOWN: '#64748b' };
 const VERDICT_EMOJI = { WIN: '\u2705', LOSS: '\u274c', PUSH: '\u267b\ufe0f', PENDING: '\u23f3', UNKNOWN: '\u2753' };
 
@@ -394,7 +408,8 @@ function buildFilterOptions() {
     menu.innerHTML = (sorted.length > 8 ? `<input type="text" class="search-input" placeholder="Search..." oninput="filterDropdown(this, '${key}')">` : '') +
       sorted.map(v => {
         const label = _fLabel(key, v);
-        return `<label data-val="${v}"><input type="checkbox" value="${v}" onchange="toggleFilter('${key}','${v}')"> ${label}</label>`;
+        const tip = key === 'angle_type' && TYPE_TOOLTIPS[v] ? ` title="${TYPE_TOOLTIPS[v]}"` : '';
+        return `<label data-val="${v}"${tip}><input type="checkbox" value="${v}" onchange="toggleFilter('${key}','${v}')"> ${label}</label>`;
       }).join('');
   }
 }
@@ -730,7 +745,8 @@ function renderTypeBreakdown() {
   let tableRows = Object.entries(groups).map(([g, picks]) => {
     const m = calcMetrics(picks);
     const label = key === 'type' ? (TYPE_LABELS[g] || g) : g;
-    return { label, ...m };
+    const _typeKey = key === 'type' ? g : null;
+    return { label, _typeKey, ...m };
   }).filter(r => r.total >= 2);
 
   tableRows.sort((a, b) => {
@@ -751,7 +767,7 @@ function renderTypeBreakdown() {
       const roiTip = escCITip(ciTipROI(r.roiCI, r.total));
       return `
       <tr class="border-t border-slate-800/50">
-        <td class="py-1.5 px-2 text-slate-300">${r.label}</td>
+        <td class="py-1.5 px-2 text-slate-300"${r._typeKey && TYPE_TOOLTIPS[r._typeKey] ? ` title="${TYPE_TOOLTIPS[r._typeKey]}"` : ''}>${r.label}</td>
         <td class="py-1.5 px-2 text-right mono text-slate-400">${r.w}-${r.l}</td>
         <td class="py-1.5 px-2 text-right" data-ci-tip="${wrTip}">
           <div class="mono font-semibold ${wrSig}">${fmtPct(r.winrate)}</div>
@@ -872,8 +888,9 @@ function renderPicksLog() {
     const pickShort = (p.pick_text || '').split('\n')[0].slice(0, 60);
     const anglesShort = (p.angles_raw || '').replace(/\n/g, '; ');
     const parsed = (p.angles || []).map(a => {
-      if (a.type === 'no_angle') return '<span class="text-slate-500">No Angle</span>';
-      const parts = [`<b>${a.wins}-${a.losses}</b> ${TYPE_LABELS[a.type]||a.type}`];
+      if (a.type === 'no_angle') return '<span class="text-slate-500" title="' + (TYPE_TOOLTIPS.no_angle||'') + '">No Angle</span>';
+      const tip = TYPE_TOOLTIPS[a.type] ? ` title="${TYPE_TOOLTIPS[a.type]}"` : '';
+      const parts = [`<b>${a.wins}-${a.losses}</b> <span${tip} style="cursor:help;text-decoration:underline dotted;text-underline-offset:3px;text-decoration-color:#475569">${TYPE_LABELS[a.type]||a.type}</span>`];
       if (a.off_type) parts.push(`off ${a.off_count} ${a.off_type}`);
       if (a.sport) parts.push(a.sport);
       if (a.bet_type) parts.push(a.bet_type);
