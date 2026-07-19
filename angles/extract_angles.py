@@ -591,7 +591,7 @@ async def extract(limit: int | None = None, output_path: str | None = None):
 
     if not output_path:
         output_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "angles", "data", "angles.json"
+            os.path.dirname(__file__), "data", "angles.json"
         )
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:

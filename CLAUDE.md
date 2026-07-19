@@ -207,13 +207,13 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/trent_watcher.py --look
 
 ## Angle Analyzer
 
-`scripts/extract_angles.py` scrapes channel `-1002486251914` for picks with blockquoted angle records, parses them into structured data (type, sport, bet type, side, day, unit, time window, off-count, undefeated/winless), enriches with grades from `picks.db`, and outputs `angles/data/angles.json`. Picks without angles get a `no_angle` type for baseline comparison.
+`angles/extract_angles.py` scrapes channel `-1002486251914` for picks with blockquoted angle records, parses them into structured data (type, sport, bet type, side, day, unit, time window, off-count, undefeated/winless), enriches with grades from `picks.db`, and outputs `angles/data/angles.json`. Picks without angles get a `no_angle` type for baseline comparison.
 
 `angles/index.html` is a single-file dashboard (Tailwind + Chart.js) that loads the JSON. Features: multi-filter bar (pick-level and angle-level), KPIs, cumulative profit chart, Quick Breakdown pivot table (group by any dimension), searchable/sortable picks log with parsed angle display, CSV export.
 
 **One-click data pull (on VPS):**
 ```bash
-su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/extract_angles.py"
+su - forwarder -c "cd ~/app && ~/venv/bin/python angles/extract_angles.py"
 ```
 
 **View locally:**
