@@ -91,9 +91,110 @@
   .kpi-ci-fill.ci-neg { background: rgba(239,68,68,.4); }
   .kpi-ci-fill.ci-neu { background: rgba(245,158,11,.3); }
   .kpi-ci-ref { position: absolute; top: -1px; width: 1px; height: 5px; background: #475569; border-radius: 1px; left: 50%; }
+
+  /* ── Mobile responsive ── */
+  @media (max-width: 639px) {
+    body { -webkit-text-size-adjust: 100%; }
+
+    /* Header */
+    header { padding: 12px 16px !important; }
+    #header-stats { display: none !important; }
+
+    /* Dashboard spacing */
+    #dashboard { padding: 16px 12px !important; }
+
+    /* Filter bar — horizontal scroll */
+    .filter-row {
+      flex-wrap: nowrap !important;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      padding-bottom: 2px;
+      gap: 6px !important;
+    }
+    .filter-row::-webkit-scrollbar { display: none; }
+    .filter-label { display: none !important; }
+    .filter-btn { white-space: nowrap; min-height: 40px; display: inline-flex; align-items: center; }
+
+    /* Bottom-sheet dropdowns */
+    .dropdown-menu {
+      position: fixed !important;
+      bottom: 0 !important; left: 0 !important; right: 0 !important;
+      top: auto !important;
+      max-height: 65vh;
+      border-radius: 20px 20px 0 0 !important;
+      padding: 6px 16px 24px !important;
+      padding-bottom: calc(env(safe-area-inset-bottom, 16px) + 16px) !important;
+      margin-top: 0 !important;
+      min-width: unset !important;
+      width: 100% !important;
+      box-shadow: 0 -4px 32px rgba(0,0,0,.5) !important;
+      z-index: 110 !important;
+    }
+    .dropdown-menu.open { animation: sheetUp .25s ease forwards; }
+    @keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+    .dropdown-menu::before {
+      content: '';
+      display: block;
+      width: 36px; height: 4px;
+      background: #475569; border-radius: 4px;
+      margin: 8px auto 14px;
+    }
+    .dropdown-menu label { padding: 12px 8px; font-size: 15px; border-radius: 10px; }
+    .dropdown-menu input[type=checkbox],
+    .dropdown-menu input[type=radio] { width: 20px; height: 20px; }
+    .dropdown-menu .search-input { font-size: 16px !important; padding: 10px 12px; }
+
+    /* Backdrop */
+    #mobile-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.5);
+      backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+      z-index: 105;
+      opacity: 0; pointer-events: none;
+      transition: opacity .2s;
+    }
+    #mobile-backdrop.show { opacity: 1; pointer-events: auto; }
+
+    /* Active tags — horizontal scroll */
+    #active-tags { overflow-x: auto; flex-wrap: nowrap !important; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    #active-tags::-webkit-scrollbar { display: none; }
+    .tag { white-space: nowrap; }
+
+    /* Chart height */
+    .chart-tall { height: 240px !important; }
+    .breakdown-card { max-height: 280px !important; }
+
+    /* Picks log header */
+    .picks-head { flex-direction: column !important; align-items: stretch !important; gap: 10px !important; }
+    .picks-head-actions { width: 100% !important; flex-direction: column !important; gap: 8px !important; }
+    #picks-search { width: 100% !important; font-size: 16px !important; }
+    #export-csv { width: 100%; text-align: center; min-height: 40px; }
+
+    /* Table — hide verbose columns on mobile */
+    .mobile-hide { display: none !important; }
+    #picks-table { font-size: 11px; }
+    #picks-table td, #picks-table th { padding: 6px 4px; }
+    .pick-cell { max-width: 110px !important; }
+
+    /* Pagination */
+    .picks-foot { flex-direction: column !important; align-items: center !important; gap: 10px !important; }
+    .picks-foot > div { flex-wrap: wrap; justify-content: center; }
+
+    /* Refresh modal */
+    #rm-card { width: calc(100vw - 24px) !important; max-width: 400px; }
+
+    /* CI tooltip */
+    .ci-tip { max-width: calc(100vw - 32px) !important; }
+
+    /* Empty state */
+    .empty-hero { min-height: 50vh; padding: 0 20px; }
+    .empty-hero .text-6xl { font-size: 3rem; }
+  }
 </style>
 </head>
 <body class="min-h-screen">
+<div id="mobile-backdrop"></div>
 
 <!-- Header -->
 <header class="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
@@ -152,8 +253,8 @@
 
   <!-- Filter bar -->
   <div id="filter-bar" class="space-y-2">
-    <div class="flex flex-wrap items-center gap-2">
-      <span class="text-xs text-slate-500 font-medium w-12 shrink-0">PICK</span>
+    <div class="flex flex-wrap items-center gap-2 filter-row">
+      <span class="text-xs text-slate-500 font-medium w-12 shrink-0 filter-label">PICK</span>
       <div class="dropdown" data-key="capper"><button class="filter-btn" data-toggle>Capper <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-capper"></div></div>
       <div class="dropdown" data-key="sport"><button class="filter-btn" data-toggle>Sport <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-sport"></div></div>
       <div class="dropdown" data-key="bet_type"><button class="filter-btn" data-toggle>Bet Type <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-bet_type"></div></div>
@@ -181,8 +282,8 @@
       </div>
       <button id="clear-filters" class="filter-btn reset-btn text-xs ml-2 hidden">Reset Filters</button>
     </div>
-    <div class="flex flex-wrap items-center gap-2">
-      <span class="text-xs text-slate-500 font-medium w-12 shrink-0">ANGLE</span>
+    <div class="flex flex-wrap items-center gap-2 filter-row">
+      <span class="text-xs text-slate-500 font-medium w-12 shrink-0 filter-label">ANGLE</span>
       <div class="dropdown" data-key="angle_type"><button class="filter-btn" data-toggle>Type Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-angle_type"></div></div>
       <div class="dropdown" data-key="off_count"><button class="filter-btn" data-toggle>Off Count Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-off_count"></div></div>
       <div class="dropdown" data-key="a_sport"><button class="filter-btn" data-toggle>Sport Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-a_sport"></div></div>
@@ -207,14 +308,14 @@
 
   <!-- Charts row -->
   <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
-    <div class="card p-4 lg:col-span-8" style="height:340px">
+    <div class="card p-4 lg:col-span-8 chart-tall" style="height:340px">
       <div class="flex items-center justify-between mb-2">
         <h3 class="text-sm font-semibold text-slate-300">Cumulative Profit</h3>
         <span class="text-xs text-slate-500 mono" id="chart-profit-label"></span>
       </div>
       <canvas id="chart-profit"></canvas>
     </div>
-    <div class="card p-4 lg:col-span-4" style="max-height:340px; overflow-y:auto">
+    <div class="card p-4 lg:col-span-4 breakdown-card" style="max-height:340px; overflow-y:auto">
       <div class="flex items-center justify-between mb-2">
         <h3 class="text-sm font-semibold text-slate-300">Breakdown</h3>
         <div class="flex items-center gap-1.5">
@@ -253,9 +354,9 @@
 
   <!-- Picks log -->
   <div class="card p-4">
-    <div class="flex items-center justify-between mb-3">
+    <div class="flex items-center justify-between mb-3 picks-head">
       <h3 class="text-sm font-semibold text-slate-300">Picks Log</h3>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 picks-head-actions">
         <input type="text" placeholder="Search picks..." id="picks-search" class="search-input !w-56 !mb-0 text-xs">
         <button id="export-csv" class="filter-btn text-xs">Export CSV</button>
       </div>
@@ -268,17 +369,17 @@
             <th class="py-2 px-2" data-col="capper">Capper</th>
             <th class="py-2 px-2" data-col="pick_text">Pick</th>
             <th class="py-2 px-2" data-col="verdict">Result</th>
-            <th class="py-2 px-2 text-right" data-col="odds">Odds</th>
+            <th class="py-2 px-2 text-right mobile-hide" data-col="odds">Odds</th>
             <th class="py-2 px-2 text-right" data-col="profit">Profit</th>
-            <th class="py-2 px-2" data-col="sport">Sport</th>
-            <th class="py-2 px-2 col-angles" data-col="angles_raw">Angles (raw)</th>
-            <th class="py-2 px-2 col-parsed">Parsed</th>
+            <th class="py-2 px-2 mobile-hide" data-col="sport">Sport</th>
+            <th class="py-2 px-2 col-angles mobile-hide" data-col="angles_raw">Angles (raw)</th>
+            <th class="py-2 px-2 col-parsed mobile-hide">Parsed</th>
           </tr>
         </thead>
         <tbody id="picks-body"></tbody>
       </table>
     </div>
-    <div class="flex items-center justify-between mt-3 text-xs text-slate-500">
+    <div class="flex items-center justify-between mt-3 text-xs text-slate-500 picks-foot">
       <span id="picks-count"></span>
       <div class="flex items-center gap-3">
         <div class="flex items-center gap-1">
@@ -479,19 +580,32 @@ document.getElementById('clear-filters').addEventListener('click', clearAllFilte
 document.getElementById('date-from').addEventListener('change', e => { _applyDatePreset(e.target.value, dateTo, true); });
 document.getElementById('date-to').addEventListener('change', e => { _applyDatePreset(dateFrom, e.target.value, true); });
 
-// Dropdown toggle
+// Dropdown toggle (with mobile bottom-sheet backdrop)
+const _mBackdrop = document.getElementById('mobile-backdrop');
+function _closeAllDropdowns() {
+  document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+  if (_mBackdrop) { _mBackdrop.classList.remove('show'); document.body.style.overflow = ''; }
+}
+if (_mBackdrop) _mBackdrop.addEventListener('click', _closeAllDropdowns);
+
 document.addEventListener('click', e => {
   const toggle = e.target.closest('[data-toggle]');
   if (toggle) {
     const menu = toggle.nextElementSibling;
     const wasOpen = menu.classList.contains('open');
-    document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
-    if (!wasOpen) menu.classList.add('open');
+    _closeAllDropdowns();
+    if (!wasOpen) {
+      menu.classList.add('open');
+      if (_mBackdrop && window.innerWidth < 640) {
+        _mBackdrop.classList.add('show');
+        document.body.style.overflow = 'hidden';
+      }
+    }
     e.stopPropagation();
     return;
   }
   if (!e.target.closest('.dropdown-menu')) {
-    document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+    _closeAllDropdowns();
   }
 });
 
@@ -636,6 +750,19 @@ document.addEventListener('mouseover', e => {
     _ciTip.classList.add('show');
   } else _ciTip.classList.remove('show');
 });
+// Touch support for CI tooltips
+document.addEventListener('touchstart', e => {
+  const el = e.target.closest('[data-ci-tip]');
+  if (el === _ciTarget) { _ciTip.classList.remove('show'); _ciTarget = null; return; }
+  _ciTarget = el;
+  if (el) {
+    _ciTip.textContent = el.dataset.ciTip;
+    const r = el.getBoundingClientRect();
+    _ciTip.style.top = ((r.top > _ciTip.offsetHeight + 16 ? r.top - _ciTip.offsetHeight - 8 : r.bottom + 8) + window.scrollY) + 'px';
+    _ciTip.style.left = Math.max(8, Math.min(r.right - _ciTip.offsetWidth, window.innerWidth - _ciTip.offsetWidth - 8)) + 'px';
+    _ciTip.classList.add('show');
+  } else { _ciTip.classList.remove('show'); _ciTarget = null; }
+}, { passive: true });
 
 // ── Render all ─────────────────────────────────────────────────────────────
 function renderAll() {
@@ -904,13 +1031,13 @@ function renderPicksLog() {
     return `<tr class="border-t border-slate-800/30 hover:bg-slate-800/20">
       <td class="py-1.5 px-2 mono text-slate-400">${p.date||'-'}</td>
       <td class="py-1.5 px-2">${p.capper||'-'}</td>
-      <td class="py-1.5 px-2 text-slate-300 truncate max-w-[200px]" title="${(p.pick_text||'').replace(/"/g,'&quot;')}">${pickShort}</td>
+      <td class="py-1.5 px-2 text-slate-300 truncate max-w-[200px] pick-cell" title="${(p.pick_text||'').replace(/"/g,'&quot;')}">${pickShort}</td>
       <td class="py-1.5 px-2 font-semibold" style="color:${vc}">${VERDICT_EMOJI[p.verdict]||''} ${p.verdict}</td>
-      <td class="py-1.5 px-2 text-right mono text-slate-400">${fmtOdds(p.odds)}</td>
+      <td class="py-1.5 px-2 text-right mono text-slate-400 mobile-hide">${fmtOdds(p.odds)}</td>
       <td class="py-1.5 px-2 text-right mono ${clr(p.profit||0)}">${p.profit!=null?fmtUnits(p.profit):'-'}</td>
-      <td class="py-1.5 px-2 text-slate-400">${p.sport||'-'}</td>
-      <td class="py-1.5 px-2 text-slate-500 col-angles text-[11px] leading-relaxed">${anglesShort}</td>
-      <td class="py-1.5 px-2 text-slate-400 col-parsed text-[11px] leading-relaxed">${parsed}</td>
+      <td class="py-1.5 px-2 text-slate-400 mobile-hide">${p.sport||'-'}</td>
+      <td class="py-1.5 px-2 text-slate-500 col-angles text-[11px] leading-relaxed mobile-hide">${anglesShort}</td>
+      <td class="py-1.5 px-2 text-slate-400 col-parsed text-[11px] leading-relaxed mobile-hide">${parsed}</td>
     </tr>`;
   }).join('');
 
