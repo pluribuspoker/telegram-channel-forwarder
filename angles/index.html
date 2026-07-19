@@ -97,11 +97,7 @@
   </div>
   <div class="flex items-center gap-3">
     <span id="header-stats" class="text-xs text-slate-400 hidden" style="white-space:nowrap">Graded picks with angle intel — filter by any dimension to find what's predictive.</span>
-    <button id="refresh-btn" class="filter-btn text-sm" onclick="showRefreshModal()">Refresh Data</button>
-    <label class="filter-btn text-sm cursor-pointer">
-      Upload JSON
-      <input type="file" accept=".json" id="file-upload" class="hidden">
-    </label>
+    <button id="refresh-btn" class="filter-btn text-sm" onclick="showRefreshModal()" title="Requires Fight Club membership">Refresh Data</button>
     <a href="/logout" class="text-xs text-slate-500 hover:text-slate-300 ml-1">Logout</a>
   </div>
 </header>
@@ -138,12 +134,8 @@
   <div class="text-6xl opacity-20">&#x1f4d0;</div>
   <div class="text-center">
     <p class="text-lg text-slate-400">All graded picks from Fight Club Picks with the angles Intel attached.</p>
-    <p class="text-sm text-slate-600 mt-2">Click <strong class="text-slate-400">Refresh Data</strong> above to pull the latest, or upload a JSON file.</p>
+    <p class="text-sm text-slate-600 mt-2">Click <strong class="text-slate-400">Refresh Data</strong> above to pull the latest. Requires Fight Club membership.</p>
   </div>
-  <label class="mt-4 px-6 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg cursor-pointer font-medium transition">
-    Choose File
-    <input type="file" accept=".json" class="hidden" id="file-upload-hero">
-  </label>
 </div>
 
 <!-- Dashboard (hidden until data loads) -->
@@ -324,14 +316,6 @@ async function autoLoad() {
   } catch(e) { /* file not available, show upload UI */ }
 }
 
-function handleFile(file) {
-  const reader = new FileReader();
-  reader.onload = e => { try { loadJSON(JSON.parse(e.target.result)); } catch(err) { alert('Invalid JSON: ' + err.message); } };
-  reader.readAsText(file);
-}
-
-document.getElementById('file-upload').addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
-document.getElementById('file-upload-hero').addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
 
 // ── Filter system ──────────────────────────────────────────────────────────
 const FILTER_LABELS = { angle_type: TYPE_LABELS, record_flag: { 'undefeated': 'Undefeated (X-0)', 'winless': 'Winless (0-X)' } };
