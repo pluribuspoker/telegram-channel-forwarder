@@ -82,6 +82,13 @@
   .ci-tip { position: absolute; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; font-size: 11px; font-family: 'Inter', system-ui, sans-serif; font-weight: 400; color: #cbd5e1; white-space: pre-line; max-width: 280px; min-width: 200px; line-height: 1.5; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .15s, visibility .15s; z-index: 50; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
   .ci-tip.show { opacity: 1; visibility: visible; }
   [data-ci-tip] { cursor: help; }
+  /* KPI confidence interval bar */
+  .kpi-ci-track { width: 100%; height: 6px; background: #1e293b; border-radius: 3px; position: relative; }
+  .kpi-ci-fill { position: absolute; top: 0; height: 100%; border-radius: 3px; min-width: 3px; transition: left .4s ease, width .4s ease; }
+  .kpi-ci-fill.ci-pos { background: rgba(34,197,94,.45); }
+  .kpi-ci-fill.ci-neg { background: rgba(239,68,68,.45); }
+  .kpi-ci-fill.ci-neu { background: rgba(245,158,11,.3); }
+  .kpi-ci-ref { position: absolute; top: -2px; width: 1.5px; height: 10px; background: #475569; border-radius: 1px; left: 50%; }
 </style>
 </head>
 <body class="min-h-screen">
@@ -189,7 +196,7 @@
   <!-- KPI cards -->
   <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3" id="kpi-row">
     <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Record</p><p class="text-xl font-bold mono mt-1" id="kpi-record">-</p></div>
-    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Win Rate</p><p class="text-xl font-bold mono mt-1" id="kpi-winrate">-</p></div>
+    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Win Rate</p><p class="text-xl font-bold mono mt-1" id="kpi-winrate">-</p><div id="kpi-wr-ci" class="mt-2 hidden" data-ci-tip=""><div class="kpi-ci-track"><div class="kpi-ci-ref"></div><div class="kpi-ci-fill" id="kpi-wr-ci-fill"></div></div><p class="text-[10px] text-slate-500 mono mt-1" id="kpi-wr-ci-label"></p></div></div>
     <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Net Units</p><p class="text-xl font-bold mono mt-1" id="kpi-units">-</p></div>
     <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">ROI</p><p class="text-xl font-bold mono mt-1" id="kpi-roi">-</p></div>
     <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Picks</p><p class="text-xl font-bold mono mt-1" id="kpi-picks">-</p></div>
@@ -628,6 +635,22 @@ function renderKPIs() {
   const m = calcMetrics(filteredPicks);
   document.getElementById('kpi-record').textContent = `${m.w}-${m.l}` + (m.push ? `-${m.push}` : '');
   const wr = document.getElementById('kpi-winrate'); wr.textContent = fmtPct(m.winrate); wr.className = `text-xl font-bold mono mt-1 ${clr(m.winrate - 0.5)}`;
+  // CI bar for win rate KPI
+  const ciWrap = document.getElementById('kpi-wr-ci');
+  if (m.decisions >= 2) {
+    const fill = document.getElementById('kpi-wr-ci-fill');
+    const lbl = document.getElementById('kpi-wr-ci-label');
+    const barClr = ciBarClr(m.wrCI.lo, m.wrCI.hi, 0.5);
+    fill.className = `kpi-ci-fill ${barClr}`;
+    fill.style.left = (m.wrCI.lo * 100).toFixed(1) + '%';
+    fill.style.width = ((m.wrCI.hi - m.wrCI.lo) * 100).toFixed(1) + '%';
+    lbl.textContent = `${(m.wrCI.lo * 100).toFixed(0)}%\u2013${(m.wrCI.hi * 100).toFixed(0)}%`;
+    lbl.className = `text-[10px] mono mt-1 ${clrSig(m.wrCI.lo, m.wrCI.hi, 0.5)}`;
+    ciWrap.dataset.ciTip = ciTipWR(m.wrCI, m.decisions);
+    ciWrap.classList.remove('hidden');
+  } else {
+    ciWrap.classList.add('hidden');
+  }
   const un = document.getElementById('kpi-units'); un.textContent = fmtUnits(m.units); un.className = `text-xl font-bold mono mt-1 ${clr(m.units)}`;
   const ro = document.getElementById('kpi-roi'); ro.textContent = fmtRoi(m.roi); ro.className = `text-xl font-bold mono mt-1 ${clr(m.roi)}`;
   document.getElementById('kpi-picks').textContent = m.total;
