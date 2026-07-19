@@ -148,11 +148,27 @@
       <div class="dropdown" data-key="capper"><button class="filter-btn" data-toggle>Capper <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-capper"></div></div>
       <div class="dropdown" data-key="sport"><button class="filter-btn" data-toggle>Sport <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-sport"></div></div>
       <div class="dropdown" data-key="bet_type"><button class="filter-btn" data-toggle>Bet Type <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-bet_type"></div></div>
-      <div class="flex items-center gap-1 ml-2">
-        <label class="text-xs text-slate-500">From</label>
-        <input type="date" id="date-from" class="search-input w-32 !mb-0 text-xs">
-        <label class="text-xs text-slate-500 ml-1">To</label>
-        <input type="date" id="date-to" class="search-input w-32 !mb-0 text-xs">
+      <div class="dropdown" id="date-dropdown">
+        <button class="filter-btn" id="date-toggle" data-toggle>Date Range <span class="text-slate-500">&darr;</span></button>
+        <div class="dropdown-menu" id="dd-date" style="min-width:240px">
+          <div class="space-y-1 mb-2">
+            <label class="date-preset" data-days="7"><input type="radio" name="date-preset" class="accent-indigo-500"> Last 7 days</label>
+            <label class="date-preset" data-days="14"><input type="radio" name="date-preset" class="accent-indigo-500"> Last 14 days</label>
+            <label class="date-preset" data-days="30"><input type="radio" name="date-preset" class="accent-indigo-500"> Last 30 days</label>
+            <label class="date-preset" data-days="60"><input type="radio" name="date-preset" class="accent-indigo-500"> Last 60 days</label>
+            <label class="date-preset" data-days="90"><input type="radio" name="date-preset" class="accent-indigo-500"> Last 90 days</label>
+            <label class="date-preset" data-preset="month"><input type="radio" name="date-preset" class="accent-indigo-500"> This month</label>
+            <label class="date-preset" data-preset="all"><input type="radio" name="date-preset" class="accent-indigo-500"> All time</label>
+          </div>
+          <div class="border-t border-slate-700 pt-2 mt-2">
+            <p class="text-[11px] text-slate-500 mb-1 px-1">Custom range</p>
+            <div class="flex items-center gap-1 px-1">
+              <input type="date" id="date-from" class="search-input !mb-0 text-xs flex-1" style="padding:4px 6px">
+              <span class="text-slate-600 text-xs">to</span>
+              <input type="date" id="date-to" class="search-input !mb-0 text-xs flex-1" style="padding:4px 6px">
+            </div>
+          </div>
+        </div>
       </div>
       <button id="clear-filters" class="filter-btn reset-btn text-xs ml-2 hidden">Reset Filters</button>
     </div>
@@ -393,12 +409,53 @@ function clearAllFilters() {
   document.getElementById('date-from').value = '';
   document.getElementById('date-to').value = '';
   document.querySelectorAll('.dropdown-menu input[type=checkbox]').forEach(cb => cb.checked = false);
+  document.querySelectorAll('#dd-date input[type=radio]').forEach(r => r.checked = false);
+  _updateDateBtn();
   applyFilters();
 }
 
+function _isoDate(d) { return d.toISOString().slice(0, 10); }
+function _updateDateBtn() {
+  const btn = document.getElementById('date-toggle');
+  if (dateFrom || dateTo) {
+    const label = dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom ? `From ${dateFrom}` : `To ${dateTo}`;
+    btn.innerHTML = label + ' <span class="text-slate-500">&darr;</span>';
+    btn.classList.add('active');
+  } else {
+    btn.innerHTML = 'Date Range <span class="text-slate-500">&darr;</span>';
+    btn.classList.remove('active');
+  }
+}
+
+function _applyDatePreset(from, to, uncheckRadios) {
+  dateFrom = from; dateTo = to;
+  document.getElementById('date-from').value = from;
+  document.getElementById('date-to').value = to;
+  if (uncheckRadios) document.querySelectorAll('#dd-date input[type=radio]').forEach(r => r.checked = false);
+  _updateDateBtn();
+  applyFilters();
+}
+
+document.querySelectorAll('#dd-date .date-preset').forEach(label => {
+  label.addEventListener('click', () => {
+    const days = label.dataset.days;
+    const preset = label.dataset.preset;
+    const today = new Date();
+    if (days) {
+      const from = new Date(today); from.setDate(from.getDate() - parseInt(days));
+      _applyDatePreset(_isoDate(from), _isoDate(today));
+    } else if (preset === 'month') {
+      const from = new Date(today.getFullYear(), today.getMonth(), 1);
+      _applyDatePreset(_isoDate(from), _isoDate(today));
+    } else if (preset === 'all') {
+      _applyDatePreset('', '');
+    }
+  });
+});
+
 document.getElementById('clear-filters').addEventListener('click', clearAllFilters);
-document.getElementById('date-from').addEventListener('change', e => { dateFrom = e.target.value; applyFilters(); });
-document.getElementById('date-to').addEventListener('change', e => { dateTo = e.target.value; applyFilters(); });
+document.getElementById('date-from').addEventListener('change', e => { _applyDatePreset(e.target.value, dateTo, true); });
+document.getElementById('date-to').addEventListener('change', e => { _applyDatePreset(dateFrom, e.target.value, true); });
 
 // Dropdown toggle
 document.addEventListener('click', e => {
