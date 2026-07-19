@@ -80,8 +80,6 @@
   .ci-bar-ref { position: absolute; top: -1px; width: 1px; height: 6px; background: #64748b; }
   .ci-tip { position: absolute; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; font-size: 11px; font-family: 'Inter', system-ui, sans-serif; font-weight: 400; color: #cbd5e1; white-space: pre-line; max-width: 280px; min-width: 200px; line-height: 1.5; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .15s, visibility .15s; z-index: 50; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
   .ci-tip.show { opacity: 1; visibility: visible; }
-  .kpi .ci-sub { font-size: 10px; color: #64748b; margin-top: 2px; font-family: 'JetBrains Mono', monospace; }
-  .kpi .ci-sub:empty { display: none; }
   [data-ci-tip] { cursor: help; }
 </style>
 </head>
@@ -196,9 +194,9 @@
   <!-- KPI cards -->
   <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3" id="kpi-row">
     <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Record</p><p class="text-xl font-bold mono mt-1" id="kpi-record">-</p></div>
-    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Win Rate</p><p class="text-xl font-bold mono mt-1" id="kpi-winrate">-</p><p class="ci-sub" id="kpi-winrate-ci"></p></div>
+    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Win Rate</p><p class="text-xl font-bold mono mt-1" id="kpi-winrate">-</p></div>
     <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Net Units</p><p class="text-xl font-bold mono mt-1" id="kpi-units">-</p></div>
-    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">ROI</p><p class="text-xl font-bold mono mt-1" id="kpi-roi">-</p><p class="ci-sub" id="kpi-roi-ci"></p></div>
+    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">ROI</p><p class="text-xl font-bold mono mt-1" id="kpi-roi">-</p></div>
     <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Picks</p><p class="text-xl font-bold mono mt-1" id="kpi-picks">-</p></div>
     <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Angles</p><p class="text-xl font-bold mono mt-1" id="kpi-angles">-</p></div>
   </div>
@@ -544,7 +542,7 @@ function ciBarClr(lo, hi, ref) { return lo > ref ? 'ci-pos' : hi < ref ? 'ci-neg
 function ciTipWR(ci, n) {
   if (n < 2) return 'Not enough data for a range estimate';
   const lo = (ci.lo * 100).toFixed(0), hi = (ci.hi * 100).toFixed(0);
-  let t = `Likely range: ${lo}%\u2013${hi}% (${n} picks)`;
+  let t = `95% likely between ${lo}%\u2013${hi}% (${n} picks)`;
   if (ci.lo > 0.5) t += '\nEntire range above 50% \u2014 edge looks real';
   else if (ci.hi < 0.5) t += '\nEntire range below 50% \u2014 consistently losing';
   else t += '\nRange crosses 50% \u2014 not yet proven';
@@ -553,7 +551,7 @@ function ciTipWR(ci, n) {
 function ciTipROI(ci, n) {
   if (n < 2) return 'Not enough data for a range estimate';
   const lo = ci.lo.toFixed(1), hi = ci.hi.toFixed(1);
-  let t = `Likely range: ${lo}%\u2013${hi}% (${n} picks)`;
+  let t = `95% likely between ${lo}%\u2013${hi}% (${n} picks)`;
   if (ci.lo > 0) t += '\nEntire range profitable \u2014 edge looks real';
   else if (ci.hi < 0) t += '\nEntire range negative \u2014 consistently unprofitable';
   else t += '\nRange crosses 0% \u2014 not yet proven';
@@ -591,23 +589,9 @@ function renderAll() {
 function renderKPIs() {
   const m = calcMetrics(filteredPicks);
   document.getElementById('kpi-record').textContent = `${m.w}-${m.l}` + (m.push ? `-${m.push}` : '');
-  const wr = document.getElementById('kpi-winrate');
-  wr.textContent = fmtPct(m.winrate);
-  wr.className = `text-xl font-bold mono mt-1 ${clrSig(m.wrCI.lo, m.wrCI.hi, 0.5)}`;
-  const wrSub = document.getElementById('kpi-winrate-ci');
-  if (m.decisions >= 2) {
-    wrSub.textContent = `${(m.wrCI.lo*100).toFixed(0)}% \u2013 ${(m.wrCI.hi*100).toFixed(0)}%`;
-    wr.parentElement.dataset.ciTip = ciTipWR(m.wrCI, m.decisions);
-  } else { wrSub.textContent = ''; delete wr.parentElement.dataset.ciTip; }
+  const wr = document.getElementById('kpi-winrate'); wr.textContent = fmtPct(m.winrate); wr.className = `text-xl font-bold mono mt-1 ${clr(m.winrate - 0.5)}`;
   const un = document.getElementById('kpi-units'); un.textContent = fmtUnits(m.units); un.className = `text-xl font-bold mono mt-1 ${clr(m.units)}`;
-  const ro = document.getElementById('kpi-roi');
-  ro.textContent = fmtRoi(m.roi);
-  ro.className = `text-xl font-bold mono mt-1 ${clrSig(m.roiCI.lo, m.roiCI.hi, 0)}`;
-  const roSub = document.getElementById('kpi-roi-ci');
-  if (m.total >= 2) {
-    roSub.textContent = `${m.roiCI.lo.toFixed(1)}% \u2013 ${m.roiCI.hi.toFixed(1)}%`;
-    ro.parentElement.dataset.ciTip = ciTipROI(m.roiCI, m.total);
-  } else { roSub.textContent = ''; delete ro.parentElement.dataset.ciTip; }
+  const ro = document.getElementById('kpi-roi'); ro.textContent = fmtRoi(m.roi); ro.className = `text-xl font-bold mono mt-1 ${clr(m.roi)}`;
   document.getElementById('kpi-picks').textContent = m.total;
   const hasAF = ANGLE_FILTER_KEYS.some(k => activeFilters[k].size > 0);
   const angleCount = hasAF
