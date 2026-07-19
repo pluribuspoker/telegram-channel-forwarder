@@ -68,6 +68,14 @@ SPORT_KEYS: dict[str, str] = {
     "Lacrosse": "lacrosse_pll",
 }
 
+# Outright tournament-winner sports. The Odds API prices "to lift the trophy" /
+# "to win the tournament" in a SEPARATE '{sport}_winner' sport (2-way outcomes,
+# includes ET/penalties) rather than on the game event. Maps a game sport_key to
+# its winner sport_key; used as a fallback for final-round / outright moneylines.
+_WINNER_SPORT_KEYS: dict[str, str] = {
+    "soccer_fifa_world_cup": "soccer_fifa_world_cup_winner",
+}
+
 PROP_STAT_MARKETS: dict[str, dict[str, str]] = {
     "MLB": {
         "HITS":       "batter_hits",
@@ -170,6 +178,26 @@ _PERIOD_RE = re.compile(
 # consulted for moneyline bet_type, so "advance"/"qualify" in a description is
 # reliably an advancement bet.
 _ADVANCE_RE = re.compile(r'\b(advanc\w*|qualif\w*)\b|\bto\s+the\s+final\b', re.IGNORECASE)
+
+# "To lift the trophy" / "to win the tournament" — an OUTRIGHT (futures) winner
+# bet. For the FINAL specifically, the knockout to_qualify market is absent and
+# the game's h2h is the 90-min 3-way line (wrong price, e.g. Spain +125 vs the
+# -158 winner price), so these route to the '{sport}_winner' outright market. The
+# parser often rewrites "lift the trophy" into an "advance as Game Winner" phrase
+# (caught by _ADVANCE_RE), but match the trophy vocabulary too so the raw wording
+# is handled if it survives the parse.
+_OUTRIGHT_RE = re.compile(
+    r'\blift(?:ing|s)?\s+the\s+(?:trophy|cup|title)\b'
+    r'|\bwin(?:s|ning)?\s+(?:the\s+)?(?:world\s+cup|tournament|title|championship|trophy)\b'
+    r'|\bto\s+be\s+champions?\b|\btournament\s+winner\b|\bwin\s+it\s+all\b',
+    re.IGNORECASE,
+)
+
+
+def _is_advance_or_outright(desc: str) -> bool:
+    """A knockout-advancement or outright-winner soccer moneyline. Both must
+    avoid the 90-min h2h market; both resolve on the full result (ET/penalties)."""
+    return bool(_ADVANCE_RE.search(desc) or _OUTRIGHT_RE.search(desc))
 
 _PERIOD_SUFFIX: dict[str, str] = {
     "1h": "_h1", "2h": "_h2",
@@ -756,9 +784,11 @@ def lookup_pick_odds(sport: str, pick: dict, bookmakers: list[dict]) -> dict:
                 "api_line": None, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
     if bet_type == "moneyline":
-        # "To advance" / "to qualify" in knockout stages — use the to_qualify
-        # market; the h2h market returns 90-min ML which is the wrong price.
-        if _ADVANCE_RE.search(desc):
+        # "To advance" / "to qualify" / "to lift the trophy" — use the to_qualify
+        # market; the h2h market returns 90-min ML which is the wrong price. The
+        # outright winner fallback (fetch_odds*) covers the final, where to_qualify
+        # is absent.
+        if _is_advance_or_outright(desc):
             return _lookup_moneyline(bookmakers, teams[0] if teams else "", period, "to_qualify", sport)
         market = "h2h_3_way" if is_regulation_ml(desc) else "h2h"
         return _lookup_moneyline(bookmakers, teams[0] if teams else "", period, market, sport)
@@ -793,8 +823,9 @@ _MLB_INNINGS_MARKETS: dict[str, str] = {
 def _markets_for_pick(pick: dict, sport: str = "") -> str:
     """Minimal markets string for this pick's bet_type. Falls back to MARKETS_FULL."""
     desc = pick.get("description", "")
-    # "To advance" / "to qualify" needs the to_qualify market, not h2h.
-    if pick.get("bet_type") == "moneyline" and _ADVANCE_RE.search(desc):
+    # "To advance" / "to qualify" / "to lift the trophy" needs the to_qualify
+    # market (or the outright winner fallback), never the 90-min h2h.
+    if pick.get("bet_type") == "moneyline" and _is_advance_or_outright(desc):
         return MARKETS_BY_TYPE["to_advance"]
     base = MARKETS_BY_TYPE.get(pick.get("bet_type", ""), MARKETS_FULL)
     if sport == "MLB" and pick.get("period") in _MLB_PERIOD_SUFFIX:
@@ -802,6 +833,37 @@ def _markets_for_pick(pick: dict, sport: str = "") -> str:
         if extra:
             return base + "," + extra
     return base
+
+
+# ── Outright winner fallback ──────────────────────────────────────────────────
+
+async def _fetch_outright_winner(
+    sport_key: str, team: str, conn: sqlite3.Connection,
+    *, game_date: str | None = None, current: bool = False,
+) -> dict | None:
+    """Best outright tournament-winner price for `team` (e.g. 'Spain to lift the
+    trophy'). The Odds API prices this in a separate '{sport}_winner' sport with
+    an 'outrights' market keyed by team-named outcomes — no game event needed.
+    Returns a lookup_pick_odds-style dict (match_type 'outright'), or None."""
+    winner_key = _WINNER_SPORT_KEYS.get(sport_key)
+    if not winner_key or not team:
+        return None
+    if current:
+        events = await _fetch_current_event_list(winner_key, conn)
+    else:
+        events = await _fetch_event_list(winner_key, game_date or "", conn)
+    for event in events:
+        eid = event.get("id")
+        if not eid:
+            continue
+        if current:
+            bks = await _fetch_current_bookmakers(winner_key, eid, "outrights", conn)
+        else:
+            bks = await _fetch_bookmakers(winner_key, eid, game_date or "", "outrights", conn)
+        r = _lookup_moneyline(bks, team, "game", "outrights")
+        if r.get("adjusted_odds") is not None:
+            return {**r, "match_type": "outright"}
+    return None
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -876,6 +938,15 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
             bookmakers = await _fetch_bookmakers(sport_key, event_id, game_date, _markets_for_pick(pick, sport), conn)
 
         r = lookup_pick_odds(sport, pick, bookmakers)
+
+        # Outright winner fallback: "to lift the trophy" / final-round advance —
+        # the game's to_qualify/h2h markets don't carry the 2-way winner price.
+        if (r.get("adjusted_odds") is None and bet_type == "moneyline"
+                and _is_advance_or_outright(pick.get("description", ""))):
+            ow = await _fetch_outright_winner(
+                sport_key, teams[0] if teams else "", conn, game_date=game_date)
+            if ow:
+                r = ow
 
         # ESPN fallback (pre-game only — odds cleared after game completion)
         if r.get("adjusted_odds") is None and sport in ESPN_LEAGUES:
@@ -1107,6 +1178,15 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
                 bookmakers = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick, sport), conn)
 
         r = lookup_pick_odds(sport, pick, bookmakers)
+
+        # Outright winner fallback (see fetch_odds) — pre-game only; the
+        # started-game branch above returns before reaching here.
+        if (r.get("adjusted_odds") is None and bet_type == "moneyline"
+                and _is_advance_or_outright(pick.get("description", ""))):
+            ow = await _fetch_outright_winner(
+                sport_key, teams[0] if teams else "", conn, current=True)
+            if ow:
+                r = ow
 
         # ESPN fallback (pre-game only, skip for team_total — ESPN lacks that market)
         if r.get("adjusted_odds") is None and sport in ESPN_LEAGUES and bet_type != "team_total":
