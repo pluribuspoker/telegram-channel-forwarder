@@ -580,10 +580,20 @@ document.getElementById('clear-filters').addEventListener('click', clearAllFilte
 document.getElementById('date-from').addEventListener('change', e => { _applyDatePreset(e.target.value, dateTo, true); });
 document.getElementById('date-to').addEventListener('change', e => { _applyDatePreset(dateFrom, e.target.value, true); });
 
-// Dropdown toggle (with mobile bottom-sheet backdrop)
+// Dropdown toggle (with mobile bottom-sheet portal)
 const _mBackdrop = document.getElementById('mobile-backdrop');
+let _sheetInfo = null; // { menu, parent, next } for restoring DOM position
+
 function _closeAllDropdowns() {
-  document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+  // Restore mobile-moved menu to its original DOM position
+  if (_sheetInfo) {
+    _sheetInfo.menu.classList.remove('open');
+    const { menu, parent, next } = _sheetInfo;
+    if (next) parent.insertBefore(menu, next);
+    else parent.appendChild(menu);
+    _sheetInfo = null;
+  }
+  document.querySelectorAll('.dropdown-menu.open').forEach(m => m.classList.remove('open'));
   if (_mBackdrop) { _mBackdrop.classList.remove('show'); document.body.style.overflow = ''; }
 }
 if (_mBackdrop) _mBackdrop.addEventListener('click', _closeAllDropdowns);
@@ -591,15 +601,22 @@ if (_mBackdrop) _mBackdrop.addEventListener('click', _closeAllDropdowns);
 document.addEventListener('click', e => {
   const toggle = e.target.closest('[data-toggle]');
   if (toggle) {
-    const menu = toggle.nextElementSibling;
-    const wasOpen = menu.classList.contains('open');
+    // Detect if THIS toggle's menu was already open
+    const wasOpen = (_sheetInfo && _sheetInfo.menu._toggle === toggle)
+      || toggle.nextElementSibling?.classList.contains('open');
     _closeAllDropdowns();
     if (!wasOpen) {
-      menu.classList.add('open');
+      const menu = toggle.nextElementSibling;
+      if (!menu) { e.stopPropagation(); return; }
       if (_mBackdrop && window.innerWidth < 640) {
+        // Move menu to <body> so it escapes overflow:auto ancestors
+        _sheetInfo = { menu, parent: menu.parentElement, next: menu.nextElementSibling };
+        menu._toggle = toggle;
+        document.body.appendChild(menu);
         _mBackdrop.classList.add('show');
         document.body.style.overflow = 'hidden';
       }
+      menu.classList.add('open');
     }
     e.stopPropagation();
     return;
