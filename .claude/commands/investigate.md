@@ -23,7 +23,7 @@ $ARGUMENTS
 4. **Verify VPS matches local** (if local): `ssh root@209.38.51.86 'cd /home/forwarder/app && git log --oneline -1'`
 5. **Check VPS logs** (`journalctl -u telegram-tracker`, `journalctl -u grade-daemon`, etc.)
 6. **Identify root cause**: Trace the full pipeline before fixing
-7. **Fix and verify** with the real data that triggered the bug (replay actual inputs through the fixed code)
+7. **Fix and verify** with the real data that triggered the bug (replay actual inputs through the fixed code). **Output-changing fixes (a broadcast, edited message, rendered result): before declaring done, diff the new output against an existing known-correct analog (e.g. how the same thing renders in the non-buggy case) and match that format exactly — don't ship a reduced variant, and treat your own "cosmetic / moot / minimal / enhance-later" hedging as a signal to fix it now or ask, not to ship it.**
 8. **Deploy code fix first** (push + deploy) before touching live data
 9. **Fix live data** if needed (wrong emoji, DB entry, etc.). Use Bot API with `parse_mode: "HTML"` — check `msg.media`: use `editMessageCaption` for photo/video, `editMessageText` for plain text
 10. **Run tracker manually** scoped to the affected channel for instant verification
