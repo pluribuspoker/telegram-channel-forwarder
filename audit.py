@@ -419,18 +419,21 @@ class AuditLog:
                 return VERDICT_EMOJI["PUSH"]
             return VERDICT_EMOJI["UNKNOWN"]
 
-        if len(picks) == 1:
-            desc, verdict, odds_str = picks[0]
-            emoji = VERDICT_EMOJI.get(verdict, "")
-            odds_part = f" [{e(odds_str)}]" if odds_str else ""
-            text = f"{emoji} {capper_linked} · {e(desc)}{odds_part}"
-        elif is_parlay:
+        # Check is_parlay BEFORE the single-pick case: a parlay that settled on
+        # a single lost leg (siblings still pending/dropped) has len(picks)==1 but
+        # must still render as a Parlay, not a lone straight pick.
+        if is_parlay:
             verdicts_only = [v for _, v, _ in picks]
             overall_emoji = _overall_emoji(verdicts_only)
             combined = _parlay_combined_odds([o for p, _, o in resolved if p.get("is_parlay_leg")])
             combined_part = f" [{e(fmt_odds(combined))}]" if combined is not None else ""
             legs = "\n".join(f"• {e(d)}" for d, _, _ in picks)
             text = f"{overall_emoji} {capper_linked} · Parlay{combined_part}\n{legs}"
+        elif len(picks) == 1:
+            desc, verdict, odds_str = picks[0]
+            emoji = VERDICT_EMOJI.get(verdict, "")
+            odds_part = f" [{e(odds_str)}]" if odds_str else ""
+            text = f"{emoji} {capper_linked} · {e(desc)}{odds_part}"
         else:
             # Non-parlay multi-pick: one emoji per pick
             lines = [_pick_line(d, v, o) for d, v, o in picks]

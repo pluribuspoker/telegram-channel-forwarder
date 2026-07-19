@@ -182,11 +182,24 @@ async def _grade_cycle(
         capper = entry.get("capper_name", "")
         reply_to_id = entry.get("reply_to_id")  # pre-cached by tracker for threaded broadcasts
 
+        # A parlay is decided the instant any leg loses — the remaining legs
+        # are moot. Treat them as needing no grading so the parlay settles now
+        # (routes through the all-resolved broadcast path below) instead of
+        # waiting forever on a pending sibling. Also stops a later-resolving
+        # pending leg from broadcasting a second, redundant result.
+        is_parlay_entry = any(p.get("is_parlay_leg") for p in picks)
+        parlay_lost = is_parlay_entry and any(
+            leg_verdicts.get(str(i), {}).get("verdict") == "LOSS"
+            for i in range(len(picks))
+        )
+
         # Figure out which legs still need grading
         unresolved_indices = []
         for i in range(len(picks)):
             leg = leg_verdicts.get(str(i))
             if not leg or leg.get("verdict") not in ("WIN", "LOSS", "PUSH"):
+                if parlay_lost:
+                    continue  # parlay already lost — pending leg is moot
                 unresolved_indices.append(i)
 
         if not unresolved_indices:

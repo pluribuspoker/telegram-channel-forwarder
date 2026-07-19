@@ -15,12 +15,15 @@ def _overall_verdict(verdicts: list[tuple]) -> str:
     all_v = [v[1] for v in verdicts]
     is_parlay = any(v[0].get("is_parlay_leg") for v in verdicts)
     if is_parlay:
+        # A parlay is lost the instant ANY leg loses — the remaining legs
+        # (even still-PENDING ones) can't change the outcome, so LOSS settles
+        # it immediately and must be checked before PENDING/UNKNOWN.
+        if "LOSS" in all_v:
+            return "LOSS"
         if "PENDING" in all_v:
             return "PENDING"
         if "UNKNOWN" in all_v:
             return "UNKNOWN"
-        if "LOSS" in all_v:
-            return "LOSS"
         if all(v == "WIN" for v in all_v):
             return "WIN"
         if "PUSH" in all_v:
