@@ -434,8 +434,10 @@ class AuditLog:
             overall_emoji = _overall_emoji(verdicts_only)
             combined = _parlay_combined_odds([o for _, _, o in parlay_all])
             combined_part = f" [{e(fmt_odds(combined))}]" if combined is not None else ""
-            legs = "\n".join(f"• {e(_format_pick(p))}" for p, _, _ in parlay_all)
-            text = f"{overall_emoji} {capper_linked} · Parlay{combined_part}\n{legs}"
+            # Inline the legs on a single line (Ko ML / Duncan ML) instead of one
+            # bullet per leg, so the whole ticket reads as one compact result.
+            legs = " / ".join(e(_format_pick(p)) for p, _, _ in parlay_all)
+            text = f"{overall_emoji} {capper_linked} · Parlay: {legs}{combined_part}"
         elif len(picks) == 1:
             desc, verdict, odds_str = picks[0]
             emoji = VERDICT_EMOJI.get(verdict, "")
