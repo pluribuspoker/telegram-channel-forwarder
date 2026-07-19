@@ -530,6 +530,55 @@ function fmtRoi(v) { return (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; }
 function clr(v) { return v > 0 ? 'pos' : v < 0 ? 'neg' : 'neu'; }
 function fmtOdds(v) { if (v == null) return '-'; return (v > 0 ? '+' : '') + v; }
 
+// ── Confidence interval helpers ───────────────────────────────────────────
+function wilsonCI(wins, n) {
+  if (n === 0) return { lo: 0, hi: 1 };
+  const z = 1.96, p = wins / n;
+  const d = 1 + z * z / n;
+  const c = (p + z * z / (2 * n)) / d;
+  const m = z * Math.sqrt((p * (1 - p) + z * z / (4 * n)) / n) / d;
+  return { lo: Math.max(0, c - m), hi: Math.min(1, c + m) };
+}
+function clrSig(lo, hi, ref) { return lo > ref ? 'pos' : hi < ref ? 'neg' : 'neu'; }
+function ciBarClr(lo, hi, ref) { return lo > ref ? 'ci-pos' : hi < ref ? 'ci-neg' : 'ci-neu'; }
+function ciTipWR(ci, n) {
+  if (n < 2) return 'Not enough data for a range estimate';
+  const lo = (ci.lo * 100).toFixed(0), hi = (ci.hi * 100).toFixed(0);
+  let t = `Likely range: ${lo}%\u2013${hi}% (${n} picks)`;
+  if (ci.lo > 0.5) t += '\nEntire range above 50% \u2014 edge looks real';
+  else if (ci.hi < 0.5) t += '\nEntire range below 50% \u2014 consistently losing';
+  else t += '\nRange crosses 50% \u2014 not yet proven';
+  return t;
+}
+function ciTipROI(ci, n) {
+  if (n < 2) return 'Not enough data for a range estimate';
+  const lo = ci.lo.toFixed(1), hi = ci.hi.toFixed(1);
+  let t = `Likely range: ${lo}%\u2013${hi}% (${n} picks)`;
+  if (ci.lo > 0) t += '\nEntire range profitable \u2014 edge looks real';
+  else if (ci.hi < 0) t += '\nEntire range negative \u2014 consistently unprofitable';
+  else t += '\nRange crosses 0% \u2014 not yet proven';
+  return t;
+}
+function escCITip(s) { return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/\n/g,'&#10;'); }
+
+// CI tooltip (single shared element, event delegation)
+const _ciTip = document.createElement('div');
+_ciTip.className = 'ci-tip';
+document.body.appendChild(_ciTip);
+let _ciTarget = null;
+document.addEventListener('mouseover', e => {
+  const el = e.target.closest('[data-ci-tip]');
+  if (el === _ciTarget) return;
+  _ciTarget = el;
+  if (el) {
+    _ciTip.textContent = el.dataset.ciTip;
+    const r = el.getBoundingClientRect();
+    _ciTip.style.top = ((r.top > _ciTip.offsetHeight + 16 ? r.top - _ciTip.offsetHeight - 8 : r.bottom + 8) + window.scrollY) + 'px';
+    _ciTip.style.left = Math.max(8, Math.min(r.right - _ciTip.offsetWidth, window.innerWidth - _ciTip.offsetWidth - 8)) + 'px';
+    _ciTip.classList.add('show');
+  } else _ciTip.classList.remove('show');
+});
+
 // ── Render all ─────────────────────────────────────────────────────────────
 function renderAll() {
   renderKPIs();
@@ -542,9 +591,23 @@ function renderAll() {
 function renderKPIs() {
   const m = calcMetrics(filteredPicks);
   document.getElementById('kpi-record').textContent = `${m.w}-${m.l}` + (m.push ? `-${m.push}` : '');
-  const wr = document.getElementById('kpi-winrate'); wr.textContent = fmtPct(m.winrate); wr.className = `text-xl font-bold mono mt-1 ${clr(m.winrate - 0.5)}`;
+  const wr = document.getElementById('kpi-winrate');
+  wr.textContent = fmtPct(m.winrate);
+  wr.className = `text-xl font-bold mono mt-1 ${clrSig(m.wrCI.lo, m.wrCI.hi, 0.5)}`;
+  const wrSub = document.getElementById('kpi-winrate-ci');
+  if (m.decisions >= 2) {
+    wrSub.textContent = `${(m.wrCI.lo*100).toFixed(0)}% \u2013 ${(m.wrCI.hi*100).toFixed(0)}%`;
+    wr.parentElement.dataset.ciTip = ciTipWR(m.wrCI, m.decisions);
+  } else { wrSub.textContent = ''; delete wr.parentElement.dataset.ciTip; }
   const un = document.getElementById('kpi-units'); un.textContent = fmtUnits(m.units); un.className = `text-xl font-bold mono mt-1 ${clr(m.units)}`;
-  const ro = document.getElementById('kpi-roi'); ro.textContent = fmtRoi(m.roi); ro.className = `text-xl font-bold mono mt-1 ${clr(m.roi)}`;
+  const ro = document.getElementById('kpi-roi');
+  ro.textContent = fmtRoi(m.roi);
+  ro.className = `text-xl font-bold mono mt-1 ${clrSig(m.roiCI.lo, m.roiCI.hi, 0)}`;
+  const roSub = document.getElementById('kpi-roi-ci');
+  if (m.total >= 2) {
+    roSub.textContent = `${m.roiCI.lo.toFixed(1)}% \u2013 ${m.roiCI.hi.toFixed(1)}%`;
+    ro.parentElement.dataset.ciTip = ciTipROI(m.roiCI, m.total);
+  } else { roSub.textContent = ''; delete ro.parentElement.dataset.ciTip; }
   document.getElementById('kpi-picks').textContent = m.total;
   const hasAF = ANGLE_FILTER_KEYS.some(k => activeFilters[k].size > 0);
   const angleCount = hasAF
@@ -630,14 +693,26 @@ function renderTypeBreakdown() {
   });
 
   document.getElementById('type-breakdown-body').innerHTML = tableRows.length
-    ? tableRows.map(r => `
+    ? tableRows.map(r => {
+      const wrSig = clrSig(r.wrCI.lo, r.wrCI.hi, 0.5);
+      const roiSig = clrSig(r.roiCI.lo, r.roiCI.hi, 0);
+      const barL = (r.wrCI.lo * 100).toFixed(1);
+      const barW = ((r.wrCI.hi - r.wrCI.lo) * 100).toFixed(1);
+      const barClr = ciBarClr(r.wrCI.lo, r.wrCI.hi, 0.5);
+      const wrTip = escCITip(ciTipWR(r.wrCI, r.decisions));
+      const roiTip = escCITip(ciTipROI(r.roiCI, r.total));
+      return `
       <tr class="border-t border-slate-800/50">
         <td class="py-1.5 px-2 text-slate-300">${r.label}</td>
         <td class="py-1.5 px-2 text-right mono text-slate-400">${r.w}-${r.l}</td>
-        <td class="py-1.5 px-2 text-right mono font-semibold ${clr(r.winrate-.5)}">${fmtPct(r.winrate)}</td>
+        <td class="py-1.5 px-2 text-right" data-ci-tip="${wrTip}">
+          <div class="mono font-semibold ${wrSig}">${fmtPct(r.winrate)}</div>
+          <div class="ci-bar-track"><div class="ci-bar-ref" style="left:50%"></div><div class="ci-bar-fill ${barClr}" style="left:${barL}%;width:${barW}%"></div></div>
+        </td>
         <td class="py-1.5 px-2 text-right mono ${clr(r.units)}">${fmtUnits(r.units)}</td>
-        <td class="py-1.5 px-2 text-right mono ${clr(r.roi)}">${fmtRoi(r.roi)}</td>
-      </tr>`).join('')
+        <td class="py-1.5 px-2 text-right mono ${roiSig}" data-ci-tip="${roiTip}">${fmtRoi(r.roi)}</td>
+      </tr>`;
+    }).join('')
     : '<tr><td colspan="5" class="py-3 text-center text-slate-500">No data</td></tr>';
 }
 
