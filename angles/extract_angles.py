@@ -238,7 +238,7 @@ def _classify_type(text: str, wins: int, losses: int) -> str:
     off_type, _ = _extract_off(text)
     if off_type:
         return f"off_{off_type}"
-    if re.search(r"\b(?:run|stretch|cooling)\b", tl):
+    if re.search(r"\b(?:run|stretch|cooling|regression|skid|slide|streak|surge|tear|heater|cold\s*spell)\b", tl):
         return "run"
     if _extract_unit(text):
         return "unit_record"
