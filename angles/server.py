@@ -61,12 +61,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     # ── refresh endpoint (SSE) ────────────────────────────────────────
 
+    def _client_ip(self):
+        return (self.headers.get("CF-Connecting-IP")
+                or self.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+                or self.client_address[0])
+
+    def _is_trusted(self):
+        trusted = os.environ.get("ANGLES_TRUSTED_IPS", "")
+        return self._client_ip() in set(filter(None, trusted.split(",")))
+
     def _handle_refresh(self):
         global _last_refresh
-        token = os.environ.get("ANGLES_REFRESH_TOKEN", "")
-        auth = self.headers.get("Authorization", "")
-        if not token or auth != f"Bearer {token}":
-            return self._json(401, {"error": "Unauthorized"})
+        if not self._is_trusted():
+            token = os.environ.get("ANGLES_REFRESH_TOKEN", "")
+            auth = self.headers.get("Authorization", "")
+            if not token or auth != f"Bearer {token}":
+                return self._json(401, {"error": "Unauthorized"})
 
         now = time.time()
         if now - _last_refresh < COOLDOWN_SECS:

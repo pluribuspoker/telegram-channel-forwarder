@@ -787,15 +787,35 @@ document.getElementById('export-csv').addEventListener('click', () => {
 // ── Refresh data via SSE ─────────────────────────────────────────────────
 const RM_EST_TOTAL = 3500;
 
-function showRefreshModal() {
-  document.getElementById('rm-key').value = localStorage.getItem('_aa_key') || '';
+function showAuthModal(errMsg) {
   document.getElementById('rm-auth').classList.remove('hidden');
   document.getElementById('rm-progress').classList.add('hidden');
-  document.getElementById('rm-auth-err').classList.add('hidden');
   document.getElementById('rm-go').disabled = false;
   document.getElementById('rm-go').textContent = 'Refresh';
+  document.getElementById('rm-key').value = localStorage.getItem('_aa_key') || '';
+  const err = document.getElementById('rm-auth-err');
+  if (errMsg) { err.textContent = errMsg; err.classList.remove('hidden'); }
+  else err.classList.add('hidden');
   document.getElementById('refresh-modal').classList.remove('hidden');
   document.getElementById('rm-key').focus();
+}
+async function showRefreshModal() {
+  // Try without auth first (IP whitelist), then with saved key
+  const saved = localStorage.getItem('_aa_key') || '';
+  for (const key of [null, saved || null]) {
+    if (key === null && saved) continue; // skip empty-then-saved duplicate
+    try {
+      const h = {}; if (key) h.Authorization = 'Bearer ' + key;
+      const r = await fetch('/api/refresh', { method: 'POST', headers: h });
+      if (r.ok) { showProgressAndStream(r); return; }
+      if (r.status !== 401) {
+        let msg = 'Refresh failed'; try { msg = (await r.json()).error || msg; } catch {}
+        showAuthModal(msg); return;
+      }
+    } catch (e) { showAuthModal('Connection error: ' + e.message); return; }
+    break; // 401 — fall through to auth modal
+  }
+  showAuthModal();
 }
 function closeRefreshModal() { document.getElementById('refresh-modal').classList.add('hidden'); }
 
@@ -820,8 +840,23 @@ async function doRefresh() {
   const key = document.getElementById('rm-key').value.trim();
   if (!key) return;
   localStorage.setItem('_aa_key', key);
+  try {
+    const r = await fetch('/api/refresh', { method: 'POST', headers: { Authorization: 'Bearer ' + key } });
+    if (!r.ok) {
+      let msg = 'Refresh failed'; try { msg = (await r.json()).error || msg; } catch {}
+      document.getElementById('rm-auth-err').textContent = msg;
+      document.getElementById('rm-auth-err').classList.remove('hidden');
+      return;
+    }
+    showProgressAndStream(r);
+  } catch (e) {
+    document.getElementById('rm-auth-err').textContent = 'Connection error: ' + e.message;
+    document.getElementById('rm-auth-err').classList.remove('hidden');
+  }
+}
 
-  // Switch to progress view
+async function showProgressAndStream(r) {
+  document.getElementById('refresh-modal').classList.remove('hidden');
   document.getElementById('rm-auth').classList.add('hidden');
   document.getElementById('rm-progress').classList.remove('hidden');
   document.getElementById('rm-stream-err').classList.add('hidden');
@@ -835,21 +870,8 @@ async function doRefresh() {
     s.className = 'rm-stage pending';
     const d = s.querySelector('[data-detail]'); if (d) d.textContent = '';
   });
-  rmBar(0);
-  rmActivate('connecting');
-  rmBar(2);
-
+  rmBar(0); rmActivate('connecting'); rmBar(2);
   try {
-    const r = await fetch('/api/refresh', { method: 'POST', headers: { Authorization: 'Bearer ' + key } });
-    if (!r.ok) {
-      let msg = 'Refresh failed';
-      try { const d = await r.json(); msg = d.error || msg; } catch {}
-      document.getElementById('rm-auth-err').textContent = msg;
-      document.getElementById('rm-auth-err').classList.remove('hidden');
-      document.getElementById('rm-auth').classList.remove('hidden');
-      document.getElementById('rm-progress').classList.add('hidden');
-      return;
-    }
     const reader = r.body.getReader(), dec = new TextDecoder();
     let buf = '';
     while (true) {
