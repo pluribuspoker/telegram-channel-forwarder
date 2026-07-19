@@ -421,10 +421,8 @@ function _updateDateBtn() {
   if (dateFrom || dateTo) {
     const label = dateLabel || (dateFrom && dateTo ? `${_fmtDate(dateFrom)} – ${_fmtDate(dateTo)}` : dateFrom ? `From ${_fmtDate(dateFrom)}` : `To ${_fmtDate(dateTo)}`);
     btn.innerHTML = label + ' <span class="text-slate-500">&darr;</span>';
-    btn.classList.add('active');
   } else {
     btn.innerHTML = 'Date Range <span class="text-slate-500">&darr;</span>';
-    btn.classList.remove('active');
   }
 }
 
