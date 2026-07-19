@@ -42,6 +42,7 @@ In both cases, `test_source_channel` → `test_dest_channel` from `MAPPINGS_CONF
 - `telegram-forwarder.service` — listener (persistent). Aliases: `flogs` / `tlogs`.
 - `telegram-tracker.timer` — pick grader, every 5 min. Scans Telegram for new picks, parses, fetches odds, applies cached verdicts.
 - `grade-daemon.service` — grade daemon (persistent). Grades pending picks every 10s via ESPN + Claude, edits emoji + broadcasts via Bot API. **Zero Telethon** — no session/flood risk. Logs: `journalctl -u grade-daemon`. **Hang-hardened:** each cycle is capped at `CYCLE_TIMEOUT` (env `GRADE_DAEMON_CYCLE_TIMEOUT`, default 300s) and aborted+retried if exceeded; the daemon feeds a systemd `WatchdogSec=600` (sends `WATCHDOG=1` each loop) so a fully wedged process auto-restarts. Broadcasts persist to the cache immediately (not just end-of-cycle) so an abort/restart never double-posts.
+- `angles-dashboard.service` — angle analyzer web dashboard (persistent). Serves `https://fightclubpicks.cc`. Env: `ANGLES_REFRESH_TOKEN`, `ANGLES_TRUSTED_IPS`, `ANGLES_PORT`.
 - `mem-watchdog.timer` — VPS memory monitor (`deploy/mem_watchdog.py`), every 10 min. Stays silent unless it DMs the operator via the watchdog bot: 🔴 on a kernel OOM-kill, 🟡 on sustained swap pressure (>1GB used ~40min+ → upgrade signal). Reuses `WATCHDOG_BOT_TOKEN`/`WATCHDOG_USER_ID`; state in `~/.mem_watchdog_state.json`. The VPS has a **2GB swapfile** (`/swapfile`, in `/etc/fstab`, `vm.swappiness=10`) — added because it previously had zero swap and OOM-killed processes under spikes.
 - `claude-watchdog-bot.service` — interactive watchdog bot (`deploy/claude_watchdog_bot.py`). Uses `WATCHDOG_BOT_TOKEN`. Menu commands: `/mem` (RAM/swap usage), `/status` (service status), `/restart`, `/kill` (force-kill+restart), `/logs` (last 20 journal lines), `/tmux` (Claude's current pane). Commands set via `setMyCommands` Bot API.
 
@@ -211,15 +212,20 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/trent_watcher.py --look
 
 `angles/index.html` is a single-file dashboard (Tailwind + Chart.js) that loads the JSON. Features: multi-filter bar (pick-level and angle-level), KPIs, cumulative profit chart, Quick Breakdown pivot table (group by any dimension), searchable/sortable picks log with parsed angle display, CSV export.
 
-**One-click data pull (on VPS):**
+**Hosted at:** `https://fightclubpicks.cc` — served by `angles/server.py` (Python stdlib, ~10MB RAM) behind Cloudflare (HTTPS, DDoS protection). Domain: Cloudflare Registrar, A record → `209.38.51.86` proxied.
+
+**One-click refresh:** The dashboard has a "Refresh Data" button that streams real-time progress via SSE. Trusted IPs (configured via `ANGLES_TRUSTED_IPS` in `.env`) skip the API key prompt. Others need `ANGLES_REFRESH_TOKEN`.
+
+**Systemd:** `angles-dashboard.service` — persistent, port 80, runs as forwarder user.
+
+**Env vars:**
+- `ANGLES_REFRESH_TOKEN` — Bearer token for the refresh endpoint
+- `ANGLES_TRUSTED_IPS` — comma-separated IPs that skip auth (uses `CF-Connecting-IP` header)
+- `ANGLES_PORT` — listen port (default 80)
+
+**Manual data pull (on VPS):**
 ```bash
 su - forwarder -c "cd ~/app && ~/venv/bin/python angles/extract_angles.py"
-```
-
-**View locally:**
-```bash
-cd angles && python -m http.server 8080
-# Open http://localhost:8080
 ```
 
 Angle types: `run`, `off_losses`, `off_wins`, `sport_record`, `bet_type_record`, `side_record`, `day_record`, `time_scoped`, `unit_record`, `no_angle`. Prose lines with records buried in sentences are auto-skipped. Context headers (e.g. "L30 days:", "This month:") propagate scope to subsequent bare-record lines. Parenthetical sub-records inherit sport/bet_type/side from parent context.

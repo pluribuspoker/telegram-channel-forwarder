@@ -28,6 +28,7 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 | `scripts/format_graded_csv.py` | Converts graded CSV to spreadsheet format with odds from Odds API |
 | `angles/extract_angles.py` | Scrapes angle records from pick channel, parses into structured data, outputs JSON |
 | `angles/index.html` | Single-file web dashboard for angle performance analysis |
+| `angles/server.py` | Lightweight HTTP server for the dashboard with SSE refresh endpoint |
 
 ---
 
@@ -341,13 +342,13 @@ python scripts/trent_watcher.py --channel ID     # send to specific channel
 
 **Angle types:** `run`, `off_losses`, `off_wins`, `sport_record`, `bet_type_record`, `side_record`, `day_record`, `time_scoped`, `unit_record`, `no_angle` (picks without angles, for baseline comparison).
 
-```bash
-# One-click data pull (on VPS):
-su - forwarder -c "cd ~/app && ~/venv/bin/python angles/extract_angles.py"
+**Hosted at:** [`https://fightclubpicks.cc`](https://fightclubpicks.cc) — served by `angles/server.py` (Python stdlib HTTP server, ~10MB RAM) behind Cloudflare. The "Refresh Data" button streams real-time extraction progress via Server-Sent Events.
 
-# View locally:
-cd angles && python -m http.server 8080
-# Open http://localhost:8080
+**VPS service:** `angles-dashboard.service` (port 80). Env vars: `ANGLES_REFRESH_TOKEN`, `ANGLES_TRUSTED_IPS`, `ANGLES_PORT`.
+
+```bash
+# Manual data pull (on VPS):
+su - forwarder -c "cd ~/app && ~/venv/bin/python angles/extract_angles.py"
 ```
 
 ---
