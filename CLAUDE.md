@@ -220,9 +220,13 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/trent_watcher.py --look
 
 **Systemd:** `angles-dashboard.service` — persistent, port 80, runs as forwarder user.
 
+**Activity dashboard:** Admin-only route at `/activity` tracks page views, unique visitors, and who visited (with Telegram display names). Logging is purely server-side (zero client-side network calls). Data stored in `angles/data/activity.db` (separate from picks.db). Username resolution via Bot API, cached 7 days.
+
 **Env vars:**
 - `ANGLES_AUTH_SECRET` — HMAC key for signing auth tokens/cookies (required)
 - `ANGLES_PORT` — listen port (default 80)
+- `ANGLES_ADMIN_IDS` — comma-separated Telegram user IDs that can access `/activity` (empty = all authenticated users)
+- `BOT_TOKEN` — used to resolve Telegram user IDs to display names on the activity dashboard (optional, falls back to numeric IDs)
 
 **Manual data pull (on VPS):**
 ```bash
