@@ -1,0 +1,18 @@
+[Unit]
+Description=Angle Analyzer Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+ExecStart=/home/forwarder/venv/bin/python angles/server.py
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+Restart=always
+RestartSec=5
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+
+[Install]
+WantedBy=multi-user.target

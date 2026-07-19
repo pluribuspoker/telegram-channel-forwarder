@@ -67,12 +67,29 @@
   </div>
   <div class="flex items-center gap-3">
     <span id="header-stats" class="text-xs text-slate-500 mono hidden"></span>
+    <button id="refresh-btn" class="filter-btn text-sm" onclick="showRefreshModal()">Refresh Data</button>
     <label class="filter-btn text-sm cursor-pointer">
       Upload JSON
       <input type="file" accept=".json" id="file-upload" class="hidden">
     </label>
   </div>
 </header>
+
+<!-- Refresh modal -->
+<div id="refresh-modal" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 hidden" onclick="if(event.target===this)closeRefreshModal()">
+  <div class="card p-6 w-80 space-y-4">
+    <h3 class="font-semibold text-sm">Refresh Data</h3>
+    <div id="rm-key-row">
+      <label class="text-xs text-slate-400">API Key</label>
+      <input type="password" id="rm-key" class="search-input mt-1" placeholder="Enter refresh token">
+    </div>
+    <p id="rm-status" class="text-sm hidden"></p>
+    <div class="flex justify-end gap-2">
+      <button onclick="closeRefreshModal()" class="filter-btn text-sm">Cancel</button>
+      <button id="rm-go" onclick="doRefresh()" class="filter-btn text-sm !bg-indigo-600 !border-indigo-500">Refresh</button>
+    </div>
+  </div>
+</div>
 
 <!-- Empty state -->
 <div id="empty-state" class="empty-hero">
@@ -725,6 +742,57 @@ document.getElementById('export-csv').addEventListener('click', () => {
 });
 
 // ── Init ───────────────────────────────────────────────────────────────────
+// ── Refresh data via API ─────────────────────────────────────────────────
+function showRefreshModal() {
+  const key = document.getElementById('rm-key');
+  const st = document.getElementById('rm-status');
+  const kr = document.getElementById('rm-key-row');
+  const btn = document.getElementById('rm-go');
+  key.value = localStorage.getItem('_aa_key') || '';
+  st.classList.add('hidden');
+  kr.classList.remove('hidden');
+  btn.disabled = false;
+  btn.textContent = 'Refresh';
+  document.getElementById('refresh-modal').classList.remove('hidden');
+}
+function closeRefreshModal() { document.getElementById('refresh-modal').classList.add('hidden'); }
+
+async function doRefresh() {
+  const key = document.getElementById('rm-key').value.trim();
+  if (!key) return;
+  localStorage.setItem('_aa_key', key);
+  const st = document.getElementById('rm-status');
+  const btn = document.getElementById('rm-go');
+  const kr = document.getElementById('rm-key-row');
+  kr.classList.add('hidden');
+  st.className = 'text-sm text-indigo-400';
+  st.textContent = 'Refreshing data\u2026 this takes a few minutes.';
+  st.classList.remove('hidden');
+  btn.disabled = true;
+  btn.textContent = 'Refreshing\u2026';
+  try {
+    const r = await fetch('/api/refresh', { method: 'POST', headers: { Authorization: 'Bearer ' + key } });
+    const d = await r.json();
+    if (r.ok) {
+      st.className = 'text-sm text-green-400';
+      st.textContent = 'Done! Reloading dashboard\u2026';
+      setTimeout(async () => { await autoLoad(); closeRefreshModal(); btn.disabled = false; btn.textContent = 'Refresh'; }, 800);
+    } else {
+      st.className = 'text-sm text-red-400';
+      st.textContent = d.error || 'Refresh failed';
+      kr.classList.remove('hidden');
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+    }
+  } catch (e) {
+    st.className = 'text-sm text-red-400';
+    st.textContent = 'Connection error: ' + e.message;
+    kr.classList.remove('hidden');
+    btn.disabled = false;
+    btn.textContent = 'Retry';
+  }
+}
+
 autoLoad();
 </script>
 </body>
