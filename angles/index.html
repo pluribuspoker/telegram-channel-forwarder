@@ -415,10 +415,11 @@ function clearAllFilters() {
 }
 
 function _isoDate(d) { return d.toISOString().slice(0, 10); }
+function _fmtDate(s) { const d = new Date(s + 'T00:00:00'); return d.toLocaleDateString(undefined, {month:'short',day:'numeric'}); }
 function _updateDateBtn() {
   const btn = document.getElementById('date-toggle');
   if (dateFrom || dateTo) {
-    const label = dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom ? `From ${dateFrom}` : `To ${dateTo}`;
+    const label = dateFrom && dateTo ? `${_fmtDate(dateFrom)} – ${_fmtDate(dateTo)}` : dateFrom ? `From ${_fmtDate(dateFrom)}` : `To ${_fmtDate(dateTo)}`;
     btn.innerHTML = label + ' <span class="text-slate-500">&darr;</span>';
     btn.classList.add('active');
   } else {
@@ -526,8 +527,11 @@ function applyFilters() {
       tags += `<span class="tag">${key}: ${label} <button onclick="toggleFilter('${key}','${v}');document.querySelector('#dd-${key} input[value=\\'${v}\\']').checked=false">&times;</button></span>`;
     }
   }
-  if (dateFrom) tags += `<span class="tag">from: ${dateFrom} <button onclick="document.getElementById('date-from').value='';dateFrom='';applyFilters()">&times;</button></span>`;
-  if (dateTo) tags += `<span class="tag">to: ${dateTo} <button onclick="document.getElementById('date-to').value='';dateTo='';applyFilters()">&times;</button></span>`;
+  if (dateFrom || dateTo) {
+    const _fd = s => { const d = new Date(s + 'T00:00:00'); return d.toLocaleDateString(undefined, {month:'short',day:'numeric',year:'numeric'}); };
+    const dl = dateFrom && dateTo ? `${_fd(dateFrom)} – ${_fd(dateTo)}` : dateFrom ? `From ${_fd(dateFrom)}` : `To ${_fd(dateTo)}`;
+    tags += `<span class="tag">${dl} <button onclick="_applyDatePreset('','',true)">&times;</button></span>`;
+  }
   tagsEl.innerHTML = tags;
   clearBtn.classList.toggle('hidden', !hasAny);
 
