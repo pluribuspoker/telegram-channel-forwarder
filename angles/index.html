@@ -144,7 +144,7 @@
   <!-- Filter bar -->
   <div id="filter-bar" class="space-y-2">
     <div class="flex flex-wrap items-center gap-2">
-      <span class="text-xs text-slate-500 font-medium mr-1">PICK</span>
+      <span class="text-xs text-slate-500 font-medium w-12 shrink-0">PICK</span>
       <div class="dropdown" data-key="capper"><button class="filter-btn" data-toggle>Capper <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-capper"></div></div>
       <div class="dropdown" data-key="sport"><button class="filter-btn" data-toggle>Sport <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-sport"></div></div>
       <div class="dropdown" data-key="bet_type"><button class="filter-btn" data-toggle>Bet Type <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-bet_type"></div></div>
@@ -173,7 +173,7 @@
       <button id="clear-filters" class="filter-btn reset-btn text-xs ml-2 hidden">Reset Filters</button>
     </div>
     <div class="flex flex-wrap items-center gap-2">
-      <span class="text-xs text-slate-500 font-medium mr-1">ANGLE</span>
+      <span class="text-xs text-slate-500 font-medium w-12 shrink-0">ANGLE</span>
       <div class="dropdown" data-key="angle_type"><button class="filter-btn" data-toggle>Angle Type <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-angle_type"></div></div>
       <div class="dropdown" data-key="off_count"><button class="filter-btn" data-toggle>Angle Off Count <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-off_count"></div></div>
       <div class="dropdown" data-key="a_sport"><button class="filter-btn" data-toggle>Angle Sport <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-a_sport"></div></div>
@@ -700,7 +700,9 @@ function renderTypeBreakdown() {
   const key = document.getElementById('breakdown-by').value;
   document.getElementById('breakdown-col-label').textContent = BREAKDOWN_COL_LABELS[key] || key;
   const isPickLevel = PICK_LEVEL_BREAKDOWN_KEYS.includes(key);
-  const rows = isPickLevel ? filteredPicks.filter(p => ['WIN','LOSS','PUSH'].includes(p.verdict)) : explodeAngles(filteredPicks);
+  // Don't re-apply angle filters for breakdown — picks are already filtered,
+  // and we need all their angles to cross-tabulate by a different dimension
+  const rows = isPickLevel ? filteredPicks.filter(p => ['WIN','LOSS','PUSH'].includes(p.verdict)) : explodeAngles(filteredPicks, false);
   const groups = isPickLevel ? groupByPickKey(rows, key) : groupByKey(rows, key);
 
   let tableRows = Object.entries(groups).map(([g, picks]) => {
@@ -751,8 +753,8 @@ document.getElementById('breakdown-table').addEventListener('click', e => {
 });
 
 // ── Performance pivot table ────────────────────────────────────────────────
-function explodeAngles(picks) {
-  const hasAngleFilters = ANGLE_FILTER_KEYS.some(k => activeFilters[k].size > 0);
+function explodeAngles(picks, applyAngleFilters = true) {
+  const hasAngleFilters = applyAngleFilters && ANGLE_FILTER_KEYS.some(k => activeFilters[k].size > 0);
   const rows = [];
   for (const p of picks) {
     if (!['WIN','LOSS','PUSH'].includes(p.verdict)) continue;
