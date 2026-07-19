@@ -96,7 +96,7 @@
     </div>
   </div>
   <div class="flex items-center gap-3">
-    <span id="header-stats" class="text-xs text-slate-400 hidden" style="white-space:nowrap">Graded picks with angle intel. Filter by any dimension to find what's predictive.</span>
+    <span id="header-stats" class="text-xs text-slate-400 hidden" style="white-space:nowrap">Performance of intel picks and angles. Filter by any dimension to find profitable patterns.</span>
     <button id="refresh-btn" class="filter-btn text-sm" onclick="showRefreshModal()" title="Requires Fight Club membership">Refresh Data</button>
     <a href="/logout" class="text-xs text-slate-500 hover:text-slate-300 ml-1">Logout</a>
   </div>
@@ -209,6 +209,7 @@
     <div class="card p-4 lg:col-span-4" style="max-height:340px; overflow-y:auto">
       <div class="flex items-center justify-between mb-2">
         <h3 class="text-sm font-semibold text-slate-300">Breakdown</h3>
+        <div class="flex items-center gap-1.5">
         <select id="breakdown-by" class="search-input !w-auto !mb-0 text-[11px]">
           <optgroup label="Angle-Level">
             <option value="type" selected>Angle Type</option>
@@ -230,6 +231,8 @@
             <option value="p_bet_type">Bet Type</option>
           </optgroup>
         </select>
+        <button id="breakdown-reset" class="text-[11px] text-slate-500 hover:text-slate-300 hidden" onclick="document.getElementById('breakdown-by').value='type';renderTypeBreakdown()" title="Reset to default">&times;</button>
+        </div>
       </div>
       <table class="w-full text-xs" id="breakdown-table">
         <thead><tr class="text-left text-[11px] text-slate-500 uppercase tracking-wider">
@@ -699,6 +702,7 @@ let bdSort = { col: 'winrate', dir: 'desc' };
 function renderTypeBreakdown() {
   const key = document.getElementById('breakdown-by').value;
   document.getElementById('breakdown-col-label').textContent = BREAKDOWN_COL_LABELS[key] || key;
+  document.getElementById('breakdown-reset').classList.toggle('hidden', key === 'type');
   const isPickLevel = PICK_LEVEL_BREAKDOWN_KEYS.includes(key);
   // Don't re-apply angle filters for breakdown — picks are already filtered,
   // and we need all their angles to cross-tabulate by a different dimension
