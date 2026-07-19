@@ -26,6 +26,8 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 | `scripts/fetch_x_posts.py` | Fetches X/Twitter posts (text + images) for a user to CSV via `twscrape` |
 | `scripts/grade_csv.py` | Batch-grades parsed CSV picks against ESPN scores via Claude |
 | `scripts/format_graded_csv.py` | Converts graded CSV to spreadsheet format with odds from Odds API |
+| `scripts/extract_angles.py` | Scrapes angle records from pick channel, parses into structured data, outputs JSON |
+| `angles/index.html` | Single-file web dashboard for angle performance analysis |
 
 ---
 
@@ -322,6 +324,31 @@ python scripts/trent_watcher.py --channel ID     # send to specific channel
 ```
 
 **VPS:** runs as `trent-monitor.timer` (every 15 minutes). Requires `X_AUTH_TOKEN` and `X_CT0` in `.env` (browser cookies from x.com — may need periodic refresh).
+
+---
+
+## Angle Analyzer
+
+`scripts/extract_angles.py` scrapes the destination channel for picks with blockquoted angle records (e.g. "5-0 run; 2-0 off 5 losses in 2026"), parses them into structured data, enriches with grading data from `picks.db`, and outputs `angles/data/angles.json`.
+
+`angles/index.html` is a single-file web dashboard for exploring angle performance. Features:
+- **Filters:** Pick-level (capper, verdict, sport, bet type, date range) and angle-level (type, off count, angle sport/bet type/side/day/unit/time window, W/L streak)
+- **KPIs:** Record, win rate, net units, ROI
+- **Quick Breakdown:** Pivot table groupable by any dimension (angle type, capper, sport, bet type, side, day, off-loss count, run length, etc.)
+- **Picks Log:** Searchable, sortable, paginated table with raw angles and parsed angle breakdown
+- **Profit Chart:** Cumulative P/L over time
+- **CSV Export**
+
+**Angle types:** `run`, `off_losses`, `off_wins`, `sport_record`, `bet_type_record`, `side_record`, `day_record`, `time_scoped`, `unit_record`, `no_angle` (picks without angles, for baseline comparison).
+
+```bash
+# One-click data pull (on VPS):
+su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/extract_angles.py"
+
+# View locally:
+cd angles && python -m http.server 8080
+# Open http://localhost:8080
+```
 
 ---
 

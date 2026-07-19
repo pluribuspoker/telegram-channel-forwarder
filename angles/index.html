@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Angle Analyzer</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --accent: #6366f1; --accent2: #8b5cf6; --green: #22c55e; --red: #ef4444; --amber: #f59e0b; }
+  * { font-family: 'Inter', system-ui, sans-serif; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+  body { background: #0a0a1a; color: #e2e8f0; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+  .card { background: #111827; border: 1px solid #1e293b; border-radius: 12px; }
+  .kpi { background: linear-gradient(135deg, #111827 0%, #0f172a 100%); }
+  .filter-btn { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 6px 14px; font-size: 13px; cursor: pointer; transition: all .15s; }
+  .filter-btn:hover { border-color: #6366f1; }
+  .filter-btn.active { background: #312e81; border-color: #6366f1; color: #a5b4fc; }
+  .tag { display: inline-flex; align-items: center; gap: 4px; background: #312e81; color: #a5b4fc; border-radius: 6px; padding: 2px 10px; font-size: 12px; }
+  .tag button { opacity: .6; cursor: pointer; }
+  .tag button:hover { opacity: 1; }
+  table th { position: sticky; top: 0; background: #111827; z-index: 2; cursor: pointer; user-select: none; }
+  table th:hover { color: #a5b4fc; }
+  table th .sort-arrow { opacity: .3; font-size: 10px; margin-left: 4px; }
+  table th .sort-arrow.active { opacity: 1; color: #6366f1; }
+  .perf-bar { height: 6px; border-radius: 3px; transition: width .4s ease; }
+  .dropdown { position: relative; display: inline-block; }
+  .dropdown-menu { display: none; position: absolute; top: 100%; left: 0; margin-top: 4px; min-width: 220px; max-height: 320px; overflow-y: auto; background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 6px; z-index: 50; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+  .dropdown-menu.open { display: block; }
+  .dropdown-menu label { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .dropdown-menu label:hover { background: #334155; }
+  .dropdown-menu input[type=checkbox] { accent-color: #6366f1; }
+  .search-input { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 6px 10px; font-size: 13px; color: #e2e8f0; width: 100%; margin-bottom: 4px; }
+  .search-input:focus { outline: none; border-color: #6366f1; }
+  .tab { padding: 8px 18px; border-radius: 8px 8px 0 0; cursor: pointer; font-size: 13px; font-weight: 500; color: #94a3b8; border: 1px solid transparent; border-bottom: none; }
+  .tab.active { background: #111827; color: #e2e8f0; border-color: #1e293b; }
+  .tab:hover:not(.active) { color: #cbd5e1; }
+  .empty-hero { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60vh; gap: 24px; }
+  .fade-in { animation: fadeIn .3s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .pos { color: var(--green); } .neg { color: var(--red); } .neu { color: var(--amber); }
+  #picks-table th[data-col] { position: relative; }
+  #picks-table th[data-col]::after { content: '\2195'; opacity: .25; margin-left: 4px; font-size: 10px; }
+  #picks-table th[data-col].sort-asc::after { content: '\2191'; opacity: 1; color: #6366f1; }
+  #picks-table th[data-col].sort-desc::after { content: '\2193'; opacity: 1; color: #6366f1; }
+  .col-angles { width: 28%; min-width: 180px; }
+  .col-parsed { width: 28%; min-width: 180px; }
+  .reset-btn { background: #7f1d1d; border: 1px solid #991b1b; color: #fca5a5; }
+  .reset-btn:hover { background: #991b1b; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- Header -->
+<header class="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+  <div class="flex items-center gap-3">
+    <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-sm">A</div>
+    <div>
+      <h1 class="text-lg font-semibold">Angle Analyzer</h1>
+      <p id="header-subtitle" class="text-xs text-slate-500">Load data to begin</p>
+    </div>
+  </div>
+  <div class="flex items-center gap-3">
+    <span id="header-stats" class="text-xs text-slate-500 mono hidden"></span>
+    <label class="filter-btn text-sm cursor-pointer">
+      Upload JSON
+      <input type="file" accept=".json" id="file-upload" class="hidden">
+    </label>
+  </div>
+</header>
+
+<!-- Empty state -->
+<div id="empty-state" class="empty-hero">
+  <div class="text-6xl opacity-20">&#x1f4d0;</div>
+  <div class="text-center">
+    <p class="text-lg text-slate-400">Upload <span class="mono text-indigo-400">angles.json</span> or place it in <span class="mono text-indigo-400">data/</span></p>
+    <p class="text-sm text-slate-600 mt-2">Generated by <span class="mono">python scripts/extract_angles.py</span></p>
+  </div>
+  <label class="mt-4 px-6 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg cursor-pointer font-medium transition">
+    Choose File
+    <input type="file" accept=".json" class="hidden" id="file-upload-hero">
+  </label>
+</div>
+
+<!-- Dashboard (hidden until data loads) -->
+<div id="dashboard" class="hidden px-6 py-5 space-y-5 fade-in">
+
+  <!-- Filter bar -->
+  <div id="filter-bar" class="space-y-2">
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="text-xs text-slate-500 font-medium mr-1">PICK</span>
+      <div class="dropdown" data-key="capper"><button class="filter-btn" data-toggle>Capper <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-capper"></div></div>
+      <div class="dropdown" data-key="verdict"><button class="filter-btn" data-toggle>Verdict <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-verdict"></div></div>
+      <div class="dropdown" data-key="sport"><button class="filter-btn" data-toggle>Sport <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-sport"></div></div>
+      <div class="dropdown" data-key="bet_type"><button class="filter-btn" data-toggle>Bet Type <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-bet_type"></div></div>
+      <div class="flex items-center gap-1 ml-2">
+        <label class="text-xs text-slate-500">From</label>
+        <input type="date" id="date-from" class="search-input w-32 !mb-0 text-xs">
+        <label class="text-xs text-slate-500 ml-1">To</label>
+        <input type="date" id="date-to" class="search-input w-32 !mb-0 text-xs">
+      </div>
+      <button id="clear-filters" class="filter-btn reset-btn text-xs ml-2 hidden">Reset Filters</button>
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="text-xs text-slate-500 font-medium mr-1">ANGLE</span>
+      <div class="dropdown" data-key="angle_type"><button class="filter-btn" data-toggle>Angle Type <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-angle_type"></div></div>
+      <div class="dropdown" data-key="off_count"><button class="filter-btn" data-toggle>Angle Off Count <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-off_count"></div></div>
+      <div class="dropdown" data-key="a_sport"><button class="filter-btn" data-toggle>Angle Sport <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-a_sport"></div></div>
+      <div class="dropdown" data-key="a_bet_type"><button class="filter-btn" data-toggle>Angle Bet Type <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-a_bet_type"></div></div>
+      <div class="dropdown" data-key="side"><button class="filter-btn" data-toggle>Angle Side <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-side"></div></div>
+      <div class="dropdown" data-key="day"><button class="filter-btn" data-toggle>Angle Day <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-day"></div></div>
+      <div class="dropdown" data-key="unit"><button class="filter-btn" data-toggle>Angle Unit <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-unit"></div></div>
+      <div class="dropdown" data-key="scope"><button class="filter-btn" data-toggle>Angle Time Window <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-scope"></div></div>
+      <div class="dropdown" data-key="record_flag"><button class="filter-btn" data-toggle>Angle W/L Streak <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-record_flag"></div></div>
+    </div>
+  </div>
+  <div id="active-tags" class="flex flex-wrap gap-1.5"></div>
+
+  <!-- KPI cards -->
+  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3" id="kpi-row">
+    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Record</p><p class="text-xl font-bold mono mt-1" id="kpi-record">-</p></div>
+    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Win Rate</p><p class="text-xl font-bold mono mt-1" id="kpi-winrate">-</p></div>
+    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Net Units</p><p class="text-xl font-bold mono mt-1" id="kpi-units">-</p></div>
+    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">ROI</p><p class="text-xl font-bold mono mt-1" id="kpi-roi">-</p></div>
+    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Picks</p><p class="text-xl font-bold mono mt-1" id="kpi-picks">-</p></div>
+    <div class="card kpi p-4"><p class="text-[11px] text-slate-500 uppercase tracking-wider">Angles</p><p class="text-xl font-bold mono mt-1" id="kpi-angles">-</p></div>
+  </div>
+
+  <!-- Charts row -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+    <div class="card p-4 lg:col-span-8" style="height:340px">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-sm font-semibold text-slate-300">Cumulative Profit</h3>
+        <span class="text-xs text-slate-500 mono" id="chart-profit-label"></span>
+      </div>
+      <canvas id="chart-profit"></canvas>
+    </div>
+    <div class="card p-4 lg:col-span-4" style="max-height:340px; overflow-y:auto">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-sm font-semibold text-slate-300">Quick Breakdown</h3>
+        <select id="breakdown-by" class="search-input !w-auto !mb-0 text-[11px]">
+          <option value="type">Angle Type</option>
+          <option value="off_count_losses">Angle Off-Loss Count</option>
+          <option value="off_count_wins">Angle Off-Win Count</option>
+          <option value="capper">Capper</option>
+          <option value="sport">Angle Sport</option>
+          <option value="bet_type">Angle Bet Type</option>
+          <option value="side">Angle Side</option>
+          <option value="day">Angle Day</option>
+          <option value="unit">Angle Unit</option>
+          <option value="scope">Angle Time Window</option>
+          <option value="is_undefeated">Angle W/L Streak (Undefeated)</option>
+          <option value="is_winless">Angle W/L Streak (Winless)</option>
+          <option value="run_length">Angle Run Length</option>
+        </select>
+      </div>
+      <table class="w-full text-xs" id="breakdown-table">
+        <thead><tr class="text-left text-[11px] text-slate-500 uppercase tracking-wider">
+          <th class="py-1.5 px-2" data-bcol="label" id="breakdown-col-label">Type</th><th class="py-1.5 px-2 text-right" data-bcol="total">Record</th><th class="py-1.5 px-2 text-right" data-bcol="winrate">Win%</th><th class="py-1.5 px-2 text-right" data-bcol="units">Units</th><th class="py-1.5 px-2 text-right" data-bcol="roi">ROI</th>
+        </tr></thead>
+        <tbody id="type-breakdown-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Picks log -->
+  <div class="card p-4">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-sm font-semibold text-slate-300">Picks Log</h3>
+      <div class="flex items-center gap-2">
+        <input type="text" placeholder="Search picks..." id="picks-search" class="search-input !w-56 !mb-0 text-xs">
+        <button id="export-csv" class="filter-btn text-xs">Export CSV</button>
+      </div>
+    </div>
+    <div class="overflow-x-auto" style="max-height:500px; overflow-y:auto">
+      <table class="w-full text-xs" id="picks-table">
+        <thead>
+          <tr class="text-left text-[11px] text-slate-500 uppercase tracking-wider">
+            <th class="py-2 px-2" data-col="date">Date</th>
+            <th class="py-2 px-2" data-col="capper">Capper</th>
+            <th class="py-2 px-2" data-col="pick_text">Pick</th>
+            <th class="py-2 px-2" data-col="verdict">Result</th>
+            <th class="py-2 px-2 text-right" data-col="odds">Odds</th>
+            <th class="py-2 px-2 text-right" data-col="profit">Profit</th>
+            <th class="py-2 px-2" data-col="sport">Sport</th>
+            <th class="py-2 px-2 col-angles" data-col="angles_raw">Angles (raw)</th>
+            <th class="py-2 px-2 col-parsed">Parsed</th>
+          </tr>
+        </thead>
+        <tbody id="picks-body"></tbody>
+      </table>
+    </div>
+    <div class="flex items-center justify-between mt-3 text-xs text-slate-500">
+      <span id="picks-count"></span>
+      <div class="flex items-center gap-3">
+        <div class="flex items-center gap-1">
+          <label>Show</label>
+          <select id="page-size" class="search-input !w-16 !mb-0 text-xs mono">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+            <option value="250">250</option>
+          </select>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="picks-prev" class="filter-btn text-xs">&larr; Prev</button>
+          <span id="picks-page" class="mono"></span>
+          <button id="picks-next" class="filter-btn text-xs">Next &rarr;</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /dashboard -->
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let allPicks = [];
+let filteredPicks = [];
+let activeFilters = { capper: new Set(), verdict: new Set(), sport: new Set(), bet_type: new Set(), angle_type: new Set(), off_count: new Set(), a_sport: new Set(), a_bet_type: new Set(), side: new Set(), day: new Set(), unit: new Set(), scope: new Set(), record_flag: new Set() };
+// Angle-level filter keys (a pick matches if ANY of its angles match)
+const ANGLE_FILTER_KEYS = ['angle_type','off_count','a_sport','a_bet_type','side','day','unit','scope','record_flag'];
+let dateFrom = '', dateTo = '';
+let picksSort = { col: 'date', dir: 'desc' };
+let picksPage = 0;
+let PICKS_PER_PAGE = 50;
+let profitChart = null;
+
+const TYPE_LABELS = {
+  run: 'Run/Streak', off_losses: 'Off Losses', off_wins: 'Off Wins',
+  sport_record: 'Sport', bet_type_record: 'Bet Type', side_record: 'Side',
+  day_record: 'Day of Week', time_scoped: 'Time-Scoped',
+  unit_record: 'Unit Record', commentary: 'Commentary', no_angle: 'No Angle',
+};
+const VERDICT_COLORS = { WIN: '#22c55e', LOSS: '#ef4444', PUSH: '#f59e0b', PENDING: '#64748b', UNKNOWN: '#64748b' };
+const VERDICT_EMOJI = { WIN: '\u2705', LOSS: '\u274c', PUSH: '\u267b\ufe0f', PENDING: '\u23f3', UNKNOWN: '\u2753' };
+
+// ── Data loading ───────────────────────────────────────────────────────────
+function loadJSON(data) {
+  allPicks = (data.picks || []).filter(p => p.angles && p.angles.length > 0);
+  document.getElementById('empty-state').classList.add('hidden');
+  document.getElementById('dashboard').classList.remove('hidden');
+  document.getElementById('header-subtitle').textContent = `${allPicks.length} picks \u00b7 extracted ${data.extracted_at ? data.extracted_at.slice(0,10) : '?'}`;
+  buildFilterOptions();
+  applyFilters();
+}
+
+async function autoLoad() {
+  try {
+    const r = await fetch('data/angles.json');
+    if (r.ok) loadJSON(await r.json());
+  } catch(e) { /* file not available, show upload UI */ }
+}
+
+function handleFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => { try { loadJSON(JSON.parse(e.target.result)); } catch(err) { alert('Invalid JSON: ' + err.message); } };
+  reader.readAsText(file);
+}
+
+document.getElementById('file-upload').addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+document.getElementById('file-upload-hero').addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+
+// ── Filter system ──────────────────────────────────────────────────────────
+const FILTER_LABELS = { angle_type: TYPE_LABELS, record_flag: { 'undefeated': 'Undefeated (X-0)', 'winless': 'Winless (0-X)' } };
+function _fLabel(key, v) { return (FILTER_LABELS[key] && FILTER_LABELS[key][v]) || v; }
+
+function buildFilterOptions() {
+  const vals = { capper: new Set(), verdict: new Set(), sport: new Set(), bet_type: new Set(),
+    angle_type: new Set(), off_count: new Set(), a_sport: new Set(), a_bet_type: new Set(),
+    side: new Set(), day: new Set(), unit: new Set(), scope: new Set(), record_flag: new Set() };
+  for (const p of allPicks) {
+    if (p.capper) vals.capper.add(p.capper);
+    if (p.verdict) vals.verdict.add(p.verdict);
+    if (p.sport) vals.sport.add(p.sport);
+    if (p.bet_type) vals.bet_type.add(p.bet_type);
+    for (const a of p.angles) {
+      if (a.type) vals.angle_type.add(a.type);
+      if (a.off_count != null) vals.off_count.add(String(a.off_count));
+      if (a.sport) vals.a_sport.add(a.sport);
+      if (a.bet_type) vals.a_bet_type.add(a.bet_type);
+      if (a.side) vals.side.add(a.side);
+      if (a.day) vals.day.add(a.day);
+      if (a.unit) vals.unit.add(a.unit);
+      if (a.scope) vals.scope.add(a.scope);
+      if (a.is_undefeated) vals.record_flag.add('undefeated');
+      if (a.is_winless) vals.record_flag.add('winless');
+    }
+  }
+  const daySortOrder = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+  function scopeSortKey(s) {
+    // Today < L2..L50 (by number) < This Month < This Season < YTD < Since... < In... < Overall
+    if (s === 'Today') return [0, 0];
+    const lm = s.match(/^L(\d+)$/);
+    if (lm) return [1, parseInt(lm[1])];
+    if (s === 'This Month') return [2, 0];
+    if (s === 'This Season') return [3, 0];
+    if (s === 'YTD') return [4, 0];
+    if (s.startsWith('Since')) return [5, 0];
+    if (s.startsWith('In')) return [6, 0];
+    if (s === 'Overall') return [7, 0];
+    return [8, 0];
+  }
+  for (const [key, set] of Object.entries(vals)) {
+    const menu = document.getElementById('dd-' + key);
+    if (!menu) continue;
+    let sorted;
+    if (key === 'off_count') sorted = [...set].sort((a,b) => Number(a) - Number(b));
+    else if (key === 'day') sorted = [...set].sort((a,b) => daySortOrder.indexOf(a) - daySortOrder.indexOf(b));
+    else if (key === 'scope') sorted = [...set].sort((a,b) => {
+      const [ga, na] = scopeSortKey(a), [gb, nb] = scopeSortKey(b);
+      return ga !== gb ? ga - gb : na !== nb ? na - nb : a.localeCompare(b);
+    });
+    else sorted = [...set].sort();
+    menu.innerHTML = (sorted.length > 8 ? `<input type="text" class="search-input" placeholder="Search..." oninput="filterDropdown(this, '${key}')">` : '') +
+      sorted.map(v => {
+        const label = _fLabel(key, v);
+        return `<label data-val="${v}"><input type="checkbox" value="${v}" onchange="toggleFilter('${key}','${v}')"> ${label}</label>`;
+      }).join('');
+  }
+}
+
+function filterDropdown(input, key) {
+  const q = input.value.toLowerCase();
+  const labels = input.parentElement.querySelectorAll('label');
+  labels.forEach(l => { l.style.display = l.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+}
+
+function toggleFilter(key, val) {
+  if (activeFilters[key].has(val)) activeFilters[key].delete(val);
+  else activeFilters[key].add(val);
+  applyFilters();
+}
+
+function clearAllFilters() {
+  for (const k of Object.keys(activeFilters)) activeFilters[k].clear();
+  dateFrom = ''; dateTo = '';
+  document.getElementById('date-from').value = '';
+  document.getElementById('date-to').value = '';
+  document.querySelectorAll('.dropdown-menu input[type=checkbox]').forEach(cb => cb.checked = false);
+  applyFilters();
+}
+
+document.getElementById('clear-filters').addEventListener('click', clearAllFilters);
+document.getElementById('date-from').addEventListener('change', e => { dateFrom = e.target.value; applyFilters(); });
+document.getElementById('date-to').addEventListener('change', e => { dateTo = e.target.value; applyFilters(); });
+
+// Dropdown toggle
+document.addEventListener('click', e => {
+  const toggle = e.target.closest('[data-toggle]');
+  if (toggle) {
+    const menu = toggle.nextElementSibling;
+    const wasOpen = menu.classList.contains('open');
+    document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+    if (!wasOpen) menu.classList.add('open');
+    e.stopPropagation();
+    return;
+  }
+  if (!e.target.closest('.dropdown-menu')) {
+    document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+  }
+});
+
+function _angleMatchesFilters(a) {
+  // Returns true if this angle passes all active angle-level filters
+  if (activeFilters.angle_type.size && !activeFilters.angle_type.has(a.type)) return false;
+  if (activeFilters.off_count.size && (a.off_count == null || !activeFilters.off_count.has(String(a.off_count)))) return false;
+  if (activeFilters.a_sport.size && !activeFilters.a_sport.has(a.sport)) return false;
+  if (activeFilters.a_bet_type.size && !activeFilters.a_bet_type.has(a.bet_type)) return false;
+  if (activeFilters.side.size && !activeFilters.side.has(a.side)) return false;
+  if (activeFilters.day.size && !activeFilters.day.has(a.day)) return false;
+  if (activeFilters.unit.size && !activeFilters.unit.has(a.unit)) return false;
+  if (activeFilters.scope.size && !activeFilters.scope.has(a.scope)) return false;
+  if (activeFilters.record_flag.size) {
+    const flags = new Set();
+    if (a.is_undefeated) flags.add('undefeated');
+    if (a.is_winless) flags.add('winless');
+    if (![...activeFilters.record_flag].some(f => flags.has(f))) return false;
+  }
+  return true;
+}
+
+function applyFilters() {
+  const hasAngleFilters = ANGLE_FILTER_KEYS.some(k => activeFilters[k].size > 0);
+
+  filteredPicks = allPicks.filter(p => {
+    if (activeFilters.capper.size && !activeFilters.capper.has(p.capper)) return false;
+    if (activeFilters.verdict.size && !activeFilters.verdict.has(p.verdict)) return false;
+    if (activeFilters.sport.size && !activeFilters.sport.has(p.sport)) return false;
+    if (activeFilters.bet_type.size && !activeFilters.bet_type.has(p.bet_type)) return false;
+    if (hasAngleFilters) {
+      if (!p.angles.some(_angleMatchesFilters)) return false;
+    }
+    if (dateFrom && p.date < dateFrom) return false;
+    if (dateTo && p.date > dateTo) return false;
+    return true;
+  });
+
+  // Update active filter buttons
+  document.querySelectorAll('.dropdown [data-toggle]').forEach(btn => {
+    const key = btn.closest('.dropdown').dataset.key;
+    btn.classList.toggle('active', activeFilters[key] && activeFilters[key].size > 0);
+  });
+
+  // Render active tags
+  const tagsEl = document.getElementById('active-tags');
+  const clearBtn = document.getElementById('clear-filters');
+  let hasAny = dateFrom || dateTo;
+  let tags = '';
+  for (const [key, set] of Object.entries(activeFilters)) {
+    for (const v of set) {
+      hasAny = true;
+      const label = _fLabel(key, v);
+      tags += `<span class="tag">${key}: ${label} <button onclick="toggleFilter('${key}','${v}');document.querySelector('#dd-${key} input[value=\\'${v}\\']').checked=false">&times;</button></span>`;
+    }
+  }
+  if (dateFrom) tags += `<span class="tag">from: ${dateFrom} <button onclick="document.getElementById('date-from').value='';dateFrom='';applyFilters()">&times;</button></span>`;
+  if (dateTo) tags += `<span class="tag">to: ${dateTo} <button onclick="document.getElementById('date-to').value='';dateTo='';applyFilters()">&times;</button></span>`;
+  tagsEl.innerHTML = tags;
+  clearBtn.classList.toggle('hidden', !hasAny);
+
+  picksPage = 0;
+  renderAll();
+}
+
+// ── Metrics helpers ────────────────────────────────────────────────────────
+function calcMetrics(picks) {
+  const graded = picks.filter(p => p.verdict === 'WIN' || p.verdict === 'LOSS' || p.verdict === 'PUSH');
+  const w = graded.filter(p => p.verdict === 'WIN').length;
+  const l = graded.filter(p => p.verdict === 'LOSS').length;
+  const push = graded.filter(p => p.verdict === 'PUSH').length;
+  const total = w + l + push;
+  const decisions = w + l;
+  const winrate = decisions > 0 ? w / decisions : 0;
+  const units = graded.reduce((s, p) => s + (p.profit || 0), 0);
+  const roi = total > 0 ? (units / total) * 100 : 0;
+  return { w, l, push, total, decisions, winrate, units, roi };
+}
+
+function fmtPct(v) { return (v * 100).toFixed(1) + '%'; }
+function fmtUnits(v) { return (v >= 0 ? '+' : '') + v.toFixed(2) + 'u'; }
+function fmtRoi(v) { return (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; }
+function clr(v) { return v > 0 ? 'pos' : v < 0 ? 'neg' : 'neu'; }
+function fmtOdds(v) { if (v == null) return '-'; return (v > 0 ? '+' : '') + v; }
+
+// ── Render all ─────────────────────────────────────────────────────────────
+function renderAll() {
+  renderKPIs();
+  renderProfitChart();
+  renderTypeBreakdown();
+  renderPicksLog();
+}
+
+// ── KPIs ───────────────────────────────────────────────────────────────────
+function renderKPIs() {
+  const m = calcMetrics(filteredPicks);
+  document.getElementById('kpi-record').textContent = `${m.w}-${m.l}` + (m.push ? `-${m.push}` : '');
+  const wr = document.getElementById('kpi-winrate'); wr.textContent = fmtPct(m.winrate); wr.className = `text-xl font-bold mono mt-1 ${clr(m.winrate - 0.5)}`;
+  const un = document.getElementById('kpi-units'); un.textContent = fmtUnits(m.units); un.className = `text-xl font-bold mono mt-1 ${clr(m.units)}`;
+  const ro = document.getElementById('kpi-roi'); ro.textContent = fmtRoi(m.roi); ro.className = `text-xl font-bold mono mt-1 ${clr(m.roi)}`;
+  document.getElementById('kpi-picks').textContent = m.total;
+  const hasAF = ANGLE_FILTER_KEYS.some(k => activeFilters[k].size > 0);
+  const angleCount = hasAF
+    ? filteredPicks.reduce((s, p) => s + p.angles.filter(_angleMatchesFilters).length, 0)
+    : filteredPicks.reduce((s, p) => s + p.angles.length, 0);
+  document.getElementById('kpi-angles').textContent = angleCount;
+  document.getElementById('header-stats').textContent = `${m.total} graded \u00b7 ${fmtPct(m.winrate)} WR \u00b7 ${fmtRoi(m.roi)} ROI`;
+  document.getElementById('header-stats').classList.remove('hidden');
+}
+
+// ── Profit chart ───────────────────────────────────────────────────────────
+function renderProfitChart() {
+  const graded = filteredPicks.filter(p => ['WIN','LOSS','PUSH'].includes(p.verdict)).sort((a,b) => (a.date||'').localeCompare(b.date||''));
+  let cum = 0;
+  const labels = [], data = [], colors = [];
+  for (const p of graded) {
+    cum += p.profit || 0;
+    labels.push(p.date || '');
+    data.push(+cum.toFixed(2));
+    colors.push(cum >= 0 ? 'rgba(34,197,94,.8)' : 'rgba(239,68,68,.8)');
+  }
+  document.getElementById('chart-profit-label').textContent = data.length ? fmtUnits(data[data.length-1]) : '';
+
+  const ctx = document.getElementById('chart-profit');
+  if (profitChart) profitChart.destroy();
+  profitChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data,
+        borderColor: cum >= 0 ? '#22c55e' : '#ef4444',
+        borderWidth: 2,
+        pointRadius: 0,
+        pointHitRadius: 8,
+        fill: {
+          target: 'origin',
+          above: 'rgba(34,197,94,.08)',
+          below: 'rgba(239,68,68,.08)',
+        },
+        tension: .25,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      layout: { padding: { bottom: 15 } },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => fmtUnits(c.parsed.y) } } },
+      scales: {
+        x: { display: true, ticks: { maxTicksLimit: 8, color: '#475569', font: { size: 10 } }, grid: { color: '#1e293b' } },
+        y: { ticks: { color: '#475569', font: { size: 10 }, callback: v => fmtUnits(v) }, grid: { color: '#1e293b' } },
+      },
+      interaction: { intersect: false, mode: 'index' },
+    }
+  });
+}
+
+// ── Quick breakdown table ──────────────────────────────────────────────────
+const BREAKDOWN_COL_LABELS = {
+  type: 'Angle Type', off_count_losses: 'Angle Off # Losses', off_count_wins: 'Angle Off # Wins',
+  capper: 'Capper', sport: 'Angle Sport', bet_type: 'Angle Bet Type', side: 'Angle Side',
+  day: 'Angle Day', unit: 'Angle Unit', scope: 'Angle Time Window', is_undefeated: 'Angle W/L Streak',
+  is_winless: 'Angle W/L Streak', run_length: 'Angle Run Length',
+};
+
+let bdSort = { col: 'winrate', dir: 'desc' };
+
+function renderTypeBreakdown() {
+  const key = document.getElementById('breakdown-by').value;
+  document.getElementById('breakdown-col-label').textContent = BREAKDOWN_COL_LABELS[key] || key;
+  const rows = explodeAngles(filteredPicks);
+  const groups = groupByKey(rows, key);
+
+  let tableRows = Object.entries(groups).map(([g, picks]) => {
+    const m = calcMetrics(picks);
+    const label = key === 'type' ? (TYPE_LABELS[g] || g) : g;
+    return { label, ...m };
+  }).filter(r => r.total >= 2);
+
+  tableRows.sort((a, b) => {
+    let va = a[bdSort.col], vb = b[bdSort.col];
+    if (bdSort.col === 'label') { va = a.label.toLowerCase(); vb = b.label.toLowerCase(); }
+    const d = bdSort.dir === 'asc' ? 1 : -1;
+    return va < vb ? -d : va > vb ? d : 0;
+  });
+
+  document.getElementById('type-breakdown-body').innerHTML = tableRows.length
+    ? tableRows.map(r => `
+      <tr class="border-t border-slate-800/50">
+        <td class="py-1.5 px-2 text-slate-300">${r.label}</td>
+        <td class="py-1.5 px-2 text-right mono text-slate-400">${r.w}-${r.l}</td>
+        <td class="py-1.5 px-2 text-right mono font-semibold ${clr(r.winrate-.5)}">${fmtPct(r.winrate)}</td>
+        <td class="py-1.5 px-2 text-right mono ${clr(r.units)}">${fmtUnits(r.units)}</td>
+        <td class="py-1.5 px-2 text-right mono ${clr(r.roi)}">${fmtRoi(r.roi)}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="5" class="py-3 text-center text-slate-500">No data</td></tr>';
+}
+
+document.getElementById('breakdown-by').addEventListener('change', renderTypeBreakdown);
+document.getElementById('breakdown-table').addEventListener('click', e => {
+  const th = e.target.closest('th[data-bcol]');
+  if (!th) return;
+  const col = th.dataset.bcol;
+  if (bdSort.col === col) bdSort.dir = bdSort.dir === 'asc' ? 'desc' : 'asc';
+  else { bdSort.col = col; bdSort.dir = 'desc'; }
+  renderTypeBreakdown();
+});
+
+// ── Performance pivot table ────────────────────────────────────────────────
+function explodeAngles(picks) {
+  const hasAngleFilters = ANGLE_FILTER_KEYS.some(k => activeFilters[k].size > 0);
+  const rows = [];
+  for (const p of picks) {
+    if (!['WIN','LOSS','PUSH'].includes(p.verdict)) continue;
+    for (const a of p.angles) {
+      // When angle-level filters are active, only include matching angles
+      if (hasAngleFilters && !_angleMatchesFilters(a)) continue;
+      rows.push({ ...p, _a: a });
+    }
+  }
+  return rows;
+}
+
+function groupByKey(rows, key) {
+  const groups = {};
+  for (const r of rows) {
+    let val;
+    switch (key) {
+      case 'type': val = r._a.type; break;
+      case 'capper': val = r.capper; break;
+      case 'sport': val = r._a.sport || r.sport; break;
+      case 'bet_type': val = r._a.bet_type || r.bet_type; break;
+      case 'side': val = r._a.side; break;
+      case 'day': val = r._a.day; break;
+      case 'unit': val = r._a.unit; break;
+      case 'scope': val = r._a.scope; break;
+      case 'is_undefeated': val = r._a.is_undefeated ? 'Undefeated (X-0)' : 'Has Losses'; break;
+      case 'is_winless': val = r._a.is_winless ? 'Winless (0-X)' : 'Has Wins'; break;
+      case 'off_count_losses':
+        if (r._a.off_type !== 'losses' || r._a.off_count == null) continue;
+        val = r._a.off_count <= 5 ? String(r._a.off_count) : '6+';
+        break;
+      case 'off_count_wins':
+        if (r._a.off_type !== 'wins' || r._a.off_count == null) continue;
+        val = r._a.off_count <= 5 ? String(r._a.off_count) : '6+';
+        break;
+      case 'run_length':
+        if (r._a.type !== 'run') continue;
+        { const len = Math.max(r._a.wins, r._a.losses);
+          val = len >= 8 ? '8+' : String(len); }
+        break;
+      default: val = r._a.type;
+    }
+    if (val == null) val = '(none)';
+    if (!groups[val]) groups[val] = [];
+    groups[val].push(r);
+  }
+  return groups;
+}
+
+// ── Picks log ──────────────────────────────────────────────────────────────
+function renderPicksLog() {
+  const q = (document.getElementById('picks-search').value || '').toLowerCase();
+  let picks = filteredPicks;
+  if (q) picks = picks.filter(p =>
+    (p.capper||'').toLowerCase().includes(q) ||
+    (p.pick_text||'').toLowerCase().includes(q) ||
+    (p.angles_raw||'').toLowerCase().includes(q) ||
+    (p.sport||'').toLowerCase().includes(q)
+  );
+
+  // Sort
+  picks = [...picks].sort((a, b) => {
+    let va = a[picksSort.col], vb = b[picksSort.col];
+    if (va == null) va = ''; if (vb == null) vb = '';
+    const d = picksSort.dir === 'asc' ? 1 : -1;
+    return va < vb ? -d : va > vb ? d : 0;
+  });
+
+  const total = picks.length;
+  const totalPages = Math.max(1, Math.ceil(total / PICKS_PER_PAGE));
+  picksPage = Math.max(0, Math.min(picksPage, totalPages - 1));
+  const start = picksPage * PICKS_PER_PAGE;
+  const page = picks.slice(start, start + PICKS_PER_PAGE);
+
+  const tbody = document.getElementById('picks-body');
+  tbody.innerHTML = page.map(p => {
+    const vc = VERDICT_COLORS[p.verdict] || '#64748b';
+    const pickShort = (p.pick_text || '').split('\n')[0].slice(0, 60);
+    const anglesShort = (p.angles_raw || '').replace(/\n/g, '; ');
+    const parsed = (p.angles || []).map(a => {
+      if (a.type === 'no_angle') return '<span class="text-slate-500">No Angle</span>';
+      const parts = [`<b>${a.wins}-${a.losses}</b> ${TYPE_LABELS[a.type]||a.type}`];
+      if (a.off_type) parts.push(`off ${a.off_count} ${a.off_type}`);
+      if (a.sport) parts.push(a.sport);
+      if (a.bet_type) parts.push(a.bet_type);
+      if (a.side) parts.push(a.side);
+      if (a.day) parts.push(a.day);
+      if (a.unit) parts.push(a.unit);
+      if (a.scope) parts.push(a.scope);
+      if (a.is_undefeated) parts.push('<span class="pos">undef</span>');
+      if (a.is_winless) parts.push('<span class="neg">winless</span>');
+      return parts.join(' \u00b7 ');
+    }).join('<br>');
+    return `<tr class="border-t border-slate-800/30 hover:bg-slate-800/20">
+      <td class="py-1.5 px-2 mono text-slate-400">${p.date||'-'}</td>
+      <td class="py-1.5 px-2">${p.capper||'-'}</td>
+      <td class="py-1.5 px-2 text-slate-300 truncate max-w-[200px]" title="${(p.pick_text||'').replace(/"/g,'&quot;')}">${pickShort}</td>
+      <td class="py-1.5 px-2 font-semibold" style="color:${vc}">${VERDICT_EMOJI[p.verdict]||''} ${p.verdict}</td>
+      <td class="py-1.5 px-2 text-right mono text-slate-400">${fmtOdds(p.odds)}</td>
+      <td class="py-1.5 px-2 text-right mono ${clr(p.profit||0)}">${p.profit!=null?fmtUnits(p.profit):'-'}</td>
+      <td class="py-1.5 px-2 text-slate-400">${p.sport||'-'}</td>
+      <td class="py-1.5 px-2 text-slate-500 col-angles text-[11px] leading-relaxed">${anglesShort}</td>
+      <td class="py-1.5 px-2 text-slate-400 col-parsed text-[11px] leading-relaxed">${parsed}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('picks-count').textContent = total === allPicks.length ? `${total} picks` : `${total} of ${allPicks.length} picks`;
+  document.getElementById('picks-page').textContent = `${picksPage + 1} / ${totalPages}`;
+  document.getElementById('picks-prev').disabled = picksPage === 0;
+  document.getElementById('picks-next').disabled = picksPage >= totalPages - 1;
+
+  // Update sort arrows
+  document.querySelectorAll('#picks-table th[data-col]').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (th.dataset.col === picksSort.col) th.classList.add('sort-' + picksSort.dir);
+  });
+}
+
+document.getElementById('picks-search').addEventListener('input', () => { picksPage = 0; renderPicksLog(); });
+document.getElementById('picks-prev').addEventListener('click', () => { picksPage--; renderPicksLog(); });
+document.getElementById('picks-next').addEventListener('click', () => { picksPage++; renderPicksLog(); });
+document.getElementById('page-size').addEventListener('change', e => { PICKS_PER_PAGE = parseInt(e.target.value); picksPage = 0; renderPicksLog(); });
+document.getElementById('picks-table').addEventListener('click', e => {
+  const th = e.target.closest('th[data-col]');
+  if (!th) return;
+  const col = th.dataset.col;
+  if (picksSort.col === col) picksSort.dir = picksSort.dir === 'asc' ? 'desc' : 'asc';
+  else { picksSort.col = col; picksSort.dir = 'desc'; }
+  renderPicksLog();
+});
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'ArrowLeft' && picksPage > 0) { picksPage--; renderPicksLog(); }
+  if (e.key === 'ArrowRight') { picksPage++; renderPicksLog(); }
+});
+
+// ── CSV export ─────────────────────────────────────────────────────────────
+document.getElementById('export-csv').addEventListener('click', () => {
+  const header = ['date','capper','pick_text','verdict','odds','profit','sport','bet_type','angles_raw'];
+  const rows = filteredPicks.map(p => header.map(h => {
+    let v = p[h]; if (v == null) return '';
+    v = String(v).replace(/"/g, '""');
+    return v.includes(',') || v.includes('\n') || v.includes('"') ? `"${v}"` : v;
+  }).join(','));
+  const csv = [header.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'angles_export.csv'; a.click();
+});
+
+// ── Init ───────────────────────────────────────────────────────────────────
+autoLoad();
+</script>
+</body>
+</html>

@@ -205,6 +205,25 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/trent_watcher.py --look
 
 **Rate limits:** Twitter's UserTweets endpoint has a ~15 min cooldown. Script wraps fetch in a 90s timeout — exits cleanly if rate-limited, retries next run.
 
+## Angle Analyzer
+
+`scripts/extract_angles.py` scrapes channel `-1002486251914` for picks with blockquoted angle records, parses them into structured data (type, sport, bet type, side, day, unit, time window, off-count, undefeated/winless), enriches with grades from `picks.db`, and outputs `angles/data/angles.json`. Picks without angles get a `no_angle` type for baseline comparison.
+
+`angles/index.html` is a single-file dashboard (Tailwind + Chart.js) that loads the JSON. Features: multi-filter bar (pick-level and angle-level), KPIs, cumulative profit chart, Quick Breakdown pivot table (group by any dimension), searchable/sortable picks log with parsed angle display, CSV export.
+
+**One-click data pull (on VPS):**
+```bash
+su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/extract_angles.py"
+```
+
+**View locally:**
+```bash
+cd angles && python -m http.server 8080
+# Open http://localhost:8080
+```
+
+Angle types: `run`, `off_losses`, `off_wins`, `sport_record`, `bet_type_record`, `side_record`, `day_record`, `time_scoped`, `unit_record`, `no_angle`. Prose lines with records buried in sentences are auto-skipped. Context headers (e.g. "L30 days:", "This month:") propagate scope to subsequent bare-record lines. Parenthetical sub-records inherit sport/bet_type/side from parent context.
+
 ## Infra sync
 
 `deploy/` is the source of truth for systemd units and Claude Code hooks. Edit files there, commit, then push to live:
