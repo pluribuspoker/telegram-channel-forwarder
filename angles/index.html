@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Angle Analyzer</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -214,19 +215,25 @@
       <div class="flex items-center justify-between mb-2">
         <h3 class="text-sm font-semibold text-slate-300">Quick Breakdown</h3>
         <select id="breakdown-by" class="search-input !w-auto !mb-0 text-[11px]">
-          <option value="type">Angle Type</option>
-          <option value="off_count_losses">Angle Off-Loss Count</option>
-          <option value="off_count_wins">Angle Off-Win Count</option>
-          <option value="capper">Capper</option>
-          <option value="sport">Angle Sport</option>
-          <option value="bet_type">Angle Bet Type</option>
-          <option value="side">Angle Side</option>
-          <option value="day">Angle Day</option>
-          <option value="unit">Angle Unit</option>
-          <option value="scope">Angle Time Window</option>
-          <option value="is_undefeated">Angle W/L Streak (Undefeated)</option>
-          <option value="is_winless">Angle W/L Streak (Winless)</option>
-          <option value="run_length">Angle Run Length</option>
+          <optgroup label="Angle-Level">
+            <option value="type" selected>Angle Type</option>
+            <option value="off_count_losses">Angle Off-Loss Count</option>
+            <option value="off_count_wins">Angle Off-Win Count</option>
+            <option value="sport">Angle Sport</option>
+            <option value="bet_type">Angle Bet Type</option>
+            <option value="side">Angle Side</option>
+            <option value="day">Angle Day</option>
+            <option value="unit">Angle Unit</option>
+            <option value="scope">Angle Time Window</option>
+            <option value="is_undefeated">Angle W/L Streak (Undefeated)</option>
+            <option value="is_winless">Angle W/L Streak (Winless)</option>
+            <option value="run_length">Angle Run Length</option>
+          </optgroup>
+          <optgroup label="Pick-Level">
+            <option value="p_capper">Capper</option>
+            <option value="p_sport">Sport</option>
+            <option value="p_bet_type">Bet Type</option>
+          </optgroup>
         </select>
       </div>
       <table class="w-full text-xs" id="breakdown-table">
@@ -651,18 +658,21 @@ function renderProfitChart() {
 // ── Quick breakdown table ──────────────────────────────────────────────────
 const BREAKDOWN_COL_LABELS = {
   type: 'Angle Type', off_count_losses: 'Angle Off # Losses', off_count_wins: 'Angle Off # Wins',
-  capper: 'Capper', sport: 'Angle Sport', bet_type: 'Angle Bet Type', side: 'Angle Side',
+  sport: 'Angle Sport', bet_type: 'Angle Bet Type', side: 'Angle Side',
   day: 'Angle Day', unit: 'Angle Unit', scope: 'Angle Time Window', is_undefeated: 'Angle W/L Streak',
   is_winless: 'Angle W/L Streak', run_length: 'Angle Run Length',
+  p_capper: 'Capper', p_sport: 'Sport', p_bet_type: 'Bet Type',
 };
+const PICK_LEVEL_BREAKDOWN_KEYS = ['p_capper', 'p_sport', 'p_bet_type'];
 
 let bdSort = { col: 'winrate', dir: 'desc' };
 
 function renderTypeBreakdown() {
   const key = document.getElementById('breakdown-by').value;
   document.getElementById('breakdown-col-label').textContent = BREAKDOWN_COL_LABELS[key] || key;
-  const rows = explodeAngles(filteredPicks);
-  const groups = groupByKey(rows, key);
+  const isPickLevel = PICK_LEVEL_BREAKDOWN_KEYS.includes(key);
+  const rows = isPickLevel ? filteredPicks.filter(p => ['WIN','LOSS','PUSH'].includes(p.verdict)) : explodeAngles(filteredPicks);
+  const groups = isPickLevel ? groupByPickKey(rows, key) : groupByKey(rows, key);
 
   let tableRows = Object.entries(groups).map(([g, picks]) => {
     const m = calcMetrics(picks);
@@ -732,7 +742,6 @@ function groupByKey(rows, key) {
     let val;
     switch (key) {
       case 'type': val = r._a.type; break;
-      case 'capper': val = r.capper; break;
       case 'sport': val = r._a.sport || r.sport; break;
       case 'bet_type': val = r._a.bet_type || r.bet_type; break;
       case 'side': val = r._a.side; break;
@@ -759,6 +768,23 @@ function groupByKey(rows, key) {
     if (val == null) val = '(none)';
     if (!groups[val]) groups[val] = [];
     groups[val].push(r);
+  }
+  return groups;
+}
+
+function groupByPickKey(picks, key) {
+  const groups = {};
+  for (const p of picks) {
+    let val;
+    switch (key) {
+      case 'p_capper': val = p.capper; break;
+      case 'p_sport': val = p.sport; break;
+      case 'p_bet_type': val = p.bet_type; break;
+      default: val = '(unknown)';
+    }
+    if (val == null) val = '(none)';
+    if (!groups[val]) groups[val] = [];
+    groups[val].push(p);
   }
   return groups;
 }
