@@ -174,15 +174,15 @@
     </div>
     <div class="flex flex-wrap items-center gap-2">
       <span class="text-xs text-slate-500 font-medium w-12 shrink-0">ANGLE</span>
-      <div class="dropdown" data-key="angle_type"><button class="filter-btn" data-toggle>Angle Type <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-angle_type"></div></div>
-      <div class="dropdown" data-key="off_count"><button class="filter-btn" data-toggle>Angle Off Count <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-off_count"></div></div>
-      <div class="dropdown" data-key="a_sport"><button class="filter-btn" data-toggle>Angle Sport <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-a_sport"></div></div>
-      <div class="dropdown" data-key="a_bet_type"><button class="filter-btn" data-toggle>Angle Bet Type <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-a_bet_type"></div></div>
-      <div class="dropdown" data-key="side"><button class="filter-btn" data-toggle>Angle Side <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-side"></div></div>
-      <div class="dropdown" data-key="day"><button class="filter-btn" data-toggle>Angle Day <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-day"></div></div>
-      <div class="dropdown" data-key="unit"><button class="filter-btn" data-toggle>Angle Unit <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-unit"></div></div>
-      <div class="dropdown" data-key="scope"><button class="filter-btn" data-toggle>Angle Time Window <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-scope"></div></div>
-      <div class="dropdown" data-key="record_flag"><button class="filter-btn" data-toggle>Angle W/L Streak <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-record_flag"></div></div>
+      <div class="dropdown" data-key="angle_type"><button class="filter-btn" data-toggle>Type Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-angle_type"></div></div>
+      <div class="dropdown" data-key="off_count"><button class="filter-btn" data-toggle>Off Count Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-off_count"></div></div>
+      <div class="dropdown" data-key="a_sport"><button class="filter-btn" data-toggle>Sport Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-a_sport"></div></div>
+      <div class="dropdown" data-key="a_bet_type"><button class="filter-btn" data-toggle>Bet Type Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-a_bet_type"></div></div>
+      <div class="dropdown" data-key="side"><button class="filter-btn" data-toggle>Side Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-side"></div></div>
+      <div class="dropdown" data-key="day"><button class="filter-btn" data-toggle>Day Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-day"></div></div>
+      <div class="dropdown" data-key="unit"><button class="filter-btn" data-toggle>Unit Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-unit"></div></div>
+      <div class="dropdown" data-key="scope"><button class="filter-btn" data-toggle>Time Window Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-scope"></div></div>
+      <div class="dropdown" data-key="record_flag"><button class="filter-btn" data-toggle>W/L Streak Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-record_flag"></div></div>
     </div>
   </div>
   <div id="active-tags" class="flex flex-wrap gap-1.5"></div>
@@ -212,18 +212,18 @@
         <div class="flex items-center gap-1.5">
         <select id="breakdown-by" class="search-input !w-auto !mb-0 text-[11px]">
           <optgroup label="Angle-Level">
-            <option value="type" selected>Angle Type</option>
-            <option value="off_count_losses">Angle Off-Loss Count</option>
-            <option value="off_count_wins">Angle Off-Win Count</option>
-            <option value="sport">Angle Sport</option>
-            <option value="bet_type">Angle Bet Type</option>
-            <option value="side">Angle Side</option>
-            <option value="day">Angle Day</option>
-            <option value="unit">Angle Unit</option>
-            <option value="scope">Angle Time Window</option>
-            <option value="is_undefeated">Angle W/L Streak (Undefeated)</option>
-            <option value="is_winless">Angle W/L Streak (Winless)</option>
-            <option value="run_length">Angle Run Length</option>
+            <option value="type" selected>Type Angle</option>
+            <option value="off_count_losses">Off-Loss Count Angle</option>
+            <option value="off_count_wins">Off-Win Count Angle</option>
+            <option value="sport">Sport Angle</option>
+            <option value="bet_type">Bet Type Angle</option>
+            <option value="side">Side Angle</option>
+            <option value="day">Day Angle</option>
+            <option value="unit">Unit Angle</option>
+            <option value="scope">Time Window Angle</option>
+            <option value="is_undefeated">W/L Streak Angle (Undefeated)</option>
+            <option value="is_winless">W/L Streak Angle (Winless)</option>
+            <option value="run_length">Run Length Angle</option>
           </optgroup>
           <optgroup label="Pick-Level">
             <option value="p_capper">Capper</option>
@@ -310,7 +310,7 @@ let profitChart = null;
 const TYPE_LABELS = {
   run: 'Run/Streak', off_losses: 'Off Losses', off_wins: 'Off Wins',
   sport_record: 'Sport', bet_type_record: 'Bet Type', side_record: 'Side',
-  day_record: 'Day of Week', time_scoped: 'Time-Scoped',
+  day_record: 'Day of Week', time_scoped: 'Recent Form',
   unit_record: 'Unit Record', commentary: 'Commentary', no_angle: 'No Angle',
 };
 const VERDICT_COLORS = { WIN: '#22c55e', LOSS: '#ef4444', PUSH: '#f59e0b', PENDING: '#64748b', UNKNOWN: '#64748b' };
@@ -337,6 +337,7 @@ async function autoLoad() {
 
 // ── Filter system ──────────────────────────────────────────────────────────
 const FILTER_LABELS = { angle_type: TYPE_LABELS, record_flag: { 'undefeated': 'Undefeated (X-0)', 'winless': 'Winless (0-X)' } };
+const FILTER_TAG_NAMES = { angle_type: 'type_angle', off_count: 'off_count_angle', a_sport: 'sport_angle', a_bet_type: 'bet_type_angle', side: 'side_angle', day: 'day_angle', unit: 'unit_angle', scope: 'time_window_angle', record_flag: 'streak_angle' };
 function _fLabel(key, v) { return (FILTER_LABELS[key] && FILTER_LABELS[key][v]) || v; }
 
 function buildFilterOptions() {
@@ -525,7 +526,8 @@ function applyFilters() {
     for (const v of set) {
       hasAny = true;
       const label = _fLabel(key, v);
-      tags += `<span class="tag">${key}: ${label} <button onclick="toggleFilter('${key}','${v}');document.querySelector('#dd-${key} input[value=\\'${v}\\']').checked=false">&times;</button></span>`;
+      const tagName = FILTER_TAG_NAMES[key] || key;
+      tags += `<span class="tag">${tagName}: ${label} <button onclick="toggleFilter('${key}','${v}');document.querySelector('#dd-${key} input[value=\\'${v}\\']').checked=false">&times;</button></span>`;
     }
   }
   if (dateFrom || dateTo) {
@@ -689,10 +691,10 @@ function renderProfitChart() {
 
 // ── Quick breakdown table ──────────────────────────────────────────────────
 const BREAKDOWN_COL_LABELS = {
-  type: 'Angle Type', off_count_losses: 'Angle Off # Losses', off_count_wins: 'Angle Off # Wins',
-  sport: 'Angle Sport', bet_type: 'Angle Bet Type', side: 'Angle Side',
-  day: 'Angle Day', unit: 'Angle Unit', scope: 'Angle Time Window', is_undefeated: 'Angle W/L Streak',
-  is_winless: 'Angle W/L Streak', run_length: 'Angle Run Length',
+  type: 'Type Angle', off_count_losses: 'Off # Losses Angle', off_count_wins: 'Off # Wins Angle',
+  sport: 'Sport Angle', bet_type: 'Bet Type Angle', side: 'Side Angle',
+  day: 'Day Angle', unit: 'Unit Angle', scope: 'Time Window Angle', is_undefeated: 'W/L Streak Angle',
+  is_winless: 'W/L Streak Angle', run_length: 'Run Length Angle',
   p_capper: 'Capper', p_sport: 'Sport', p_bet_type: 'Bet Type',
 };
 const PICK_LEVEL_BREAKDOWN_KEYS = ['p_capper', 'p_sport', 'p_bet_type'];
