@@ -178,7 +178,6 @@
       <div class="dropdown" data-key="off_count"><button class="filter-btn" data-toggle>Off Count Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-off_count"></div></div>
       <div class="dropdown" data-key="a_sport"><button class="filter-btn" data-toggle>Sport Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-a_sport"></div></div>
       <div class="dropdown" data-key="a_bet_type"><button class="filter-btn" data-toggle>Bet Type Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-a_bet_type"></div></div>
-      <div class="dropdown" data-key="side"><button class="filter-btn" data-toggle>Side Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-side"></div></div>
       <div class="dropdown" data-key="day"><button class="filter-btn" data-toggle>Day Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-day"></div></div>
       <div class="dropdown" data-key="unit"><button class="filter-btn" data-toggle>Unit Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-unit"></div></div>
       <div class="dropdown" data-key="scope"><button class="filter-btn" data-toggle>Time Window Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-scope"></div></div>
@@ -217,7 +216,6 @@
             <option value="off_count_wins">Off-Win Count Angle</option>
             <option value="sport">Sport Angle</option>
             <option value="bet_type">Bet Type Angle</option>
-            <option value="side">Side Angle</option>
             <option value="day">Day Angle</option>
             <option value="unit">Unit Angle</option>
             <option value="scope">Time Window Angle</option>
@@ -298,9 +296,9 @@
 // ── State ──────────────────────────────────────────────────────────────────
 let allPicks = [];
 let filteredPicks = [];
-let activeFilters = { capper: new Set(), verdict: new Set(), sport: new Set(), bet_type: new Set(), angle_type: new Set(), off_count: new Set(), a_sport: new Set(), a_bet_type: new Set(), side: new Set(), day: new Set(), unit: new Set(), scope: new Set(), record_flag: new Set() };
+let activeFilters = { capper: new Set(), verdict: new Set(), sport: new Set(), bet_type: new Set(), angle_type: new Set(), off_count: new Set(), a_sport: new Set(), a_bet_type: new Set(), day: new Set(), unit: new Set(), scope: new Set(), record_flag: new Set() };
 // Angle-level filter keys (a pick matches if ANY of its angles match)
-const ANGLE_FILTER_KEYS = ['angle_type','off_count','a_sport','a_bet_type','side','day','unit','scope','record_flag'];
+const ANGLE_FILTER_KEYS = ['angle_type','off_count','a_sport','a_bet_type','day','unit','scope','record_flag'];
 let dateFrom = '', dateTo = '', dateLabel = '';
 let picksSort = { col: 'date', dir: 'desc' };
 let picksPage = 0;
@@ -309,7 +307,7 @@ let profitChart = null;
 
 const TYPE_LABELS = {
   run: 'Run/Streak Angle', off_losses: 'Off Losses Angle', off_wins: 'Off Wins Angle',
-  sport_record: 'Sport Angle', bet_type_record: 'Bet Type Angle', side_record: 'Side Angle',
+  sport_record: 'Sport Angle', bet_type_record: 'Bet Type Angle',
   day_record: 'Day of Week Angle', time_scoped: 'Recent Form Angle',
   unit_record: 'Unit Record Angle', commentary: 'Commentary', no_angle: 'No Angle In Message',
 };
@@ -337,7 +335,7 @@ async function autoLoad() {
 
 // ── Filter system ──────────────────────────────────────────────────────────
 const FILTER_LABELS = { angle_type: TYPE_LABELS, record_flag: { 'undefeated': 'Undefeated (X-0)', 'winless': 'Winless (0-X)' } };
-const FILTER_TAG_NAMES = { angle_type: 'type_angle', off_count: 'off_count_angle', a_sport: 'sport_angle', a_bet_type: 'bet_type_angle', side: 'side_angle', day: 'day_angle', unit: 'unit_angle', scope: 'time_window_angle', record_flag: 'streak_angle' };
+const FILTER_TAG_NAMES = { angle_type: 'type_angle', off_count: 'off_count_angle', a_sport: 'sport_angle', a_bet_type: 'bet_type_angle', day: 'day_angle', unit: 'unit_angle', scope: 'time_window_angle', record_flag: 'streak_angle' };
 function _fLabel(key, v) { return (FILTER_LABELS[key] && FILTER_LABELS[key][v]) || v; }
 
 function buildFilterOptions() {
@@ -354,7 +352,6 @@ function buildFilterOptions() {
       if (a.off_count != null) vals.off_count.add(String(a.off_count));
       if (a.sport) vals.a_sport.add(a.sport);
       if (a.bet_type) vals.a_bet_type.add(a.bet_type);
-      if (a.side) vals.side.add(a.side);
       if (a.day) vals.day.add(a.day);
       if (a.unit) vals.unit.add(a.unit);
       if (a.scope) vals.scope.add(a.scope);
@@ -482,7 +479,6 @@ function _angleMatchesFilters(a) {
   if (activeFilters.off_count.size && (a.off_count == null || !activeFilters.off_count.has(String(a.off_count)))) return false;
   if (activeFilters.a_sport.size && !activeFilters.a_sport.has(a.sport)) return false;
   if (activeFilters.a_bet_type.size && !activeFilters.a_bet_type.has(a.bet_type)) return false;
-  if (activeFilters.side.size && !activeFilters.side.has(a.side)) return false;
   if (activeFilters.day.size && !activeFilters.day.has(a.day)) return false;
   if (activeFilters.unit.size && !activeFilters.unit.has(a.unit)) return false;
   if (activeFilters.scope.size && !activeFilters.scope.has(a.scope)) return false;
@@ -692,7 +688,7 @@ function renderProfitChart() {
 // ── Quick breakdown table ──────────────────────────────────────────────────
 const BREAKDOWN_COL_LABELS = {
   type: 'Type Angle', off_count_losses: 'Off # Losses Angle', off_count_wins: 'Off # Wins Angle',
-  sport: 'Sport Angle', bet_type: 'Bet Type Angle', side: 'Side Angle',
+  sport: 'Sport Angle', bet_type: 'Bet Type Angle',
   day: 'Day Angle', unit: 'Unit Angle', scope: 'Time Window Angle', is_undefeated: 'W/L Streak Angle',
   is_winless: 'W/L Streak Angle', run_length: 'Run Length Angle',
   p_capper: 'Capper', p_sport: 'Sport', p_bet_type: 'Bet Type',
@@ -781,7 +777,6 @@ function groupByKey(rows, key) {
       case 'type': val = r._a.type; break;
       case 'sport': val = r._a.sport || r.sport; break;
       case 'bet_type': val = r._a.bet_type || r.bet_type; break;
-      case 'side': val = r._a.side; break;
       case 'day': val = r._a.day; break;
       case 'unit': val = r._a.unit; break;
       case 'scope': val = r._a.scope; break;
@@ -862,7 +857,6 @@ function renderPicksLog() {
       if (a.off_type) parts.push(`off ${a.off_count} ${a.off_type}`);
       if (a.sport) parts.push(a.sport);
       if (a.bet_type) parts.push(a.bet_type);
-      if (a.side) parts.push(a.side);
       if (a.day) parts.push(a.day);
       if (a.unit) parts.push(a.unit);
       if (a.scope) parts.push(a.scope);

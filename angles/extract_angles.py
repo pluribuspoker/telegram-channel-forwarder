@@ -248,8 +248,6 @@ def _classify_type(text: str, wins: int, losses: int) -> str:
     # Bet-type is most specific, then side, then sport.
     if _extract_bet_type(text):
         return "bet_type_record"
-    if _extract_side(text):
-        return "side_record"
     if _extract_sport(text):
         return "sport_record"
     # Time-scoped: includes "last N", "L30 days", "this month", "YTD", etc.
@@ -325,7 +323,7 @@ def _parse_segment(text: str, parent_ctx: str = "") -> list[dict]:
 
     sport = _extract_sport(main_text)
     bet_type = _extract_bet_type(main_text)
-    side = _extract_side(main_text)
+    side = None
     scope = _extract_scope(main_text)
     # Inherit missing fields from parent context (sub-records from parens)
     if parent_ctx:
@@ -333,8 +331,6 @@ def _parse_segment(text: str, parent_ctx: str = "") -> list[dict]:
             sport = _extract_sport(parent_ctx)
         if not bet_type:
             bet_type = _extract_bet_type(parent_ctx)
-        if not side:
-            side = _extract_side(parent_ctx)
 
     # Undefeated/winless only meaningful for deeper angles (records in a
     # specific context), not raw streaks like "6-0 run" or "7-3 last 10".
