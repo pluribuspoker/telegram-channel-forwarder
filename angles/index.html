@@ -1144,28 +1144,26 @@ function renderTopEdges() {
   }
   document.getElementById('edge-card').classList.remove('hidden');
 
-  // Best edges: sorted by CI lower bound descending, deduplicated by value
-  const edgeSorted = [...all].sort((a, b) => b.wrCI.lo - a.wrCI.lo);
-  const edges = _dedup(edgeSorted, (a, b) => a.wrCI.lo > b.wrCI.lo).slice(0, 8);
-  // Fades: sorted by CI upper bound ascending, deduplicated by value
-  const fadeSorted = [...all].sort((a, b) => a.wrCI.hi - b.wrCI.hi);
-  const fades = _dedup(fadeSorted, (a, b) => a.wrCI.hi < b.wrCI.hi).slice(0, 8);
+  // Edges: CI lower bound > 50% (entire range above break-even)
+  const edgeSorted = [...all].filter(r => r.wrCI.lo > 0.5).sort((a, b) => b.wrCI.lo - a.wrCI.lo);
+  const edges = _dedup(edgeSorted, (a, b) => a.wrCI.lo > b.wrCI.lo);
+  // Fades: CI upper bound < 50% (entire range below break-even)
+  const fadeSorted = [...all].filter(r => r.wrCI.hi < 0.5).sort((a, b) => a.wrCI.hi - b.wrCI.hi);
+  const fades = _dedup(fadeSorted, (a, b) => a.wrCI.hi < b.wrCI.hi);
 
-  const sigEdges = edges.filter(r => r.wrCI.lo > 0.5).length;
-  const sigFades = fades.filter(r => r.wrCI.hi < 0.5).length;
   const parts = [];
-  if (sigEdges) parts.push(`${sigEdges} significant edge${sigEdges > 1 ? 's' : ''}`);
-  if (sigFades) parts.push(`${sigFades} significant fade${sigFades > 1 ? 's' : ''}`);
+  if (edges.length) parts.push(`${edges.length} significant edge${edges.length > 1 ? 's' : ''}`);
+  if (fades.length) parts.push(`${fades.length} significant fade${fades.length > 1 ? 's' : ''}`);
   document.getElementById('edge-teaser').textContent = parts.length
-    ? parts.join(', ') + ` across ${all.length} slices`
-    : `${all.length} slices analyzed`;
+    ? parts.join(', ')
+    : 'no significant edges yet';
 
   document.getElementById('edge-best-body').innerHTML = edges.length
     ? edges.map((r, i) => _edgeRow(r, i + 1, 'edge')).join('')
-    : '<tr><td colspan="6" class="py-3 text-center text-slate-500">Not enough data</td></tr>';
+    : '<tr><td colspan="6" class="py-3 text-center text-slate-500">No edges with CI entirely above 50%</td></tr>';
   document.getElementById('edge-fade-body').innerHTML = fades.length
     ? fades.map((r, i) => _edgeRow(r, i + 1, 'fade')).join('')
-    : '<tr><td colspan="6" class="py-3 text-center text-slate-500">Not enough data</td></tr>';
+    : '<tr><td colspan="6" class="py-3 text-center text-slate-500">No fades with CI entirely below 50%</td></tr>';
 }
 
 let topEdgesOpen = false;
