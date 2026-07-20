@@ -505,6 +505,8 @@ async def extract(limit: int | None = None, output_path: str | None = None):
         gd = grades.get(msg.id, {})
         sport = gd.get("sport")
         bet_type = gd.get("bet_type")
+        if bet_type:
+            bet_type = BET_TYPES_MAP.get(bet_type.lower(), bet_type)
         if gd.get("verdict") and gd["verdict"] not in ("PENDING", "UNKNOWN"):
             verdict = gd["verdict"]
         if gd.get("odds") and not odds:
