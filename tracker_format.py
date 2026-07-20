@@ -375,11 +375,24 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             # Find the parlay/teaser header line (e.g. "Two Team Teaser / Parlay:")
             # Prefer this over team-name matching, which can misfire when a leg
             # line itself mentions multiple teams (e.g. "Pistons / Magic o208.5").
+            #
+            # A message can also mention "parlay" in prose (e.g. a capper-name
+            # line like "Travy (weird ass parlay today)") ABOVE the real header,
+            # which the first-match loop would wrongly grab. Prefer a label-style
+            # header — the keyword followed by a colon at end of line, as in
+            # "Parlay:" or "Two Team Teaser / Parlay:" — so the combined price
+            # lands on the header nearest the legs, not the prose mention. Fall
+            # back to the first keyword line when there's no colon-label header.
             header_j = -1
             for j, line in enumerate(lines):
-                if re.search(r'\b(?:parlay|teaser)\b', line, re.IGNORECASE):
+                if re.search(r'\b(?:parlay|teaser)\b[^:\n]*:\s*$', line, re.IGNORECASE):
                     header_j = j
                     break
+            if header_j < 0:
+                for j, line in enumerate(lines):
+                    if re.search(r'\b(?:parlay|teaser)\b', line, re.IGNORECASE):
+                        header_j = j
+                        break
             # Fallback: line mentioning multiple leg teams
             if header_j < 0:
                 leg_terms = []
