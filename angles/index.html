@@ -92,6 +92,17 @@
   .kpi-ci-fill.ci-neu { background: rgba(245,158,11,.3); }
   .kpi-ci-ref { position: absolute; top: -1px; width: 1px; height: 5px; background: #475569; border-radius: 1px; left: 50%; }
 
+  /* ── Top Edges ── */
+  .edge-rank { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 9px; font-size: 10px; font-weight: 600; }
+  .edge-rank.edge-pos { background: rgba(34,197,94,.15); color: #4ade80; }
+  .edge-rank.edge-neg { background: rgba(239,68,68,.15); color: #f87171; }
+  .edge-dim { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; line-height: 1; }
+  .edge-val { font-size: 12px; color: #cbd5e1; line-height: 1.3; }
+  .edge-header { cursor: pointer; user-select: none; }
+  .edge-chevron { transition: transform .2s; }
+  .edge-chevron.open { transform: rotate(180deg); }
+  .edge-section-label { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; padding: 6px 8px; border-radius: 4px; }
+
   /* ── Mobile responsive ── */
   @media (max-width: 639px) {
     body { -webkit-text-size-adjust: 100%; }
@@ -192,6 +203,10 @@
 
     /* CI tooltip */
     .ci-tip { max-width: calc(100vw - 32px) !important; }
+
+    /* Top Edges */
+    #edge-body .grid { grid-template-columns: 1fr !important; }
+    #edge-body { max-height: 65vh; overflow-y: auto; }
 
     /* Empty state */
     .empty-hero { min-height: 50vh; padding: 0 20px; }
@@ -359,6 +374,33 @@
     </div>
   </div>
 
+
+  <!-- Top Edges -->
+  <div class="card" id="edge-card">
+    <div class="flex items-center justify-between px-4 py-3 edge-header" onclick="toggleTopEdges()">
+      <div class="flex items-center gap-2">
+        <span class="text-sm font-semibold text-slate-300">Top Edges</span>
+        <span id="edge-teaser" class="text-xs text-slate-500"></span>
+      </div>
+      <svg id="edge-chevron" class="edge-chevron w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+    </div>
+    <div id="edge-body" class="hidden px-4 pb-4">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div>
+          <div class="edge-section-label text-green-400/80 bg-green-500/5 mb-2">Strongest Edges</div>
+          <table class="w-full text-xs"><thead><tr class="text-left text-[10px] text-slate-500 uppercase tracking-wider">
+            <th class="py-1 px-1 w-7"></th><th class="py-1 px-2">Dimension</th><th class="py-1 px-2 text-right">Rec</th><th class="py-1 px-2 text-right">Win%</th><th class="py-1 px-2 text-right">Units</th><th class="py-1 px-2 text-right">ROI</th>
+          </tr></thead><tbody id="edge-best-body"></tbody></table>
+        </div>
+        <div>
+          <div class="edge-section-label text-red-400/80 bg-red-500/5 mb-2">Strongest Fades</div>
+          <table class="w-full text-xs"><thead><tr class="text-left text-[10px] text-slate-500 uppercase tracking-wider">
+            <th class="py-1 px-1 w-7"></th><th class="py-1 px-2">Dimension</th><th class="py-1 px-2 text-right">Rec</th><th class="py-1 px-2 text-right">Win%</th><th class="py-1 px-2 text-right">Units</th><th class="py-1 px-2 text-right">ROI</th>
+          </tr></thead><tbody id="edge-fade-body"></tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Picks log -->
   <div class="card p-4">
@@ -801,6 +843,7 @@ function renderAll() {
   renderKPIs();
   renderProfitChart();
   renderTypeBreakdown();
+  renderTopEdges();
   renderPicksLog();
 }
 
@@ -1016,6 +1059,116 @@ function groupByPickKey(picks, key) {
   }
   return groups;
 }
+
+// ── Top Edges ─────────────────────────────────────────────────────────────
+const EDGE_DIMS = [
+  { key: 'type', label: 'Angle Type', pick: false },
+  { key: 'off_count_losses', label: 'Off Losses', pick: false },
+  { key: 'off_count_wins', label: 'Off Wins', pick: false },
+  { key: 'sport', label: 'Sport Angle', pick: false },
+  { key: 'bet_type', label: 'Bet Type Angle', pick: false },
+  { key: 'day', label: 'Day Angle', pick: false },
+  { key: 'unit', label: 'Unit Angle', pick: false },
+  { key: 'scope', label: 'Time Window', pick: false },
+  { key: 'is_undefeated', label: 'Streak', pick: false },
+  { key: 'is_winless', label: 'Streak', pick: false },
+  { key: 'run_length', label: 'Run Length', pick: false },
+  { key: 'p_capper', label: 'Capper', pick: true },
+  { key: 'p_sport', label: 'Sport', pick: true },
+  { key: 'p_bet_type', label: 'Bet Type', pick: true },
+  { key: 'p_day', label: 'Day', pick: true },
+];
+const MIN_EDGE_N = 15;
+
+function computeAllEdges() {
+  const gradedPicks = filteredPicks.filter(p => ['WIN','LOSS','PUSH'].includes(p.verdict));
+  const angleRows = explodeAngles(filteredPicks, false);
+  const results = [];
+  for (const dim of EDGE_DIMS) {
+    const groups = dim.pick
+      ? groupByPickKey(gradedPicks, dim.key)
+      : groupByKey(angleRows, dim.key);
+    for (const [val, picks] of Object.entries(groups)) {
+      const m = calcMetrics(picks);
+      if (m.decisions < MIN_EDGE_N) continue;
+      results.push({ dim: dim.label, dimKey: dim.key, val, ...m });
+    }
+  }
+  return results;
+}
+
+function _edgeRow(r, rank, mode) {
+  const wrSig = clrSig(r.wrCI.lo, r.wrCI.hi, 0.5);
+  const roiSig = clrSig(r.roiCI.lo, r.roiCI.hi, 0);
+  const barL = (r.wrCI.lo * 100).toFixed(1);
+  const barW = ((r.wrCI.hi - r.wrCI.lo) * 100).toFixed(1);
+  const barClr = ciBarClr(r.wrCI.lo, r.wrCI.hi, 0.5);
+  const wrTip = escCITip(ciTipWR(r.wrCI, r.decisions));
+  const roiTip = escCITip(ciTipROI(r.roiCI, r.total));
+  const rankClr = mode === 'edge' ? 'edge-pos' : 'edge-neg';
+  const label = r.dimKey === 'type' ? (TYPE_LABELS[r.val] || r.val) : r.val;
+  return `<tr class="border-t border-slate-800/50 hover:bg-slate-800/30 cursor-pointer" data-edge-dim="${r.dimKey}">
+    <td class="py-1.5 px-1.5 text-center"><span class="edge-rank ${rankClr}">${rank}</span></td>
+    <td class="py-1.5 px-2"><div class="edge-dim">${r.dim}</div><div class="edge-val">${label}</div></td>
+    <td class="py-1.5 px-2 text-right mono text-slate-400">${r.w}-${r.l}</td>
+    <td class="py-1.5 px-2 text-right" data-ci-tip="${wrTip}">
+      <div class="mono font-semibold ${wrSig}">${fmtPct(r.winrate)}</div>
+      <div class="ci-bar-track"><div class="ci-bar-ref" style="left:50%"></div><div class="ci-bar-fill ${barClr}" style="left:${barL}%;width:${barW}%"></div></div>
+    </td>
+    <td class="py-1.5 px-2 text-right mono ${clr(r.units)}">${fmtUnits(r.units)}</td>
+    <td class="py-1.5 px-2 text-right mono ${roiSig}" data-ci-tip="${roiTip}">${fmtRoi(r.roi)}</td>
+  </tr>`;
+}
+
+function renderTopEdges() {
+  const all = computeAllEdges();
+  if (all.length === 0) {
+    document.getElementById('edge-card').classList.add('hidden');
+    return;
+  }
+  document.getElementById('edge-card').classList.remove('hidden');
+
+  // Best edges: sorted by CI lower bound descending
+  const edges = [...all].sort((a, b) => b.wrCI.lo - a.wrCI.lo).slice(0, 8);
+  // Fades: sorted by CI upper bound ascending (worst first)
+  const fades = [...all].sort((a, b) => a.wrCI.hi - b.wrCI.hi).slice(0, 8);
+
+  const sigEdges = edges.filter(r => r.wrCI.lo > 0.5).length;
+  const sigFades = fades.filter(r => r.wrCI.hi < 0.5).length;
+  const parts = [];
+  if (sigEdges) parts.push(`${sigEdges} significant edge${sigEdges > 1 ? 's' : ''}`);
+  if (sigFades) parts.push(`${sigFades} significant fade${sigFades > 1 ? 's' : ''}`);
+  document.getElementById('edge-teaser').textContent = parts.length
+    ? parts.join(', ') + ` across ${all.length} slices`
+    : `${all.length} slices analyzed`;
+
+  document.getElementById('edge-best-body').innerHTML = edges.length
+    ? edges.map((r, i) => _edgeRow(r, i + 1, 'edge')).join('')
+    : '<tr><td colspan="6" class="py-3 text-center text-slate-500">Not enough data</td></tr>';
+  document.getElementById('edge-fade-body').innerHTML = fades.length
+    ? fades.map((r, i) => _edgeRow(r, i + 1, 'fade')).join('')
+    : '<tr><td colspan="6" class="py-3 text-center text-slate-500">Not enough data</td></tr>';
+}
+
+let topEdgesOpen = false;
+function toggleTopEdges() {
+  topEdgesOpen = !topEdgesOpen;
+  document.getElementById('edge-body').classList.toggle('hidden', !topEdgesOpen);
+  document.getElementById('edge-chevron').classList.toggle('open', topEdgesOpen);
+}
+
+// Click edge row → jump to that breakdown dimension
+document.getElementById('edge-card').addEventListener('click', e => {
+  const tr = e.target.closest('tr[data-edge-dim]');
+  if (!tr) return;
+  const dimKey = tr.dataset.edgeDim;
+  const sel = document.getElementById('breakdown-by');
+  if ([...sel.options].some(o => o.value === dimKey)) {
+    sel.value = dimKey;
+    renderTypeBreakdown();
+    document.getElementById('breakdown-table').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+});
 
 // ── Picks log ──────────────────────────────────────────────────────────────
 function renderPicksLog() {
