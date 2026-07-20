@@ -1089,6 +1089,8 @@ function computeAllEdges() {
       ? groupByPickKey(gradedPicks, dim.key)
       : groupByKey(angleRows, dim.key);
     for (const [val, picks] of Object.entries(groups)) {
+      // Skip complement values from boolean splits (not meaningful edges)
+      if (val === 'Has Wins' || val === 'Has Losses') continue;
       const m = calcMetrics(picks);
       if (m.decisions < MIN_EDGE_N) continue;
       results.push({ dim: dim.label, dimKey: dim.key, val, isPickLevel: dim.pick, ...m });
