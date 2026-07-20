@@ -306,7 +306,7 @@
     </div>
     <div class="flex flex-wrap items-center gap-2 filter-row">
       <span class="text-xs text-slate-500 font-medium w-12 shrink-0 filter-label">ANGLE</span>
-      <div class="dropdown" data-key="angle_type"><button class="filter-btn" data-toggle>Type Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-angle_type"></div></div>
+      <div class="dropdown" data-key="angle_type"><button class="filter-btn" data-toggle>Angle Type <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-angle_type"></div></div>
       <div class="dropdown" data-key="off_count"><button class="filter-btn" data-toggle>Off Count Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-off_count"></div></div>
       <div class="dropdown" data-key="a_sport"><button class="filter-btn" data-toggle>Sport Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-a_sport"></div></div>
       <div class="dropdown" data-key="a_bet_type"><button class="filter-btn" data-toggle>Bet Type Angle <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-a_bet_type"></div></div>
@@ -343,7 +343,7 @@
         <div class="flex items-center gap-1.5">
         <select id="breakdown-by" class="search-input !w-auto !mb-0 text-[11px]">
           <optgroup label="Angle-Level">
-            <option value="type" selected>Type Angle</option>
+            <option value="type" selected>Angle Type</option>
             <option value="off_count_losses">Off-Loss Count Angle</option>
             <option value="off_count_wins">Off-Win Count Angle</option>
             <option value="sport">Sport Angle</option>
@@ -924,7 +924,7 @@ function renderProfitChart() {
 
 // ── Quick breakdown table ──────────────────────────────────────────────────
 const BREAKDOWN_COL_LABELS = {
-  type: 'Type Angle', off_count_losses: 'Off # Losses Angle', off_count_wins: 'Off # Wins Angle',
+  type: 'Angle Type', off_count_losses: 'Off # Losses Angle', off_count_wins: 'Off # Wins Angle',
   sport: 'Sport Angle', bet_type: 'Bet Type Angle',
   day: 'Day Angle', unit: 'Unit Angle', scope: 'Time Window Angle', is_undefeated: 'W/L Streak Angle',
   is_winless: 'W/L Streak Angle', run_length: 'Run Length Angle',
@@ -1120,6 +1120,20 @@ function _edgeRow(r, rank, mode) {
   </tr>`;
 }
 
+// Deduplicate: when same value appears across related dimensions, keep strongest
+function _dedup(list, bestFn) {
+  const seen = {};
+  const out = [];
+  for (const r of list) {
+    const label = r.dimKey === 'type' ? (TYPE_LABELS[r.val] || r.val) : r.val;
+    if (seen[label] && !bestFn(r, seen[label])) continue;
+    if (seen[label]) out.splice(out.indexOf(seen[label]), 1);
+    seen[label] = r;
+    out.push(r);
+  }
+  return out;
+}
+
 function renderTopEdges() {
   const all = computeAllEdges();
   if (all.length === 0) {
@@ -1128,10 +1142,12 @@ function renderTopEdges() {
   }
   document.getElementById('edge-card').classList.remove('hidden');
 
-  // Best edges: sorted by CI lower bound descending
-  const edges = [...all].sort((a, b) => b.wrCI.lo - a.wrCI.lo).slice(0, 8);
-  // Fades: sorted by CI upper bound ascending (worst first)
-  const fades = [...all].sort((a, b) => a.wrCI.hi - b.wrCI.hi).slice(0, 8);
+  // Best edges: sorted by CI lower bound descending, deduplicated by value
+  const edgeSorted = [...all].sort((a, b) => b.wrCI.lo - a.wrCI.lo);
+  const edges = _dedup(edgeSorted, (a, b) => a.wrCI.lo > b.wrCI.lo).slice(0, 8);
+  // Fades: sorted by CI upper bound ascending, deduplicated by value
+  const fadeSorted = [...all].sort((a, b) => a.wrCI.hi - b.wrCI.hi);
+  const fades = _dedup(fadeSorted, (a, b) => a.wrCI.hi < b.wrCI.hi).slice(0, 8);
 
   const sigEdges = edges.filter(r => r.wrCI.lo > 0.5).length;
   const sigFades = fades.filter(r => r.wrCI.hi < 0.5).length;
