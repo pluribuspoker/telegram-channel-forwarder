@@ -229,6 +229,7 @@
   <div class="flex items-center gap-3 hdr-actions">
     <span id="header-stats" class="text-xs text-slate-400 hidden" style="white-space:nowrap">Performance of intel picks and angles. Filter by any dimension to find profitable patterns.</span>
     <button id="refresh-btn" class="filter-btn text-sm" onclick="showRefreshModal()" title="Requires Fight Club membership">Refresh Data</button>
+    <a id="activity-link" href="/activity" class="text-xs text-slate-500 hover:text-slate-300 ml-1 hidden">Activity</a>
     <a href="/logout" class="text-xs text-slate-500 hover:text-slate-300 ml-1 hdr-logout">Logout</a>
   </div>
 </header>
@@ -1420,7 +1421,10 @@ function rmFinish(e) {
 }
 
 autoLoad();
-fetch('/api/me').then(r => r.json()).then(d => { if (!d.can_refresh) document.getElementById('refresh-btn').style.display = 'none'; }).catch(() => {});
+fetch('/api/me').then(r => r.json()).then(d => {
+  if (!d.can_refresh) document.getElementById('refresh-btn').style.display = 'none';
+  if (d.is_admin) document.getElementById('activity-link').classList.remove('hidden');
+}).catch(() => {});
 </script>
 </body>
 </html>

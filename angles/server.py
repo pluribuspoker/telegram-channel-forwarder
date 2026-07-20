@@ -102,7 +102,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         if self.path.rstrip("/") == "/api/me":
             can_refresh = not _REFRESH_ALLOWED_IDS or user_id in _REFRESH_ALLOWED_IDS
-            return self._json(200, {"can_refresh": can_refresh})
+            is_admin = not _ADMIN_IDS or user_id in _ADMIN_IDS
+            return self._json(200, {"can_refresh": can_refresh, "is_admin": is_admin})
 
         # Activity dashboard (admin-only)
         if path == "/activity":
