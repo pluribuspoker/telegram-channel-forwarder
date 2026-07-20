@@ -344,6 +344,7 @@
             <option value="p_capper">Capper</option>
             <option value="p_sport">Sport</option>
             <option value="p_bet_type">Bet Type</option>
+            <option value="p_day">Day</option>
           </optgroup>
         </select>
         <button id="breakdown-reset" class="text-[11px] text-slate-500 hover:text-slate-300 hidden" onclick="document.getElementById('breakdown-by').value='type';renderTypeBreakdown()" title="Reset to default">&times;</button>
@@ -464,18 +465,20 @@ async function autoLoad() {
 
 // ── Filter system ──────────────────────────────────────────────────────────
 const FILTER_LABELS = { angle_type: TYPE_LABELS, record_flag: { 'undefeated': 'Undefeated (X-0)', 'winless': 'Winless (0-X)' } };
-const FILTER_TAG_NAMES = { angle_type: 'type_angle', off_count: 'off_count_angle', a_sport: 'sport_angle', a_bet_type: 'bet_type_angle', day: 'day_angle', unit: 'unit_angle', scope: 'time_window_angle', record_flag: 'streak_angle' };
+const FILTER_TAG_NAMES = { p_day: 'day', angle_type: 'type_angle', off_count: 'off_count_angle', a_sport: 'sport_angle', a_bet_type: 'bet_type_angle', day: 'day_angle', unit: 'unit_angle', scope: 'time_window_angle', record_flag: 'streak_angle' };
 function _fLabel(key, v) { return (FILTER_LABELS[key] && FILTER_LABELS[key][v]) || v; }
 
 function buildFilterOptions() {
-  const vals = { capper: new Set(), verdict: new Set(), sport: new Set(), bet_type: new Set(),
+  const vals = { capper: new Set(), verdict: new Set(), sport: new Set(), bet_type: new Set(), p_day: new Set(),
     angle_type: new Set(), off_count: new Set(), a_sport: new Set(), a_bet_type: new Set(),
     side: new Set(), day: new Set(), unit: new Set(), scope: new Set(), record_flag: new Set() };
+  const _dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   for (const p of allPicks) {
     if (p.capper) vals.capper.add(p.capper);
     if (p.verdict) vals.verdict.add(p.verdict);
     if (p.sport) vals.sport.add(p.sport);
     if (p.bet_type) vals.bet_type.add(p.bet_type);
+    if (p.date) { const d = new Date(p.date); if (!isNaN(d)) vals.p_day.add(_dayNames[d.getUTCDay()]); }
     for (const a of p.angles) {
       if (a.type) vals.angle_type.add(a.type);
       if (a.off_count != null) vals.off_count.add(String(a.off_count));
@@ -507,7 +510,7 @@ function buildFilterOptions() {
     if (!menu) continue;
     let sorted;
     if (key === 'off_count') sorted = [...set].sort((a,b) => Number(a) - Number(b));
-    else if (key === 'day') sorted = [...set].sort((a,b) => daySortOrder.indexOf(a) - daySortOrder.indexOf(b));
+    else if (key === 'day' || key === 'p_day') sorted = [...set].sort((a,b) => daySortOrder.indexOf(a) - daySortOrder.indexOf(b));
     else if (key === 'scope') sorted = [...set].sort((a,b) => {
       const [ga, na] = scopeSortKey(a), [gb, nb] = scopeSortKey(b);
       return ga !== gb ? ga - gb : na !== nb ? na - nb : a.localeCompare(b);
@@ -659,6 +662,11 @@ function applyFilters() {
     if (activeFilters.verdict.size && !activeFilters.verdict.has(p.verdict)) return false;
     if (activeFilters.sport.size && !activeFilters.sport.has(p.sport)) return false;
     if (activeFilters.bet_type.size && !activeFilters.bet_type.has(p.bet_type)) return false;
+    if (activeFilters.p_day.size && p.date) {
+      const _dn = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      const d = new Date(p.date);
+      if (!activeFilters.p_day.has(_dn[d.getUTCDay()])) return false;
+    }
     if (hasAngleFilters) {
       if (!p.angles.some(_angleMatchesFilters)) return false;
     }
@@ -877,9 +885,9 @@ const BREAKDOWN_COL_LABELS = {
   sport: 'Sport Angle', bet_type: 'Bet Type Angle',
   day: 'Day Angle', unit: 'Unit Angle', scope: 'Time Window Angle', is_undefeated: 'W/L Streak Angle',
   is_winless: 'W/L Streak Angle', run_length: 'Run Length Angle',
-  p_capper: 'Capper', p_sport: 'Sport', p_bet_type: 'Bet Type',
+  p_capper: 'Capper', p_sport: 'Sport', p_bet_type: 'Bet Type', p_day: 'Day',
 };
-const PICK_LEVEL_BREAKDOWN_KEYS = ['p_capper', 'p_sport', 'p_bet_type'];
+const PICK_LEVEL_BREAKDOWN_KEYS = ['p_capper', 'p_sport', 'p_bet_type', 'p_day'];
 
 let bdSort = { col: 'ci_lo', dir: 'desc' };
 
@@ -999,6 +1007,7 @@ function groupByPickKey(picks, key) {
       case 'p_capper': val = p.capper; break;
       case 'p_sport': val = p.sport; break;
       case 'p_bet_type': val = p.bet_type; break;
+      case 'p_day': { const _dn = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']; const d = new Date(p.date); val = !isNaN(d) ? _dn[d.getUTCDay()] : null; break; }
       default: val = '(unknown)';
     }
     if (val == null) val = '(none)';
