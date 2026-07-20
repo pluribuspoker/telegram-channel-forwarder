@@ -264,6 +264,7 @@
       <div class="dropdown" data-key="capper"><button class="filter-btn" data-toggle>Capper <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-capper"></div></div>
       <div class="dropdown" data-key="sport"><button class="filter-btn" data-toggle>Sport <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-sport"></div></div>
       <div class="dropdown" data-key="bet_type"><button class="filter-btn" data-toggle>Bet Type <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-bet_type"></div></div>
+      <div class="dropdown" data-key="p_day"><button class="filter-btn" data-toggle>Day <span class="text-slate-500">&darr;</span></button><div class="dropdown-menu" id="dd-p_day"></div></div>
       <div class="dropdown" id="date-dropdown">
         <button class="filter-btn" id="date-toggle" data-toggle>Date Range <span class="text-slate-500">&darr;</span></button>
         <div class="dropdown-menu" id="dd-date" style="min-width:240px">
@@ -350,7 +351,7 @@
       </div>
       <table class="w-full text-xs" id="breakdown-table">
         <thead><tr class="text-left text-[11px] text-slate-500 uppercase tracking-wider">
-          <th class="py-1.5 px-2" data-bcol="label" id="breakdown-col-label">Type</th><th class="py-1.5 px-2 text-right" data-bcol="total">Record</th><th class="py-1.5 px-2 text-right" data-bcol="winrate" data-ci-tip="Win rate with 95% confidence range.&#10;&#10;Green = statistically significant edge&#10;Yellow = inconclusive (need more picks)&#10;Red = statistically losing&#10;&#10;Bar shows the likely range.&#10;Vertical line = 50% (break-even).">Win%</th><th class="py-1.5 px-2 text-right" data-bcol="units">Units</th><th class="py-1.5 px-2 text-right" data-bcol="roi" data-ci-tip="ROI with 95% confidence range.&#10;&#10;Green = statistically profitable&#10;Yellow = inconclusive (need more picks)&#10;Red = statistically unprofitable&#10;&#10;Hover any row for details.">ROI</th>
+          <th class="py-1.5 px-2" data-bcol="label" id="breakdown-col-label">Type</th><th class="py-1.5 px-2 text-right" data-bcol="total">Record</th><th class="py-1.5 px-2 text-right" data-bcol="ci_lo" data-ci-tip="Win rate with 95% confidence range.&#10;&#10;Green = statistically significant edge&#10;Yellow = inconclusive (need more picks)&#10;Red = statistically losing&#10;&#10;Bar shows the likely range.&#10;Vertical line = 50% (break-even).">Win%</th><th class="py-1.5 px-2 text-right" data-bcol="units">Units</th><th class="py-1.5 px-2 text-right" data-bcol="roi" data-ci-tip="ROI with 95% confidence range.&#10;&#10;Green = statistically profitable&#10;Yellow = inconclusive (need more picks)&#10;Red = statistically unprofitable&#10;&#10;Hover any row for details.">ROI</th>
         </tr></thead>
         <tbody id="type-breakdown-body"></tbody>
       </table>
@@ -412,7 +413,7 @@
 // ── State ──────────────────────────────────────────────────────────────────
 let allPicks = [];
 let filteredPicks = [];
-let activeFilters = { capper: new Set(), verdict: new Set(), sport: new Set(), bet_type: new Set(), angle_type: new Set(), off_count: new Set(), a_sport: new Set(), a_bet_type: new Set(), day: new Set(), unit: new Set(), scope: new Set(), record_flag: new Set() };
+let activeFilters = { capper: new Set(), verdict: new Set(), sport: new Set(), bet_type: new Set(), p_day: new Set(), angle_type: new Set(), off_count: new Set(), a_sport: new Set(), a_bet_type: new Set(), day: new Set(), unit: new Set(), scope: new Set(), record_flag: new Set() };
 // Angle-level filter keys (a pick matches if ANY of its angles match)
 const ANGLE_FILTER_KEYS = ['angle_type','off_count','a_sport','a_bet_type','day','unit','scope','record_flag'];
 let dateFrom = '', dateTo = '', dateLabel = '';
@@ -880,7 +881,7 @@ const BREAKDOWN_COL_LABELS = {
 };
 const PICK_LEVEL_BREAKDOWN_KEYS = ['p_capper', 'p_sport', 'p_bet_type'];
 
-let bdSort = { col: 'winrate', dir: 'desc' };
+let bdSort = { col: 'ci_lo', dir: 'desc' };
 
 function renderTypeBreakdown() {
   const key = document.getElementById('breakdown-by').value;
@@ -896,7 +897,7 @@ function renderTypeBreakdown() {
     const m = calcMetrics(picks);
     const label = key === 'type' ? (TYPE_LABELS[g] || g) : g;
     const _typeKey = key === 'type' ? g : null;
-    return { label, _typeKey, ...m };
+    return { label, _typeKey, ci_lo: m.wrCI.lo, ...m };
   }).filter(r => r.total >= 2);
 
   tableRows.sort((a, b) => {
