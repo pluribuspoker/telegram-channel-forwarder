@@ -378,10 +378,7 @@
   <!-- Top Edges -->
   <div class="card" id="edge-card">
     <div class="flex items-center justify-between px-4 py-3 edge-header" onclick="toggleTopEdges()">
-      <div class="flex items-center gap-2">
-        <span class="text-sm font-semibold text-slate-300">Top Edges</span>
-        <span id="edge-teaser" class="text-xs text-slate-500"></span>
-      </div>
+      <span class="text-sm font-semibold text-slate-300">Top Edges</span>
       <svg id="edge-chevron" class="edge-chevron w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
     </div>
     <div id="edge-body" class="hidden px-4 pb-4">
@@ -1144,21 +1141,14 @@ function renderTopEdges() {
   }
   document.getElementById('edge-card').classList.remove('hidden');
 
-  // Edges: prefer CI-significant, but always show at least 3 (max 10)
+  // Edges: prefer CI-significant, but always show at least 3 (max 8)
   const allEdgeSorted = _dedup([...all].sort((a, b) => b.wrCI.lo - a.wrCI.lo), (a, b) => a.wrCI.lo > b.wrCI.lo);
   const sigEdges = allEdgeSorted.filter(r => r.wrCI.lo > 0.5);
-  const edges = sigEdges.length >= 3 ? sigEdges.slice(0, 10) : allEdgeSorted.slice(0, Math.max(3, sigEdges.length)).slice(0, 10);
-  // Fades: prefer CI-significant, but always show at least 3 (max 10)
+  const edges = sigEdges.length >= 3 ? sigEdges.slice(0, 8) : allEdgeSorted.slice(0, Math.max(3, sigEdges.length)).slice(0, 8);
+  // Fades: prefer CI-significant, but always show at least 3 (max 8)
   const allFadeSorted = _dedup([...all].sort((a, b) => a.wrCI.hi - b.wrCI.hi), (a, b) => a.wrCI.hi < b.wrCI.hi);
   const sigFades = allFadeSorted.filter(r => r.wrCI.hi < 0.5);
-  const fades = sigFades.length >= 3 ? sigFades.slice(0, 10) : allFadeSorted.slice(0, Math.max(3, sigFades.length)).slice(0, 10);
-
-  const parts = [];
-  if (sigEdges.length) parts.push(`${sigEdges.length} significant edge${sigEdges.length > 1 ? 's' : ''}`);
-  if (sigFades.length) parts.push(`${sigFades.length} significant fade${sigFades.length > 1 ? 's' : ''}`);
-  document.getElementById('edge-teaser').textContent = parts.length
-    ? parts.join(', ')
-    : 'no significant edges yet';
+  const fades = sigFades.length >= 3 ? sigFades.slice(0, 8) : allFadeSorted.slice(0, Math.max(3, sigFades.length)).slice(0, 8);
 
   document.getElementById('edge-best-body').innerHTML = edges.length
     ? edges.map((r, i) => _edgeRow(r, i + 1, 'edge')).join('')
