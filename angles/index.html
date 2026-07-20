@@ -1415,10 +1415,7 @@ function rmFinish(e) {
     document.getElementById('rm-card').classList.add('rm-glow');
     document.getElementById('rm-close').textContent = 'Close';
   }, 350);
-  setTimeout(async () => {
-    await autoLoad();
-    closeRefreshModal();
-  }, 1800);
+  setTimeout(() => { autoLoad(); }, 1800);
 }
 
 autoLoad();
