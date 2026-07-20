@@ -379,13 +379,19 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             # A message can also mention "parlay" in prose (e.g. a capper-name
             # line like "Travy (weird ass parlay today)") ABOVE the real header,
             # which the first-match loop would wrongly grab. Prefer a label-style
-            # header — the keyword followed by a colon at end of line, as in
-            # "Parlay:" or "Two Team Teaser / Parlay:" — so the combined price
-            # lands on the header nearest the legs, not the prose mention. Fall
-            # back to the first keyword line when there's no colon-label header.
+            # header — the keyword followed by a colon, as in "Parlay:" or
+            # "Two Team Teaser / Parlay:" — so the combined price lands on the
+            # header nearest the legs, not the prose mention. Fall back to the
+            # first keyword line when there's no colon-label header.
+            #
+            # The optional trailing "[+101]" in the pattern keeps this idempotent:
+            # once we've appended the price the header becomes "Parlay: [+101]"
+            # (no longer colon-terminated), and without tolerating that tag a
+            # re-run would fail to re-find the header and wrongly tag the prose
+            # line instead.
             header_j = -1
             for j, line in enumerate(lines):
-                if re.search(r'\b(?:parlay|teaser)\b[^:\n]*:\s*$', line, re.IGNORECASE):
+                if re.search(r'\b(?:parlay|teaser)\b[^:\n]*:(?:\s*\[[+-]\d[^\]]*\])?\s*$', line, re.IGNORECASE):
                     header_j = j
                     break
             if header_j < 0:
