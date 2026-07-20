@@ -543,8 +543,9 @@ async def extract(limit: int | None = None, output_path: str | None = None):
         if has_angles:
             total_with_angles += 1
 
-        # Skip messages that aren't picks (no grade entry AND no verdict emoji)
-        if not gd and verdict == "PENDING":
+        # Skip messages that aren't picks (no grade entry AND no verdict emoji
+        # AND no parsed angles — messages with angles are definitely picks)
+        if not gd and verdict == "PENDING" and not has_angles:
             continue
 
         seen_msg_ids.add(msg.id)
