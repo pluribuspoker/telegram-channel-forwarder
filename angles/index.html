@@ -79,8 +79,9 @@
   .ci-bar-fill.ci-neg { background: rgba(239,68,68,.5); }
   .ci-bar-fill.ci-neu { background: rgba(245,158,11,.35); }
   .ci-bar-ref { position: absolute; top: -1px; width: 1px; height: 6px; background: #64748b; }
-  .ci-tip { position: absolute; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; font-size: 11px; font-family: 'Inter', system-ui, sans-serif; font-weight: 400; color: #cbd5e1; white-space: pre-line; max-width: 280px; min-width: 200px; line-height: 1.5; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .15s, visibility .15s; z-index: 50; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
-  .ci-tip.show { opacity: 1; visibility: visible; }
+  .ci-tip, .angle-tip { position: absolute; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; font-size: 11px; font-family: 'Inter', system-ui, sans-serif; font-weight: 400; color: #cbd5e1; white-space: pre-line; max-width: 280px; min-width: 200px; line-height: 1.5; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .15s, visibility .15s; z-index: 50; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  .ci-tip.show, .angle-tip.show { opacity: 1; visibility: visible; }
+  .angle-hover { cursor: help; border-bottom: 1px dotted #475569; padding-bottom: 1px; }
   [data-ci-tip] { cursor: help; }
   td[title] { cursor: help; }
   .dropdown-menu label[title] { cursor: help; }
@@ -201,8 +202,8 @@
     /* Refresh modal */
     #rm-card { width: calc(100vw - 24px) !important; max-width: 400px; }
 
-    /* CI tooltip */
-    .ci-tip { max-width: calc(100vw - 32px) !important; }
+    /* Tooltips */
+    .ci-tip, .angle-tip { max-width: calc(100vw - 32px) !important; }
 
     /* Top Edges */
     #edge-body .grid { grid-template-columns: 1fr !important; }
@@ -471,6 +472,7 @@ let picksSort = { col: 'date', dir: 'desc' };
 let picksPage = 0;
 let PICKS_PER_PAGE = 50;
 let profitChart = null;
+let angleTypeStats = {};
 
 const TYPE_LABELS = {
   run: 'Run/Streak Angle', off_losses: 'Off Losses Angle', off_wins: 'Off Wins Angle',
@@ -493,9 +495,28 @@ const TYPE_TOOLTIPS = {
 const VERDICT_COLORS = { WIN: '#22c55e', LOSS: '#ef4444', PUSH: '#f59e0b', PENDING: '#64748b', UNKNOWN: '#64748b' };
 const VERDICT_EMOJI = { WIN: '\u2705', LOSS: '\u274c', PUSH: '\u267b\ufe0f', PENDING: '\u23f3', UNKNOWN: '\u2753' };
 
+// ── Angle type stats (for hover tooltips) ─────────────────────────────────
+function computeAngleTypeStats() {
+  angleTypeStats = {};
+  for (const p of allPicks) {
+    if (!['WIN','LOSS','PUSH'].includes(p.verdict)) continue;
+    for (const a of p.angles) {
+      const t = a.type;
+      if (!t || t === 'no_angle') continue;
+      if (!angleTypeStats[t]) angleTypeStats[t] = { w: 0, l: 0, push: 0, profit: 0 };
+      const s = angleTypeStats[t];
+      if (p.verdict === 'WIN') s.w++;
+      else if (p.verdict === 'LOSS') s.l++;
+      else s.push++;
+      s.profit += (p.profit || 0);
+    }
+  }
+}
+
 // ── Data loading ───────────────────────────────────────────────────────────
 function loadJSON(data) {
   allPicks = (data.picks || []).filter(p => p.angles && p.angles.length > 0);
+  computeAngleTypeStats();
   document.getElementById('empty-state').classList.add('hidden');
   document.getElementById('dashboard').classList.remove('hidden');
   const ext = data.extracted_at ? new Date(data.extracted_at).toLocaleString(undefined, {month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}) : '?';
@@ -843,6 +864,46 @@ document.addEventListener('touchstart', e => {
     _ciTip.style.left = Math.max(8, Math.min(r.right - _ciTip.offsetWidth, window.innerWidth - _ciTip.offsetWidth - 8)) + 'px';
     _ciTip.classList.add('show');
   } else { _ciTip.classList.remove('show'); _ciTarget = null; }
+}, { passive: true });
+
+// Angle performance tooltip (single shared element, event delegation)
+const _angleTip = document.createElement('div');
+_angleTip.className = 'angle-tip';
+document.body.appendChild(_angleTip);
+let _angleTarget = null;
+function _positionAngleTip(el) {
+  const type = el.dataset.angleType;
+  const s = angleTypeStats[type];
+  if (!s) { _angleTip.classList.remove('show'); _angleTarget = null; return; }
+  const total = s.w + s.l + s.push;
+  const decisions = s.w + s.l;
+  const wr = decisions > 0 ? (s.w / decisions * 100).toFixed(1) + '%' : '—';
+  const roi = total > 0 ? (s.profit / total * 100).toFixed(1) : '—';
+  const label = TYPE_LABELS[type] || type;
+  const profitStr = (s.profit >= 0 ? '+' : '') + s.profit.toFixed(1) + 'u';
+  const profitClr = s.profit > 0 ? '#22c55e' : s.profit < 0 ? '#ef4444' : '#cbd5e1';
+  _angleTip.innerHTML = `<div style="font-weight:600;color:#e2e8f0;margin-bottom:3px">${label}</div>`
+    + `<div>${s.w}-${s.l}${s.push ? '-'+s.push : ''} · ${wr} win rate</div>`
+    + `<div><span style="color:${profitClr}">${profitStr}</span> · ${roi}% ROI</div>`
+    + `<div style="color:#64748b;margin-top:2px">${total} graded picks</div>`;
+  const r = el.getBoundingClientRect();
+  _angleTip.style.top = ((r.top > _angleTip.offsetHeight + 16 ? r.top - _angleTip.offsetHeight - 8 : r.bottom + 8) + window.scrollY) + 'px';
+  _angleTip.style.left = Math.max(8, Math.min(r.right - _angleTip.offsetWidth, window.innerWidth - _angleTip.offsetWidth - 8)) + 'px';
+  _angleTip.classList.add('show');
+}
+document.addEventListener('mouseover', e => {
+  const el = e.target.closest('.angle-hover');
+  if (el === _angleTarget) return;
+  _angleTarget = el;
+  if (el) _positionAngleTip(el);
+  else _angleTip.classList.remove('show');
+});
+document.addEventListener('touchstart', e => {
+  const el = e.target.closest('.angle-hover');
+  if (el === _angleTarget) { _angleTip.classList.remove('show'); _angleTarget = null; return; }
+  _angleTarget = el;
+  if (el) _positionAngleTip(el);
+  else { _angleTip.classList.remove('show'); _angleTarget = null; }
 }, { passive: true });
 
 // ── Render all ─────────────────────────────────────────────────────────────
@@ -1220,8 +1281,7 @@ function renderPicksLog() {
     const anglesShort = (p.angles_raw || '').replace(/\n/g, '; ');
     const parsed = (p.angles || []).map(a => {
       if (a.type === 'no_angle') return '<span class="text-slate-500" title="' + (TYPE_TOOLTIPS.no_angle||'') + '">No Angle</span>';
-      const tip = TYPE_TOOLTIPS[a.type] ? ` title="${TYPE_TOOLTIPS[a.type]}"` : '';
-      const parts = [`<b>${a.wins}-${a.losses}</b> <span${tip} style="cursor:help;text-decoration:underline dotted;text-underline-offset:3px;text-decoration-color:#475569">${TYPE_LABELS[a.type]||a.type}</span>`];
+      const parts = [`<b>${a.wins}-${a.losses}</b> ${TYPE_LABELS[a.type]||a.type}`];
       if (a.off_type) parts.push(`off ${a.off_count} ${a.off_type}`);
       if (a.sport) parts.push(a.sport);
       if (a.bet_type) parts.push(a.bet_type);
@@ -1230,7 +1290,7 @@ function renderPicksLog() {
       if (a.scope) parts.push(a.scope);
       if (a.is_undefeated) parts.push('<span class="pos">undef</span>');
       if (a.is_winless) parts.push('<span class="neg">winless</span>');
-      return parts.join(' \u00b7 ');
+      return `<span class="angle-hover" data-angle-type="${a.type}">${parts.join(' \u00b7 ')}</span>`;
     }).join('<br>');
     return `<tr class="border-t border-slate-800/30 hover:bg-slate-800/20">
       <td class="py-1.5 px-2 mono text-slate-400">${p.date||'-'}</td>
