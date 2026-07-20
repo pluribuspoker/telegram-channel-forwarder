@@ -491,8 +491,15 @@ async def extract(limit: int | None = None, output_path: str | None = None):
 
     async for msg in client.iter_messages(CHANNEL_ID, limit=limit):
         total_scanned += 1
+
+        # Report progress BEFORE any skips so the bar never stalls
+        if total_scanned % 50 == 0:
+            _progress("scan", scanned=total_scanned, angles=total_with_angles)
+        if total_scanned % 500 == 0:
+            print(f"  scanned {total_scanned}, found {total_with_angles} with angles …")
+
         if msg.date and msg.date.date() < REPO_CREATED:
-            continue
+            break  # newest-first: all remaining are older
         if not msg.text:
             continue
 
@@ -557,11 +564,7 @@ async def extract(limit: int | None = None, output_path: str | None = None):
             }
         )
 
-        if total_scanned % 100 == 0:
-            _progress("scan", scanned=total_scanned, angles=total_with_angles)
-        if total_scanned % 500 == 0:
-            print(f"  scanned {total_scanned}, found {total_with_angles} with angles …")
-
+    _progress("scan", scanned=total_scanned, angles=total_with_angles)  # final
     _progress("enriching")
     # Also pick up any graded messages we missed (no text / entities edge cases)
     for mid, gd in grades.items():

@@ -1291,7 +1291,7 @@ document.getElementById('export-csv').addEventListener('click', () => {
 
 // ── Init ───────────────────────────────────────────────────────────────────
 // ── Refresh data via SSE ─────────────────────────────────────────────────
-const RM_EST_TOTAL = 3500;
+let RM_EST_TOTAL = 1500;
 
 function showRefreshModal() {
   document.getElementById('rm-confirm').classList.remove('hidden');
@@ -1385,6 +1385,7 @@ function rmEvent(e) {
       rmActivate('scan'); rmBar(10); break;
     case 'scan':
       rmDetail('scan', e.scanned.toLocaleString() + ' \u00b7 ' + e.angles.toLocaleString() + ' angles');
+      if (e.scanned > RM_EST_TOTAL * 0.8) RM_EST_TOTAL = Math.round(e.scanned * 1.3);
       rmBar(10 + Math.min(70, (e.scanned / RM_EST_TOTAL) * 70)); break;
     case 'enriching': rmComplete('scan'); rmActivate('enriching'); rmBar(83); break;
     case 'writing':   rmComplete('enriching'); rmActivate('writing'); rmBar(91); break;
