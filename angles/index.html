@@ -1107,11 +1107,9 @@ function _edgeRow(r, rank, mode) {
   const roiTip = escCITip(ciTipROI(r.roiCI, r.total));
   const rankClr = mode === 'edge' ? 'edge-pos' : 'edge-neg';
   const label = r.dimKey === 'type' ? (TYPE_LABELS[r.val] || r.val) : r.val;
-  const lvl = r.isPickLevel ? 'pick' : 'angle';
-  const lvlClr = r.isPickLevel ? 'text-sky-400/60 bg-sky-500/10' : 'text-amber-400/60 bg-amber-500/10';
   return `<tr class="border-t border-slate-800/50 hover:bg-slate-800/30 cursor-pointer" data-edge-dim="${r.dimKey}">
     <td class="py-1.5 px-1.5 text-center"><span class="edge-rank ${rankClr}">${rank}</span></td>
-    <td class="py-1.5 px-2"><div class="edge-dim">${r.dim} <span class="inline-block text-[9px] px-1 rounded ${lvlClr}" style="vertical-align:1px">${lvl}</span></div><div class="edge-val">${label}</div></td>
+    <td class="py-1.5 px-2"><div class="edge-dim">${r.dim}</div><div class="edge-val">${label}</div></td>
     <td class="py-1.5 px-2 text-right mono text-slate-400">${r.w}-${r.l}</td>
     <td class="py-1.5 px-2 text-right" data-ci-tip="${wrTip}">
       <div class="mono font-semibold ${wrSig}">${fmtPct(r.winrate)}</div>
