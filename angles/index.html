@@ -1142,16 +1142,18 @@ function renderTopEdges() {
   }
   document.getElementById('edge-card').classList.remove('hidden');
 
-  // Edges: CI lower bound > 50% (entire range above break-even)
-  const edgeSorted = [...all].filter(r => r.wrCI.lo > 0.5).sort((a, b) => b.wrCI.lo - a.wrCI.lo);
-  const edges = _dedup(edgeSorted, (a, b) => a.wrCI.lo > b.wrCI.lo);
-  // Fades: CI upper bound < 50% (entire range below break-even)
-  const fadeSorted = [...all].filter(r => r.wrCI.hi < 0.5).sort((a, b) => a.wrCI.hi - b.wrCI.hi);
-  const fades = _dedup(fadeSorted, (a, b) => a.wrCI.hi < b.wrCI.hi);
+  // Edges: prefer CI-significant, but always show at least 3 (max 10)
+  const allEdgeSorted = _dedup([...all].sort((a, b) => b.wrCI.lo - a.wrCI.lo), (a, b) => a.wrCI.lo > b.wrCI.lo);
+  const sigEdges = allEdgeSorted.filter(r => r.wrCI.lo > 0.5);
+  const edges = sigEdges.length >= 3 ? sigEdges.slice(0, 10) : allEdgeSorted.slice(0, Math.max(3, sigEdges.length)).slice(0, 10);
+  // Fades: prefer CI-significant, but always show at least 3 (max 10)
+  const allFadeSorted = _dedup([...all].sort((a, b) => a.wrCI.hi - b.wrCI.hi), (a, b) => a.wrCI.hi < b.wrCI.hi);
+  const sigFades = allFadeSorted.filter(r => r.wrCI.hi < 0.5);
+  const fades = sigFades.length >= 3 ? sigFades.slice(0, 10) : allFadeSorted.slice(0, Math.max(3, sigFades.length)).slice(0, 10);
 
   const parts = [];
-  if (edges.length) parts.push(`${edges.length} significant edge${edges.length > 1 ? 's' : ''}`);
-  if (fades.length) parts.push(`${fades.length} significant fade${fades.length > 1 ? 's' : ''}`);
+  if (sigEdges.length) parts.push(`${sigEdges.length} significant edge${sigEdges.length > 1 ? 's' : ''}`);
+  if (sigFades.length) parts.push(`${sigFades.length} significant fade${sigFades.length > 1 ? 's' : ''}`);
   document.getElementById('edge-teaser').textContent = parts.length
     ? parts.join(', ')
     : 'no significant edges yet';
