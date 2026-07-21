@@ -206,7 +206,15 @@ async def _download_image_b64(client, msg) -> tuple[str, str] | None:
     return base64.b64encode(data).decode(), "image/jpeg"
 
 
-async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = None) -> None:
+async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = None,
+                   targets: dict[int, list[int]] | None = None) -> None:
+    """Grade live channels.
+
+    `targets` ({channel_id: [msg_id, ...]}) processes exactly those messages and skips the
+    date scan entirely — used by the listener, which knows precisely what it just forwarded
+    (including one source pick fanned out to several dest channels). Deterministic and cheap:
+    no dependence on where a by-date sweep happened to be when the message landed.
+    """
     import datetime as dt
     from telethon import TelegramClient
     from telethon.sessions import StringSession
@@ -229,6 +237,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
         return
     if channel is not None:
         channel_ids = [channel]
+    if targets:
+        # Only visit the channels we were handed work for, in a stable order.
+        channel_ids = [c for c in channel_ids if c in targets] or list(targets)
 
     # Build broadcast results map from MAPPINGS_CONFIG: graded dest_channel → broadcast_results_channel.
     # In dry-run, route to test_broadcast_results_channel so results can be previewed safely.
@@ -280,7 +291,12 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 channel_names[cid] = str(cid)
 
         channels_str = ', '.join(channel_names[c] for c in channel_ids)
-        print(f"{mode} | {days}d | {channels_str}")
+        if targets:
+            tgt_str = ' '.join(f"{c}:{','.join(str(i) for i in targets[c])}"
+                               for c in channel_ids if targets.get(c))
+            print(f"{mode} | targeted | {tgt_str}")
+        else:
+            print(f"{mode} | {days}d | {channels_str}")
         print("=" * 40)
 
         edited = pending = failed = errors = 0
@@ -298,6 +314,15 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
             visited_keys: set[str] = set()
 
             async def _iter_with_catchup():
+                if targets:
+                    # Targeted run: fetch exactly the requested ids. No date scan, so the
+                    # result never depends on when this run started relative to the post.
+                    want = targets.get(channel_id) or []
+                    fetched = await client.get_messages(channel_id, ids=want)
+                    for m in (fetched if isinstance(fetched, list) else [fetched]):
+                        if m:
+                            yield m
+                    return
                 async for m in client.iter_messages(channel_id):
                     mdate = m.date
                     if mdate.tzinfo is None:
@@ -1090,9 +1115,23 @@ async def main() -> None:
                         help="Days back to scan in --live mode (default: 7)")
     parser.add_argument("--channel",  type=int, metavar="ID",
                         help="Limit --live to a single channel ID (overrides GRADE_CHANNELS)")
+    parser.add_argument("--target",   action="append", metavar="CH:ID", default=[],
+                        help="Process only this message (repeatable), e.g. "
+                             "--target=-1002486251914:3409 (use '=', the id starts with '-'). "
+                             "Skips the date scan entirely.")
     parser.add_argument("--dry-run",  action="store_true",
                         help="Log what would be graded/edited without touching Telegram")
     args = parser.parse_args()
+
+    targets: dict[int, list[int]] | None = None
+    if args.target:
+        targets = {}
+        for t in args.target:
+            ch, _, mid = t.rpartition(":")   # rpartition: channel ids are negative, no colon
+            try:
+                targets.setdefault(int(ch), []).append(int(mid))
+            except ValueError:
+                parser.error(f"--target expects CH:ID, got {t!r}")
 
     if args.backtest:
         await run_backtest(args.backtest)
@@ -1100,7 +1139,8 @@ async def main() -> None:
         date = args.date or _date.today().isoformat()
         await grade_one(args.grade, date)
     elif args.live:
-        await run_live(dry_run=args.dry_run, days=args.days, channel=args.channel)
+        await run_live(dry_run=args.dry_run, days=args.days, channel=args.channel,
+                       targets=targets)
     else:
         parser.print_help()
 
