@@ -1130,7 +1130,7 @@ function renderTypeBreakdown() {
       const roiTip = escCITip(ciTipROI(r.roiCI, r.total));
       return `
       <tr class="border-t border-slate-800/50">
-        <td class="py-1.5 px-2 text-slate-300"${r._typeKey && TYPE_TOOLTIPS[r._typeKey] ? ` title="${TYPE_TOOLTIPS[r._typeKey]}"` : ''}>${r.label}</td>
+        <td class="py-1.5 px-2 text-slate-300"${r._typeKey && TYPE_TOOLTIPS[r._typeKey] ? ` data-ci-tip="${TYPE_TOOLTIPS[r._typeKey]}"` : ''}>${r.label}</td>
         <td class="py-1.5 px-2 text-right mono text-slate-400">${r.w}-${r.l}</td>
         <td class="py-1.5 px-2 text-right" data-ci-tip="${wrTip}">
           <div class="mono font-semibold ${wrSig}">${fmtPct(r.winrate)}</div>
