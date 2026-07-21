@@ -887,6 +887,7 @@ function _computeSubStats(spec) {
     if (!['WIN','LOSS','PUSH'].includes(p.verdict)) continue;
     for (const a of p.angles) {
       if (a.type !== spec.type) continue;
+      if (spec.off_type && a.off_type !== spec.off_type) continue;
       if (spec.off_count != null && a.off_count !== spec.off_count) continue;
       if (spec.sport && a.sport !== spec.sport) continue;
       if (spec.bet_type && a.bet_type !== spec.bet_type) continue;
@@ -901,39 +902,48 @@ function _computeSubStats(spec) {
   }
   return s;
 }
+function _subAngleLabel(spec) {
+  const parts = [];
+  if (spec.off_count != null) parts.push(`off ${spec.off_count} ${spec.off_type || 'wins'}`);
+  if (spec.sport) parts.push(spec.sport);
+  if (spec.bet_type) parts.push(spec.bet_type);
+  if (spec.day) parts.push(spec.day);
+  if (spec.unit) parts.push(spec.unit);
+  if (spec.scope) parts.push(spec.scope);
+  return parts.join(' · ');
+}
 function _positionAngleTip(el) {
   const type = el.dataset.angleType;
   const s = angleTypeStats[type];
   if (!s) { _angleTip.classList.remove('show'); _angleTarget = null; return; }
   const label = TYPE_LABELS[type] || type;
   const o = _angleStatsLine(s);
-  let html = `<div style="font-weight:600;color:#e2e8f0;margin-bottom:3px">${label}</div>`
-    + `<div>${o.record} · ${o.wr} win rate</div>`
-    + `<div><span style="color:${o.profitClr}">${o.profitStr}</span> · ${o.roi}% ROI</div>`
-    + `<div style="color:#64748b;margin-top:2px">${o.total} graded picks</div>`;
+  let hasSubSection = false;
+  let subHtml = '';
   // Sub-stats for specific attributes
   if (el.dataset.angleSpec) {
     const spec = JSON.parse(el.dataset.angleSpec);
-    const hasSubAttrs = spec.off_count != null || spec.sport || spec.bet_type || spec.day || spec.unit || spec.scope;
+    const hasSubAttrs = spec.off_count != null || spec.off_type || spec.sport || spec.bet_type || spec.day || spec.unit || spec.scope;
     if (hasSubAttrs) {
       const sub = _computeSubStats(spec);
       const subTotal = sub.w + sub.l + sub.push;
       if (subTotal > 0 && subTotal !== o.total) {
-        const subParts = [];
-        if (spec.off_count != null) subParts.push(`off ${spec.off_count}`);
-        if (spec.sport) subParts.push(spec.sport);
-        if (spec.bet_type) subParts.push(spec.bet_type);
-        if (spec.day) subParts.push(spec.day);
-        if (spec.unit) subParts.push(spec.unit);
-        if (spec.scope) subParts.push(spec.scope);
+        hasSubSection = true;
         const ss = _angleStatsLine(sub);
-        html += `<div style="border-top:1px solid #334155;margin-top:5px;padding-top:5px">`
-          + `<div style="font-weight:600;color:#94a3b8;margin-bottom:2px">▸ ${subParts.join(' · ')}</div>`
+        const subLabel = _subAngleLabel(spec);
+        subHtml = `<div style="border-top:1px solid #334155;margin-top:5px;padding-top:5px">`
+          + `<div style="font-weight:600;color:#e2e8f0;margin-bottom:2px">${label} · ${subLabel}</div>`
           + `<div>${ss.record} · ${ss.wr} win rate</div>`
           + `<div><span style="color:${ss.profitClr}">${ss.profitStr}</span> · ${ss.roi}% ROI · ${ss.total} picks</div></div>`;
       }
     }
   }
+  const allLabel = hasSubSection ? `${label} <span style="color:#64748b;font-weight:400">(all)</span>` : label;
+  let html = `<div style="font-weight:600;color:#e2e8f0;margin-bottom:3px">${allLabel}</div>`
+    + `<div>${o.record} · ${o.wr} win rate</div>`
+    + `<div><span style="color:${o.profitClr}">${o.profitStr}</span> · ${o.roi}% ROI</div>`
+    + `<div style="color:#64748b;margin-top:2px">${o.total} graded picks</div>`
+    + subHtml;
   _angleTip.innerHTML = html;
   const r = el.getBoundingClientRect();
   _angleTip.style.top = ((r.top > _angleTip.offsetHeight + 16 ? r.top - _angleTip.offsetHeight - 8 : r.bottom + 8) + window.scrollY) + 'px';
@@ -1339,7 +1349,7 @@ function renderPicksLog() {
       if (a.scope) parts.push(a.scope);
       if (a.is_undefeated) parts.push('<span class="pos">undef</span>');
       if (a.is_winless) parts.push('<span class="neg">winless</span>');
-      const spec = JSON.stringify({type:a.type,off_count:a.off_count??null,sport:a.sport||null,bet_type:a.bet_type||null,day:a.day||null,unit:a.unit||null,scope:a.scope||null}).replace(/"/g,'&quot;');
+      const spec = JSON.stringify({type:a.type,off_type:a.off_type||null,off_count:a.off_count??null,sport:a.sport||null,bet_type:a.bet_type||null,day:a.day||null,unit:a.unit||null,scope:a.scope||null}).replace(/"/g,'&quot;');
       return `<span class="angle-hover" data-angle-type="${a.type}" data-angle-spec="${spec}">${parts.join(' \u00b7 ')}</span>`;
     }).join('<br>');
     return `<tr class="border-t border-slate-800/30 hover:bg-slate-800/20">
