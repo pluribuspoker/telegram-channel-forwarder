@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 load_dotenv(ROOT / ".env.local", override=True)
 
-from scripts.x_client import XCredentialsError, build_api
+from scripts.x_client import XCredentialsError, build_api, diagnose_failure
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -56,13 +56,25 @@ LOOKBACK_HOURS = 2
 CLASSIFY_MODEL = "claude-sonnet-4-6"
 
 
-class _XAuthError(Exception):
-    """X/Twitter credentials are missing or rejected.
+class _XFetchError(Exception):
+    """An X/Twitter fetch failed in a way that must page the operator, not pass
+    silently as a quiet "no new tweets" day.
 
-    Fatal, not transient: every run fetches 0 tweets until a human pastes fresh
-    cookies, so this must exit non-zero and page the operator rather than look
-    like a quiet "no new tweets" day.
+    Fatal, not transient: every run fetches 0 tweets until a human intervenes.
+    Carries `kind` + `remedy` so the alert names the REAL fix instead of always
+    blaming the cookies — the 2026-07-21 outage was an anti-bot build change, not
+    cookies, and the old "refresh X_AUTH_TOKEN" message sent the fix the wrong way:
+      kind="missing"   — X_AUTH_TOKEN / X_CT0 absent from the environment
+      kind="bootstrap" — XClIdGen anti-bot bootstrap failed; X changed its web
+                         build. Code fix (repoint _XCLID_PAGES), NOT cookies.
+      kind="auth"      — bootstrap works but the request was rejected; the cookies
+                         are the likely cause — refresh them.
     """
+
+    def __init__(self, message: str, kind: str = "auth", remedy: str = ""):
+        super().__init__(message)
+        self.kind = kind
+        self.remedy = remedy
 
 
 class _ClassifyError(Exception):
@@ -120,14 +132,35 @@ async def _fetch_impl(since: datetime, limit: int) -> list[dict]:
     try:
         api = await build_api()
     except XCredentialsError as e:
-        raise _XAuthError(str(e)) from e
+        raise _XFetchError(
+            str(e),
+            kind="missing",
+            remedy="Put X_AUTH_TOKEN / X_CT0 in /home/forwarder/app/.env.local, "
+                   "then: sudo systemctl start trent-monitor.service",
+        ) from e
 
     user = await api.user_by_login(USERNAME)
     if user is None:
-        # twscrape returns None when X rejects the cookies (expired/revoked).
-        raise _XAuthError(
-            f"X rejected the cookies — could not resolve @{USERNAME}. "
-            "Refresh X_AUTH_TOKEN / X_CT0 from the browser."
+        # twscrape returns None for BOTH an anti-bot bootstrap failure and a real
+        # cookie rejection — diagnose which before naming a remedy (2026-07-21: a
+        # build change looked exactly like bad cookies and cost 2 days elsewhere).
+        kind, detail = await diagnose_failure()
+        if kind == "bootstrap":
+            raise _XFetchError(
+                f"Could not resolve @{USERNAME}: X's anti-bot transaction-ID "
+                f"bootstrap failed — X likely changed its web build again. This is "
+                f"a CODE fix, not a cookie problem. {detail}",
+                kind="bootstrap",
+                remedy="Repoint the candidate pages (_XCLID_PAGES) in "
+                       "scripts/x_client.py to one still on the full webpack build, "
+                       "then redeploy. Do NOT refresh the cookies — they're fine.",
+            )
+        raise _XFetchError(
+            f"Could not resolve @{USERNAME}. {detail}",
+            kind="auth",
+            remedy="Refresh X_AUTH_TOKEN / X_CT0 in /home/forwarder/app/.env.local "
+                   "(browser cookies from x.com), then: "
+                   "sudo systemctl start trent-monitor.service",
         )
 
     results = []
@@ -445,16 +478,15 @@ async def main():
     print(f"Fetching @{USERNAME} tweets since {since.strftime('%H:%M UTC')}...")
     try:
         tweets = await fetch_recent_tweets(since)
-    except _XAuthError as e:
+    except _XFetchError as e:
         # Hard stop: silently fetching 0 tweets forever is how a 2-day outage
         # hides behind "No new tweets" + a green systemd status.
         con.close()
-        print(f"FATAL: {e}", file=sys.stderr)
+        print(f"FATAL [{e.kind}]: {e}", file=sys.stderr)
         _alert_operator(
             f"🔴 Trent watcher is DOWN — no picks are being forwarded.\n\n"
             f"{e}\n\n"
-            f"Fix: put X_AUTH_TOKEN / X_CT0 in /home/forwarder/app/.env.local, "
-            f"then: sudo systemctl start trent-monitor.service"
+            f"Fix: {e.remedy}"
         )
         sys.exit(1)
     print(f"  {len(tweets)} tweets fetched")
