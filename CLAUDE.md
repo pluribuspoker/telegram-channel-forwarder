@@ -113,6 +113,21 @@ Colors and formatting are applied by `_fmtlog` in `/root/.server_aliases.sh` —
 su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.py --live --days 2 2>&1"
 ```
 
+**Targeted runs:** `--target=CH:ID` (repeatable) processes exactly those messages and skips the
+date scan. Use `=`, not a space — the channel id starts with `-` and argparse would read it as
+an option.
+```bash
+su - forwarder -c "cd ~/app && ~/venv/bin/python tracker.py --live --target=-1002486251914:3409 2>&1"
+```
+
+**Fast path after a forward:** the listener enqueues the exact `(dest_channel, msg_id)` pairs it
+just created and runs a targeted tracker pass ~3s later, so odds land in seconds instead of
+waiting for the 5-min timer. A pick fanned out to N dest channels enqueues N targets and batches
+into one pass; a forward landing mid-run re-arms the queue and gets the next pass. **Every run
+logs** — one summary line per run to `journalctl -u telegram-forwarder` (grep the message id to
+answer "did the fast path fire?") and full tracker output to `logs/tracker_quick.log`
+(size-rotated, `.1` backup).
+
 **NHL 3-way / regulation moneyline:** Must win in regulation — OT = LOSS. Detection centralized in `is_regulation_ml()` (`common.py`).
 
 **KBO (Korean Baseball):** Graded via `koreabaseball.com` ASMX endpoint (`fetch_kbo_context` in `scores.py`). The Odds API has KBO odds but never populates scores, so we scrape the official site instead. Picks are always sent the US evening before the game day, so the code fetches `date+1` to find the correct game. Team ID map (`KBO_TEAM_IDS`) is in `scores.py`. If a pick re-parses as `sport: "Other"` despite the message containing "kbo", the post-parse correction in `claude_parse` (`ai.py`) should catch it.

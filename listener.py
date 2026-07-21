@@ -18,6 +18,7 @@ import os
 import hashlib
 import sqlite3
 import sys
+import time
 import urllib.request
 
 logging.basicConfig(
@@ -259,56 +260,103 @@ def _content_save(dest_channel: int, text_hash: str) -> None:
 
 
 _trigger_lock = asyncio.Lock()
-_trigger_pending = False
-_TRIGGER_MAX_RERUNS = 5
+# Work queue of (dest_channel, message_id) pairs this listener just created and still owes a
+# quick tracker pass. One source pick fanned out to N dest channels enqueues N entries.
+_pending_targets: set[tuple[int, int]] = set()
+_pending_full_sweep = False   # fallback when a send gave us no usable message id
+
+_QUICK_LOG      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "tracker_quick.log")
+_QUICK_LOG_MAX  = 5 * 1024 * 1024
+
+
+def _quick_log(header: str, body: str) -> None:
+    """Append a quick-run's full output to logs/tracker_quick.log (size-rotated).
+
+    The quick run used to write to DEVNULL, so it left no trace anywhere and 'did the fast
+    path fire for message X?' was unanswerable after the fact.
+    """
+    try:
+        os.makedirs(os.path.dirname(_QUICK_LOG), exist_ok=True)
+        if os.path.exists(_QUICK_LOG) and os.path.getsize(_QUICK_LOG) > _QUICK_LOG_MAX:
+            os.replace(_QUICK_LOG, _QUICK_LOG + ".1")
+        with open(_QUICK_LOG, "a", encoding="utf-8", errors="replace") as f:
+            f.write(f"\n{'='*70}\n{header}\n{'='*70}\n{body}")
+    except Exception as e:
+        print(f"[trigger] could not write {_QUICK_LOG}: {e}")
+
 
 async def _trigger_tracker_soon():
     """Fire a quick tracker run ~3s after a pick is forwarded to get odds into the message fast.
-    Coalesced: one run at a time, but a request arriving mid-run is *deferred*, not dropped —
-    the in-flight run repeats once it finishes. Dropping it meant a pick forwarded while a run
-    was already scanning got no fast pass at all and waited out the 5-min tracker timer; whether
-    it was picked up anyway came down to luck, since the in-flight run may or may not have
-    already scanned that pick's dest channel."""
-    global _trigger_pending
+
+    Targeted: we already know exactly which (channel, message_id) pairs we just created, so the
+    tracker is handed that list rather than blind-scanning every graded channel by date. That
+    removes the race outright — previously whether a pick got its odds depended on where the
+    by-date sweep happened to be when the message landed, so the same pick fanned out to two
+    channels could get odds in 18s in one and wait 4m14s in the other.
+
+    Work-queue semantics: forwards enqueue targets, the runner drains the queue each pass. A
+    forward landing mid-run simply re-arms the queue and is picked up by the next pass, so
+    nothing is dropped and no retry/coalesce heuristic is needed.
+    """
+    global _pending_full_sweep
     if _trigger_lock.locked():
-        _trigger_pending = True  # re-run once the current one finishes
-        return
+        return  # queue is armed; the in-flight runner will drain it
     async with _trigger_lock:
-        reruns = 0
+        failures = 0
         while True:
-            await asyncio.sleep(3)
-            # Cleared after the settle sleep, so this run covers everything forwarded so far and
-            # only a forward landing mid-scan re-arms it.
-            _trigger_pending = False
-            for attempt in range(2):
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        sys.executable, "tracker.py", "--live", "--days", "0.1",
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                    await proc.wait()
-                    if proc.returncode != 0 and attempt == 0:
-                        print(f"[trigger] tracker quick-run exited {proc.returncode}, retrying in 5s")
-                        await asyncio.sleep(5)
-                        continue
-                except Exception as e:
-                    print(f"[trigger] tracker quick-run failed: {e}")
+            await asyncio.sleep(3)   # let Telegram settle; also batches a fan-out into one pass
+            batch, full = sorted(_pending_targets), _pending_full_sweep
+            _pending_targets.clear()
+            _pending_full_sweep = False
+            if not batch and not full:
+                return
+
+            argv = [sys.executable, "tracker.py", "--live"]
+            if full:
+                argv += ["--days", "0.1"]
+                label = "full-sweep"
+            else:
+                # `--target=` (not a separate argv item): channel ids are negative, so argparse
+                # would otherwise read the value as another option.
+                argv += [f"--target={ch}:{mid}" for ch, mid in batch]
+                label = " ".join(f"{ch}:{mid}" for ch, mid in batch)
+
+            started = time.monotonic()
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                )
+                out, _ = await proc.communicate()
+                rc = proc.returncode
+            except Exception as e:
+                print(f"[trigger] quick-run {label} failed to spawn: {e}")
+                return
+            took = time.monotonic() - started
+            body = (out or b"").decode("utf-8", "replace")
+            _quick_log(f"{datetime.datetime.now().isoformat(timespec='seconds')}  "
+                       f"{label}  rc={rc}  {took:.1f}s", body)
+            # One line per run into the journal so `journalctl -u telegram-forwarder | grep <msg>`
+            # answers "did the fast path fire for this message?" without opening the log file.
+            print(f"[trigger] quick-run {label} rc={rc} in {took:.1f}s")
+
+            if rc != 0:
+                for line in body.strip().splitlines()[-15:]:
+                    print(f"[trigger]   | {line}")
+                failures += 1
+                if failures > 1:
+                    print("[trigger] quick-run failed twice, leaving it to the 5-min timer")
                     return
-                if attempt == 0:
-                    await asyncio.sleep(5)  # second pass: catches "message not yet in window" edge case
-            if not _trigger_pending:
-                return
-            reruns += 1
-            if reruns > _TRIGGER_MAX_RERUNS:
-                print(f"[trigger] coalesce cap hit ({_TRIGGER_MAX_RERUNS} re-runs), "
-                      f"leaving the rest to the 5-min timer")
-                return
-            print(f"[trigger] pick forwarded mid-run, re-running tracker ({reruns}/{_TRIGGER_MAX_RERUNS})")
+                # Requeue so the retry targets the same messages rather than guessing.
+                _pending_targets.update(batch)
+                _pending_full_sweep = _pending_full_sweep or full
+                await asyncio.sleep(5)
+            else:
+                failures = 0
 
 
 async def _forward_group(group, mapping, client, sender, dest_entity, use_test, catchup=False):
     """Shared forwarding logic: filter → enrich → log → send → record → trigger tracker."""
+    global _pending_full_sweep
     ch_id = group[0].peer_id.channel_id
     dest_ch = mapping.get("test_dest_channel") if use_test else mapping.get("dest_channel")
 
@@ -375,9 +423,15 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
                 source_key = f"{ch_id}:{group[0].id}"
             cache[f"{dest_ch}:{sid}"] = {"_forwarded": True, "mapping_id": mapping.get("id", ""), "_source_key": source_key}
             _save_pending_cache(cache)
+            # Hand the quick tracker pass exactly what we just created. The same source pick
+            # forwarded to N dest channels enqueues N targets, so every copy is processed —
+            # no copy's fate depends on where a by-date sweep happened to be.
+            _pending_targets.update((dest_ch, sid) for sid in sent_ids)
             # Update reply chain with the newest sent message
             if capper_key and dest_ch:
                 _reply_chain_save(dest_ch, capper_key, sent_ids[-1])
+        elif sent:
+            _pending_full_sweep = True   # sent, but no usable ids — fall back to a date sweep
         if not use_test:
             asyncio.create_task(_trigger_tracker_soon())
         return True
