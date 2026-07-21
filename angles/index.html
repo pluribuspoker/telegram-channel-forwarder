@@ -907,13 +907,18 @@ function _angleMetrics(s) {
   const wrCI = wilsonCI(s.w, decisions);
   return { w: s.w, l: s.l, push: s.push, total, decisions, winrate, units, roi, wrCI };
 }
-function _angleTipRow(label, m, cls) {
+function _isEdgeStats(s) {
+  const d = s.w + s.l;
+  return d >= 10 && s.profit > 0 && wilsonCI(s.w, d).lo > 0.5;
+}
+function _angleTipRow(label, m, cls, edge) {
   const wrSig = clrSig(m.wrCI.lo, m.wrCI.hi, 0.5);
   const barL = (m.wrCI.lo * 100).toFixed(1);
   const barW = ((m.wrCI.hi - m.wrCI.lo) * 100).toFixed(1);
   const barClr = ciBarClr(m.wrCI.lo, m.wrCI.hi, 0.5);
+  const star = edge ? ' <span style="color:#86efac" title="Statistically significant edge">★</span>' : '';
   return `<tr${cls ? ` class="${cls}"` : ''}>
-    <td class="at-label">${label}</td>
+    <td class="at-label">${label}${star}</td>
     <td class="text-right mono text-slate-400" style="white-space:nowrap">${m.w}-${m.l}${m.push ? '-'+m.push : ''}</td>
     <td class="text-right" style="white-space:nowrap">
       <div class="mono font-semibold ${wrSig}">${fmtPct(m.winrate)}</div>
@@ -971,12 +976,12 @@ function _positionAngleTip(el) {
       if (subTotal > 0 && subTotal !== m.total) {
         const sm = _angleMetrics(sub);
         const subLabel = _subAngleLabel(spec);
-        rows += _angleTipRow(`${label} <span style="color:#64748b;font-weight:400">(all)</span>`, m, '');
-        subRow = _angleTipRow(subLabel, sm, 'at-sub');
+        rows += _angleTipRow(`${label} <span style="color:#64748b;font-weight:400">(all)</span>`, m, '', _isEdgeStats(s));
+        subRow = _angleTipRow(subLabel, sm, 'at-sub', _isEdgeStats(sub));
       }
     }
   }
-  if (!subRow) rows = _angleTipRow(label, m, '');
+  if (!subRow) rows = _angleTipRow(label, m, '', _isEdgeStats(s));
   const desc = TYPE_TOOLTIPS[type] || '';
   const descHtml = desc ? `<div style="padding:3px 10px 2px;color:#64748b;font-size:10px;font-style:italic;border-top:1px solid #334155">${desc}</div>` : '';
   _angleTip.innerHTML = `<table>${rows}${subRow}</table>${descHtml}`;
