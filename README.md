@@ -326,7 +326,7 @@ python scripts/trent_watcher.py --lookback 24    # look back 24 hours
 python scripts/trent_watcher.py --channel ID     # send to specific channel
 ```
 
-**VPS:** runs as `trent-monitor.timer` (every 15 minutes). Requires `X_AUTH_TOKEN` and `X_CT0` in `.env` (browser cookies from x.com — may need periodic refresh).
+**VPS:** runs as `trent-monitor.timer` (every 15 minutes). Requires `X_AUTH_TOKEN` and `X_CT0` in `.env.local` (browser cookies from x.com — may need periodic refresh). Put them in `.env.local`, not `.env`: `syncenv` overwrites `.env` and would wipe them. Missing/rejected cookies exit non-zero and DM the operator instead of quietly fetching 0 tweets.
 
 ---
 
