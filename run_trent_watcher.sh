@@ -3,6 +3,10 @@
 # Signals healthchecks.io on start / success / failure (with log output)
 # Retries once on failure (next scheduled run is only 15 min away anyway)
 
+# Without pipefail, `python ... | tee` returns tee's status (always 0), so a
+# non-zero exit from the watcher was reported as success — no retry, no /fail ping.
+set -o pipefail
+
 APP_DIR="/home/forwarder/app"
 PYTHON="/home/forwarder/venv/bin/python"
 LOGFILE="/tmp/trent_watcher_last_run.log"
