@@ -10,24 +10,28 @@ import argparse
 import asyncio
 import csv
 import os
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
-from twscrape import API, gather
+from twscrape import gather
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.x_client import XCredentialsError, build_api
 
 
 async def fetch_tweets(username: str, since: datetime, limit: int = 2000):
-    api = API()
-
-    auth_token = os.environ.get("X_AUTH_TOKEN", "")
-    ct0 = os.environ.get("X_CT0", "")
-    if not auth_token or not ct0:
-        print("Set X_AUTH_TOKEN and X_CT0 env vars")
+    try:
+        api = await build_api()
+    except XCredentialsError as e:
+        print(e)
         print("DevTools (F12) → Application → Cookies → https://x.com")
         return []
 
-    await api.pool.add_account_cookies("me", f"auth_token={auth_token}; ct0={ct0}")
-
     user = await api.user_by_login(username)
+    if user is None:
+        print(f"X rejected the cookies — could not resolve @{username}. Refresh them.")
+        return []
     print(f"Fetching tweets for @{user.username} (id={user.id}) since {since.date()}")
 
     results = []

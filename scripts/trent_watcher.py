@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 load_dotenv(ROOT / ".env.local", override=True)
 
-from twscrape import API
+from scripts.x_client import XCredentialsError, build_api
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -117,16 +117,11 @@ def _prune_old(con: sqlite3.Connection, days: int = 7):
 # ─── Tweet fetching ──────────────────────────────────────────────────────────
 
 async def _fetch_impl(since: datetime, limit: int) -> list[dict]:
-    api = API()
-    auth_token = os.environ.get("X_AUTH_TOKEN", "")
-    ct0 = os.environ.get("X_CT0", "")
-    if not auth_token or not ct0:
-        raise _XAuthError(
-            "X_AUTH_TOKEN / X_CT0 missing — set them in .env.local "
-            "(NOT .env, which syncenv overwrites)"
-        )
+    try:
+        api = await build_api()
+    except XCredentialsError as e:
+        raise _XAuthError(str(e)) from e
 
-    await api.pool.add_account_cookies("me", f"auth_token={auth_token}; ct0={ct0}")
     user = await api.user_by_login(USERNAME)
     if user is None:
         # twscrape returns None when X rejects the cookies (expired/revoked).
