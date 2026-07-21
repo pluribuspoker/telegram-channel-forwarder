@@ -502,7 +502,7 @@ const VERDICT_COLORS = { WIN: '#22c55e', LOSS: '#ef4444', PUSH: '#f59e0b', PENDI
 const VERDICT_EMOJI = { WIN: '\u2705', LOSS: '\u274c', PUSH: '\u267b\ufe0f', PENDING: '\u23f3', UNKNOWN: '\u2753' };
 
 // ── Angle type stats (for hover tooltips) ─────────────────────────────────
-let angleEdgeKeys = new Set();
+let _edgeCache = {};
 function _angleSpecKey(a) {
   return JSON.stringify([a.type, a.off_type||null, a.off_count??null, a.sport||null, a.bet_type||null, a.day||null, a.unit||null, a.scope||null]);
 }
@@ -530,14 +530,7 @@ function computeAngleTypeStats() {
       ss.profit += (p.profit || 0);
     }
   }
-  // Identify edge angles: CI lower bound > 50% AND profitable, min 10 decisions
-  // Sub-spec only (no parent type fallback) — backtested at 64.9% WR, +18.4% ROI, flags ~6% of picks
-  angleEdgeKeys = new Set();
-  for (const [sk, ss] of Object.entries(subStats)) {
-    const d = ss.w + ss.l;
-    if (d < 10 || ss.profit <= 0) continue;
-    if (wilsonCI(ss.w, d).lo > 0.5) angleEdgeKeys.add(sk);
-  }
+  _edgeCache = {};
 }
 
 // ── Data loading ───────────────────────────────────────────────────────────
@@ -910,6 +903,13 @@ function _angleMetrics(s) {
 function _isEdgeStats(s) {
   const d = s.w + s.l;
   return d >= 10 && s.profit > 0 && wilsonCI(s.w, d).lo > 0.5;
+}
+function _isAngleEdge(a) {
+  const ck = _angleSpecKey(a);
+  if (ck in _edgeCache) return _edgeCache[ck];
+  const sub = _computeSubStats({type:a.type,off_type:a.off_type||null,off_count:a.off_count??null,sport:a.sport||null,bet_type:a.bet_type||null,day:a.day||null,unit:a.unit||null,scope:a.scope||null});
+  _edgeCache[ck] = _isEdgeStats(sub);
+  return _edgeCache[ck];
 }
 function _angleTipRow(label, m, cls, edge) {
   const wrSig = clrSig(m.wrCI.lo, m.wrCI.hi, 0.5);
@@ -1392,12 +1392,12 @@ function renderPicksLog() {
       ? '<span class="text-slate-500" title="' + (TYPE_TOOLTIPS.no_angle||'') + '">No Angle</span>'
       : angleGroups.map(g => {
       const a0 = g.types[0];
-      const anyEdge = g.types.some(a => angleEdgeKeys.has(_angleSpecKey(a)));
+      const anyEdge = g.types.some(a => _isAngleEdge(a));
       const edgeCls = anyEdge ? ' angle-edge' : '';
       // Type labels: each hoverable with its own spec
       const typeSpans = g.types.map(a => {
         const spec = JSON.stringify({type:a.type,off_type:a.off_type||null,off_count:a.off_count??null,sport:a.sport||null,bet_type:a.bet_type||null,day:a.day||null,unit:a.unit||null,scope:a.scope||null}).replace(/"/g,'&quot;');
-        return `<span class="angle-hover${angleEdgeKeys.has(_angleSpecKey(a)) ? ' angle-edge' : ''}" data-angle-type="${a.type}" data-angle-spec="${spec}">${TYPE_LABELS[a.type]||a.type}</span>`;
+        return `<span class="angle-hover${_isAngleEdge(a) ? ' angle-edge' : ''}" data-angle-type="${a.type}" data-angle-spec="${spec}">${TYPE_LABELS[a.type]||a.type}</span>`;
       });
       const attrs = [];
       if (a0.off_type) attrs.push(`off ${a0.off_count} ${a0.off_type}`);
