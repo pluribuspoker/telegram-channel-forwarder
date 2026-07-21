@@ -71,14 +71,17 @@ The tracker and grade daemon share `parse_cache.json` (atomic writes via `os.rep
 
 ### Environment files
 
-Two-file split to protect sessions from `syncenv`:
+Two-file split to protect server-only secrets from `syncenv`:
 
 | File | Where | Synced | Contains |
 |---|---|---|---|
-| `.env` | local + server | ✅ `syncenv` copies this | all config except session strings |
-| `.env.local` | local + server (separately) | ❌ never touched | `TELEGRAM_SESSION`, `BOT_SESSION` |
+| `.env` | local + server | ✅ `syncenv` copies this | config that exists on **both** machines |
+| `.env.local` | local + server (separately) | ❌ never touched | `TELEGRAM_SESSION`, `BOT_SESSION`, `X_AUTH_TOKEN`, `X_CT0` |
 
-`syncenv` is safe to run freely. `.env.local` is loaded after `.env` in both Python code and systemd, so it always wins.
+> **Rule: any value that exists only on the server belongs in `.env.local`.**
+> `syncenv` *overwrites* the server's `.env` with the local copy, so a key present in the server's `.env` but absent from the local one is **silently deleted** on the next sync. This is not hypothetical: it wiped `X_AUTH_TOKEN`/`X_CT0` on 2026-07-19 and took the Trent watcher down for 2 days without a single alert. `syncenv` is safe to run freely *only as long as this rule holds*.
+
+`.env.local` is loaded after `.env` in both Python code and systemd, so it always wins.
 
 **Regex escaping in `MAPPINGS_CONFIG`:** The JSON value is inside single quotes in the `.env` file, so regex backslashes need **four** backslashes (`\\\\`) to survive: shell quotes → JSON string → regex. For example, `\d+` becomes `\\\\d+` in `.env`.
 
@@ -244,6 +247,12 @@ Angle types: `run`, `off_losses`, `off_wins`, `sport_record`, `bet_type_record`,
 - **Hooks:** `cp deploy/hooks/<hook> ~/.claude/hooks/<hook> && chmod +x ~/.claude/hooks/<hook>`
 
 **Detect drift:** `bash scripts/check_deploy_sync.sh` — diffs every file under `deploy/` vs its live VPS copy, prints OK/DRIFT per file, exits non-zero on drift.
+
+### Writing a `run_*.sh` runner
+
+- **`set -o pipefail` is mandatory.** These scripts pipe Python through `tee` to a logfile, and a pipeline's exit status is *`tee`'s* — always 0. Without it a crashed job reports success, skips its own retry, and pings healthchecks.io as OK. All three runners silently did this until 2026-07-21.
+- **`TimeoutStartSec` must exceed the runner's own worst case** (retries × per-attempt timeout + backoff), or systemd kills the retry mid-flight.
+- **Set the `*_HEALTHCHECK_URL`** for the job in `.env`. `ping_hc()` is a silent no-op when unset, so the script *looks* monitored while having no dead-man's-switch at all. Coverage today: listener ✅, tracker ✅, **trent ❌ (`TRENT_HEALTHCHECK_URL` unset)**.
 
 ## Deploy workflow
 
