@@ -127,6 +127,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         super().do_GET()
 
+    def end_headers(self):
+        """Inject no-cache for HTML so browsers always get the latest."""
+        path = self.path.split("?")[0].split("#")[0]
+        if path in ("/", "") or path.endswith(".html"):
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        super().end_headers()
+
     def do_POST(self):
         if self.path.rstrip("/") == "/api/refresh":
             self._handle_refresh()
