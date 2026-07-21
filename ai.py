@@ -146,6 +146,7 @@ Rules by bet type:
 - Double chance: covers two of three outcomes (e.g. "team or draw"). WIN if either covered outcome occurs. LOSS only if the one uncovered outcome occurs.
 - Draw no bet (DNB): team wins → WIN. Team loses → LOSS. Draw → PUSH.
 - Moneyline: did the picked team/fighter win outright?
+- Baseball First 5 innings (F5) moneyline (pick description contains "First 5", "F5", "1st 5", or "first five"): standard 2-way market — the picked team WINS with MORE runs than the opponent through 5 innings, LOSES with FEWER, and a TIE after 5 innings is a PUSH (stake refunded), NOT a loss. Only if the pick explicitly says "3-way" is a tie a LOSS.
 - NHL regulation/3-way moneyline (pick description contains "3-way", "60 min", "regulation", "reg ML", etc.): team must win in REGULATION only. If the score data shows OT=1 (or any OT column with a non-zero value), or P4 or more periods, the game went to overtime — the pick is a LOSS regardless of who won in OT.
 - Soccer moneyline is 3-way: team must win outright. A draw (in regulation or otherwise) is a LOSS, not a push. Only "draw no bet" (DNB) pushes on a draw.
 - Soccer extra time: When the status shows "AET" (After Extra Time) or "PEN" (penalties), a "(Regulation 90': ...)" note shows the 90-minute score. For moneyline and total bets, use the REGULATION score, NOT the final AET score. Extra-time goals do not count. Exception: if the pick says "to advance" or "to qualify", use the final result (the team that advances wins).
