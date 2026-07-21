@@ -235,27 +235,32 @@ def _extract_unit(text: str):
 # ── Angle type classification ─────────────────────────────────────────────
 
 
-def _classify_type(text: str, wins: int, losses: int) -> str:
+def _classify_types(text: str, wins: int, losses: int) -> list[str]:
+    """Return all applicable angle types for a text segment.
+
+    Pattern types (off, run) are exclusive — if one matches, only that
+    type is returned.  Dimension types (sport, bet_type, day, unit,
+    scope) can co-occur and each produces a separate angle.
+    """
     tl = text.lower()
     off_type, _ = _extract_off(text)
     if off_type:
-        return f"off_{off_type}"
+        return [f"off_{off_type}"]
     if re.search(r"\b(?:run|stretch|cooling|regression|skid|slide|streak|surge|tear|heater|cold\s*spell)\b", tl):
-        return "run"
+        return ["run"]
+
+    types: list[str] = []
     if _extract_unit(text):
-        return "unit_record"
-    if _extract_day(text) and not _extract_sport(text) and not _extract_bet_type(text):
-        return "day_record"
-    # Separate sport / bet-type / side into distinct types.
-    # Bet-type is most specific, then side, then sport.
+        types.append("unit_record")
+    if _extract_day(text):
+        types.append("day_record")
     if _extract_bet_type(text):
-        return "bet_type_record"
+        types.append("bet_type_record")
     if _extract_sport(text):
-        return "sport_record"
-    # Time-scoped: includes "last N", "L30 days", "this month", "YTD", etc.
+        types.append("sport_record")
     if _extract_scope(text) or re.search(r"\blast\s+\d+\b|\bl\d+\b|\bl\s+\d+\b", tl):
-        return "time_scoped"
-    return "commentary"
+        types.append("time_scoped")
+    return types or ["commentary"]
 
 
 # ── Parse one angle segment ───────────────────────────────────────────────
@@ -311,22 +316,24 @@ def _parse_segment(text: str, parent_ctx: str = "") -> list[dict]:
     # If main text has no off-signal, check full text (parens may hold context)
     if not off_type:
         off_type, off_count = _extract_off(text)
-    atype = _classify_type(main_text, wins, losses)
+    atypes = _classify_types(main_text, wins, losses)
     # If commentary, try full text with parens for better type
-    if atype == "commentary":
-        full_type = _classify_type(text, wins, losses)
-        if full_type != "commentary":
-            atype = full_type
+    if atypes == ["commentary"]:
+        full_types = _classify_types(text, wins, losses)
+        if full_types != ["commentary"]:
+            atypes = full_types
     # If still commentary, try parent context (for sub-records from parens)
-    if atype == "commentary" and parent_ctx:
-        parent_type = _classify_type(parent_ctx, wins, losses)
-        if parent_type != "commentary":
-            atype = parent_type
+    if atypes == ["commentary"] and parent_ctx:
+        parent_types = _classify_types(parent_ctx, wins, losses)
+        if parent_types != ["commentary"]:
+            atypes = parent_types
 
     sport = _extract_sport(main_text)
     bet_type = _extract_bet_type(main_text)
     side = None
     scope = _extract_scope(main_text)
+    day = _extract_day(main_text)
+    unit = _extract_unit(main_text)
     # Inherit missing fields from parent context (sub-records from parens)
     if parent_ctx:
         if not sport:
@@ -334,26 +341,28 @@ def _parse_segment(text: str, parent_ctx: str = "") -> list[dict]:
         if not bet_type:
             bet_type = _extract_bet_type(parent_ctx)
 
-    # Undefeated/winless only meaningful for deeper angles (records in a
-    # specific context), not raw streaks like "6-0 run" or "7-3 last 10".
-    _deeper = atype not in ("run", "time_scoped")
-    angle = {
-        "raw": text,
-        "wins": wins,
-        "losses": losses,
-        "type": atype,
-        "sport": sport,
-        "bet_type": bet_type,
-        "side": side,
-        "day": _extract_day(main_text),
-        "scope": scope,
-        "unit": _extract_unit(main_text),
-        "off_type": off_type,
-        "off_count": off_count,
-        "is_undefeated": _deeper and losses == 0 and wins > 0,
-        "is_winless": _deeper and wins == 0 and losses > 0,
-    }
-    return [angle] + sub_records
+    angles_out: list[dict] = []
+    for atype in atypes:
+        # Undefeated/winless only meaningful for deeper angles (records in a
+        # specific context), not raw streaks like "6-0 run" or "7-3 last 10".
+        _deeper = atype not in ("run", "time_scoped")
+        angles_out.append({
+            "raw": text,
+            "wins": wins,
+            "losses": losses,
+            "type": atype,
+            "sport": sport,
+            "bet_type": bet_type,
+            "side": side,
+            "day": day,
+            "scope": scope,
+            "unit": unit,
+            "off_type": off_type,
+            "off_count": off_count,
+            "is_undefeated": _deeper and losses == 0 and wins > 0,
+            "is_winless": _deeper and wins == 0 and losses > 0,
+        })
+    return angles_out + sub_records
 
 
 def parse_blockquote(bq_text: str) -> list[dict]:
