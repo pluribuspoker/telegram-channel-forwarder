@@ -259,31 +259,52 @@ def _content_save(dest_channel: int, text_hash: str) -> None:
 
 
 _trigger_lock = asyncio.Lock()
+_trigger_pending = False
+_TRIGGER_MAX_RERUNS = 5
 
 async def _trigger_tracker_soon():
     """Fire a quick tracker run ~3s after a pick is forwarded to get odds into the message fast.
-    Debounced: only one trigger runs at a time; concurrent callers are silently skipped."""
+    Coalesced: one run at a time, but a request arriving mid-run is *deferred*, not dropped —
+    the in-flight run repeats once it finishes. Dropping it meant a pick forwarded while a run
+    was already scanning got no fast pass at all and waited out the 5-min tracker timer; whether
+    it was picked up anyway came down to luck, since the in-flight run may or may not have
+    already scanned that pick's dest channel."""
+    global _trigger_pending
     if _trigger_lock.locked():
-        return  # another trigger is already running
+        _trigger_pending = True  # re-run once the current one finishes
+        return
     async with _trigger_lock:
-        await asyncio.sleep(3)
-        for attempt in range(2):
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    sys.executable, "tracker.py", "--live", "--days", "0.1",
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await proc.wait()
-                if proc.returncode != 0 and attempt == 0:
-                    print(f"[trigger] tracker quick-run exited {proc.returncode}, retrying in 5s")
-                    await asyncio.sleep(5)
-                    continue
-            except Exception as e:
-                print(f"[trigger] tracker quick-run failed: {e}")
+        reruns = 0
+        while True:
+            await asyncio.sleep(3)
+            # Cleared after the settle sleep, so this run covers everything forwarded so far and
+            # only a forward landing mid-scan re-arms it.
+            _trigger_pending = False
+            for attempt in range(2):
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        sys.executable, "tracker.py", "--live", "--days", "0.1",
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await proc.wait()
+                    if proc.returncode != 0 and attempt == 0:
+                        print(f"[trigger] tracker quick-run exited {proc.returncode}, retrying in 5s")
+                        await asyncio.sleep(5)
+                        continue
+                except Exception as e:
+                    print(f"[trigger] tracker quick-run failed: {e}")
+                    return
+                if attempt == 0:
+                    await asyncio.sleep(5)  # second pass: catches "message not yet in window" edge case
+            if not _trigger_pending:
                 return
-            if attempt == 0:
-                await asyncio.sleep(5)  # second pass: catches "message not yet in window" edge case
+            reruns += 1
+            if reruns > _TRIGGER_MAX_RERUNS:
+                print(f"[trigger] coalesce cap hit ({_TRIGGER_MAX_RERUNS} re-runs), "
+                      f"leaving the rest to the 5-min timer")
+                return
+            print(f"[trigger] pick forwarded mid-run, re-running tracker ({reruns}/{_TRIGGER_MAX_RERUNS})")
 
 
 async def _forward_group(group, mapping, client, sender, dest_entity, use_test, catchup=False):
