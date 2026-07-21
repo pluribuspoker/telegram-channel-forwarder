@@ -51,6 +51,8 @@
   #picks-table th[data-col].sort-desc::after { content: '\2193'; opacity: 1; color: #6366f1; }
   .col-angles { width: 28%; min-width: 180px; }
   .col-parsed { width: 28%; min-width: 180px; }
+  /* Parsed-angles sub-row: mobile-only, replaces the hidden Parsed column */
+  .angle-subrow { display: none; }
   .reset-btn { background: #7f1d1d; border: 1px solid #991b1b; color: #fca5a5; }
   .reset-btn:hover { background: #991b1b; }
   /* ── Refresh progress ── */
@@ -200,6 +202,18 @@
     #picks-table { font-size: 11px; }
     #picks-table td, #picks-table th { padding: 6px 4px; }
     .pick-cell { max-width: 110px !important; }
+
+    /* Parsed angles — full-width sub-row under each pick */
+    .angle-subrow { display: table-row; }
+    .angle-subrow > td { padding: 0 4px 7px 4px !important; }
+    .angle-subrow .as-body {
+      border-left: 2px solid #334155;
+      padding-left: 7px;
+      font-size: 10.5px;
+      line-height: 1.6;
+      color: #94a3b8;
+    }
+    .angle-subrow .angle-hover { border-bottom-color: #64748b; }
 
     /* Pagination */
     .picks-foot { flex-direction: column !important; align-items: center !important; gap: 10px !important; }
@@ -1420,7 +1434,8 @@ function renderPicksLog() {
       <td class="py-1.5 px-2 text-slate-400 mobile-hide">${p.sport||'-'}</td>
       <td class="py-1.5 px-2 text-slate-500 col-angles text-[11px] leading-relaxed mobile-hide">${anglesShort}</td>
       <td class="py-1.5 px-2 text-slate-400 col-parsed text-[11px] leading-relaxed mobile-hide">${parsed}</td>
-    </tr>`;
+    </tr>
+    <tr class="angle-subrow"><td colspan="9"><div class="as-body">${parsed}</div></td></tr>`;
   }).join('');
 
   document.getElementById('picks-count').textContent = total === allPicks.length ? `${total} picks` : `${total} of ${allPicks.length} picks`;
