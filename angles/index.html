@@ -1378,19 +1378,36 @@ function renderPicksLog() {
     const vc = VERDICT_COLORS[p.verdict] || '#64748b';
     const pickShort = (p.pick_text || '').split('\n')[0].slice(0, 60);
     const anglesShort = (p.angles_raw || '').replace(/\n/g, '; ');
-    const parsed = (p.angles || []).map(a => {
-      if (a.type === 'no_angle') return '<span class="text-slate-500" title="' + (TYPE_TOOLTIPS.no_angle||'') + '">No Angle</span>';
-      const parts = [`<b>${a.wins}-${a.losses}</b> ${TYPE_LABELS[a.type]||a.type}`];
-      if (a.off_type) parts.push(`off ${a.off_count} ${a.off_type}`);
-      if (a.sport) parts.push(a.sport);
-      if (a.bet_type) parts.push(a.bet_type);
-      if (a.day) parts.push(a.day);
-      if (a.unit) parts.push(a.unit);
-      if (a.scope) parts.push(a.scope);
-      const isEdge = angleEdgeKeys.has(_angleSpecKey(a));
-      const edgeCls = isEdge ? ' angle-edge' : '';
-      const spec = JSON.stringify({type:a.type,off_type:a.off_type||null,off_count:a.off_count??null,sport:a.sport||null,bet_type:a.bet_type||null,day:a.day||null,unit:a.unit||null,scope:a.scope||null}).replace(/"/g,'&quot;');
-      return `<span class="angle-hover${edgeCls}" data-angle-type="${a.type}" data-angle-spec="${spec}">${parts.join(' \u00b7 ')}</span>`;
+    // Group angles that share the same record + attributes (from multi-type split)
+    const angleGroups = [];
+    const angles = (p.angles || []).filter(a => a.type !== 'no_angle');
+    const noAngle = (p.angles || []).some(a => a.type === 'no_angle');
+    for (const a of angles) {
+      const gk = [a.wins, a.losses, a.off_type||'', a.off_count??'', a.sport||'', a.bet_type||'', a.day||'', a.unit||'', a.scope||''].join('|');
+      const last = angleGroups.length > 0 ? angleGroups[angleGroups.length - 1] : null;
+      if (last && last.key === gk) { last.types.push(a); }
+      else angleGroups.push({ key: gk, types: [a] });
+    }
+    const parsed = (noAngle && !angles.length)
+      ? '<span class="text-slate-500" title="' + (TYPE_TOOLTIPS.no_angle||'') + '">No Angle</span>'
+      : angleGroups.map(g => {
+      const a0 = g.types[0];
+      const anyEdge = g.types.some(a => angleEdgeKeys.has(_angleSpecKey(a)));
+      const edgeCls = anyEdge ? ' angle-edge' : '';
+      // Type labels: each hoverable with its own spec
+      const typeSpans = g.types.map(a => {
+        const spec = JSON.stringify({type:a.type,off_type:a.off_type||null,off_count:a.off_count??null,sport:a.sport||null,bet_type:a.bet_type||null,day:a.day||null,unit:a.unit||null,scope:a.scope||null}).replace(/"/g,'&quot;');
+        return `<span class="angle-hover${angleEdgeKeys.has(_angleSpecKey(a)) ? ' angle-edge' : ''}" data-angle-type="${a.type}" data-angle-spec="${spec}">${TYPE_LABELS[a.type]||a.type}</span>`;
+      });
+      const attrs = [];
+      if (a0.off_type) attrs.push(`off ${a0.off_count} ${a0.off_type}`);
+      if (a0.sport) attrs.push(a0.sport);
+      if (a0.bet_type) attrs.push(a0.bet_type);
+      if (a0.day) attrs.push(a0.day);
+      if (a0.unit) attrs.push(a0.unit);
+      if (a0.scope) attrs.push(a0.scope);
+      const suffix = attrs.length ? ' \u00b7 ' + attrs.join(' \u00b7 ') : '';
+      return `<b>${a0.wins}-${a0.losses}</b> ${typeSpans.join(', ')}${suffix}`;
     }).join('<br>');
     return `<tr class="border-t border-slate-800/30 hover:bg-slate-800/20">
       <td class="py-1.5 px-2 mono text-slate-400">${p.date||'-'}</td>
