@@ -87,6 +87,7 @@
   .angle-tip .at-label { font-weight: 600; color: #e2e8f0; padding: 3px 10px; }
   .angle-tip .at-sub { border-top: 1px solid #334155; }
   .angle-hover { cursor: help; border-bottom: 1px dotted #475569; padding-bottom: 1px; }
+  .angle-edge { color: #86efac; }
   [data-ci-tip] { cursor: help; }
   td[title] { cursor: help; }
   .dropdown-menu label[title] { cursor: help; }
@@ -501,8 +502,13 @@ const VERDICT_COLORS = { WIN: '#22c55e', LOSS: '#ef4444', PUSH: '#f59e0b', PENDI
 const VERDICT_EMOJI = { WIN: '\u2705', LOSS: '\u274c', PUSH: '\u267b\ufe0f', PENDING: '\u23f3', UNKNOWN: '\u2753' };
 
 // ── Angle type stats (for hover tooltips) ─────────────────────────────────
+let angleEdgeKeys = new Set();
+function _angleSpecKey(a) {
+  return JSON.stringify([a.type, a.off_type||null, a.off_count??null, a.sport||null, a.bet_type||null, a.day||null, a.unit||null, a.scope||null]);
+}
 function computeAngleTypeStats() {
   angleTypeStats = {};
+  const subStats = {};
   for (const p of allPicks) {
     if (!['WIN','LOSS','PUSH'].includes(p.verdict)) continue;
     for (const a of p.angles) {
@@ -514,7 +520,22 @@ function computeAngleTypeStats() {
       else if (p.verdict === 'LOSS') s.l++;
       else s.push++;
       s.profit += (p.profit || 0);
+      // Sub-angle stats
+      const sk = _angleSpecKey(a);
+      if (!subStats[sk]) subStats[sk] = { w: 0, l: 0, push: 0, profit: 0 };
+      const ss = subStats[sk];
+      if (p.verdict === 'WIN') ss.w++;
+      else if (p.verdict === 'LOSS') ss.l++;
+      else ss.push++;
+      ss.profit += (p.profit || 0);
     }
+  }
+  // Identify edge angles: CI lower bound > 50% win rate AND profitable, min 5 decisions
+  angleEdgeKeys = new Set();
+  for (const [sk, ss] of Object.entries(subStats)) {
+    const d = ss.w + ss.l;
+    if (d < 5 || ss.profit <= 0) continue;
+    if (wilsonCI(ss.w, d).lo > 0.5) angleEdgeKeys.add(sk);
   }
 }
 
@@ -1360,10 +1381,10 @@ function renderPicksLog() {
       if (a.day) parts.push(a.day);
       if (a.unit) parts.push(a.unit);
       if (a.scope) parts.push(a.scope);
-      if (a.is_undefeated) parts.push('<span class="pos">undef</span>');
-      if (a.is_winless) parts.push('<span class="neg">winless</span>');
+      const isEdge = angleEdgeKeys.has(_angleSpecKey(a));
+      const edgeCls = isEdge ? ' angle-edge' : '';
       const spec = JSON.stringify({type:a.type,off_type:a.off_type||null,off_count:a.off_count??null,sport:a.sport||null,bet_type:a.bet_type||null,day:a.day||null,unit:a.unit||null,scope:a.scope||null}).replace(/"/g,'&quot;');
-      return `<span class="angle-hover" data-angle-type="${a.type}" data-angle-spec="${spec}">${parts.join(' \u00b7 ')}</span>`;
+      return `<span class="angle-hover${edgeCls}" data-angle-type="${a.type}" data-angle-spec="${spec}">${parts.join(' \u00b7 ')}</span>`;
     }).join('<br>');
     return `<tr class="border-t border-slate-800/30 hover:bg-slate-800/20">
       <td class="py-1.5 px-2 mono text-slate-400">${p.date||'-'}</td>
