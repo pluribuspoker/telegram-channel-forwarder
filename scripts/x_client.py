@@ -6,11 +6,17 @@ Two upstream/library quirks are worked around here so every caller gets them:
   1. XClIdGen fetches the wrong page (twscrape 0.19.1, the latest release).
      twscrape builds X's anti-bot X-Client-Transaction-ID by scraping a page for
      the `ondemand.s-*.js` indices chunk. It hardcodes `https://x.com/tesla`, but
-     X migrated profile pages to a new build that ships a single bundle and no
-     such chunk — so XClIdGen creation fails 3/3 and EVERY request aborts
-     (user_by_login returns None, which looks exactly like bad cookies).
-     The logged-out homepage still serves the legacy webpack build with the full
-     chunk map, so we point XClIdGen at `https://x.com` instead.
+     X keeps migrating pages to a slim single-bundle build with no such chunk —
+     so XClIdGen creation fails 3/3 and EVERY request aborts (user_by_login
+     returns None, which looks exactly like bad cookies — but the cookieless
+     bootstrap failing first means it never was a cookie problem).
+     The migration front has moved twice: first profile pages (/tesla, /elonmusk),
+     then (2026-07) the logged-out homepage `https://x.com` itself. As of this
+     writing `https://x.com/home` is the one public page still served by the full
+     webpack build (679 scripts, direct `ondemand.s-*.js` match), so we point
+     XClIdGen there. If it fails 3/3 again, probe candidate pages with
+     scripts/x_client.py-style logic and repoint to whichever still ships the
+     chunk map — do NOT reflexively blame the cookies.
      Upstream: https://github.com/vladkens/twscrape/issues/248
 
   2. add_account_cookies() silently ignores rotated cookies.
@@ -29,14 +35,14 @@ ACCOUNT_NAME = "me"
 
 
 def patch_xclid() -> None:
-    """Point XClIdGen at the homepage instead of the (now-migrated) /tesla page."""
+    """Point XClIdGen at /home — the one page still on the full webpack build."""
     if getattr(_xclid.XClIdGen, "_home_patched", False):
         return
 
     async def _create_from_home() -> "_xclid.XClIdGen":
         clt = _xclid._make_client()
         try:
-            text = await _xclid.get_tw_page_text("https://x.com", clt)
+            text = await _xclid.get_tw_page_text("https://x.com/home", clt)
             soup = bs4.BeautifulSoup(text, "html.parser")
             vk_bytes, anim_key = await _xclid.load_keys(soup, clt)
             return _xclid.XClIdGen(vk_bytes, anim_key)
