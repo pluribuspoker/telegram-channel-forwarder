@@ -19,6 +19,7 @@ Usage:
 import asyncio
 import base64
 import io
+import json
 import os
 import sqlite3
 import sys
@@ -53,6 +54,15 @@ LOOKBACK_HOURS = 2
 # temperature param — Sonnet 5 / Opus 4.7+ / Fable 5 REJECT it (400). Sonnet 4.6
 # keeps both strong judgment and temperature support, so it's the right pick.
 CLASSIFY_MODEL = "claude-sonnet-4-6"
+
+
+class _XAuthError(Exception):
+    """X/Twitter credentials are missing or rejected.
+
+    Fatal, not transient: every run fetches 0 tweets until a human pastes fresh
+    cookies, so this must exit non-zero and page the operator rather than look
+    like a quiet "no new tweets" day.
+    """
 
 
 class _ClassifyError(Exception):
@@ -111,11 +121,19 @@ async def _fetch_impl(since: datetime, limit: int) -> list[dict]:
     auth_token = os.environ.get("X_AUTH_TOKEN", "")
     ct0 = os.environ.get("X_CT0", "")
     if not auth_token or not ct0:
-        print("ERROR: Set X_AUTH_TOKEN and X_CT0 in .env")
-        return []
+        raise _XAuthError(
+            "X_AUTH_TOKEN / X_CT0 missing — set them in .env.local "
+            "(NOT .env, which syncenv overwrites)"
+        )
 
     await api.pool.add_account_cookies("me", f"auth_token={auth_token}; ct0={ct0}")
     user = await api.user_by_login(USERNAME)
+    if user is None:
+        # twscrape returns None when X rejects the cookies (expired/revoked).
+        raise _XAuthError(
+            f"X rejected the cookies — could not resolve @{USERNAME}. "
+            "Refresh X_AUTH_TOKEN / X_CT0 from the browser."
+        )
 
     results = []
     old_streak = 0
@@ -138,6 +156,60 @@ async def _fetch_impl(since: datetime, limit: int) -> list[dict]:
         })
 
     return results
+
+
+# State for alert rate-limiting, kept outside the repo (same spot as mem_watchdog).
+_ALERT_STATE = Path.home() / ".trent_watcher_state.json"
+_ALERT_EVERY_HOURS = 6
+
+
+def _alert_operator(text: str) -> None:
+    """DM the operator via the watchdog bot, at most once per _ALERT_EVERY_HOURS.
+
+    Rate-limited so a multi-day credential outage doesn't DM every 15 minutes
+    (and so the runner's built-in retry doesn't double-send).
+    """
+    now = datetime.now(timezone.utc)
+    try:
+        state = json.loads(_ALERT_STATE.read_text()) if _ALERT_STATE.exists() else {}
+    except Exception:
+        state = {}
+
+    last = state.get("last_auth_alert")
+    if last:
+        try:
+            if (now - datetime.fromisoformat(last)) < timedelta(hours=_ALERT_EVERY_HOURS):
+                print("  (operator already alerted recently, not re-sending)")
+                return
+        except Exception:
+            pass
+
+    token = os.environ.get("WATCHDOG_BOT_TOKEN", "")
+    uid = os.environ.get("WATCHDOG_USER_ID", "")
+    if not token or not uid:
+        print("  WATCHDOG_BOT_TOKEN / WATCHDOG_USER_ID not set, cannot alert", file=sys.stderr)
+        return
+
+    try:
+        r = httpx.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": uid, "text": text},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            print(f"  alert send failed: HTTP {r.status_code}", file=sys.stderr)
+            return
+    except Exception as e:
+        print(f"  alert send failed: {e}", file=sys.stderr)
+        return
+
+    state["last_auth_alert"] = now.isoformat()
+    try:
+        tmp = _ALERT_STATE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state))
+        os.replace(tmp, _ALERT_STATE)
+    except Exception as e:
+        print(f"  could not persist alert state: {e}", file=sys.stderr)
 
 
 async def fetch_recent_tweets(since: datetime, limit: int = 50) -> list[dict]:
@@ -376,7 +448,20 @@ async def main():
 
     since = datetime.now(timezone.utc) - timedelta(hours=args.lookback)
     print(f"Fetching @{USERNAME} tweets since {since.strftime('%H:%M UTC')}...")
-    tweets = await fetch_recent_tweets(since)
+    try:
+        tweets = await fetch_recent_tweets(since)
+    except _XAuthError as e:
+        # Hard stop: silently fetching 0 tweets forever is how a 2-day outage
+        # hides behind "No new tweets" + a green systemd status.
+        con.close()
+        print(f"FATAL: {e}", file=sys.stderr)
+        _alert_operator(
+            f"🔴 Trent watcher is DOWN — no picks are being forwarded.\n\n"
+            f"{e}\n\n"
+            f"Fix: put X_AUTH_TOKEN / X_CT0 in /home/forwarder/app/.env.local, "
+            f"then: sudo systemctl start trent-monitor.service"
+        )
+        sys.exit(1)
     print(f"  {len(tweets)} tweets fetched")
 
     # Filter to unseen
