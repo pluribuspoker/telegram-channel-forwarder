@@ -909,10 +909,8 @@ function _isAngleEdge(a) {
   const ck = JSON.stringify([spec.type,spec.off_type,spec.off_count,spec.sport,spec.bet_type,spec.day,spec.unit,spec.scope]);
   if (ck in _edgeCache) return _edgeCache[ck];
   const sub = _computeSubStats(spec);
-  const result = _isEdgeStats(sub);
-  if (a.type === 'off_wins' && a.off_count === 1) console.log('off_wins/1 edge check:', ck, sub, result);
-  _edgeCache[ck] = result;
-  return result;
+  _edgeCache[ck] = _isEdgeStats(sub);
+  return _edgeCache[ck];
 }
 function _angleTipRow(label, m, cls, edge) {
   const wrSig = clrSig(m.wrCI.lo, m.wrCI.hi, 0.5);
@@ -1410,7 +1408,7 @@ function renderPicksLog() {
       if (a0.unit) attrs.push(a0.unit);
       if (a0.scope) attrs.push(a0.scope);
       const suffix = attrs.length ? ' \u00b7 ' + attrs.join(' \u00b7 ') : '';
-      return `<b>${a0.wins}-${a0.losses}</b> ${typeSpans.join(', ')}${suffix}`;
+      return `<span class="${edgeCls.trim()}">${'<b>' + a0.wins + '-' + a0.losses + '</b> ' + typeSpans.join(', ') + suffix}</span>`;
     }).join('<br>');
     return `<tr class="border-t border-slate-800/30 hover:bg-slate-800/20">
       <td class="py-1.5 px-2 mono text-slate-400">${p.date||'-'}</td>
