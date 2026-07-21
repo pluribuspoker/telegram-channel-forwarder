@@ -193,6 +193,7 @@ python scripts/grade_csv.py --limit 5        # first 5 matching
 - **Systemd:** `trent-monitor.timer` (15 min) → `trent-monitor.service`
 - **DB table:** `trent_seen` in `picks.db` (tracks processed tweet IDs, pruned after 7 days)
 - **X credentials:** `X_AUTH_TOKEN` and `X_CT0` in **`.env.local`** (browser cookies from x.com, may expire). They must live in `.env.local`, NOT `.env` — `syncenv` overwrites `.env` from the local machine, and since the local `.env` has no X keys, putting them there silently wipes them on the next sync (this took the watcher down for 2 days on 2026-07-19). If the cookies are missing or rejected, the watcher now exits non-zero and DMs the operator via the watchdog bot (rate-limited to once per 6h; state in `~/.trent_watcher_state.json`).
+- **twscrape wrapper:** always build the API via `scripts/x_client.py` (`build_api()`), never `API()` + `add_account_cookies()` directly. It carries two workarounds for library bugs that both present as "bad cookies": twscrape's XClIdGen scrapes a page X has since migrated (fix: point it at `https://x.com`), and `add_account_cookies()` silently ignores rotated cookies when the account is already cached in `accounts.db`. See the module docstring.
 - **Lookback:** 2 hours per run (covers missed runs / gaps)
 - **Channel grading:** Channel is in `GRADE_CHANNELS` — tracker handles odds + result emojis
 
