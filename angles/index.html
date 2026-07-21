@@ -547,7 +547,7 @@ function loadJSON(data) {
 
 async function autoLoad() {
   try {
-    const r = await fetch('data/angles.json');
+    const r = await fetch('data/angles.json?v=' + Date.now());
     if (r.ok) loadJSON(await r.json());
   } catch(e) { /* file not available, show upload UI */ }
 }
