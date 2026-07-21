@@ -489,7 +489,11 @@ async def main():
             await send_pick(tw, args.channel, dry_run=args.dry_run)
             picks_sent += 1
 
-        _mark_seen(con, tw["id"], had_pick=is_pick)
+        # A dry run must leave no trace: marking seen here would permanently
+        # suppress the tweet from every later real run, so `--dry-run` would
+        # silently destroy the thing it was meant to preview.
+        if not args.dry_run:
+            _mark_seen(con, tw["id"], had_pick=is_pick)
 
     con.close()
     print(f"Done: {picks_sent} picks sent, {len(new_tweets)} tweets processed")
