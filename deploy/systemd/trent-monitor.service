@@ -11,7 +11,10 @@ WorkingDirectory=/home/forwarder/app
 EnvironmentFile=/home/forwarder/app/.env
 EnvironmentFile=/home/forwarder/app/.env.local
 ExecStart=/home/forwarder/app/run_trent_watcher.sh
-TimeoutStartSec=120
+# Must exceed the runner's own worst case: attempt 1 (90s fetch timeout)
+# + 60s backoff + attempt 2 (90s) = ~240s. At the old 120s systemd killed the
+# retry mid-flight, so a slow/rate-limited fetch could never complete.
+TimeoutStartSec=300
 
 [Install]
 WantedBy=multi-user.target
