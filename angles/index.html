@@ -503,6 +503,7 @@ const VERDICT_EMOJI = { WIN: '\u2705', LOSS: '\u274c', PUSH: '\u267b\ufe0f', PEN
 
 // ── Angle type stats (for hover tooltips) ─────────────────────────────────
 let angleEdgeKeys = new Set();
+let angleEdgeTypes = new Set();
 function _angleSpecKey(a) {
   return JSON.stringify([a.type, a.off_type||null, a.off_count??null, a.sport||null, a.bet_type||null, a.day||null, a.unit||null, a.scope||null]);
 }
@@ -532,10 +533,17 @@ function computeAngleTypeStats() {
   }
   // Identify edge angles: CI lower bound > 50% win rate AND profitable, min 5 decisions
   angleEdgeKeys = new Set();
+  angleEdgeTypes = new Set();
   for (const [sk, ss] of Object.entries(subStats)) {
     const d = ss.w + ss.l;
     if (d < 5 || ss.profit <= 0) continue;
     if (wilsonCI(ss.w, d).lo > 0.5) angleEdgeKeys.add(sk);
+  }
+  // Also flag parent types that are edges overall
+  for (const [t, ts] of Object.entries(angleTypeStats)) {
+    const d = ts.w + ts.l;
+    if (d < 5 || ts.profit <= 0) continue;
+    if (wilsonCI(ts.w, d).lo > 0.5) angleEdgeTypes.add(t);
   }
 }
 
@@ -1381,7 +1389,7 @@ function renderPicksLog() {
       if (a.day) parts.push(a.day);
       if (a.unit) parts.push(a.unit);
       if (a.scope) parts.push(a.scope);
-      const isEdge = angleEdgeKeys.has(_angleSpecKey(a));
+      const isEdge = angleEdgeKeys.has(_angleSpecKey(a)) || angleEdgeTypes.has(a.type);
       const edgeCls = isEdge ? ' angle-edge' : '';
       const spec = JSON.stringify({type:a.type,off_type:a.off_type||null,off_count:a.off_count??null,sport:a.sport||null,bet_type:a.bet_type||null,day:a.day||null,unit:a.unit||null,scope:a.scope||null}).replace(/"/g,'&quot;');
       return `<span class="angle-hover${edgeCls}" data-angle-type="${a.type}" data-angle-spec="${spec}">${parts.join(' \u00b7 ')}</span>`;
