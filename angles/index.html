@@ -905,11 +905,14 @@ function _isEdgeStats(s) {
   return d >= 10 && s.profit > 0 && wilsonCI(s.w, d).lo > 0.5;
 }
 function _isAngleEdge(a) {
-  const ck = _angleSpecKey(a);
+  const spec = {type:a.type,off_type:a.off_type||null,off_count:a.off_count??null,sport:a.sport||null,bet_type:a.bet_type||null,day:a.day||null,unit:a.unit||null,scope:a.scope||null};
+  const ck = JSON.stringify([spec.type,spec.off_type,spec.off_count,spec.sport,spec.bet_type,spec.day,spec.unit,spec.scope]);
   if (ck in _edgeCache) return _edgeCache[ck];
-  const sub = _computeSubStats({type:a.type,off_type:a.off_type||null,off_count:a.off_count??null,sport:a.sport||null,bet_type:a.bet_type||null,day:a.day||null,unit:a.unit||null,scope:a.scope||null});
-  _edgeCache[ck] = _isEdgeStats(sub);
-  return _edgeCache[ck];
+  const sub = _computeSubStats(spec);
+  const result = _isEdgeStats(sub);
+  if (a.type === 'off_wins' && a.off_count === 1) console.log('off_wins/1 edge check:', ck, sub, result);
+  _edgeCache[ck] = result;
+  return result;
 }
 function _angleTipRow(label, m, cls, edge) {
   const wrSig = clrSig(m.wrCI.lo, m.wrCI.hi, 0.5);
