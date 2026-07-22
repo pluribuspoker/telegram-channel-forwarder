@@ -77,7 +77,32 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(BASE_DIR), **kwargs)
 
+    def _force_https(self) -> bool:
+        """Redirect insecure HTTP requests to HTTPS. Returns True if handled.
+
+        Behind Cloudflare (Flexible SSL) the origin always sees HTTP, so the
+        visitor's real scheme arrives in X-Forwarded-Proto / CF-Visitor. The
+        Secure session cookie is silently dropped over http://, which shows up
+        as an endless re-login loop, so bounce HTTP visitors to HTTPS before
+        any cookie logic. Fails open (no redirect) when the scheme is unknown,
+        to avoid redirect loops.
+        """
+        xfp = self.headers.get("X-Forwarded-Proto", "").strip().lower()
+        if xfp:
+            insecure = xfp == "http"
+        else:
+            insecure = '"scheme":"http"' in self.headers.get("CF-Visitor", "").replace(" ", "")
+        if not insecure:
+            return False
+        host = self.headers.get("Host", "fightclubpicks.cc")
+        self.send_response(301)
+        self.send_header("Location", f"https://{host}{self.path}")
+        self.end_headers()
+        return True
+
     def do_GET(self):
+        if self._force_https():
+            return
         path = self.path.split("?")[0].split("#")[0]
         name = path.rstrip("/").rsplit("/", 1)[-1]
 
@@ -128,13 +153,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().do_GET()
 
     def end_headers(self):
-        """Inject no-cache for HTML so browsers always get the latest."""
+        """Inject no-cache for HTML and an HSTS header on every response."""
+        # HSTS: once seen over https, browsers auto-upgrade future http:// hits
+        # to https://, so the Secure session cookie is never dropped again.
+        self.send_header("Strict-Transport-Security", "max-age=31536000")
         path = self.path.split("?")[0].split("#")[0]
         if path in ("/", "") or path.endswith(".html"):
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         super().end_headers()
 
     def do_POST(self):
+        if self._force_https():
+            return
         if self.path.rstrip("/") == "/api/refresh":
             self._handle_refresh()
         else:
