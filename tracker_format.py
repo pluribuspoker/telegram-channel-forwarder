@@ -573,6 +573,19 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     return "\n".join(lines)
 
 
+def _is_not_modified(err: str) -> bool:
+    """True if an edit error just means the message already has this content.
+
+    Telegram answers an idempotent re-edit with 400 "message is not modified"
+    (Bot API) / MessageNotModifiedError (Telethon). Both mean the edit's goal is
+    already met, so callers must treat them as success — otherwise the second
+    writer to reach a message reports a failure on correct output.
+    """
+    # Bot API says "message is not modified"; MTProto/Telethon raises
+    # MESSAGE_NOT_MODIFIED — normalise underscores so both forms match.
+    return "not modified" in (err or "").lower().replace("_", " ")
+
+
 async def _bot_edit_message(
     bot_token: str,
     channel_id: int,
@@ -602,10 +615,16 @@ async def _bot_edit_message(
                               "text": new_text, "parse_mode": "HTML",
                               "disable_web_page_preview": True},
                     )
-                    if r2.is_success:
+                    if r2.is_success or _is_not_modified(r2.text):
                         return True
                     print(f"    [bot edit error] {r2.status_code}: {r2.text[:120]}")
                     return False
+                # "message is not modified" means the message ALREADY carries the
+                # content we're setting — the desired end state, not a failure.
+                # Reporting it as one makes a second writer (tracker after daemon,
+                # or a retry) flag [EDIT FAILED] on a perfectly correct message.
+                if _is_not_modified(r.text):
+                    return True
                 print(f"    [bot edit error] {r.status_code}: {r.text[:120]}")
                 return False
             return True
@@ -625,5 +644,7 @@ async def _user_edit_message(
         await client.edit_message(channel_id, message_id, new_text, parse_mode="html")
         return True
     except Exception as exc:
+        if _is_not_modified(str(exc)) or type(exc).__name__ == "MessageNotModifiedError":
+            return True  # already carries this content — see _is_not_modified
         print(f"    [user edit error] {exc}")
         return False

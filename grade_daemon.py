@@ -426,7 +426,11 @@ async def _grade_cycle(
                 else:
                     edit_failed = True
                     print(f"  [grade_daemon] edit failed {cache_key}")
-            else:
+            elif not any(ch in html_text for ch in _PICK_EMOJI.values()):
+                # Unchanged AND no emoji anywhere: _insert_emojis genuinely found
+                # no line to mark — a real failure. Unchanged WITH an emoji already
+                # present just means someone (the tracker) got here first, which is
+                # the desired end state, not a failure.
                 edit_failed = True
                 print(f"  [grade_daemon] emoji insert failed (no line match) {cache_key}")
 
