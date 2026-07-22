@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from common import VERDICT_EMOJI, parlay_combined_odds
 from scores import fetch_espn, odds_requests_used, try_early_grade_math, build_early_context, validate_sport
 from odds import fetch_odds, fetch_odds_current, quota_used as odds_quota_used
+from pikkit import get_pick_splits
 from ai import (
     claude_parse,
     claude_grade,
@@ -694,6 +695,22 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             await _edit_msg(channel_id, linked_id, _odds_text, msg.media is not None and not isinstance(msg.media, MessageMediaWebPage))
                             await asyncio.sleep(0.5)
 
+                # ── Fetch Pikkit splits at first encounter ──────────────────
+                pikkit_by_pick: dict = cached_entry.get("pikkit_by_pick", {})
+                if not pikkit_by_pick and date_str:
+                    for i, pick in enumerate(picks):
+                        pick_sport = pick.get("sport") or sport
+                        try:
+                            pdata = await get_pick_splits(pick, pick_sport, date_str)
+                        except Exception as e:
+                            print(f"  [pikkit] error for pick {i}: {e}")
+                            pdata = None
+                        if pdata:
+                            pikkit_by_pick[str(i)] = pdata
+                            print(f"  [pikkit] {pick.get('description', '')[:50]} → {pdata['side']} ({pdata['public_pct']:.0%} bets)")
+                    if pikkit_by_pick:
+                        cached_entry["pikkit_by_pick"] = pikkit_by_pick
+
                 # Cache HTML text + media flag so the grade daemon can edit
                 # via Bot API without needing Telethon.
                 _cur_html = _to_bot_html(text, msg.entities)
@@ -868,7 +885,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             if cached_leg_verdicts.get(str(j), {}).get("broadcasted"):
                                 entry["broadcasted"] = True
                             new_leg_verdicts[str(j)] = entry
-                    pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
+                    pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick, pikkit_by_pick)
                     pending_cache[cache_key]["html_text"] = _cur_html
                     pending_cache[cache_key]["has_media"] = msg.media is not None and not isinstance(msg.media, MessageMediaWebPage)
                     pending_cache[cache_key]["msg_date"] = date_str
@@ -910,6 +927,10 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         existing = pending_cache.get(cache_key, {})
                         if isinstance(existing, dict):
                             pending_cache[cache_key] = {**existing, "odds_by_pick": odds_by_pick}
+                    if pikkit_by_pick:
+                        existing = pending_cache.get(cache_key, {})
+                        if isinstance(existing, dict) and not existing.get("pikkit_by_pick"):
+                            pending_cache[cache_key] = {**existing, "pikkit_by_pick": pikkit_by_pick}
                     continue
 
                 first_pick, _, first_calc, first_sport, first_game_date = verdicts[0]
@@ -960,7 +981,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             "sport": lps, "game_date": lgd or date_str,
                             "broadcasted": already_bc or terminal_channel,
                         }
-                pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick)
+                pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick, pikkit_by_pick)
                 # Update HTML text after emoji edit so daemon sees current state
                 if not edit_failed and not dry_run:
                     pending_cache[cache_key]["html_text"] = new_text

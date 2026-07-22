@@ -488,6 +488,29 @@ async def extract(limit: int | None = None, output_path: str | None = None):
         print(f"Loaded {len(grades)} grades from picks.db")
         _progress("grades", count=len(grades))
 
+    # Load Pikkit splits from parse_cache for enrichment
+    cache_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "parse_cache.json")
+    pikkit_lookup: dict[int, dict] = {}  # msg_id → first pick's pikkit data
+    if os.path.exists(cache_path):
+        with open(cache_path, "r", encoding="utf-8") as f:
+            pcache = json.load(f)
+        ch_prefix = f"{CHANNEL_ID}:"
+        for key, entry in pcache.items():
+            if not key.startswith(ch_prefix) or not isinstance(entry, dict):
+                continue
+            pbp = entry.get("pikkit_by_pick", {})
+            if pbp:
+                try:
+                    mid = int(key.split(":")[1])
+                except (ValueError, IndexError):
+                    continue
+                # Use first pick's pikkit data (most messages have one pick)
+                first = pbp.get("0", {})
+                if first:
+                    pikkit_lookup[mid] = first
+        if pikkit_lookup:
+            print(f"Loaded {len(pikkit_lookup)} Pikkit splits from parse_cache")
+
     picks: list[dict] = []
     seen_msg_ids: set[int] = set()
     total_scanned = 0
@@ -571,6 +594,7 @@ async def extract(limit: int | None = None, output_path: str | None = None):
                 "profit": round(_profit(odds, verdict), 4),
                 "angles_raw": "\n".join(bq_texts) if bq_texts else "",
                 "angles": all_angles if has_angles else _NO_ANGLE,
+                "pikkit": pikkit_lookup.get(msg.id),
             }
         )
 
@@ -597,6 +621,7 @@ async def extract(limit: int | None = None, output_path: str | None = None):
                 "profit": round(_profit(odds, v), 4),
                 "angles_raw": "",
                 "angles": _NO_ANGLE,
+                "pikkit": pikkit_lookup.get(mid),
             }
         )
 

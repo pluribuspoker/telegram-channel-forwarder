@@ -41,8 +41,8 @@ def _norm_desc(d: str) -> str:
     return re.sub(r'\s+', ' ', d).strip()
 
 
-def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict, odds_by_pick: dict | None = None) -> dict:
-    """Build a pending-cache entry, preserving linked_message_ids and odds from the existing entry."""
+def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict, odds_by_pick: dict | None = None, pikkit_by_pick: dict | None = None) -> dict:
+    """Build a pending-cache entry, preserving linked_message_ids, odds and pikkit from the existing entry."""
     entry = {
         "capper_name":        capper,
         "parsed":             parsed,
@@ -50,6 +50,8 @@ def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict
         "linked_message_ids": existing.get("linked_message_ids", []),
         # Preserve fetched odds — once set, never overwritten with None
         "odds_by_pick":       odds_by_pick if odds_by_pick is not None else existing.get("odds_by_pick", {}),
+        # Preserve Pikkit splits — once set, never overwritten with None
+        "pikkit_by_pick":     pikkit_by_pick if pikkit_by_pick is not None else existing.get("pikkit_by_pick", {}),
     }
     if existing.get("_unknown_notified"):
         entry["_unknown_notified"] = True
