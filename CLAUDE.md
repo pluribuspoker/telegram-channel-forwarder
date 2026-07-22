@@ -136,6 +136,8 @@ answer "did the fast path fire?") and full tracker output to `logs/tracker_quick
 
 To force a re-fetch after manually restoring a cache entry: delete the `odds_by_pick` key from the relevant `parse_cache.json` entry — the next run will re-fetch and re-edit.
 
+> ⚠️ **Only safe before first pitch.** The tracker fetches via `fetch_odds_current`, so a re-fetch after the game starts can match the *next game in the series* — one day away, which slips under the `>2 days` wrong-game guard in `tracker.py`. You then get live/next-day prices instead of the pregame lines, **and** the bad `game_date` becomes `eff_date` (`tracker.py`), pointing grading at the wrong game. To repair odds on a game already underway, write the values in directly: pull the closing lines with `odds._try_pregame(...)` against the correct event id and set `game_date` yourself. Cross-check by confirming a leg whose cached odds were already correct reproduces exactly.
+
 **Backtest / audit:**
 ```bash
 python scripts/audit_odds.py --days-back 7
