@@ -50,6 +50,61 @@ CONTEXT_SKIP = "__SKIP__"
 CONTEXT_PENDING = "__PENDING__"
 CONTEXT_ESPN_ERROR = "__ESPN_ERROR__"  # ESPN fetch failed (network/SSL); retry next run
 
+# Baseball first-5-innings wording, for stripping a period qualifier that was
+# mistakenly applied to a full-game leg (see the _MLB_F5_TOTAL_MAX guard).
+_F5_WORDING_RE = re.compile(
+    r"[\(\[]?\b(?:f5|1st\s*5|first\s*5|first\s*five)\b(?:\s*innings?)?[\)\]]?",
+    re.IGNORECASE,
+)
+
+
+def _strip_f5_wording(desc: str) -> str:
+    """Remove 'F5' / 'first 5 innings' phrasing from a pick description."""
+    cleaned = _F5_WORDING_RE.sub(" ", desc)
+    cleaned = re.sub(r"\(\s*\)|\[\s*\]", " ", cleaned)      # emptied parentheticals
+    # The match may have swallowed an opening bracket ("(first 5 innings spread)"),
+    # leaving its partner orphaned — drop the unbalanced closers.
+    for open_c, close_c in (("(", ")"), ("[", "]")):
+        while cleaned.count(close_c) > cleaned.count(open_c):
+            cleaned = cleaned.replace(close_c, "", 1)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return re.sub(r"\s+([,.])", r"\1", cleaned)
+
+
+# Real MLB first-5-innings totals top out around 7.5 runs and full-game totals
+# start around 6.5, so an "F5" total above 7.5 is unambiguously a full-game line.
+_MLB_F5_TOTAL_MAX = 7.5
+
+
+def _fix_mlb_f5_total_bleed(parsed: dict) -> dict:
+    """Undo a period qualifier that bled from one parlay leg onto a full-game total.
+
+    A period written on ONE leg gets applied to the others ("Dodgers F5 +1.5 &
+    under 11.5" → both legs period="1h"), which breaks the ticket twice: odds route
+    to the F5 alt-totals ladder, where an "under 11.5" prices as a ~-9900 lock that
+    swamps the real parlay price, and grading resolves the leg off the 5-inning
+    score — settling, emoji-ing and broadcasting the ticket while the game is still
+    being played. Scoped to MLB totals: that is where the alt ladder makes the
+    mispricing extreme and where the two line ranges separate cleanly.
+    """
+    for pick in parsed.get("picks", []):
+        line = pick.get("line")
+        if (
+            (pick.get("sport") or parsed.get("sport")) == "MLB"
+            and pick.get("period") == "1h"
+            and pick.get("bet_type") == "total"
+            and isinstance(line, (int, float))
+            and not isinstance(line, bool)
+            and line > _MLB_F5_TOTAL_MAX
+        ):
+            pick["period"] = "game"
+            # The description is load-bearing — the grade prompt keys "F5" off its
+            # text, so leaving the wording in would still grade the leg on the
+            # 5-inning score even with period corrected.
+            pick["description"] = _strip_f5_wording(pick.get("description") or "")
+    return parsed
+
+
 # Post-parse hint words that indicate Soccer when Claude returns sport="Other"
 _SOCCER_HINTS = (
     "bundesliga", "epl", "premier league", "la liga", "serie a",
@@ -124,7 +179,8 @@ Classification rules:
 - Double chance: "X or Draw", "Draw or X", "X or Y" bets that cover two of three outcomes. Use bet_type="double_chance". Put the first-named team in "teams". line and direction should be null.
 - Draw no bet (DNB): "X draw no bet", "X DNB". Like moneyline but draw = refund. Use bet_type="draw_no_bet". Put the team in "teams". line and direction should be null.
 - Colloquial moneyline slang: phrases like "nuking/hammering/pounding/smashing/blasting/tailing/riding/loving the X", "all over the X", or "X for the win" express a MONEYLINE pick on team/side X (bet_type=moneyline), even with no explicit bet type, line, or odds stated — extract it. Ignore surrounding bankroll slang (e.g. "for my coin back", "to get well"). Still return no picks for pure commentary with no team/side named. "AL"/"NL" in an MLB All-Star context = American League All-Stars / National League All-Stars.
-- Period: 1h=first half, 2h=second half, 1q=first quarter, 1p/2p/3p=hockey periods, game=full game (default).
+- Period: 1h=first half, 2h=second half, 1q=first quarter, 1p/2p/3p=hockey periods, game=full game (default). For baseball, 1h = first 5 innings (F5).
+- Period qualifiers are PER-LEG, never shared. In a multi-leg pick, a period written on one leg applies ONLY to that leg — every other leg is period="game" unless it carries its own qualifier. In "Dodgers F5 +1.5 & under 11.5" the F5 belongs to the spread; the total is a FULL-GAME total (period="game"). Sanity-check the line against the period before tagging it: an MLB first-5-innings total is ~3.5-7.5 runs, an NBA first-half total ~105-125, an NFL first-half total ~19-28, an NHL period total ~1.5-2.5. A line far above the period's normal range is a full-game line that was never period-scoped.
 
 Message:
 {text}"""
@@ -420,6 +476,9 @@ async def claude_parse(
                     parsed["sport"] = "Lacrosse"
                     pick["teams"] = [canonical]
                     break
+
+    if parsed:
+        _fix_mlb_f5_total_bleed(parsed)
 
     if parsed and parsed.get("sport") == "Other":
         tl = text.lower()
