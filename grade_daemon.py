@@ -441,6 +441,18 @@ async def _grade_cycle(
                 "sport": ps, "game_date": gd or msg_date,
                 "broadcasted": not edit_failed,
             }
+        # A parlay broadcasts as ONE ticket covering every leg, so once a SETTLED
+        # parlay goes out (below), mark ALL its resolved legs broadcasted — not
+        # just the ones resolved this cycle. Otherwise an already-resolved sibling
+        # (e.g. an over that hit mid-game, saved WIN/broadcasted=False while the
+        # parlay waited on its other leg) is left unbroadcast, and the next cycle's
+        # broadcast-only path re-posts the identical ticket. Guard on `not
+        # parlay_pending` so a still-undecided parlay (mixed with a straight pick
+        # that broadcast now) isn't prematurely marked and silently suppressed.
+        if is_parlay and not parlay_pending and not edit_failed:
+            for lv in leg_verdicts.values():
+                if isinstance(lv, dict) and lv.get("verdict") in ("WIN", "LOSS", "PUSH"):
+                    lv["broadcasted"] = True
         entry["leg_verdicts"] = leg_verdicts
 
         graded_count += len(newly_resolved)
