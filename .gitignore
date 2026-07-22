@@ -211,6 +211,7 @@ picks.db-journal
 picks.db-wal
 backtest_*.txt
 parse_cache.json
+parse_cache.json.lock
 data/
 scripts/output/
 accounts.db
