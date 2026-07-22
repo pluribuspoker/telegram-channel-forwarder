@@ -1444,7 +1444,7 @@ function renderPicksLog() {
       <td class="py-1.5 px-2 text-right mono text-slate-400 mobile-hide">${fmtOdds(p.odds)}</td>
       <td class="py-1.5 px-2 text-right mono ${clr(p.profit||0)}">${p.profit!=null?fmtUnits(p.profit):'-'}</td>
       <td class="py-1.5 px-2 text-slate-400 mobile-hide">${p.sport||'-'}</td>
-      <td class="py-1.5 px-2 mobile-hide text-center text-[11px]">${p.pikkit ? (() => { const pct = Math.round(p.pikkit.public_pct*100); const hpct = Math.round(p.pikkit.handle_pct*100); return p.pikkit.side === 'book' ? '<span title="Fading public: ' + pct + '% bets / ' + hpct + '% handle on this side" style="color:#22c55e;cursor:help">B</span>' : '<span title="With public: ' + pct + '% bets / ' + hpct + '% handle on this side" style="color:#ef4444;cursor:help">P</span>'; })() : ''}</td>
+      <td class="py-1.5 px-2 mobile-hide text-center text-[11px]">${p.pikkit ? (p.pikkit.side === 'book' ? '<span title="Fading public: ' + Math.round(p.pikkit.public_pct*100) + '% bets / ' + Math.round(p.pikkit.handle_pct*100) + '% handle" style="color:#22c55e;cursor:help">B</span>' : '<span title="With public: ' + Math.round(p.pikkit.public_pct*100) + '% bets / ' + Math.round(p.pikkit.handle_pct*100) + '% handle" style="color:#ef4444;cursor:help">P</span>') : ''}</td>
       <td class="py-1.5 px-2 text-slate-500 col-angles text-[11px] leading-relaxed mobile-hide">${anglesShort}</td>
       <td class="py-1.5 px-2 text-slate-400 col-parsed text-[11px] leading-relaxed mobile-hide">${parsed}</td>
     </tr>
