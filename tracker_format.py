@@ -446,7 +446,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             return f" [{_fmt(odds_val)} pre]"
         return f" [{_fmt(odds_val)}]"
 
-    def _place(j: int, odds_tag: str, allow_source: bool = False):
+    def _place(j: int, odds_tag: str, allow_source: bool = False,
+               declined: list | None = None):
         """Place odds_tag on line j. Returns True if the tag was placed OR our
         own tag is already there (pick is done); returns None if the line
         already carries a DIFFERENT pick's tag, so the caller should keep
@@ -456,12 +457,37 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
 
         allow_source=True lets the tag land on a line that carries the source's
         own stated price (e.g. "(-110)") — used only for the line-moved case,
-        where we deliberately show the current number next to the stated one."""
+        where we deliberately show the current number next to the stated one.
+
+        declined: when supplied, lines rejected because they already carry the
+        SOURCE's own stated price are recorded here. Such a line is this pick's
+        line — it matched — so the caller must resolve it via the move-threshold
+        rule rather than let the pick fall through to the unmatched fallbacks."""
         line = lines[j]
         if _ODDS_TAG_RE.search(line):
-            return True if odds_tag.strip() in line else None
+            if odds_tag.strip() in line:
+                return True
+            # A line carrying BOTH a tag and the capper's own price is the
+            # "now" case below, already resolved on an earlier pass. Its tag
+            # ("[-190 now]") isn't textually equal to the plain tag we recompute
+            # here ("[-190]"), so record it as declined rather than reporting
+            # the pick unmatched — otherwise a re-run strands a second tag on an
+            # unrelated line. Tags are stripped before testing so we read the
+            # capper's price, not the digits inside our own tag.
+            if (
+                not allow_source
+                and declined is not None
+                and j not in declined
+                and _SOURCE_ODDS_RE.search(_ODDS_TAG_RE.sub("", line))
+            ):
+                declined.append(j)
+            return None
         if _SOURCE_ODDS_RE.search(line) and not allow_source:
-            return True if odds_tag.strip() in line else None
+            if odds_tag.strip() in line:
+                return True
+            if declined is not None and j not in declined:
+                declined.append(j)
+            return None
         lines[j] = f"{line.rstrip()}{odds_tag}"
         return True
 
@@ -478,6 +504,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         # (>3% implied-prob swing), show the current number with a "now" marker
         # so readers see the move.
         moved = False
+        # Lines that matched this pick but already carry the capper's own price.
+        src_declined: list[int] = []
         src_odds = _extract_source_odds(pick.get("description") or "")
         if src_odds is not None:
             cur_odds = odds_by_pick.get(str(idx), {}).get("odds")
@@ -499,7 +527,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         if desc:
             for j, line in enumerate(lines):
                 if desc in _norm_abbr(line.lower()):
-                    if _place(j, odds_tag, allow_source=moved):
+                    if _place(j, odds_tag, allow_source=moved, declined=src_declined):
                         desc_matched = True
                         break
 
@@ -508,7 +536,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 if " @ " in line and not _BET_LINE_RE.search(line):
                     continue  # skip game-info headers, but keep pick lines
                 if any(term in line.lower() for term in search_terms):
-                    if _place(j, odds_tag, allow_source=moved):
+                    if _place(j, odds_tag, allow_source=moved, declined=src_declined):
                         desc_matched = True
                         break
 
@@ -535,7 +563,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                     if " @ " in line and not _BET_LINE_RE.search(line):
                         continue
                     if desc_stripped in _norm_abbr(line.lower()):
-                        if _place(j, odds_tag, allow_source=moved):
+                        if _place(j, odds_tag, allow_source=moved, declined=src_declined):
                             desc_matched = True
                             break
 
@@ -551,9 +579,32 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                     if " @ " in row and not _BET_LINE_RE.search(row):
                         continue
                     if line_str in row:
-                        if _place(j, odds_tag, allow_source=moved):
+                        if _place(j, odds_tag, allow_source=moved, declined=src_declined):
                             desc_matched = True
                             break
+
+        if not desc_matched and src_declined:
+            # The pick's own line WAS found — it was declined only because the
+            # capper already priced it there (e.g. "Blue Jays TT over 3.5 -145").
+            # That's the same "source already showed the number" case the
+            # description check above handles, but the parsed description is a
+            # normalised restatement that usually drops the price, so it has to
+            # be caught here against the raw line. Apply the identical rule:
+            # stay quiet within the move threshold, show a "now" marker beyond
+            # it. Either way the pick is resolved — it must NOT fall through to
+            # the unmatched fallbacks, which would strand the tag on whatever
+            # unrelated line comes next (a blockquote angle record, say).
+            j = src_declined[0]
+            line_odds = _extract_source_odds(_ODDS_TAG_RE.sub("", lines[j]))
+            cur_odds = odds_by_pick.get(str(idx), {}).get("odds")
+            if (
+                line_odds is not None
+                and cur_odds is not None
+                and abs(_american_to_prob(cur_odds) - _american_to_prob(line_odds))
+                > _ODDS_MOVE_THRESHOLD
+            ):
+                _place(j, f" [{_fmt(cur_odds)} now]", allow_source=True)
+            desc_matched = True
 
         if not desc_matched:
             standalone_unmatched.append(idx)
