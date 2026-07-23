@@ -108,8 +108,8 @@ async def fetch_events_for_date(dt: str) -> dict[str, list[dict]]:
                 log.warning("[pikkit] events fetch error: %s", e)
                 break
 
-            if resp.status_code == 401:
-                log.warning("[pikkit] 401 — token expired or invalid")
+            if resp.status_code in (401, 403):
+                log.warning("[pikkit] %d — token expired or invalid", resp.status_code)
                 _alert_token_expired()
                 return {}
             if resp.status_code != 200:
@@ -194,8 +194,8 @@ async def fetch_splits(event_id: str) -> dict | None:
             log.warning("[pikkit] splits fetch error for %s: %s", event_id, e)
             return None
 
-        if resp.status_code == 401:
-            log.warning("[pikkit] 401 — token expired")
+        if resp.status_code in (401, 403):
+            log.warning("[pikkit] %d — token expired", resp.status_code)
             _alert_token_expired()
             return None
         if resp.status_code != 200:
