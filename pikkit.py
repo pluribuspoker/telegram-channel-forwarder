@@ -361,7 +361,6 @@ def _classify(pick: dict, game: dict, side: str) -> dict | None:
     return {
         "side":       pick_side,
         "public_pct": round(pct, 4),
-        "handle_pct": round(pct, 4),  # OddsShark only has ticket %, use same value
         "market":     market,
         "source":     "oddsshark",
     }

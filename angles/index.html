@@ -1444,7 +1444,7 @@ function renderPicksLog() {
       <td class="py-1.5 px-2 text-right mono text-slate-400 mobile-hide">${fmtOdds(p.odds)}</td>
       <td class="py-1.5 px-2 text-right mono ${clr(p.profit||0)}">${p.profit!=null?fmtUnits(p.profit):'-'}</td>
       <td class="py-1.5 px-2 text-slate-400 mobile-hide">${p.sport||'-'}</td>
-      <td class="py-1.5 px-2 mobile-hide text-center text-[11px]">${p.pikkit ? (p.pikkit.side === 'book' ? '<span title="Fading public: ' + Math.round(p.pikkit.public_pct*100) + '% bets / ' + Math.round(p.pikkit.handle_pct*100) + '% handle" style="color:#22c55e;cursor:help">B</span>' : '<span title="With public: ' + Math.round(p.pikkit.public_pct*100) + '% bets / ' + Math.round(p.pikkit.handle_pct*100) + '% handle" style="color:#ef4444;cursor:help">P</span>') : ''}</td>
+      <td class="py-1.5 px-2 mobile-hide text-center text-[11px]">${p.pikkit ? (p.pikkit.side === 'book' ? '<span title="Fading public (' + Math.round(p.pikkit.public_pct*100) + '% of bets on this side)" style="color:#22c55e;cursor:help">B ' + Math.round(p.pikkit.public_pct*100) + '%</span>' : '<span title="With public (' + Math.round(p.pikkit.public_pct*100) + '% of bets on this side)" style="color:#ef4444;cursor:help">P ' + Math.round(p.pikkit.public_pct*100) + '%</span>') : ''}</td>
       <td class="py-1.5 px-2 text-slate-500 col-angles text-[11px] leading-relaxed mobile-hide">${anglesShort}</td>
       <td class="py-1.5 px-2 text-slate-400 col-parsed text-[11px] leading-relaxed mobile-hide">${parsed}</td>
     </tr>
@@ -1483,11 +1483,10 @@ document.addEventListener('keydown', e => {
 
 // ── CSV export ─────────────────────────────────────────────────────────────
 document.getElementById('export-csv').addEventListener('click', () => {
-  const header = ['date','capper','pick_text','verdict','odds','profit','sport','bet_type','book_side','public_pct','handle_pct','angles_raw'];
+  const header = ['date','capper','pick_text','verdict','odds','profit','sport','bet_type','book_side','public_pct','angles_raw'];
   const rows = filteredPicks.map(p => header.map(h => {
     if (h === 'book_side') return p.pikkit ? p.pikkit.side : '';
     if (h === 'public_pct') return p.pikkit ? Math.round(p.pikkit.public_pct * 100) : '';
-    if (h === 'handle_pct') return p.pikkit ? Math.round(p.pikkit.handle_pct * 100) : '';
     let v = p[h]; if (v == null) return '';
     v = String(v).replace(/"/g, '""');
     return v.includes(',') || v.includes('\n') || v.includes('"') ? `"${v}"` : v;
