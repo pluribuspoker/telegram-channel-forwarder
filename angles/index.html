@@ -57,9 +57,7 @@
   .reset-btn:hover { background: #991b1b; }
   /* ── Book liability tooltip ── */
   .book-cell { position: relative; }
-  .book-tip { display: none; position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px 12px; white-space: nowrap; z-index: 60; box-shadow: 0 8px 24px rgba(0,0,0,.6); font-size: 11px; color: #cbd5e1; pointer-events: none; }
-  .book-tip::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 6px solid transparent; border-top-color: #334155; }
-  .book-cell:hover .book-tip { display: block; }
+  #book-float { display: none; position: fixed; background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px 12px; white-space: nowrap; z-index: 9999; box-shadow: 0 8px 24px rgba(0,0,0,.6); font-size: 11px; color: #cbd5e1; pointer-events: none; }
   .book-tip table { border-collapse: collapse; margin: 6px 0 4px; }
   .book-tip th { font-size: 10px; color: #64748b; font-weight: 500; padding: 2px 8px; text-align: right; border-bottom: 1px solid #1e293b; }
   .book-tip td { padding: 3px 8px; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
@@ -569,41 +567,35 @@ function fmtBook(pk, odds) {
   const c = isBook ? '#22c55e' : '#ef4444';
   const lbl = isBook ? 'B' : 'P';
 
-  // Label text
   let label = '<span style="color:' + c + '">' + lbl + ' ' + bp + '%'
     + (hp != null ? '<br><span style="color:#94a3b8;font-size:10px">$' + hp + '%</span>' : '') + '</span>';
 
-  // Build liability tooltip if we have handle% and odds
-  if (hp == null || !odds) return '<div class="book-cell">' + label + '</div>';
+  if (hp == null || !odds) return label;
 
+  // Build liability data for floating tooltip
   const mult = o => o > 0 ? o / 100 : 100 / Math.abs(o);
   const implP = o => o < 0 ? Math.abs(o) / (Math.abs(o) + 100) : 100 / (o + 100);
   const toAm = p => p >= 0.5 ? Math.round(-(p / (1 - p) * 100)) : Math.round(((1 - p) / p) * 100);
   const fmtAm = o => (o > 0 ? '+' : '') + o;
+  const fmtPL = v => { const n = parseFloat(v); return (n >= 0 ? '<span style="color:#22c55e">+$' : '<span style="color:#ef4444">-$') + Math.abs(n).toFixed(2) + '</span>'; };
 
   const pickProb = implP(odds);
   const oppProb = Math.min(0.95, Math.max(0.05, 1.03 - pickProb));
   const oppOdds = toAm(oppProb);
-
-  const monA = hp;                  // % money on pick
-  const monB = 100 - hp;            // % money on opp
-  const plA = (monB - monA * mult(odds)).toFixed(2);   // book P&L if pick wins
-  const plB = (monA - monB * mult(oppOdds)).toFixed(2); // book P&L if opp wins
+  const monA = hp, monB = 100 - hp;
+  const plA = (monB - monA * mult(odds)).toFixed(2);
+  const plB = (monA - monB * mult(oppOdds)).toFixed(2);
   const swing = Math.abs(plA - plB).toFixed(2);
-
-  const fmtPL = v => { const n = parseFloat(v); return (n >= 0 ? '<span style="color:#22c55e">+$' : '<span style="color:#ef4444">-$') + Math.abs(n).toFixed(2) + '</span>'; };
-
   const bookPref = parseFloat(plA) > parseFloat(plB) ? 'pick wins' : 'opp wins';
 
-  const tip = '<div class="book-tip">'
-    + '<div class="bt-title">' + fmtAm(odds) + ' (Pick) vs. ' + fmtAm(oppOdds) + ' (Opp) — per $100</div>'
+  const tipHtml = '<div class="bt-title">' + fmtAm(odds) + ' (Pick) vs. ' + fmtAm(oppOdds) + ' (Opp) &mdash; per $100</div>'
     + '<table><tr><th>$ on Pick</th><th>Pick Wins</th><th>Opp Wins</th><th>$ Swing</th></tr>'
-    + '<tr><td>' + hp + '%</td><td>' + fmtPL(plA) + '</td><td>' + fmtPL(plB) + '</td><td style="color:#f59e0b">$' + swing + '</td></tr>'
-    + '</table>'
-    + '<div class="bt-note">Book prefers ' + bookPref + ' · $' + swing + ' swing</div>'
-    + '</div>';
+    + '<tr><td>' + hp + '%</td><td>' + fmtPL(plA) + '</td><td>' + fmtPL(plB) + '</td><td style="color:#f59e0b">$' + swing + '</td></tr></table>'
+    + '<div class="bt-note">Book prefers ' + bookPref + ' &middot; $' + swing + ' swing</div>';
 
-  return '<div class="book-cell" style="cursor:help">' + label + tip + '</div>';
+  // Escape for data attribute
+  const esc = tipHtml.replace(/"/g, '&quot;');
+  return '<div class="book-cell" style="cursor:help" data-book-tip="' + esc + '">' + label + '</div>';
 }
 
 function loadJSON(data) {
@@ -1687,6 +1679,30 @@ fetch('/api/me').then(r => r.json()).then(d => {
   if (!d.can_refresh) document.getElementById('refresh-btn').style.display = 'none';
   if (d.is_admin) document.getElementById('activity-link').classList.remove('hidden');
 }).catch(() => {});
+
+// ── Floating book tooltip ──
+(function() {
+  const fl = document.createElement('div');
+  fl.id = 'book-float';
+  document.body.appendChild(fl);
+
+  document.addEventListener('mouseover', e => {
+    const cell = e.target.closest('[data-book-tip]');
+    if (!cell) { fl.style.display = 'none'; return; }
+    fl.innerHTML = cell.dataset.bookTip;
+    fl.style.display = 'block';
+    const r = cell.getBoundingClientRect();
+    const fw = fl.offsetWidth;
+    let left = r.left + r.width / 2 - fw / 2;
+    if (left + fw > window.innerWidth - 8) left = window.innerWidth - fw - 8;
+    if (left < 8) left = 8;
+    fl.style.left = left + 'px';
+    fl.style.top = (r.top - fl.offsetHeight - 8) + 'px';
+  });
+  document.addEventListener('mouseout', e => {
+    if (e.target.closest('[data-book-tip]')) fl.style.display = 'none';
+  });
+})();
 </script>
 </body>
 </html>
