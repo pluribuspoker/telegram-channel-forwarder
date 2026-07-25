@@ -588,36 +588,51 @@ function fmtBook(pk, odds) {
   const monA = hp, monB = 100 - hp;
   const plA = (monB - monA * mult(odds)).toFixed(2);
   const plB = (monA - monB * mult(oppOdds)).toFixed(2);
-  const swing = Math.abs(plA - plB).toFixed(2);
-  const bookPref = parseFloat(plA) > parseFloat(plB) ? 'pick wins' : 'opp wins';
+  const nA = parseFloat(plA), nB = parseFloat(plB);
+  const swing = Math.abs(nA - nB);
+  const bookWantsPick = nA > nB;  // book profits more if pick wins
 
-  const sideLbl = isBook ? 'Fading public' : 'With public';
+  // Action-oriented verdict
+  let verdictIcon, verdictColor, verdictText, verdictSub;
+  if (swing < 15) {
+    verdictIcon = '&#x2248;'; verdictColor = '#64748b';
+    verdictText = 'Book is balanced';
+    verdictSub = 'Similar profit either way &mdash; no clear exposure';
+  } else if (bookWantsPick) {
+    verdictIcon = '&#x25B2;'; verdictColor = '#22c55e';
+    verdictText = 'Book needs this pick to hit';
+    verdictSub = 'Book profits $' + swing.toFixed(0) + ' more if pick wins &mdash; you\'re on the house\'s side';
+  } else {
+    verdictIcon = '&#x25BC;'; verdictColor = '#ef4444';
+    verdictText = 'Book is rooting against you';
+    verdictSub = 'Book profits $' + swing.toFixed(0) + ' more if pick loses &mdash; you\'re fading the house';
+  }
+
   const tipHtml = ''
     + '<div class="bt-header">' + fmtAm(odds) + ' vs. ' + fmtAm(oppOdds) + '</div>'
 
     + '<div class="bt-row">'
-    +   '<div><div class="bt-label">Money on Pick</div><div class="bt-sublabel">Handle % (where the $ is)</div></div>'
+    +   '<div><div class="bt-label">Money on Pick</div><div class="bt-sublabel">% of total $ wagered on this side</div></div>'
     +   '<div class="bt-val" style="color:#e2e8f0">' + hp + '%</div>'
     + '</div>'
 
     + '<div class="bt-row">'
-    +   '<div><div class="bt-label">If Pick Wins</div><div class="bt-sublabel">Book\'s P&amp;L on $100 wagered</div></div>'
+    +   '<div><div class="bt-label">If Pick Wins</div><div class="bt-sublabel">Book\'s P&amp;L per $100 in the market</div></div>'
     +   '<div class="bt-val">' + fmtPL(plA) + '</div>'
     + '</div>'
 
     + '<div class="bt-row">'
-    +   '<div><div class="bt-label">If Opp Wins</div><div class="bt-sublabel">Book\'s P&amp;L on $100 wagered</div></div>'
+    +   '<div><div class="bt-label">If Opp Wins</div><div class="bt-sublabel">Book\'s P&amp;L per $100 in the market</div></div>'
     +   '<div class="bt-val">' + fmtPL(plB) + '</div>'
     + '</div>'
 
     + '<div class="bt-divider"></div>'
 
-    + '<div class="bt-row" style="border:none">'
-    +   '<div><div class="bt-label">Book Swing</div><div class="bt-sublabel">Difference between outcomes</div></div>'
-    +   '<div class="bt-val" style="color:#f59e0b">$' + swing + '</div>'
-    + '</div>'
-
-    + '<div class="bt-footer">' + sideLbl + ' &middot; Book prefers ' + bookPref + '</div>';
+    + '<div style="display:flex;align-items:start;gap:8px;padding:4px 0">'
+    +   '<span style="color:' + verdictColor + ';font-size:14px;line-height:1">' + verdictIcon + '</span>'
+    +   '<div><div style="color:' + verdictColor + ';font-weight:600;font-size:12px">' + verdictText + '</div>'
+    +   '<div class="bt-sublabel" style="margin-top:2px">' + verdictSub + '</div></div>'
+    + '</div>';
 
   // Escape for data attribute
   const esc = tipHtml.replace(/"/g, '&quot;');
