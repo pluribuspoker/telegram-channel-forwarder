@@ -55,6 +55,16 @@
   .angle-subrow { display: none; }
   .reset-btn { background: #7f1d1d; border: 1px solid #991b1b; color: #fca5a5; }
   .reset-btn:hover { background: #991b1b; }
+  /* ── Book liability tooltip ── */
+  .book-cell { position: relative; }
+  .book-tip { display: none; position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px 12px; white-space: nowrap; z-index: 60; box-shadow: 0 8px 24px rgba(0,0,0,.6); font-size: 11px; color: #cbd5e1; pointer-events: none; }
+  .book-tip::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 6px solid transparent; border-top-color: #334155; }
+  .book-cell:hover .book-tip { display: block; }
+  .book-tip table { border-collapse: collapse; margin: 6px 0 4px; }
+  .book-tip th { font-size: 10px; color: #64748b; font-weight: 500; padding: 2px 8px; text-align: right; border-bottom: 1px solid #1e293b; }
+  .book-tip td { padding: 3px 8px; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .book-tip .bt-title { font-weight: 600; color: #e2e8f0; margin-bottom: 2px; }
+  .book-tip .bt-note { font-size: 10px; color: #64748b; margin-top: 4px; }
   /* ── Refresh progress ── */
   .rm-stage { display: flex; align-items: center; gap: 10px; color: #475569; transition: color .3s; }
   .rm-stage.active { color: #c7d2fe; }
@@ -551,16 +561,49 @@ function computeAngleTypeStats() {
 }
 
 // ── Data loading ───────────────────────────────────────────────────────────
-function fmtBook(pk) {
+function fmtBook(pk, odds) {
   if (!pk) return '';
   const bp = Math.round(pk.public_pct * 100);
   const hp = pk.handle_pct != null ? Math.round(pk.handle_pct * 100) : null;
   const isBook = pk.side === 'book';
   const c = isBook ? '#22c55e' : '#ef4444';
   const lbl = isBook ? 'B' : 'P';
-  const tip = (isBook ? 'Fading public' : 'With public') + ' (' + bp + '% of bets' + (hp != null ? ', ' + hp + '% of money' : '') + ')';
-  return '<span title="' + tip + '" style="color:' + c + ';cursor:help">' + lbl + ' ' + bp + '%'
+
+  // Label text
+  let label = '<span style="color:' + c + '">' + lbl + ' ' + bp + '%'
     + (hp != null ? '<br><span style="color:#94a3b8;font-size:10px">$' + hp + '%</span>' : '') + '</span>';
+
+  // Build liability tooltip if we have handle% and odds
+  if (hp == null || !odds) return '<div class="book-cell">' + label + '</div>';
+
+  const mult = o => o > 0 ? o / 100 : 100 / Math.abs(o);
+  const implP = o => o < 0 ? Math.abs(o) / (Math.abs(o) + 100) : 100 / (o + 100);
+  const toAm = p => p >= 0.5 ? Math.round(-(p / (1 - p) * 100)) : Math.round(((1 - p) / p) * 100);
+  const fmtAm = o => (o > 0 ? '+' : '') + o;
+
+  const pickProb = implP(odds);
+  const oppProb = Math.min(0.95, Math.max(0.05, 1.03 - pickProb));
+  const oppOdds = toAm(oppProb);
+
+  const monA = hp;                  // % money on pick
+  const monB = 100 - hp;            // % money on opp
+  const plA = (monB - monA * mult(odds)).toFixed(2);   // book P&L if pick wins
+  const plB = (monA - monB * mult(oppOdds)).toFixed(2); // book P&L if opp wins
+  const swing = Math.abs(plA - plB).toFixed(2);
+
+  const fmtPL = v => { const n = parseFloat(v); return (n >= 0 ? '<span style="color:#22c55e">+$' : '<span style="color:#ef4444">-$') + Math.abs(n).toFixed(2) + '</span>'; };
+
+  const bookPref = parseFloat(plA) > parseFloat(plB) ? 'pick wins' : 'opp wins';
+
+  const tip = '<div class="book-tip">'
+    + '<div class="bt-title">' + fmtAm(odds) + ' (Pick) vs. ' + fmtAm(oppOdds) + ' (Opp) — per $100</div>'
+    + '<table><tr><th>$ on Pick</th><th>Pick Wins</th><th>Opp Wins</th><th>$ Swing</th></tr>'
+    + '<tr><td>' + hp + '%</td><td>' + fmtPL(plA) + '</td><td>' + fmtPL(plB) + '</td><td style="color:#f59e0b">$' + swing + '</td></tr>'
+    + '</table>'
+    + '<div class="bt-note">Book prefers ' + bookPref + ' · $' + swing + ' swing</div>'
+    + '</div>';
+
+  return '<div class="book-cell" style="cursor:help">' + label + tip + '</div>';
 }
 
 function loadJSON(data) {
@@ -1456,7 +1499,7 @@ function renderPicksLog() {
       <td class="py-1.5 px-2 text-right mono text-slate-400 mobile-hide">${fmtOdds(p.odds)}</td>
       <td class="py-1.5 px-2 text-right mono ${clr(p.profit||0)}">${p.profit!=null?fmtUnits(p.profit):'-'}</td>
       <td class="py-1.5 px-2 text-slate-400 mobile-hide">${p.sport||'-'}</td>
-      <td class="py-1.5 px-2 mobile-hide text-center text-[11px] leading-tight">${fmtBook(p.pikkit)}</td>
+      <td class="py-1.5 px-2 mobile-hide text-center text-[11px] leading-tight">${fmtBook(p.pikkit, p.odds)}</td>
       <td class="py-1.5 px-2 text-slate-500 col-angles text-[11px] leading-relaxed mobile-hide">${anglesShort}</td>
       <td class="py-1.5 px-2 text-slate-400 col-parsed text-[11px] leading-relaxed mobile-hide">${parsed}</td>
     </tr>
