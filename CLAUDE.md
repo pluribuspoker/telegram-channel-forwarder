@@ -76,7 +76,7 @@ Two-file split to protect server-only secrets from `syncenv`:
 | File | Where | Synced | Contains |
 |---|---|---|---|
 | `.env` | local + server | ✅ `syncenv` copies this | config that exists on **both** machines |
-| `.env.local` | local + server (separately) | ❌ never touched | `TELEGRAM_SESSION`, `BOT_SESSION`, `X_AUTH_TOKEN`, `X_CT0` |
+| `.env.local` | local + server (separately) | ❌ never touched | `TELEGRAM_SESSION`, `BOT_SESSION`, `X_AUTH_TOKEN`, `X_CT0`, `PIKKIT_TOKEN` |
 
 > **Rule: any value that exists only on the server belongs in `.env.local`.**
 > `syncenv` *overwrites* the server's `.env` with the local copy, so a key present in the server's `.env` but absent from the local one is **silently deleted** on the next sync. This is not hypothetical: it wiped `X_AUTH_TOKEN`/`X_CT0` on 2026-07-19 and took the Trent watcher down for 2 days without a single alert. `syncenv` is safe to run freely *only as long as this rule holds*.
@@ -142,6 +142,28 @@ To force a re-fetch after manually restoring a cache entry: delete the `odds_by_
 ```bash
 python scripts/audit_odds.py --days-back 7
 python scripts/audit_odds.py --dry-run
+```
+
+## Pikkit betting splits
+
+`pikkit.py` fetches community betting splits (bet% + handle%) from Pikkit's API for each pick. Tracker calls `get_pick_splits()` after odds fetch and stores results in `pikkit_by_pick` in parse_cache. The dashboard shows a Book Interest column/filter based on this data.
+
+- **API:** `prod-website.pikkit.app` — `/events/all` (event discovery) + `/event/foryou/{id}` (splits by market)
+- **Auth:** `PIKKIT_TOKEN` in `.env.local` (opaque hex session_id, 400-day expiry)
+- **Key constraint:** completed games return 403 — splits must be fetched before/during the game
+- **Token generation:** `scripts/pikkit_auth.py` — must run locally (real Chrome + display), NOT on VPS. Turnstile rejects headless/bundled Chromium. Session is NOT IP-bound (tested 2026-07-24).
+
+**Two-step manual auth flow (run locally):**
+```bash
+python scripts/pikkit_auth.py --send-sms --phone +19545361686
+# Read SMS code, then:
+python scripts/pikkit_auth.py --submit-code <CODE> --auth-id <from step 1> --phone +19545361686
+```
+Token is saved to `.env.local`. SCP to VPS or update `.env.local` there manually. `PIKKIT_TOKEN` must be in `.env.local`, NOT `.env` — `syncenv` would wipe it.
+
+**Token health check (from VPS or locally):**
+```bash
+python scripts/pikkit_auth.py --validate
 ```
 
 ## Broadcast results

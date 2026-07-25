@@ -12,6 +12,7 @@ Also includes a **pick grader** (`tracker.py`) that runs every 5 minutes, grades
 |---|---|
 | `listener.py` | Real-time forwarder — runs persistently as a systemd service |
 | `tracker.py` | Pick grader entry point + orchestration (CLI, live mode, backtest, Telegram editing) |
+| `pikkit.py` | Betting splits — fetches bet% + handle% from Pikkit API per pick, classifies public/book side |
 | `odds.py` | Odds lookup — fetches pre-game lines from Odds API, caches in `picks.db`, sanity checks |
 | `scores.py` | Sports data — ESPN / Odds API fetching, scoreboard formatting, team matching |
 | `ai.py` | Claude AI — pick parsing, grading, context building, cost tracking |
