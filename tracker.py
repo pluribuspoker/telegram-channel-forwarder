@@ -678,6 +678,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             "pregame_bookmaker":  result.pregame_bookmaker,
                             "pregame_match_type": result.pregame_match_type,
                             "game_date":          result.game_date,
+                            "betonline_sides":    result.betonline_sides,
                         }
                         odds_total += 1
                         if display_odds is not None:

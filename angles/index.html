@@ -562,7 +562,7 @@ function computeAngleTypeStats() {
 }
 
 // ── Data loading ───────────────────────────────────────────────────────────
-function fmtBook(pk, odds) {
+function fmtBook(pk, odds, bol) {
   if (!pk) return '';
   const bp = Math.round(pk.public_pct * 100);
   const hp = pk.handle_pct != null ? Math.round(pk.handle_pct * 100) : null;
@@ -573,21 +573,33 @@ function fmtBook(pk, odds) {
   let label = '<span style="color:' + c + '">' + lbl + ' ' + bp + '%'
     + (hp != null ? '<br><span style="color:#94a3b8;font-size:10px">$' + hp + '%</span>' : '') + '</span>';
 
-  if (hp == null || !odds) return label;
+  if (hp == null) return label;
 
   // Build liability data for floating tooltip
+  // Use BetOnline odds if available, otherwise derive from pick odds
   const mult = o => o > 0 ? o / 100 : 100 / Math.abs(o);
-  const implP = o => o < 0 ? Math.abs(o) / (Math.abs(o) + 100) : 100 / (o + 100);
-  const toAm = p => p >= 0.5 ? Math.round(-(p / (1 - p) * 100)) : Math.round(((1 - p) / p) * 100);
   const fmtAm = o => (o > 0 ? '+' : '') + o;
   const fmtPL = v => { const n = parseFloat(v); return (n >= 0 ? '<span style="color:#22c55e">+$' : '<span style="color:#ef4444">-$') + Math.abs(n).toFixed(2) + '</span>'; };
 
-  const pickProb = implP(odds);
-  const oppProb = Math.min(0.95, Math.max(0.05, 1.03 - pickProb));
-  const oppOdds = toAm(oppProb);
+  let pickO, oppO, pickLbl, oppLbl, source;
+  if (bol) {
+    pickO = bol.pick_odds; oppO = bol.opp_odds;
+    pickLbl = bol.pick_label; oppLbl = bol.opp_label;
+    source = 'BetOnline';
+  } else if (odds) {
+    const implP = o => o < 0 ? Math.abs(o) / (Math.abs(o) + 100) : 100 / (o + 100);
+    const toAm = p => p >= 0.5 ? Math.round(-(p / (1 - p) * 100)) : Math.round(((1 - p) / p) * 100);
+    pickO = odds;
+    oppO = toAm(Math.min(0.95, Math.max(0.05, 1.03 - implP(odds))));
+    pickLbl = 'Pick'; oppLbl = 'Opp';
+    source = 'est.';
+  } else {
+    return label;
+  }
+
   const monA = hp, monB = 100 - hp;
-  const plA = (monB - monA * mult(odds)).toFixed(2);
-  const plB = (monA - monB * mult(oppOdds)).toFixed(2);
+  const plA = (monB - monA * mult(pickO)).toFixed(2);
+  const plB = (monA - monB * mult(oppO)).toFixed(2);
   const nA = parseFloat(plA), nB = parseFloat(plB);
   const swing = Math.abs(nA - nB);
   const bookWantsPick = nA > nB;  // book profits more if pick wins
@@ -609,7 +621,8 @@ function fmtBook(pk, odds) {
   }
 
   const tipHtml = ''
-    + '<div class="bt-header">' + fmtAm(odds) + ' vs. ' + fmtAm(oppOdds) + '</div>'
+    + '<div class="bt-header">' + fmtAm(pickO) + ' (' + pickLbl + ') vs. ' + fmtAm(oppO) + ' (' + oppLbl + ')</div>'
+    + '<div style="font-size:9px;color:#475569;margin:-6px 0 8px">Odds: ' + source + ' &middot; Splits: Pikkit handle %</div>'
 
     + '<div class="bt-row">'
     +   '<div><div class="bt-label">Money on Pick</div><div class="bt-sublabel">% of total $ wagered on this side</div></div>'
@@ -1532,7 +1545,7 @@ function renderPicksLog() {
       <td class="py-1.5 px-2 text-right mono text-slate-400 mobile-hide">${fmtOdds(p.odds)}</td>
       <td class="py-1.5 px-2 text-right mono ${clr(p.profit||0)}">${p.profit!=null?fmtUnits(p.profit):'-'}</td>
       <td class="py-1.5 px-2 text-slate-400 mobile-hide">${p.sport||'-'}</td>
-      <td class="py-1.5 px-2 mobile-hide text-center text-[11px] leading-tight">${fmtBook(p.pikkit, p.odds)}</td>
+      <td class="py-1.5 px-2 mobile-hide text-center text-[11px] leading-tight">${fmtBook(p.pikkit, p.odds, p.betonline)}</td>
       <td class="py-1.5 px-2 text-slate-500 col-angles text-[11px] leading-relaxed mobile-hide">${anglesShort}</td>
       <td class="py-1.5 px-2 text-slate-400 col-parsed text-[11px] leading-relaxed mobile-hide">${parsed}</td>
     </tr>

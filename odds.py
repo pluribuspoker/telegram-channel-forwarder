@@ -245,6 +245,7 @@ class OddsResult:
     pregame_bookmaker:  str | None = None
     pregame_match_type: str | None = None
     game_date:          str | None = None   # YYYY-MM-DD from commence_time
+    betonline_sides:    dict | None = None  # {pick_odds, opp_odds, pick_label, opp_label}
 
     @property
     def found(self) -> bool:
@@ -434,7 +435,7 @@ async def _fetch_bookmakers(
         data = await _api_get(
             http,
             f"{ODDS_API_BASE}/historical/sports/{sport_key}/events/{event_id}/odds",
-            {"apiKey": ODDS_API_KEY, "regions": "us", "markets": markets,
+            {"apiKey": ODDS_API_KEY, "regions": "us,us2", "markets": markets,
              "date": f"{date}T18:00:00Z", "oddsFormat": "american"},
         )
     bookmakers: list[dict] = []
@@ -500,6 +501,65 @@ def _collect_outcomes(
                 if price is not None:
                     results.append((float(pt) if pt is not None else None, int(price), bk_key))
     return results
+
+
+def _betonline_both_sides(
+    bookmakers: list[dict],
+    market_key: str,
+    pick_team: str | None = None,
+    pick_direction: str | None = None,
+    pick_line: float | None = None,
+) -> dict | None:
+    """Extract BetOnline odds for both sides of a market.
+
+    Returns {pick_odds, opp_odds, pick_label, opp_label} or None.
+    """
+    for bk in bookmakers:
+        if bk.get("key") != "betonlineag":
+            continue
+        for mkt in bk.get("markets", []):
+            if mkt.get("key") != market_key:
+                continue
+            outcomes = mkt.get("outcomes", [])
+            if len(outcomes) < 2:
+                continue
+
+            # For totals: match by direction (Over/Under)
+            if pick_direction:
+                pick_name = "Over" if pick_direction == "over" else "Under"
+                opp_name = "Under" if pick_direction == "over" else "Over"
+                pick_o = next((o for o in outcomes if o.get("name") == pick_name
+                               and (pick_line is None or o.get("point") is None
+                                    or abs(float(o["point"]) - pick_line) < 0.01)), None)
+                opp_o = next((o for o in outcomes if o.get("name") == opp_name
+                              and (pick_line is None or o.get("point") is None
+                                   or abs(float(o["point"]) - pick_line) < 0.01)), None)
+                if pick_o and opp_o and pick_o.get("price") and opp_o.get("price"):
+                    return {"pick_odds": int(pick_o["price"]), "opp_odds": int(opp_o["price"]),
+                            "pick_label": pick_name, "opp_label": opp_name}
+                continue
+
+            # For ML/spread: match by team name
+            if not pick_team:
+                continue
+            pick_o = opp_o = None
+            for o in outcomes:
+                name = o.get("name", "")
+                price = o.get("price")
+                pt = o.get("point")
+                if price is None:
+                    continue
+                if pick_line is not None and pt is not None and abs(float(pt) - pick_line) > 0.01:
+                    continue
+                if _team_matches(pick_team.lower(), name.lower()):
+                    pick_o = {"price": int(price), "name": name}
+                elif opp_o is None:
+                    opp_o = {"price": int(price), "name": name}
+            if pick_o and opp_o:
+                return {"pick_odds": pick_o["price"], "opp_odds": opp_o["price"],
+                        "pick_label": pick_o["name"], "opp_label": opp_o["name"]}
+        break  # only one betonlineag entry
+    return None
 
 
 def _find_event_id(event_list: list[dict], teams: list[str]) -> str | None:
@@ -1197,6 +1257,21 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
                 if espn_bk:
                     r = lookup_pick_odds(sport, pick, espn_bk)
 
+        # Extract BetOnline odds for both sides (for dashboard liability card)
+        bol = None
+        if bookmakers and r.get("adjusted_odds") is not None:
+            team0 = teams[0] if teams else None
+            direction = (pick.get("direction") or "").lower() or None
+            pick_line_val = pick.get("line")
+            if bet_type == "moneyline":
+                bol = _betonline_both_sides(bookmakers, "h2h", pick_team=team0)
+            elif bet_type == "spread":
+                bol = _betonline_both_sides(bookmakers, "spreads", pick_team=team0,
+                                            pick_line=float(pick_line_val) if pick_line_val is not None else None)
+            elif bet_type in ("total", "over", "under"):
+                bol = _betonline_both_sides(bookmakers, "totals", pick_direction=direction,
+                                            pick_line=float(pick_line_val) if pick_line_val is not None else None)
+
         return OddsResult(
             match_type = r["match_type"],
             odds       = r["adjusted_odds"],
@@ -1204,6 +1279,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
             api_line   = r["api_line"],
             pick_line  = r["pick_line"],
             game_date  = gd,
+            betonline_sides = bol,
         )
 
     finally:
@@ -1241,7 +1317,7 @@ async def _fetch_current_bookmakers(
     async with httpx.AsyncClient(timeout=20) as http:
         data = await _api_get(http,
             f"{ODDS_API_BASE}/sports/{sport_key}/events/{event_id}/odds",
-            {"apiKey": ODDS_API_KEY, "regions": "us", "markets": markets, "oddsFormat": "american"},
+            {"apiKey": ODDS_API_KEY, "regions": "us,us2", "markets": markets, "oddsFormat": "american"},
         )
     bookmakers: list[dict] = data.get("bookmakers", []) if isinstance(data, dict) else []
     _save_bookmakers(conn, sport_key, event_id, cache_key, markets, bookmakers)
