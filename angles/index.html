@@ -57,12 +57,15 @@
   .reset-btn:hover { background: #991b1b; }
   /* ── Book liability tooltip ── */
   .book-cell { position: relative; }
-  #book-float { display: none; position: fixed; background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px 12px; white-space: nowrap; z-index: 9999; box-shadow: 0 8px 24px rgba(0,0,0,.6); font-size: 11px; color: #cbd5e1; pointer-events: none; }
-  .book-tip table { border-collapse: collapse; margin: 6px 0 4px; }
-  .book-tip th { font-size: 10px; color: #64748b; font-weight: 500; padding: 2px 8px; text-align: right; border-bottom: 1px solid #1e293b; }
-  .book-tip td { padding: 3px 8px; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
-  .book-tip .bt-title { font-weight: 600; color: #e2e8f0; margin-bottom: 2px; }
-  .book-tip .bt-note { font-size: 10px; color: #64748b; margin-top: 4px; }
+  #book-float { display: none; position: fixed; background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 14px 16px; white-space: nowrap; z-index: 9999; box-shadow: 0 12px 32px rgba(0,0,0,.7); color: #cbd5e1; pointer-events: none; min-width: 220px; }
+  .bt-header { font-size: 13px; font-weight: 600; color: #e2e8f0; margin-bottom: 10px; letter-spacing: -0.2px; }
+  .bt-row { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 0; border-bottom: 1px solid #1e293b; }
+  .bt-row:last-child { border-bottom: none; }
+  .bt-label { font-size: 11px; color: #64748b; }
+  .bt-sublabel { font-size: 9px; color: #475569; display: block; margin-top: 1px; }
+  .bt-val { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 500; }
+  .bt-divider { height: 1px; background: #1e293b; margin: 8px 0; }
+  .bt-footer { font-size: 10px; color: #94a3b8; margin-top: 8px; line-height: 1.4; }
   /* ── Refresh progress ── */
   .rm-stage { display: flex; align-items: center; gap: 10px; color: #475569; transition: color .3s; }
   .rm-stage.active { color: #c7d2fe; }
@@ -588,10 +591,33 @@ function fmtBook(pk, odds) {
   const swing = Math.abs(plA - plB).toFixed(2);
   const bookPref = parseFloat(plA) > parseFloat(plB) ? 'pick wins' : 'opp wins';
 
-  const tipHtml = '<div class="bt-title">' + fmtAm(odds) + ' (Pick) vs. ' + fmtAm(oppOdds) + ' (Opp) &mdash; per $100</div>'
-    + '<table><tr><th>$ on Pick</th><th>Pick Wins</th><th>Opp Wins</th><th>$ Swing</th></tr>'
-    + '<tr><td>' + hp + '%</td><td>' + fmtPL(plA) + '</td><td>' + fmtPL(plB) + '</td><td style="color:#f59e0b">$' + swing + '</td></tr></table>'
-    + '<div class="bt-note">Book prefers ' + bookPref + ' &middot; $' + swing + ' swing</div>';
+  const sideLbl = isBook ? 'Fading public' : 'With public';
+  const tipHtml = ''
+    + '<div class="bt-header">' + fmtAm(odds) + ' vs. ' + fmtAm(oppOdds) + '</div>'
+
+    + '<div class="bt-row">'
+    +   '<div><div class="bt-label">Money on Pick</div><div class="bt-sublabel">Handle % (where the $ is)</div></div>'
+    +   '<div class="bt-val" style="color:#e2e8f0">' + hp + '%</div>'
+    + '</div>'
+
+    + '<div class="bt-row">'
+    +   '<div><div class="bt-label">If Pick Wins</div><div class="bt-sublabel">Book\'s P&amp;L on $100 wagered</div></div>'
+    +   '<div class="bt-val">' + fmtPL(plA) + '</div>'
+    + '</div>'
+
+    + '<div class="bt-row">'
+    +   '<div><div class="bt-label">If Opp Wins</div><div class="bt-sublabel">Book\'s P&amp;L on $100 wagered</div></div>'
+    +   '<div class="bt-val">' + fmtPL(plB) + '</div>'
+    + '</div>'
+
+    + '<div class="bt-divider"></div>'
+
+    + '<div class="bt-row" style="border:none">'
+    +   '<div><div class="bt-label">Book Swing</div><div class="bt-sublabel">Difference between outcomes</div></div>'
+    +   '<div class="bt-val" style="color:#f59e0b">$' + swing + '</div>'
+    + '</div>'
+
+    + '<div class="bt-footer">' + sideLbl + ' &middot; Book prefers ' + bookPref + '</div>';
 
   // Escape for data attribute
   const esc = tipHtml.replace(/"/g, '&quot;');
