@@ -452,7 +452,7 @@
             <th class="py-2 px-2 text-right mobile-hide" data-col="odds">Odds</th>
             <th class="py-2 px-2 text-right" data-col="profit">Profit</th>
             <th class="py-2 px-2 mobile-hide" data-col="sport">Sport</th>
-            <th class="py-2 px-2 mobile-hide" data-col="pikkit_side" title="Pikkit betting splits: Book Side = pick fades public, Public Side = pick is with public majority">Book</th>
+            <th class="py-2 px-2 mobile-hide" data-col="pikkit_side" title="Pikkit splits: B/P = book/public side (bet%), $% = handle (money%). Divergence = sharp money signal.">Book</th>
             <th class="py-2 px-2 col-angles mobile-hide" data-col="angles_raw">Angles (raw)</th>
             <th class="py-2 px-2 col-parsed mobile-hide">Parsed</th>
           </tr>
@@ -1444,7 +1444,7 @@ function renderPicksLog() {
       <td class="py-1.5 px-2 text-right mono text-slate-400 mobile-hide">${fmtOdds(p.odds)}</td>
       <td class="py-1.5 px-2 text-right mono ${clr(p.profit||0)}">${p.profit!=null?fmtUnits(p.profit):'-'}</td>
       <td class="py-1.5 px-2 text-slate-400 mobile-hide">${p.sport||'-'}</td>
-      <td class="py-1.5 px-2 mobile-hide text-center text-[11px]">${p.pikkit ? (p.pikkit.side === 'book' ? '<span title="Fading public (' + Math.round(p.pikkit.public_pct*100) + '% of bets on this side)" style="color:#22c55e;cursor:help">B ' + Math.round(p.pikkit.public_pct*100) + '%</span>' : '<span title="With public (' + Math.round(p.pikkit.public_pct*100) + '% of bets on this side)" style="color:#ef4444;cursor:help">P ' + Math.round(p.pikkit.public_pct*100) + '%</span>') : ''}</td>
+      <td class="py-1.5 px-2 mobile-hide text-center text-[11px] leading-tight">${p.pikkit ? (() => { const bp = Math.round(p.pikkit.public_pct*100); const hp = p.pikkit.handle_pct != null ? Math.round(p.pikkit.handle_pct*100) : null; const isBook = p.pikkit.side === 'book'; const c = isBook ? '#22c55e' : '#ef4444'; const lbl = isBook ? 'B' : 'P'; const tip = isBook ? 'Fading public' : 'With public'; const betTip = bp + '% of bets on this side'; const hdlTip = hp != null ? ', ' + hp + '% of money' : ''; return '<span title="' + tip + ' (' + betTip + hdlTip + ')" style="color:' + c + ';cursor:help">' + lbl + ' ' + bp + '%' + (hp != null ? '<br><span style="color:#94a3b8;font-size:10px">$' + hp + '%</span>' : '') + '</span>'; })() : ''}</td>
       <td class="py-1.5 px-2 text-slate-500 col-angles text-[11px] leading-relaxed mobile-hide">${anglesShort}</td>
       <td class="py-1.5 px-2 text-slate-400 col-parsed text-[11px] leading-relaxed mobile-hide">${parsed}</td>
     </tr>
@@ -1483,10 +1483,11 @@ document.addEventListener('keydown', e => {
 
 // ── CSV export ─────────────────────────────────────────────────────────────
 document.getElementById('export-csv').addEventListener('click', () => {
-  const header = ['date','capper','pick_text','verdict','odds','profit','sport','bet_type','book_side','public_pct','angles_raw'];
+  const header = ['date','capper','pick_text','verdict','odds','profit','sport','bet_type','book_side','bet_pct','handle_pct','angles_raw'];
   const rows = filteredPicks.map(p => header.map(h => {
     if (h === 'book_side') return p.pikkit ? p.pikkit.side : '';
-    if (h === 'public_pct') return p.pikkit ? Math.round(p.pikkit.public_pct * 100) : '';
+    if (h === 'bet_pct') return p.pikkit ? Math.round(p.pikkit.public_pct * 100) : '';
+    if (h === 'handle_pct') return p.pikkit && p.pikkit.handle_pct != null ? Math.round(p.pikkit.handle_pct * 100) : '';
     let v = p[h]; if (v == null) return '';
     v = String(v).replace(/"/g, '""');
     return v.includes(',') || v.includes('\n') || v.includes('"') ? `"${v}"` : v;
