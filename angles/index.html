@@ -551,6 +551,18 @@ function computeAngleTypeStats() {
 }
 
 // ── Data loading ───────────────────────────────────────────────────────────
+function fmtBook(pk) {
+  if (!pk) return '';
+  const bp = Math.round(pk.public_pct * 100);
+  const hp = pk.handle_pct != null ? Math.round(pk.handle_pct * 100) : null;
+  const isBook = pk.side === 'book';
+  const c = isBook ? '#22c55e' : '#ef4444';
+  const lbl = isBook ? 'B' : 'P';
+  const tip = (isBook ? 'Fading public' : 'With public') + ' (' + bp + '% of bets' + (hp != null ? ', ' + hp + '% of money' : '') + ')';
+  return '<span title="' + tip + '" style="color:' + c + ';cursor:help">' + lbl + ' ' + bp + '%'
+    + (hp != null ? '<br><span style="color:#94a3b8;font-size:10px">$' + hp + '%</span>' : '') + '</span>';
+}
+
 function loadJSON(data) {
   allPicks = (data.picks || []).filter(p => p.angles && p.angles.length > 0);
   // Flatten pikkit.side for sorting
@@ -1444,7 +1456,7 @@ function renderPicksLog() {
       <td class="py-1.5 px-2 text-right mono text-slate-400 mobile-hide">${fmtOdds(p.odds)}</td>
       <td class="py-1.5 px-2 text-right mono ${clr(p.profit||0)}">${p.profit!=null?fmtUnits(p.profit):'-'}</td>
       <td class="py-1.5 px-2 text-slate-400 mobile-hide">${p.sport||'-'}</td>
-      <td class="py-1.5 px-2 mobile-hide text-center text-[11px] leading-tight">${p.pikkit ? (() => { const bp = Math.round(p.pikkit.public_pct*100); const hp = p.pikkit.handle_pct != null ? Math.round(p.pikkit.handle_pct*100) : null; const isBook = p.pikkit.side === 'book'; const c = isBook ? '#22c55e' : '#ef4444'; const lbl = isBook ? 'B' : 'P'; const tip = isBook ? 'Fading public' : 'With public'; const betTip = bp + '% of bets on this side'; const hdlTip = hp != null ? ', ' + hp + '% of money' : ''; return '<span title="' + tip + ' (' + betTip + hdlTip + ')" style="color:' + c + ';cursor:help">' + lbl + ' ' + bp + '%' + (hp != null ? '<br><span style="color:#94a3b8;font-size:10px">$' + hp + '%</span>' : '') + '</span>'; })() : ''}</td>
+      <td class="py-1.5 px-2 mobile-hide text-center text-[11px] leading-tight">${fmtBook(p.pikkit)}</td>
       <td class="py-1.5 px-2 text-slate-500 col-angles text-[11px] leading-relaxed mobile-hide">${anglesShort}</td>
       <td class="py-1.5 px-2 text-slate-400 col-parsed text-[11px] leading-relaxed mobile-hide">${parsed}</td>
     </tr>
