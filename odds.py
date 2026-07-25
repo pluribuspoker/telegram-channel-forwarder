@@ -503,6 +503,10 @@ def _collect_outcomes(
     return results
 
 
+_BOOK_PRIORITY = ["betonlineag", "bovada", "mybookieag"]
+_BOOK_DISPLAY = {"betonlineag": "BetOnline", "bovada": "Bovada", "mybookieag": "MyBookie"}
+
+
 def _betonline_both_sides(
     bookmakers: list[dict],
     market_key: str,
@@ -510,55 +514,63 @@ def _betonline_both_sides(
     pick_direction: str | None = None,
     pick_line: float | None = None,
 ) -> dict | None:
-    """Extract BetOnline odds for both sides of a market.
+    """Extract offshore book odds for both sides of a market.
 
-    Returns {pick_odds, opp_odds, pick_label, opp_label} or None.
+    Tries BetOnline first, then Bovada, then MyBookie.
+    Returns {pick_odds, opp_odds, pick_label, opp_label, book} or None.
     """
-    for bk in bookmakers:
-        if bk.get("key") != "betonlineag":
+    bk_map = {bk.get("key"): bk for bk in bookmakers}
+    target = None
+    for key in _BOOK_PRIORITY:
+        if key in bk_map:
+            target = bk_map[key]
+            break
+    if not target:
+        return None
+    book_name = _BOOK_DISPLAY.get(target.get("key", ""), target.get("key", ""))
+
+    for mkt in target.get("markets", []):
+        if mkt.get("key") != market_key:
             continue
-        for mkt in bk.get("markets", []):
-            if mkt.get("key") != market_key:
-                continue
-            outcomes = mkt.get("outcomes", [])
-            if len(outcomes) < 2:
-                continue
+        outcomes = mkt.get("outcomes", [])
+        if len(outcomes) < 2:
+            continue
 
-            # For totals: match by direction (Over/Under)
-            if pick_direction:
-                pick_name = "Over" if pick_direction == "over" else "Under"
-                opp_name = "Under" if pick_direction == "over" else "Over"
-                pick_o = next((o for o in outcomes if o.get("name") == pick_name
-                               and (pick_line is None or o.get("point") is None
-                                    or abs(float(o["point"]) - pick_line) < 0.01)), None)
-                opp_o = next((o for o in outcomes if o.get("name") == opp_name
-                              and (pick_line is None or o.get("point") is None
-                                   or abs(float(o["point"]) - pick_line) < 0.01)), None)
-                if pick_o and opp_o and pick_o.get("price") and opp_o.get("price"):
-                    return {"pick_odds": int(pick_o["price"]), "opp_odds": int(opp_o["price"]),
-                            "pick_label": pick_name, "opp_label": opp_name}
-                continue
+        # For totals: match by direction (Over/Under)
+        if pick_direction:
+            pick_name = "Over" if pick_direction == "over" else "Under"
+            opp_name = "Under" if pick_direction == "over" else "Over"
+            pick_o = next((o for o in outcomes if o.get("name") == pick_name
+                           and (pick_line is None or o.get("point") is None
+                                or abs(float(o["point"]) - pick_line) < 0.01)), None)
+            opp_o = next((o for o in outcomes if o.get("name") == opp_name
+                          and (pick_line is None or o.get("point") is None
+                               or abs(float(o["point"]) - pick_line) < 0.01)), None)
+            if pick_o and opp_o and pick_o.get("price") and opp_o.get("price"):
+                return {"pick_odds": int(pick_o["price"]), "opp_odds": int(opp_o["price"]),
+                        "pick_label": pick_name, "opp_label": opp_name, "book": book_name}
+            continue
 
-            # For ML/spread: match by team name
-            if not pick_team:
+        # For ML/spread: match by team name
+        if not pick_team:
+            continue
+        pick_o = opp_o = None
+        for o in outcomes:
+            name = o.get("name", "")
+            price = o.get("price")
+            pt = o.get("point")
+            if price is None:
                 continue
-            pick_o = opp_o = None
-            for o in outcomes:
-                name = o.get("name", "")
-                price = o.get("price")
-                pt = o.get("point")
-                if price is None:
-                    continue
-                if pick_line is not None and pt is not None and abs(float(pt) - pick_line) > 0.01:
-                    continue
-                if _team_matches(pick_team.lower(), name.lower()):
-                    pick_o = {"price": int(price), "name": name}
-                elif opp_o is None:
-                    opp_o = {"price": int(price), "name": name}
-            if pick_o and opp_o:
-                return {"pick_odds": pick_o["price"], "opp_odds": opp_o["price"],
-                        "pick_label": pick_o["name"], "opp_label": opp_o["name"]}
-        break  # only one betonlineag entry
+            if pick_line is not None and pt is not None and abs(float(pt) - pick_line) > 0.01:
+                continue
+            if _team_matches(pick_team.lower(), name.lower()):
+                pick_o = {"price": int(price), "name": name}
+            elif opp_o is None:
+                opp_o = {"price": int(price), "name": name}
+        if pick_o and opp_o:
+            return {"pick_odds": pick_o["price"], "opp_odds": opp_o["price"],
+                    "pick_label": pick_o["name"], "opp_label": opp_o["name"], "book": book_name}
+
     return None
 
 
