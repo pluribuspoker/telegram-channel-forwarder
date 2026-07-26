@@ -419,9 +419,9 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
         if sent and sent is not True:
             sent_ids = [s.id for s in sent] if isinstance(sent, list) else [sent.id]
             cache = _load_pending_cache()
+            source_key = f"{ch_id}:{group[0].id}"
             for sid in sent_ids:
-                source_key = f"{ch_id}:{group[0].id}"
-            cache[f"{dest_ch}:{sid}"] = {"_forwarded": True, "mapping_id": mapping.get("id", ""), "_source_key": source_key}
+                cache[f"{dest_ch}:{sid}"] = {"_forwarded": True, "mapping_id": mapping.get("id", ""), "_source_key": source_key}
             _save_pending_cache(cache)
             # Hand the quick tracker pass exactly what we just created. The same source pick
             # forwarded to N dest channels enqueues N targets, so every copy is processed —
