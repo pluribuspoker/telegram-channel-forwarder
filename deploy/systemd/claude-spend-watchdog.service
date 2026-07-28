@@ -1,0 +1,11 @@
+[Unit]
+Description=Claude API spend watchdog (alerts operator via Telegram on cost spikes)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/deploy/claude_spend_watchdog.py

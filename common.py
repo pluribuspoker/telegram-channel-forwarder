@@ -5,10 +5,80 @@ Shared utilities for the Telegram forwarder and pick tracker.
 import base64
 import io
 import copy
+import os
 import re
 import sys
 
+from datetime import datetime, timedelta, timezone
+
 from telethon.tl.types import MessageEntityBlockquote, MessageMediaDocument, MessageMediaPhoto
+
+
+# ── Ungradeable-leg cap ──────────────────────────────────────────────────────
+# A leg whose ESPN context builds fine but which Claude cannot grade comes back
+# UNKNOWN, and UNKNOWN is not a verdict we persist — only WIN/LOSS/PUSH are. So
+# without a cap the leg stays "unresolved" and both the daemon (every ~60s) and
+# the tracker (every 5min) pay for the same unanswerable question forever. One
+# such pick — parsed with a description naming one team and a `teams` list
+# naming another, so its context resolved to the wrong game — cost ~$9.40/day
+# for five days (2026-07-22 → 07-27).
+#
+# Attempts are recorded on the leg itself as a dict with NO "verdict" key, so
+# every resolved-check (`.get("verdict") in ("WIN","LOSS","PUSH")`) still reads
+# the leg as unresolved and no broadcast, emoji edit or eviction behaviour
+# changes. Deliberately no "game_date" either: the tracker invalidates a cached
+# leg whose game_date disagrees with a day hint, which would reset the counter
+# and restore the infinite loop.
+#
+# Attempts are also spaced out rather than burned back-to-back, so a game whose
+# box score lands late still gets retried for a few hours before we give up.
+UNKNOWN_MAX_ATTEMPTS = int(os.getenv("GRADE_UNKNOWN_MAX_ATTEMPTS", "6"))
+UNKNOWN_BACKOFF_MIN = int(os.getenv("GRADE_UNKNOWN_BACKOFF_MIN", "30"))
+
+
+def should_skip_unknown(leg: object, now: datetime | None = None) -> tuple[bool, str]:
+    """Should we skip the paid grade call for this leg?
+
+    Returns (skip, reason). Reason is non-empty only when skipping, and is
+    worth logging the first time a leg goes terminal.
+    """
+    if not isinstance(leg, dict):
+        return False, ""
+    n = leg.get("unknown_attempts") or 0
+    if not isinstance(n, int) or n <= 0:
+        return False, ""
+    if n >= UNKNOWN_MAX_ATTEMPTS:
+        return True, f"ungradeable after {n} attempts"
+    last = leg.get("last_unknown")
+    if isinstance(last, str) and last:
+        try:
+            elapsed = (now or datetime.now(timezone.utc)) - datetime.fromisoformat(last)
+        except ValueError:
+            return False, ""
+        if elapsed < timedelta(minutes=UNKNOWN_BACKOFF_MIN):
+            waited = int(elapsed.total_seconds() // 60)
+            return True, f"backoff {waited}/{UNKNOWN_BACKOFF_MIN}min after {n} attempts"
+    return False, ""
+
+
+def record_unknown_attempt(leg_verdicts: dict, idx: int) -> int:
+    """Bump leg `idx`'s UNKNOWN counter. Returns the new count (0 = not recorded).
+
+    Caller must persist `leg_verdicts` (set the entry dirty) or the count never
+    advances and the leg is re-graded forever — which is the bug this prevents.
+    """
+    key = str(idx)
+    prev = leg_verdicts.get(key)
+    prev = prev if isinstance(prev, dict) else {}
+    if prev.get("verdict") in ("WIN", "LOSS", "PUSH", "VOID"):
+        return 0  # already settled — nothing to cap
+    n = (prev.get("unknown_attempts") or 0)
+    n = n + 1 if isinstance(n, int) else 1
+    updated = {k: v for k, v in prev.items() if k not in ("unknown_attempts", "last_unknown")}
+    updated["unknown_attempts"] = n
+    updated["last_unknown"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    leg_verdicts[key] = updated
+    return n
 
 
 def parlay_combined_odds(leg_odds: list[int | None]) -> int | None:
