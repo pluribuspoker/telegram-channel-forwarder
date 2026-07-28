@@ -160,14 +160,23 @@ def main() -> None:
                 state["hour_alert_at"] = now
                 sent_any = True
 
+    # A 24h window keeps reporting a burst for a full day after it stops, so a
+    # fix deployed mid-window still alerts as if it were live. Quote the current
+    # hour alongside it: near-zero there means the cause is already gone and
+    # this is the window draining, not a leak to go chase.
     if force or day_total > day_limit:
         if force or now - state.get("day_alert_at", 0) > DAY_DEBOUNCE_SECS:
+            if hour_total < day_total / 24:
+                verdict = "Spend has already stopped — 24h window is draining, not a live leak."
+            else:
+                verdict = "Still spending now. Normal baseline is well under $1/day."
             msg = (
                 f"💸 Claude spend above threshold\n\n"
                 f"Trailing 24h: ${day_total:.2f} ({day_calls} calls) — limit ${day_limit:.2f}\n"
                 f"{fmt_breakdown(day_per)}\n\n"
+                f"Last hour: ${hour_total:.2f} ({hour_calls} calls)\n\n"
                 f"Projected month at this rate: ${day_total * 30:.0f}\n\n"
-                f"Normal baseline is well under $1/day."
+                f"{verdict}"
             )
             if send(msg):
                 state["day_alert_at"] = now
