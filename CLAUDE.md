@@ -241,6 +241,7 @@ python scripts/grade_csv.py --limit 5        # first 5 matching
 - **twscrape wrapper:** always build the API via `scripts/x_client.py` (`build_api()`), never `API()` + `add_account_cookies()` directly. It carries two workarounds for library bugs that both present as "bad cookies": twscrape's XClIdGen scrapes a page X has since migrated (fix: point it at `https://x.com`), and `add_account_cookies()` silently ignores rotated cookies when the account is already cached in `accounts.db`. See the module docstring.
 - **Lookback:** 2 hours per run (covers missed runs / gaps)
 - **Channel grading:** Channel is in `GRADE_CHANNELS` — tracker handles odds + result emojis
+- **Singles only.** This channel forwards SINGLE-GAME bets; multi-leg parlays are not sent. Three checks enforce it, and the order matters: `is_pick_text` decides *whether* it's a pick, `is_pick_image` is a fallback that can only rescue a tweet the text rejected, and `is_parlay_image` is a **veto** that runs on every candidate with a photo — *including* ones the text already approved. That last one exists because the tweet text often names just one leg of the slip ("Swapped Braves ML for Red Sox ML" attached to a 5-leg FUGAZI FIVE), so the image is the only ground truth about what the bet actually is. Keep the veto's prompt narrow and default-to-pass: a false positive silently stops real picks, and nothing downstream would flag it.
 
 **Manual run on VPS:**
 ```bash
