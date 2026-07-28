@@ -55,6 +55,15 @@ def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict
     }
     if existing.get("_unknown_notified"):
         entry["_unknown_notified"] = True
+    # `_failed` is the terminal "stop touching this entry" flag that BOTH the
+    # tracker (tracker.py) and the grade daemon (grade_daemon.py) honour. It has
+    # to survive this rebuild or it is silently dropped on the next run that
+    # re-processes the entry — which turns a permanent stop into a ~5-minute one
+    # and lets an ungradeable pick resume burning a Claude call every cycle.
+    if existing.get("_failed"):
+        entry["_failed"] = True
+        if existing.get("_failed_reason"):
+            entry["_failed_reason"] = existing["_failed_reason"]
     if existing.get("_forwarded"):
         entry["_forwarded"] = True
     if existing.get("mapping_id"):
