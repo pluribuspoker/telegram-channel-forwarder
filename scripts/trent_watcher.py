@@ -302,6 +302,31 @@ Tweet text: {text}
 
 Return only: true or false"""
 
+_IMAGE_IS_PARLAY_PROMPT = """\
+Does this image show a MULTI-LEG PARLAY — two or more selections combined onto ONE ticket \
+that all must win for the bet to cash?
+
+Return true ONLY when you can see that combining:
+- A slip listing 2+ teams/players under a single wager, with ONE combined price and ONE payout
+- An explicit label: "N-LEG PARLAY", "PARLAY", "FUGAZI FIVE"/"FUGAZI 5", "[N]-man nuke", \
+"Last Chance U slip", "round robin", "SGP" / "same game parlay"
+
+Return false for everything else:
+- A single-game bet slip (one selection)
+- Several SEPARATE slips side by side, each its own straight bet with its own payout
+- A promo graphic, team logo, matchup art, meme, screenshot, or any photo with no bet slip
+- Anything you are not sure about
+
+The tweet text may only describe ONE leg of the slip — judge the IMAGE, not the text.
+
+Tweet text: {text}
+
+Return only: true or false"""
+
+# Cap on how many attached photos the parlay veto inspects, so a media-heavy
+# tweet can't turn one classification into an unbounded run of image calls.
+_PARLAY_VETO_MAX_PHOTOS = 4
+
 
 def _is_retweet(text: str) -> bool:
     return text.lstrip().startswith("RT @")
@@ -342,18 +367,19 @@ async def download_image(url: str) -> tuple[str, bytes] | None:
         return None
 
 
-async def is_pick_image(tweet: dict) -> bool:
-    """Check if a tweet's image contains a single bet slip."""
+def _photo_urls(tweet: dict) -> list[str]:
     photos = tweet.get("photos", "").strip()
     if not photos:
-        return False
-    img_url = photos.split("|")[0].strip()
-    if not img_url:
-        return False
+        return []
+    return [u.strip() for u in photos.split("|") if u.strip()]
 
+
+async def _ask_about_image(tweet: dict, img_url: str, prompt: str, label: str) -> bool:
+    """Send one attached image to Claude with `prompt`. Returns its true/false."""
     img = await download_image(img_url)
     if not img:
-        # Download failure is transient — don't let it silently drop a pick.
+        # Download failure is transient — don't let it silently drop a pick, and
+        # don't let it silently WAIVE the parlay veto either.
         raise _ClassifyError(f"image download failed for {tweet['id']}")
     media_type, img_bytes = img
     img_b64 = base64.b64encode(img_bytes).decode()
@@ -366,13 +392,37 @@ async def is_pick_image(tweet: dict) -> bool:
             temperature=0,
             messages=[{"role": "user", "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_b64}},
-                {"type": "text", "text": _IMAGE_IS_PICK_PROMPT.format(text=text)},
+                {"type": "text", "text": prompt.format(text=text)},
             ]}],
         )
     except Exception as e:
-        print(f"  ERROR image-check {tweet['id']}: {e}")
+        print(f"  ERROR {label} {tweet['id']}: {e}")
         raise _ClassifyError(str(e)) from e
     return _parse_bool(resp.content[0].text)
+
+
+async def is_pick_image(tweet: dict) -> bool:
+    """Check if a tweet's image contains a single bet slip."""
+    urls = _photo_urls(tweet)
+    if not urls:
+        return False
+    return await _ask_about_image(tweet, urls[0], _IMAGE_IS_PICK_PROMPT, "image-check")
+
+
+async def is_parlay_image(tweet: dict) -> bool:
+    """Does any attached image show a multi-leg parlay slip?
+
+    This is a VETO, and it runs even when the text classifier already said
+    "yes" — the slip is ground truth about what the bet actually is, while the
+    text may name only one leg of it (e.g. "Swapped Braves ML for Red Sox ML"
+    attached to a FUGAZI FIVE 5-leg slip). Checking the image only as a
+    fallback for a "no" text verdict, as this used to, made the parlay rule
+    unreachable in exactly the case it exists for.
+    """
+    for img_url in _photo_urls(tweet)[:_PARLAY_VETO_MAX_PHOTOS]:
+        if await _ask_about_image(tweet, img_url, _IMAGE_IS_PARLAY_PROMPT, "parlay-check"):
+            return True
+    return False
 
 
 # ─── Telegram ────────────────────────────────────────────────────────────────
@@ -511,6 +561,13 @@ async def main():
             # Image fallback: always check images if text check said no pick
             if not is_pick and tw.get("photos"):
                 is_pick = await is_pick_image(tw)
+
+            # Parlay veto — we forward SINGLES only. Runs on every candidate
+            # with a photo, including ones the text already approved, because
+            # the text can describe a single leg of a multi-leg slip.
+            if is_pick and tw.get("photos") and await is_parlay_image(tw):
+                print(f"  skipping {tw['id']}: image shows a multi-leg parlay")
+                is_pick = False
         except _ClassifyError as e:
             # Transient blip — leave the tweet UNSEEN so it retries next run
             # (bounded: it stops being fetched once it ages out of the window).
