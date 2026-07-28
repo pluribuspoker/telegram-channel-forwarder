@@ -19,7 +19,13 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
-from common import VERDICT_EMOJI, parlay_combined_odds
+from common import (
+    VERDICT_EMOJI,
+    UNKNOWN_MAX_ATTEMPTS,
+    parlay_combined_odds,
+    record_unknown_attempt,
+    should_skip_unknown,
+)
 from scores import fetch_espn, odds_requests_used, try_early_grade_math, build_early_context, validate_sport
 from odds import fetch_odds, fetch_odds_current, quota_used as odds_quota_used
 from pikkit import get_pick_splits
@@ -792,11 +798,24 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             elif context == CONTEXT_SKIP:
                                 verdict, calc = "UNKNOWN", ""
                             else:
-                                verdict, calc = await claude_grade(
-                                    pick.get("description", text[:80]), date_str, context,
-                                    pick.get("bet_type", ""),
-                                    pick.get("prop_stat") or "",
-                                )
+                                # Cap repeat grading of a leg Claude can't
+                                # resolve (see common.should_skip_unknown).
+                                # Recorded into cached_leg_verdicts, which both
+                                # save sites below copy into new_leg_verdicts.
+                                skip_unknown, why = should_skip_unknown(cached_leg)
+                                if skip_unknown:
+                                    verdict, calc = "PENDING", ""
+                                else:
+                                    verdict, calc = await claude_grade(
+                                        pick.get("description", text[:80]), date_str, context,
+                                        pick.get("bet_type", ""),
+                                        pick.get("prop_stat") or "",
+                                    )
+                                    if verdict not in ("WIN", "LOSS", "PUSH"):
+                                        n = record_unknown_attempt(cached_leg_verdicts, i)
+                                        if n >= UNKNOWN_MAX_ATTEMPTS:
+                                            print(f"  ⏹ {msg.id} leg {i} ungradeable after {n} "
+                                                  f"attempts — no longer grading")
                     verdicts.append((pick, verdict, calc, pick_sport, game_date))
 
                 # Build edited text — odds then emoji inserted inline after each pick's line

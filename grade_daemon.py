@@ -30,7 +30,13 @@ from dotenv import load_dotenv
 load_dotenv()
 load_dotenv(".env.local", override=True)
 
-from common import VERDICT_EMOJI, parlay_combined_odds
+from common import (
+    VERDICT_EMOJI,
+    UNKNOWN_MAX_ATTEMPTS,
+    parlay_combined_odds,
+    record_unknown_attempt,
+    should_skip_unknown,
+)
 from scores import fetch_espn, try_early_grade_math, build_early_context
 from ai import (
     claude_grade,
@@ -356,11 +362,26 @@ async def _grade_cycle(
                 elif context == CONTEXT_SKIP:
                     verdict, calc = "UNKNOWN", ""
                 else:
-                    verdict, calc = await claude_grade(
-                        pick.get("description", ""), msg_date, context,
-                        pick.get("bet_type", ""),
-                        pick.get("prop_stat") or "",
-                    )
+                    # Cap repeat grading of a leg Claude can't resolve. Without
+                    # this an ungradeable leg is re-graded every cycle forever.
+                    skip_unknown, why = should_skip_unknown(leg_verdicts.get(str(i)))
+                    if skip_unknown:
+                        verdict, calc = "PENDING", ""
+                    else:
+                        verdict, calc = await claude_grade(
+                            pick.get("description", ""), msg_date, context,
+                            pick.get("bet_type", ""),
+                            pick.get("prop_stat") or "",
+                        )
+                        if verdict not in ("WIN", "LOSS", "PUSH"):
+                            n = record_unknown_attempt(leg_verdicts, i)
+                            if n:
+                                entry["leg_verdicts"] = leg_verdicts
+                                dirty = True
+                                if n >= UNKNOWN_MAX_ATTEMPTS:
+                                    print(f"  ⏹ {cache_key} leg {i} ungradeable after {n} "
+                                          f"attempts — no longer grading "
+                                          f"({pick.get('description', '')[:50]})")
 
             if verdict in ("WIN", "LOSS", "PUSH"):
                 leg_verdicts[str(i)] = {
