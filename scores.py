@@ -253,22 +253,34 @@ def _parse_cfl_schedule(html: str) -> list[dict]:
     """Parse CFL.ca schedule page into a list of game dicts with quarter scores."""
     games: list[dict] = []
 
-    # Split into blocks by timestamp markers
-    blocks = re.split(r'var\s+int_timestamp\s*=\s*Number\(', html)
+    # Split per game card. Do NOT split on the `int_timestamp` script: an
+    # IN-PROGRESS game renders its quarter/clock ("4th 15:00") instead of that
+    # script, so a live game carries no timestamp and would be swallowed into
+    # the previous card's block — invisible to the parser and thus ungradeable
+    # until the game went final. Every card (upcoming, live, final) has the
+    # `div-game-id-` anchor.
+    blocks = re.split(r'<div id="div-game-id-\d+"', html)
     if len(blocks) < 2:
         return games
 
     for block in blocks[1:]:
-        ts_m = re.match(r'(\d+)\)', block)
-        if not ts_m:
-            continue
-        timestamp = int(ts_m.group(1))
-        game_date = _datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%d")
-
         # Find the first <table> in this block (quarter scores)
         table_m = re.search(r'<table[^>]*>(.*?)</table>', block, re.DOTALL)
         if not table_m:
             continue
+
+        # Date: prefer the card's own kickoff timestamp; a live card has none,
+        # so fall back to the date embedded in its ad-slot id.
+        pre_table = block[:table_m.start()]
+        ts_m = re.search(r'var\s+int_timestamp\s*=\s*Number\((\d+)\)', pre_table)
+        if ts_m:
+            game_date = _datetime.fromtimestamp(
+                int(ts_m.group(1)), tz=timezone.utc).strftime("%Y-%m-%d")
+        else:
+            ad_m = re.search(r'id="ad-schedule-game-(\d{4}-\d{2}-\d{2})-', pre_table)
+            if not ad_m:
+                continue
+            game_date = ad_m.group(1)
 
         rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table_m.group(1), re.DOTALL)
         if len(rows) < 3:
@@ -292,9 +304,27 @@ def _parse_cfl_schedule(html: str) -> list[dict]:
             continue
 
         # Determine if game is final (look for "Final" or "F (OT)" before the table)
-        pre_table = block[:table_m.start()]
         is_final = bool(re.search(r'\bFinal\b|F\s*\(OT\)', pre_table, re.IGNORECASE))
         is_ot = bool(re.search(r'F\s*\(OT\)', pre_table, re.IGNORECASE))
+
+        # Live cards mark status "Live" and show the current quarter + clock,
+        # e.g. <span class="date">4th 15:00</span>. Halftime reads "Half".
+        is_live = (not is_final) and bool(
+            re.search(r'<span class="status">\s*Live\s*</span>', pre_table, re.IGNORECASE))
+        current_period = None
+        if is_live:
+            q_m = re.search(r'<span class="date">\s*(\d)(?:st|nd|rd|th)\b', pre_table,
+                            re.IGNORECASE)
+            if q_m:
+                current_period = int(q_m.group(1))
+            elif re.search(r'<span class="date">\s*Half\b', pre_table, re.IGNORECASE):
+                current_period = 2  # halftime: Q1+Q2 done, Q3 not started
+            elif len(team_rows[0]["quarters"]) > 4:
+                # Live with an extra column = overtime; regulation is over. Read
+                # from the table rather than guessing at unobserved OT markup.
+                current_period = 5
+            # Still None (unrecognized clock text) → treated as period 0, so
+            # nothing early-grades. Failing closed is the safe direction here.
 
         away = team_rows[0]
         home = team_rows[1]
@@ -310,6 +340,8 @@ def _parse_cfl_schedule(html: str) -> list[dict]:
             "home_total": home["total"],
             "final": is_final,
             "ot": is_ot,
+            "live": is_live,
+            "current_period": current_period,
         })
 
     return games
@@ -342,13 +374,48 @@ def _format_cfl_line_scores(game: dict) -> str:
     return header + "\n" + "\n".join(lines)
 
 
+def _cfl_scoreboard(game: dict) -> dict:
+    """Wrap a parsed cfl.ca game in an ESPN-shaped scoreboard.
+
+    Lets CFL reuse the shared early-grading helpers, which are written against
+    ESPN's schema. Without this CFL has no early grading at all: ESPN serves
+    zero CFL events, so `build_early_context` is handed an empty scoreboard and
+    always returns None.
+    """
+    def competitor(side: str) -> dict:
+        linescores = []
+        for q in game[f"{side}_quarters"]:
+            try:
+                linescores.append({"value": float(q), "displayValue": str(q)})
+            except (TypeError, ValueError):
+                break  # "-" placeholder: no further quarters are real
+        return {
+            "homeAway": side,
+            "team": {"displayName": game[f"{side}_name"]},
+            "score": game[f"{side}_total"],
+            "linescores": linescores,
+        }
+
+    return {"events": [{
+        "id": "cfl",
+        "status": {
+            "period": game.get("current_period") or 0,
+            "type": {"state": "in" if game.get("live") else "post"},
+        },
+        "competitions": [{"competitors": [competitor("away"), competitor("home")]}],
+    }]}
+
+
 async def fetch_cfl_context(
     team: str, date: str, *, odds_game_date: str | None = None,
+    period: str = "game",
 ) -> tuple[str, str]:
     """Grade a CFL pick by scraping CFL.ca schedule for quarter scores.
 
     ESPN has no CFL data, so we scrape the official site instead.
-    Returns (context_str, game_date).
+    A period bet (1Q/1H/...) whose period has already finished is graded from
+    the live card while the game is still in progress; everything else waits
+    for the final. Returns (context_str, game_date).
     """
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as http:
         try:
@@ -386,6 +453,17 @@ async def fetch_cfl_context(
                 continue
             if g["final"]:
                 return _format_cfl_line_scores(g), g["date"]
+            # Game still running: a period bet can settle as soon as ITS period
+            # is over. Teams are omitted from the probe pick on purpose — this
+            # game is already the match, and the synthetic scoreboard holds only
+            # it, so re-matching by name could only fail.
+            if period != "game" and g.get("live"):
+                early = build_early_context(
+                    "CFL", {"period": period, "teams": [], "player": ""},
+                    _cfl_scoreboard(g),
+                )
+                if early:
+                    return early, g["date"]
             return "PENDING", g["date"]
 
     return "", date

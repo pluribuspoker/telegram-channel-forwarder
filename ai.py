@@ -613,7 +613,8 @@ async def build_context(
         team = teams[0] if teams else ""
         if not team:
             return CONTEXT_SKIP, date
-        ctx, game_date = await fetch_cfl_context(team, date, odds_game_date=odds_game_date)
+        ctx, game_date = await fetch_cfl_context(
+            team, date, odds_game_date=odds_game_date, period=period)
         if ctx == "PENDING":
             return CONTEXT_PENDING, game_date
         return (ctx if ctx else CONTEXT_PENDING), game_date
