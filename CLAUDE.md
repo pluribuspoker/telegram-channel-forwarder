@@ -295,7 +295,7 @@ Angle types: `run`, `off_losses`, `off_wins`, `sport_record`, `bet_type_record`,
 
 - **`set -o pipefail` is mandatory.** These scripts pipe Python through `tee` to a logfile, and a pipeline's exit status is *`tee`'s* — always 0. Without it a crashed job reports success, skips its own retry, and pings healthchecks.io as OK. All three runners silently did this until 2026-07-21.
 - **`TimeoutStartSec` must exceed the runner's own worst case** (retries × per-attempt timeout + backoff), or systemd kills the retry mid-flight.
-- **Set the `*_HEALTHCHECK_URL`** for the job in `.env`. `ping_hc()` is a silent no-op when unset, so the script *looks* monitored while having no dead-man's-switch at all. Coverage today: listener ✅, tracker ✅, **trent ❌ (`TRENT_HEALTHCHECK_URL` unset)**.
+- **Set the `*_HEALTHCHECK_URL`** for the job in `.env`. `ping_hc()` is a silent no-op when unset, so the script *looks* monitored while having no dead-man's-switch at all. Coverage today: listener ✅, tracker ✅, **trent ❌ (`TRENT_HEALTHCHECK_URL` unset)**, **sauce ❌ (`run_sauce_daily.sh` pings nothing and has no retry)**. Sauce is the proof of what that costs: it crashed at the same step three mornings running (2026-07-29→31) and nobody found out until the missing posts were noticed by eye.
 
 ## Deploy workflow
 
