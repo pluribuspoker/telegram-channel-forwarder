@@ -94,6 +94,13 @@ def _connect():
 
 # ─── Claude: classify + parse ─────────────────────────────────────────────────
 
+# Must scale with the sheet: each pick costs ~80 output tokens, and a truncated
+# reply is unparseable JSON, not partial data. 2048 quietly became too small once
+# the sheet passed ~25 open bets (CFB futures piling up) and killed the daily post
+# for 3 days straight. This covers ~200 picks; the guard below catches the rest.
+_PARSE_MAX_TOKENS = 16384
+
+
 async def classify_and_parse(picks: list[dict]) -> list[dict]:
     """Classify sport and parse bet structure for each pick via Claude."""
     lines = []
@@ -126,13 +133,26 @@ async def classify_and_parse(picks: list[dict]) -> list[dict]:
 
     resp = await claude().messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=2048,
+        max_tokens=_PARSE_MAX_TOKENS,
         messages=[{"role": "user", "content": prompt}],
     )
+    if resp.stop_reason == "max_tokens":
+        raise RuntimeError(
+            f"classify_and_parse: Claude hit the {resp.usage.output_tokens}-token "
+            f"cap on {len(picks)} picks, so the JSON is truncated. Raise "
+            f"_PARSE_MAX_TOKENS or batch the picks."
+        )
     raw = resp.content[0].text.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
     parsed_list = json.loads(raw)
+    if len(parsed_list) != len(picks):
+        # Silently short lists leave picks with no sport/bet_type, which then skip
+        # odds and grade UNKNOWN — fail here instead of shipping half-parsed picks.
+        raise RuntimeError(
+            f"classify_and_parse: Claude returned {len(parsed_list)} objects for "
+            f"{len(picks)} picks."
+        )
 
     for i, p in enumerate(picks):
         if i < len(parsed_list):
