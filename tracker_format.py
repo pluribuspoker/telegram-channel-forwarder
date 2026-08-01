@@ -637,14 +637,39 @@ def _is_not_modified(err: str) -> bool:
     return "not modified" in (err or "").lower().replace("_", " ")
 
 
-async def _bot_edit_message(
+def _is_message_gone(err: str) -> bool:
+    """True if an edit error means the target message no longer exists.
+
+    A pick message can vanish two ways: the capper deletes-and-reposts at the
+    source (so our forward is stale), or an operator deletes the bad forward by
+    hand. Either way the pick is retracted, and anything still keyed to that
+    message — emoji edits, result broadcasts, audit rows — is describing a bet
+    nobody made. Callers use this to retire the entry permanently instead of
+    retrying it every cycle.
+
+    Deliberately narrow, and everything else falls through as an ordinary
+    (retryable) failure: a false positive here silently kills a live pick, which
+    nothing downstream would flag. Flood waits, timeouts and permission errors
+    are all transient and must NOT match.
+    """
+    e = (err or "").lower().replace("_", " ")
+    return "message to edit not found" in e or "message id invalid" in e
+
+
+async def _bot_edit_message_status(
     bot_token: str,
     channel_id: int,
     message_id: int,
     new_text: str,
     has_media: bool,
-) -> bool:
-    """Edit a message via Bot API. Returns True on success."""
+) -> tuple[bool, bool]:
+    """Edit a message via Bot API. Returns (ok, gone).
+
+    `gone` is True only when Telegram reports the message no longer exists (see
+    _is_message_gone) — the signal that the pick was retracted and the entry
+    should be retired rather than retried. Every other failure leaves it False
+    so the caller keeps treating it as transient.
+    """
     method = "editMessageCaption" if has_media else "editMessageText"
     field  = "caption"            if has_media else "text"
     payload: dict = {"chat_id": channel_id, "message_id": message_id,
@@ -667,21 +692,36 @@ async def _bot_edit_message(
                               "disable_web_page_preview": True},
                     )
                     if r2.is_success or _is_not_modified(r2.text):
-                        return True
+                        return True, False
                     print(f"    [bot edit error] {r2.status_code}: {r2.text[:120]}")
-                    return False
+                    return False, _is_message_gone(r2.text)
                 # "message is not modified" means the message ALREADY carries the
                 # content we're setting — the desired end state, not a failure.
                 # Reporting it as one makes a second writer (tracker after daemon,
                 # or a retry) flag [EDIT FAILED] on a perfectly correct message.
                 if _is_not_modified(r.text):
-                    return True
+                    return True, False
                 print(f"    [bot edit error] {r.status_code}: {r.text[:120]}")
-                return False
-            return True
+                return False, _is_message_gone(r.text)
+            return True, False
     except Exception as exc:
+        # Network/timeout errors carry no verdict about the message's existence.
         print(f"    [bot edit error] {exc}")
-        return False
+        return False, False
+
+
+async def _bot_edit_message(
+    bot_token: str,
+    channel_id: int,
+    message_id: int,
+    new_text: str,
+    has_media: bool,
+) -> bool:
+    """Edit a message via Bot API. Returns True on success."""
+    ok, _gone = await _bot_edit_message_status(
+        bot_token, channel_id, message_id, new_text, has_media
+    )
+    return ok
 
 
 async def _user_edit_message(

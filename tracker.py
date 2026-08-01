@@ -355,6 +355,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             dead_key = f"{channel_id}:{sid}"
                             dead_entry = pending_cache.get(dead_key, {})
                             linked = dead_entry.get("linked_message_ids", [])
+                            did_promote = False
                             if linked and isinstance(dead_entry, dict) and "parsed" in dead_entry:
                                 # Try to find a surviving linked message
                                 alive = await client.get_messages(channel_id, ids=linked)
@@ -380,8 +381,22 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                         # Remove the dead primary
                                         pending_cache.pop(dead_key, None)
                                         print(f"  [dupe] promoted {lmsg.id} (primary {sid} deleted)")
+                                        did_promote = True
                                         yield lmsg
                                         break
+                            if not did_promote and isinstance(dead_entry, dict) and "parsed" in dead_entry:
+                                # Deleted with no surviving copy to promote: the pick
+                                # was retracted (capper delete-and-repost, or an
+                                # operator removing a bad forward). Previously this
+                                # branch fell through silently, leaving the entry in
+                                # the cache — so the grade daemon kept grading it and
+                                # broadcast a result for a bet nobody made. `_failed`
+                                # is the terminal flag both loops honour, and
+                                # _pending_entry preserves it across rebuilds.
+                                dead_entry["_failed"] = True
+                                dead_entry["_failed_reason"] = "message deleted"
+                                pending_cache[dead_key] = dead_entry
+                                print(f"  ⏹ {dead_key} retired — pick message deleted")
 
             async for msg in _iter_with_catchup():
                 msg_date = msg.date
