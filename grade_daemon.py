@@ -49,7 +49,12 @@ from ai import (
 )
 from tracker_cache import _load_pending_cache, _save_pending_cache
 from tracker_grading import _overall_verdict
-from tracker_format import _insert_emojis, _bot_edit_message, _PICK_EMOJI
+from tracker_format import (
+    _insert_emojis,
+    _bot_edit_message,
+    _bot_edit_message_status,
+    _PICK_EMOJI,
+)
 from audit import AuditLog, log_api_costs
 from sheets import append_pick_rows
 
@@ -102,6 +107,25 @@ def _build_sheets_map() -> dict[int, str]:
         if dest and sid:
             result[dest] = sid
     return result
+
+
+def _retire_deleted(entry: dict, cache: dict, cache_key: str) -> None:
+    """Permanently retire a cache entry whose pick message has been deleted.
+
+    `_failed` is the existing terminal "stop touching this entry" flag honoured
+    by both this daemon and the tracker, and `_pending_entry` already preserves
+    it across the cache rebuild — so the stop survives the next tracker pass
+    instead of lasting one write cycle.
+
+    Persists immediately: the reason we are here is that a result was about to
+    be broadcast, and a broadcast is not idempotent, so the flag has to outlive
+    a mid-cycle abort or restart.
+    """
+    entry["_failed"] = True
+    entry["_failed_reason"] = "message deleted"
+    cache[cache_key] = entry
+    _save_pending_cache(cache)
+    print(f"  ⏹ {cache_key} retired — pick message deleted (no broadcast)")
 
 
 def _build_user_send_channels() -> set[int]:
@@ -266,13 +290,20 @@ async def _grade_cycle(
                             all_v.append((picks[i], "PENDING", "", picks[i].get("sport") or sport))
                     new_text = _insert_emojis(html_text, all_v)
                     if new_text != html_text:
-                        ok = await _bot_edit_message(bot_token, channel_id, msg_id, new_text, has_media)
+                        ok, gone = await _bot_edit_message_status(
+                            bot_token, channel_id, msg_id, new_text, has_media
+                        )
                         if ok:
                             entry["html_text"] = new_text
                             await asyncio.sleep(0.5)
                             for linked_id in entry.get("linked_message_ids", []):
                                 await _bot_edit_message(bot_token, channel_id, linked_id, new_text, has_media)
                                 await asyncio.sleep(0.5)
+                        elif gone:
+                            # Message deleted — the bet was retracted. Retire it
+                            # instead of broadcasting a result for it.
+                            _retire_deleted(entry, cache, cache_key)
+                            continue
 
                 nr_pick_results = []
                 for i in unbroadcast:
@@ -436,7 +467,9 @@ async def _grade_cycle(
             new_text = _insert_emojis(html_text, emoji_verdicts)
 
             if new_text != html_text:
-                ok = await _bot_edit_message(bot_token, channel_id, msg_id, new_text, has_media)
+                ok, gone = await _bot_edit_message_status(
+                    bot_token, channel_id, msg_id, new_text, has_media
+                )
                 if ok:
                     await asyncio.sleep(0.5)
                     # Edit linked duplicates
@@ -444,6 +477,15 @@ async def _grade_cycle(
                         await _bot_edit_message(bot_token, channel_id, linked_id, new_text, has_media)
                         await asyncio.sleep(0.5)
                     entry["html_text"] = new_text
+                elif gone:
+                    # The pick message was deleted, so this bet was retracted.
+                    # Retire the entry before it can broadcast or record a result
+                    # for a bet nobody made. Without this the legs stay
+                    # broadcasted=False and the broadcast-only path below re-posts
+                    # them on the very next cycle, resurrecting the result the
+                    # failed edit was supposed to suppress.
+                    _retire_deleted(entry, cache, cache_key)
+                    continue
                 else:
                     edit_failed = True
                     print(f"  [grade_daemon] edit failed {cache_key}")
