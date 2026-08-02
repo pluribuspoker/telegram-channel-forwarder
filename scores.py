@@ -1382,6 +1382,135 @@ _AMBIGUOUS_SPORTS = {
 }
 
 
+# ─── Cross-league nickname collisions ────────────────────────────────────────
+#
+# _AMBIGUOUS_SPORTS above keys on fragments of the PARSED team name, which only
+# works when the shared word survives into the canonical name ("rangers" is in
+# both "Texas Rangers" and "New York Rangers"). Some nicknames leave no shared
+# fragment at all: "Snakes" is the Arizona Diamondbacks in MLB and the Maryland
+# Whipsnakes in the PLL. The ambiguity exists ONLY in the raw message and is
+# erased the instant Claude commits to a canonical name — after which nothing
+# downstream can tell a correct resolution from a wrong one, because both find
+# a real game, a real closing line, and grade cleanly to OPPOSITE verdicts.
+#
+# So this map is keyed on the RAW MESSAGE TOKEN and resolved against the
+# schedule: whichever candidate actually has a game that day wins. Prompt rules
+# can only ever pin the nickname to one league; the schedule is evidence.
+_NICKNAME_COLLISIONS: dict[str, list[tuple[str, str]]] = {
+    "snakes": [("MLB", "Arizona Diamondbacks"), ("Lacrosse", "Maryland Whipsnakes")],
+}
+
+# Tiebreak window, used ONLY when more than one candidate has a game that day.
+# A pick posted just before one game and most of a day before another is for the
+# near one; anything less lopsided is escalated to a human instead of guessed.
+_COLLISION_NEAR_HOURS = 2.0
+_COLLISION_FAR_HOURS  = 6.0
+
+
+def _event_start(evt: dict) -> _datetime | None:
+    try:
+        return _datetime.fromisoformat((evt.get("date") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _swap_team_in_desc(desc: str, token: str, old_name: str, new_name: str) -> str:
+    """Re-point a pick description at the resolved team.
+
+    The description is load-bearing downstream (it is what claude_grade reads and
+    what _insert_odds/_insert_emojis match against the message text), so leaving
+    "Arizona Diamondbacks -1.5" on a pick whose team is now the Whipsnakes would
+    hand the grader a contradiction.
+    """
+    if not desc:
+        return desc
+    for pat in (re.escape(old_name), rf"\b{re.escape(old_name.split()[-1])}\b", rf"\b{re.escape(token)}\b"):
+        out = re.sub(pat, new_name, desc, flags=re.IGNORECASE)
+        if out != desc:
+            return out
+    return desc
+
+
+async def resolve_nickname_collision(
+    sport: str,
+    teams: list[str],
+    description: str,
+    raw_text: str,
+    date_str: str,
+    scoreboard_cache: dict,
+    *,
+    post_time: _datetime | None = None,
+) -> tuple[str, list[str], str, str | None]:
+    """Resolve a cross-league nickname using the schedule rather than the prompt.
+
+    Returns (sport, teams, description, warning). Everything is returned
+    unchanged when the message carries no collision token, when Claude resolved
+    it to something outside the candidate set, or when the day stays genuinely
+    ambiguous — in that last case `warning` is set so it gets flagged instead of
+    silently guessed.
+    """
+    low = (raw_text or "").lower()
+    token = next((t for t in _NICKNAME_COLLISIONS if re.search(rf"\b{t}\b", low)), None)
+    if not token:
+        return sport, teams, description, None
+    candidates = _NICKNAME_COLLISIONS[token]
+
+    # Only intervene when Claude actually landed on one of the known candidates.
+    # If it produced something else entirely, this map isn't what's in play and
+    # overriding would itself be a guess.
+    parsed_team = " ".join(teams).lower()
+    matched = next(
+        (t for _s, t in candidates if t.split()[-1].lower() in parsed_team), None
+    )
+    if not matched:
+        return sport, teams, description, None
+
+    found: list[tuple[str, str, _datetime | None]] = []
+    for cand_sport, cand_team in candidates:
+        if cand_sport not in ESPN_LEAGUES:
+            continue
+        key = (cand_sport, date_str)
+        if key not in scoreboard_cache:
+            scoreboard_cache[key] = await fetch_espn(cand_sport, date_str)
+        sb = scoreboard_cache[key]
+        if not sb:
+            continue
+        events = sb.get("events", [])
+        ids = find_event_ids(events, [cand_team])
+        if not ids:
+            continue
+        start = next((_event_start(e) for e in events if e.get("id") in ids), None)
+        found.append((cand_sport, cand_team, start))
+
+    def _resolved(cand: tuple[str, str, _datetime | None]):
+        s, t, _ = cand
+        if t == matched:
+            return sport, teams, description, None
+        return s, [t], _swap_team_in_desc(description, token, matched, t), None
+
+    if not found:
+        return sport, teams, description, None
+    if len(found) == 1:
+        return _resolved(found[0])
+
+    if post_time is not None:
+        # A pregame pick cannot be for a game that had already started.
+        upcoming = [f for f in found if f[2] and f[2] > post_time]
+        if len(upcoming) == 1:
+            return _resolved(upcoming[0])
+        if len(upcoming) >= 2:
+            ranked = sorted(upcoming, key=lambda f: f[2])
+            near_h = (ranked[0][2] - post_time).total_seconds() / 3600
+            next_h = (ranked[1][2] - post_time).total_seconds() / 3600
+            if near_h <= _COLLISION_NEAR_HOURS and next_h >= _COLLISION_FAR_HOURS:
+                return _resolved(ranked[0])
+
+    listing = " vs ".join(f"{t} ({s})" for s, t, _ in found)
+    warn = (f'ambiguous nickname "{token}" — {listing} both play {date_str}; '
+            f'kept {sport} {teams}, verify')
+    return sport, teams, description, warn
+
+
 async def validate_sport(
     sport: str,
     teams: list[str],
