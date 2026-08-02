@@ -518,10 +518,10 @@ class AuditLog:
             elif linked not in who[idx]:
                 who[idx].append(linked)
 
-        # Only the header is bold, and a blank line follows it. Bolding the pick
-        # descriptions too (the first cut did) left the whole message one weight of
-        # white text with nothing to read as the title — and mobile wrapping of long
-        # descriptions blurs the rows together further.
+        # The header carries bold + underline and a blank line under it; the pick
+        # descriptions stay plain. Bolding those too (the first cut did) left the
+        # whole message one weight of white text with nothing to read as the title —
+        # and mobile wrapping of long descriptions blurs the rows together further.
         lines = []
         for (verdict, desc, odds_str), names in zip(specs, who):
             odds_part = f" [{e(odds_str)}]" if odds_str else ""
@@ -529,7 +529,7 @@ class AuditLog:
                 f"{VERDICT_EMOJI.get(verdict, '')} {e(desc)}{odds_part} — {', '.join(names)}"
             )
 
-        text = "\n".join(([f"<b>{e(header)}</b>", ""] if header else []) + lines)
+        text = "\n".join(([f"<b><u>{e(header)}</u></b>", ""] if header else []) + lines)
         link = _pick_link(items[0]["channel_id"], items[0]["message_id"])
         await self._post_broadcast(
             target=target_channel, text=text, reply_to_id=reply_to_id, link=link
