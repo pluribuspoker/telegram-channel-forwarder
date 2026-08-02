@@ -26,7 +26,10 @@ from common import (
     record_unknown_attempt,
     should_skip_unknown,
 )
-from scores import fetch_espn, odds_requests_used, try_early_grade_math, build_early_context, validate_sport
+from scores import (
+    fetch_espn, odds_requests_used, try_early_grade_math, build_early_context,
+    validate_sport, resolve_nickname_collision,
+)
 from odds import fetch_odds, fetch_odds_current, quota_used as odds_quota_used
 from pikkit import get_pick_splits
 from ai import (
@@ -578,6 +581,30 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 if not cached_parse and picks:
                     teams = picks[0].get("teams", [])
                     bet_desc = picks[0].get("description", "")
+
+                    # Cross-league nickname collisions ("Snakes" = Diamondbacks
+                    # or Whipsnakes) must be resolved BEFORE validate_sport: the
+                    # ambiguity lives in the raw message only, and validate_sport
+                    # keys on the parsed team, so it confirms whichever league
+                    # Claude picked as long as that team has a game.
+                    coll_sport, coll_teams, coll_desc, coll_warn = await resolve_nickname_collision(
+                        sport, teams, bet_desc, text, date_str, scoreboard_cache,
+                        post_time=msg.date,
+                    )
+                    if coll_warn:
+                        print(f"  ⚠ {coll_warn}")
+                        await audit.warn(f"⚠️ <b>ambiguous nickname</b>: {coll_warn}\n{capper}")
+                    if coll_sport != sport or coll_teams != teams:
+                        print(f"  nickname collision: {sport} {teams} -> {coll_sport} {coll_teams}")
+                        sport = coll_sport
+                        parsed["sport"] = sport
+                        picks[0]["teams"] = coll_teams
+                        picks[0]["description"] = coll_desc
+                        teams, bet_desc = coll_teams, coll_desc
+                        ps0 = picks[0].get("sport")
+                        if ps0 and ps0 != sport:
+                            del picks[0]["sport"]
+
                     new_sport, new_teams = await validate_sport(
                         sport, teams, bet_desc, date_str, scoreboard_cache,
                     )
