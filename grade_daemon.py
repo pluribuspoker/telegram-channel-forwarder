@@ -19,6 +19,7 @@ This avoids session/flood-wait risk entirely.
 import asyncio
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -37,7 +38,12 @@ from common import (
     record_unknown_attempt,
     should_skip_unknown,
 )
-from scores import fetch_espn, try_early_grade_math, build_early_context
+from scores import (
+    fetch_espn,
+    try_early_grade_math,
+    build_early_context,
+    _find_event_for_pick,
+)
 from ai import (
     claude_grade,
     build_context,
@@ -67,8 +73,23 @@ ESPN_CACHE_TTL = 30  # seconds — don't re-fetch same sport/date faster than th
 # ~35-min silent hang caused by an untimed Claude request). Should comfortably
 # exceed a normal cycle (seconds) and the worst-case per-request time.
 CYCLE_TIMEOUT = int(os.getenv("GRADE_DAEMON_CYCLE_TIMEOUT", "300"))
+# How many results on the same game must land in one cycle before they are merged
+# into a single broadcast. 2 = merge as soon as there is anything to merge; raise it
+# to keep the per-capper look until the spam is worse. 0/1 would "group" lone picks,
+# so the floor is 2.
+GROUP_MIN = max(2, int(os.getenv("GRADE_DAEMON_GROUP_MIN", "2")))
 
 _CACHE_PATH = os.path.join(os.path.dirname(__file__), "parse_cache.json")
+
+_SPORT_EMOJI = {
+    "MLB": "⚾️", "KBO": "⚾️",
+    "NBA": "🏀", "WNBA": "🏀", "NCAAB": "🏀", "CBB": "🏀",
+    "NFL": "🏈", "NCAAF": "🏈", "CFB": "🏈", "CFL": "🏈", "UFL": "🏈",
+    "NHL": "🏒",
+    "Soccer": "⚽️",
+    "UFC": "🥊", "Boxing": "🥊",
+    "Tennis": "🎾", "Golf": "⛳️", "Lacrosse": "🥍",
+}
 
 
 def _sd_notify(state: str) -> None:
@@ -185,6 +206,263 @@ def _parlay_broadcast_legs(picks, leg_verdicts, odds_by_pick, default_sport):
     return out
 
 
+# ─── Same-game broadcast grouping ────────────────────────────────────────────
+
+def _norm_team(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+# Market sides that name a direction rather than a team. betonline_sides holds these
+# for totals/props, so they must never be mistaken for a matchup — "Over/Under" would
+# key every total in a sport on one date as if it were the same game.
+_DIRECTIONAL_LABELS = {"over", "under", "yes", "no", "draw", "tie"}
+
+
+def _matchup_labels(pick: dict, odds_entry: dict) -> list[str]:
+    """Team names identifying this pick's game, best-effort.
+
+    `betonline_sides` names both sides of the market, and for a moneyline or spread
+    that is the only place the *opponent* appears — the parse records just the side
+    that was bet. For a total those same fields hold Over/Under, so directional labels
+    are discarded in favour of the parsed teams.
+    """
+    sides = odds_entry.get("betonline_sides") or {}
+    side_labels = [s for s in (sides.get("pick_label"), sides.get("opp_label")) if s]
+    if side_labels and not any(_norm_team(s) in _DIRECTIONAL_LABELS for s in side_labels):
+        return side_labels
+    return [t for t in (pick.get("teams") or []) if t]
+
+
+def _game_key(sport: str, game_date: str, labels: list[str]) -> tuple | None:
+    """Identity of the game a pick is on, or None when it can't be determined.
+
+    None is the safe answer: it means "never group this", i.e. exactly the
+    one-message-per-pick behaviour that predates grouping.
+    """
+    if not sport or not game_date:
+        return None
+    norm = sorted({_norm_team(t) for t in labels if _norm_team(t)})
+    if not norm:
+        return None
+    return (sport, game_date, tuple(norm))
+
+
+def _final_score_text(event: dict) -> str | None:
+    """'Yankees 2–5 Cubs' for a COMPLETED game, else None.
+
+    Gated on `completed` because a pick can settle before the game does (an over that
+    already cleared, a lost parlay leg) — printing the running score as the result
+    line would be wrong.
+    """
+    comp = (event.get("competitions") or [{}])[0]
+    if not ((comp.get("status") or {}).get("type") or {}).get("completed"):
+        return None
+    sides = {c.get("homeAway"): c for c in comp.get("competitors", [])}
+    away, home = sides.get("away"), sides.get("home")
+    if not away or not home:
+        return None
+
+    def _name(c: dict) -> str:
+        t = c.get("team") or {}
+        return t.get("shortDisplayName") or t.get("displayName") or t.get("abbreviation") or ""
+
+    try:
+        return f"{_name(away)} {int(away['score'])}–{int(home['score'])} {_name(home)}"
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+async def _resolve_game_keys(pending: list[dict], espn_cache: _ESPNCache) -> None:
+    """Upgrade each queued result's game key to the ESPN event id where one matches.
+
+    A team-name key only merges picks that *name* the same teams, so a moneyline
+    ("Chicago Cubs") and a total ("Cubs / Yankees o8.5") on one game would never meet
+    — the parse records only the bet side for the first and both teams for the second.
+    The event id is the game's real identity: it merges those two and cannot merge two
+    different games. Falls back to the name key whenever ESPN has no event for the pick
+    (sport it doesn't cover, offseason, no match), which is conservative rather than
+    wrong. The scoreboard is the same one grading just fetched, so this is normally a
+    cache hit, and the event is kept for the header.
+    """
+    for item in pending:
+        if not item["game_key"] or not item["matchup"]:
+            continue
+        sport, game_date, _ = item["game_key"]
+        try:
+            sb = await espn_cache.get(sport, game_date)
+            event = _find_event_for_pick(sb, item["matchup"]) if sb else None
+        except Exception as exc:
+            print(f"  [group] event lookup failed ({sport} {game_date}): {exc}")
+            continue
+        if event and event.get("id"):
+            item["game_key"] = (sport, game_date, f"espn:{event['id']}")
+            item["event"] = event
+
+
+def _group_header(group: list[dict]) -> str:
+    """Game label for a merged broadcast — '⚾️ Yankees 2–5 Cubs · 8/1'.
+
+    Degrades to the ESPN matchup, then the pick's own team labels, then the sport,
+    when there is no final score: the header is context, never a reason to hold up
+    or drop a result.
+    """
+    sport, game_date, _ = group[0]["game_key"]
+    try:
+        d = _date.fromisoformat(game_date)
+        date_tag = f"{d.month}/{d.day}"
+    except ValueError:
+        date_tag = game_date
+
+    event = next((it["event"] for it in group if it.get("event")), None)
+    matchup = ""
+    if event:
+        matchup = _final_score_text(event) or event.get("shortName") or ""
+    if not matchup:
+        labels = group[0]["matchup"]
+        matchup = " vs ".join(labels) if len(labels) == 2 else (labels[0] if labels else sport)
+
+    return " ".join(p for p in (_SPORT_EMOJI.get(sport, ""), matchup, f"· {date_tag}") if p)
+
+
+def _queue_broadcast(
+    pending: list[dict], *, cache_key: str, channel_id: int, message_id: int,
+    capper: str, reply_to_id: int | None, bc_results: list, sheets_results: list,
+    leg_indices: list[int], mark_all_resolved: bool, html_text: str | None,
+    msg_date: str, sport: str, picks: list, leg_verdicts: dict, odds_by_pick: dict,
+) -> None:
+    """Queue one message's result for the end-of-cycle flush.
+
+    Only a lone straight pick gets a game key: a parlay spans several games, and a
+    multi-pick message would have to be split across group messages, so both stay on
+    the one-message-per-pick path.
+    """
+    game_key = None
+    matchup: list[str] = []
+    if (len(bc_results) == 1 and len(leg_indices) == 1
+            and not any(p.get("is_parlay_leg") for p in picks)):
+        i = leg_indices[0]
+        pick = picks[i] if i < len(picks) else bc_results[0][0]
+        lv = leg_verdicts.get(str(i)) or {}
+        matchup = _matchup_labels(pick, odds_by_pick.get(str(i)) or {})
+        game_key = _game_key(
+            lv.get("sport") or pick.get("sport") or sport,
+            lv.get("game_date") or msg_date,
+            matchup,
+        )
+
+    pending.append({
+        "cache_key": cache_key, "channel_id": channel_id, "message_id": message_id,
+        "capper": capper, "reply_to_id": reply_to_id,
+        "bc_results": bc_results, "sheets_results": sheets_results,
+        "leg_indices": leg_indices, "mark_all_resolved": mark_all_resolved,
+        "html_text": html_text, "msg_date": msg_date,
+        "game_key": game_key, "matchup": matchup, "event": None,
+    })
+
+
+def _mark_broadcasted(cache: dict, item: dict) -> None:
+    """Flip this message's resolved legs to broadcasted=True in the live cache dict."""
+    entry = cache.get(item["cache_key"])
+    if not isinstance(entry, dict):
+        return  # evicted mid-cycle — nothing left to mark
+    leg_verdicts = entry.get("leg_verdicts") or {}
+    for i in item["leg_indices"]:
+        leg = leg_verdicts.get(str(i))
+        if isinstance(leg, dict):
+            leg["broadcasted"] = True
+    # A parlay broadcasts as ONE ticket covering every leg, so mark every resolved
+    # leg — not just the ones resolved this cycle. Otherwise an already-resolved
+    # sibling (e.g. an over that hit mid-game and was saved WIN/broadcasted=False
+    # while the parlay waited on its other leg) is left unbroadcast and the next
+    # cycle's broadcast-only path re-posts the identical ticket.
+    if item["mark_all_resolved"]:
+        for leg in leg_verdicts.values():
+            if isinstance(leg, dict) and leg.get("verdict") in ("WIN", "LOSS", "PUSH"):
+                leg["broadcasted"] = True
+    entry["leg_verdicts"] = leg_verdicts
+
+
+async def _flush_broadcasts(
+    pending: list[dict], audit: AuditLog, cache: dict,
+    sheets_map: dict[int, str], espn_cache: _ESPNCache,
+) -> None:
+    """Send every result queued this cycle, merging the ones on the same game.
+
+    Results that land in the same cycle on the same game go out as ONE message
+    instead of one per capper — three cappers on Cubs ML used to fire three
+    near-identical messages and three notifications. Anything without a resolvable
+    game key, plus parlays and multi-pick messages, falls through to the unchanged
+    per-message path, as does a game with fewer than GROUP_MIN results.
+
+    Ordering matches the pre-grouping code: mark broadcasted and persist BEFORE
+    sending, so a crash mid-flush drops a result rather than double-posting one
+    (a broadcast is not idempotent; a missed one is recoverable, a duplicate is not).
+
+    What deferring the send does change is that a graded leg now sits at
+    broadcasted=False until the flush instead of flipping to True in the same breath
+    as its verdict. A tracker pass landing inside that window sees the message as
+    not-yet-broadcast and re-records it to the audit channel — one duplicate line in a
+    private ops channel. That is deliberately preferred over the alternative ordering
+    (mark at grade time), where a cycle abort between grading and the flush would lose
+    the result broadcast outright, which is public and unrecoverable.
+    """
+    if not pending:
+        return
+
+    await _resolve_game_keys(pending, espn_cache)
+
+    buckets: dict[tuple, list[dict]] = {}
+    for idx, item in enumerate(pending):
+        target = audit.broadcast_results_mappings.get(item["channel_id"])
+        # Group per target channel: one source fans out to several dest channels,
+        # each with its own broadcast channel, and those must not be merged.
+        key = ("game", target, item["game_key"]) if (target and item["game_key"]) else ("solo", idx)
+        buckets.setdefault(key, []).append(item)
+
+    for key, group in buckets.items():
+        # Message order, so the rendering is deterministic and the reply anchors to
+        # the earliest pick of the group.
+        group.sort(key=lambda it: (it["channel_id"], it["message_id"]))
+        for item in group:
+            _mark_broadcasted(cache, item)
+        _save_pending_cache(cache)
+
+        if key[0] == "game" and len(group) >= GROUP_MIN:
+            await audit.broadcast_group(
+                target_channel=key[1],
+                header=_group_header(group),
+                items=[{
+                    "channel_id": it["channel_id"], "message_id": it["message_id"],
+                    "capper": it["capper"], "pick": it["bc_results"][0][0],
+                    "verdict": it["bc_results"][0][1], "odds": it["bc_results"][0][2],
+                } for it in group],
+                reply_to_id=next((it["reply_to_id"] for it in group if it["reply_to_id"]), None),
+            )
+            ident = key[2][2]
+            print(f"  ⊞ merged {len(group)} results on {key[2][0]} "
+                  f"{'/'.join(ident) if isinstance(ident, tuple) else ident} "
+                  f"into one broadcast")
+        else:
+            for it in group:
+                await audit.broadcast_results(
+                    channel_id=it["channel_id"], message_id=it["message_id"],
+                    pick_results=it["bc_results"], capper_name=it["capper"],
+                    reply_to_id=it["reply_to_id"],
+                )
+
+        for it in group:
+            if it["channel_id"] in sheets_map and it["sheets_results"]:
+                try:
+                    await append_pick_rows(
+                        pick_results=it["sheets_results"],
+                        date_str=it["msg_date"],
+                        raw_text=it["html_text"] or "",
+                        sheets_id=sheets_map[it["channel_id"]],
+                    )
+                except Exception as exc:
+                    print(f"  [sheets] warn: {exc}")
+
+
 async def _grade_cycle(
     bot_token: str,
     audit: AuditLog,
@@ -198,6 +476,9 @@ async def _grade_cycle(
     graded_count = 0
     pending_count = 0
     dirty = False
+    # Results are queued here instead of being sent inline, so the flush at the end
+    # of the cycle can see every result at once and merge the ones on the same game.
+    pending_broadcasts: list[dict] = []
 
     for cache_key, entry in list(cache.items()):
         if not isinstance(entry, dict) or "parsed" not in entry:
@@ -318,30 +599,22 @@ async def _grade_cycle(
                     _parlay_broadcast_legs(picks, leg_verdicts, odds_by_pick, sport)
                     if any(p.get("is_parlay_leg") for p in picks) else nr_pick_results
                 )
-                await audit.broadcast_results(
-                    channel_id=channel_id,
-                    message_id=msg_id,
-                    pick_results=bc_results,
-                    capper_name=capper,
-                    reply_to_id=reply_to_id,
+                # Queued, not sent: the end-of-cycle flush marks these legs
+                # broadcasted and persists BEFORE sending, so the "can never
+                # re-broadcast after an abort" guarantee still holds — an abort
+                # before the flush leaves them broadcasted=False and this same
+                # path re-queues them next cycle.
+                _queue_broadcast(
+                    pending_broadcasts,
+                    cache_key=cache_key, channel_id=channel_id, message_id=msg_id,
+                    capper=capper, reply_to_id=reply_to_id,
+                    bc_results=bc_results, sheets_results=nr_pick_results,
+                    leg_indices=list(unbroadcast), mark_all_resolved=False,
+                    html_text=html_text, msg_date=msg_date, sport=sport,
+                    picks=picks, leg_verdicts=leg_verdicts, odds_by_pick=odds_by_pick,
                 )
-                if channel_id in sheets_map:
-                    try:
-                        await append_pick_rows(
-                            pick_results=nr_pick_results,
-                            date_str=msg_date,
-                            raw_text=html_text or "",
-                            sheets_id=sheets_map[channel_id],
-                        )
-                    except Exception as exc:
-                        print(f"  [sheets] warn: {exc}")
-                for i in unbroadcast:
-                    leg_verdicts[str(i)]["broadcasted"] = True
                 entry["leg_verdicts"] = leg_verdicts
                 dirty = True
-                # Persist immediately so a mid-cycle abort/restart can never
-                # re-broadcast this result (broadcast is not idempotent).
-                _save_pending_cache(cache)
                 graded_count += len(unbroadcast)
                 for i in unbroadcast:
                     pick = picks[i]
@@ -497,31 +770,23 @@ async def _grade_cycle(
                 edit_failed = True
                 print(f"  [grade_daemon] emoji insert failed (no line match) {cache_key}")
 
-        # ── Mark legs as broadcasted ──────────────────────────────────────
+        # ── Record verdicts ───────────────────────────────────────────────
+        # `broadcasted` stays False until the message actually goes out, which the
+        # end-of-cycle flush does (it marks + persists before sending). An abort
+        # between here and the flush therefore re-queues the broadcast next cycle
+        # rather than losing it — and still can't duplicate one.
         for i, pick, verdict, calc, ps, gd in newly_resolved:
             leg_verdicts[str(i)] = {
                 "verdict": verdict, "calc": calc,
                 "sport": ps, "game_date": gd or msg_date,
-                "broadcasted": not edit_failed,
+                "broadcasted": False,
             }
-        # A parlay broadcasts as ONE ticket covering every leg, so once a SETTLED
-        # parlay goes out (below), mark ALL its resolved legs broadcasted — not
-        # just the ones resolved this cycle. Otherwise an already-resolved sibling
-        # (e.g. an over that hit mid-game, saved WIN/broadcasted=False while the
-        # parlay waited on its other leg) is left unbroadcast, and the next cycle's
-        # broadcast-only path re-posts the identical ticket. Guard on `not
-        # parlay_pending` so a still-undecided parlay (mixed with a straight pick
-        # that broadcast now) isn't prematurely marked and silently suppressed.
-        if is_parlay and not parlay_pending and not edit_failed:
-            for lv in leg_verdicts.values():
-                if isinstance(lv, dict) and lv.get("verdict") in ("WIN", "LOSS", "PUSH"):
-                    lv["broadcasted"] = True
         entry["leg_verdicts"] = leg_verdicts
 
         graded_count += len(newly_resolved)
         dirty = True
-        # Persist immediately so a mid-cycle abort/restart can never re-broadcast
-        # this result (broadcast is not idempotent).
+        # Persist the verdicts now: grading cost a Claude call and a mid-cycle abort
+        # must not throw that away.
         _save_pending_cache(cache)
 
         # Pretty print
@@ -530,7 +795,7 @@ async def _grade_cycle(
             desc = pick.get("description", "")[:40]
             print(f"  {emoji} {cache_key} {capper[:15]:<15} {desc} ({calc})")
 
-        # ── Broadcast results ─────────────────────────────────────────────
+        # ── Queue broadcast + Sheets for the end-of-cycle flush ───────────
         if not edit_failed:
             nr_pick_results = []
             for i, pick, verdict, calc, ps, gd in newly_resolved:
@@ -542,27 +807,21 @@ async def _grade_cycle(
             # shows every leg and the combined price, not just the settled one.
             bc_results = (
                 _parlay_broadcast_legs(picks, leg_verdicts, odds_by_pick, sport)
-                if any(p.get("is_parlay_leg") for p in picks) else nr_pick_results
+                if is_parlay else nr_pick_results
             )
-            await audit.broadcast_results(
-                channel_id=channel_id,
-                message_id=msg_id,
-                pick_results=bc_results,
-                capper_name=capper,
-                reply_to_id=reply_to_id,
+            _queue_broadcast(
+                pending_broadcasts,
+                cache_key=cache_key, channel_id=channel_id, message_id=msg_id,
+                capper=capper, reply_to_id=reply_to_id,
+                bc_results=bc_results, sheets_results=nr_pick_results,
+                leg_indices=[i for i, *_ in newly_resolved],
+                # Guard on `not parlay_pending` so a still-undecided parlay (mixed
+                # with a straight pick that broadcasts now) isn't prematurely marked
+                # and silently suppressed.
+                mark_all_resolved=is_parlay and not parlay_pending,
+                html_text=html_text, msg_date=msg_date, sport=sport,
+                picks=picks, leg_verdicts=leg_verdicts, odds_by_pick=odds_by_pick,
             )
-
-            # ── Google Sheets ─────────────────────────────────────────────
-            if channel_id in sheets_map:
-                try:
-                    await append_pick_rows(
-                        pick_results=nr_pick_results,
-                        date_str=msg_date,
-                        raw_text=html_text or "",
-                        sheets_id=sheets_map[channel_id],
-                    )
-                except Exception as exc:
-                    print(f"  [sheets] warn: {exc}")
 
         # ── Audit DB ─────────────────────────────────────────────────────
         all_descs = "\n".join(
@@ -589,6 +848,8 @@ async def _grade_cycle(
             odds_bookmaker=first_odds.get("bookmaker"),
             odds_match_type=first_odds.get("match_type"),
         )
+
+    await _flush_broadcasts(pending_broadcasts, audit, cache, sheets_map, espn_cache)
 
     if dirty:
         _save_pending_cache(cache)
@@ -640,9 +901,11 @@ async def run_daemon() -> None:
                     timeout=CYCLE_TIMEOUT,
                 )
             except asyncio.TimeoutError:
-                # A network call hung past CYCLE_TIMEOUT. The cycle is cancelled
-                # (already-broadcast results were persisted incrementally, so no
-                # double-post). Force a re-process next cycle and carry on.
+                # A network call hung past CYCLE_TIMEOUT. The cycle is cancelled.
+                # Verdicts already graded were persisted incrementally, and results
+                # are only marked broadcasted once they have actually been sent, so
+                # an abort re-queues the unsent ones next cycle without duplicating
+                # the sent ones. Force a re-process and carry on.
                 print(f"[cycle {cycle}] ⚠ grade cycle exceeded {CYCLE_TIMEOUT}s — aborted, retrying next cycle")
                 cache_mtime = 0
                 await asyncio.sleep(LOOP_INTERVAL)

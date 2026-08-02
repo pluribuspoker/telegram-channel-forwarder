@@ -105,6 +105,32 @@ def _format_pick(pick: dict) -> str:
     # Fallback to cleaned description string
     return _clean_desc(pick.get("description", ""))
 
+
+def _fmt_odds(o: int | None) -> str:
+    """American odds as a signed string; empty when the pick was never priced."""
+    if o is None:
+        return ""
+    return f"+{o}" if o > 0 else str(o)
+
+
+def _pick_link(channel_id: int, message_id: int) -> str:
+    """Deep link to a pick message in a private channel."""
+    return f"https://t.me/c/{str(abs(channel_id))[3:]}/{message_id}"
+
+
+def _capper_label(capper_name: str) -> str:
+    """Squeeze a capper handle down to label size.
+
+    The label is the message's first line, which for analytics-source channels is
+    often a paragraph of reasoning rather than a short handle. Cap it so the label
+    stays handle-sized and never swallows the result line.
+    """
+    label = " ".join((capper_name or "").split())
+    if len(label) > 40:
+        label = label[:39].rstrip() + "…"
+    return label
+
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "picks.db")
 
 _SCHEMA = """
@@ -381,20 +407,8 @@ class AuditLog:
         def e(s: str) -> str:
             return _html.escape(str(s))
 
-        def fmt_odds(o: int | None) -> str:
-            if o is None:
-                return ""
-            return f"+{o}" if o > 0 else str(o)
-
-        channel_bare = str(abs(channel_id))[3:]
-        link = f"https://t.me/c/{channel_bare}/{message_id}"
-
-        # The capper label is the message's first line, which for analytics-source
-        # channels is often a paragraph of reasoning rather than a short handle.
-        # Cap it so the label stays handle-sized and never swallows the result line.
-        capper_label = " ".join(capper_name.split())
-        if len(capper_label) > 40:
-            capper_label = capper_label[:39].rstrip() + "…"
+        link = _pick_link(channel_id, message_id)
+        capper_label = _capper_label(capper_name)
 
         # Capper name is the link; bold if present, plain link if not
         capper_linked = f'<b><a href="{link}">{e(capper_label)}</a></b>' if capper_label else f'<a href="{link}">view</a>'
@@ -403,7 +417,7 @@ class AuditLog:
         # parlay that settled on one lost leg still passes its other (voided /
         # pending) legs so the whole ticket can be shown and priced.
         is_parlay = any(p.get("is_parlay_leg") for p, _, _o in pick_results)
-        picks = [(_format_pick(p), v, fmt_odds(o)) for p, v, o in resolved]
+        picks = [(_format_pick(p), v, _fmt_odds(o)) for p, v, o in resolved]
 
         def _pick_line(desc: str, verdict: str, odds_str: str) -> str:
             odds_part = f" [{e(odds_str)}]" if odds_str else ""
@@ -433,7 +447,7 @@ class AuditLog:
             verdicts_only = [v for _, v, _ in parlay_all if v in ("WIN", "LOSS", "PUSH")]
             overall_emoji = _overall_emoji(verdicts_only)
             combined = _parlay_combined_odds([o for _, _, o in parlay_all])
-            combined_part = f" [{e(fmt_odds(combined))}]" if combined is not None else ""
+            combined_part = f" [{e(_fmt_odds(combined))}]" if combined is not None else ""
             # Inline the legs on a single line (Ko ML / Duncan ML) instead of one
             # bullet per leg, so the whole ticket reads as one compact result.
             legs = " / ".join(e(_format_pick(p)) for p, _, _ in parlay_all)
@@ -457,6 +471,74 @@ class AuditLog:
                 reply_to_id = disc.messages[0].id
             except Exception:
                 pass  # no linked group or message not found — send without reply
+
+        await self._post_broadcast(target=target, text=text, reply_to_id=reply_to_id, link=link)
+
+    async def broadcast_group(
+        self,
+        *,
+        target_channel: int,
+        header: str,
+        items: list[dict],
+        reply_to_id: int | None = None,
+    ) -> None:
+        """Post ONE result message covering several cappers' picks on the same game.
+
+        Each item is {channel_id, message_id, capper, pick, verdict, odds}. Bets that
+        are identical — same verdict, same description, same price — collapse onto a
+        single line naming every capper, so three cappers on Cubs ML read as one line
+        instead of three near-identical messages. Each name still deep-links to that
+        capper's own pick message, so nothing is lost but the repetition.
+
+        Price is part of the merge key on purpose: two cappers who got different
+        numbers on the same side did not make the same bet, and printing one of the
+        two prices would misreport the other's result.
+        """
+        if not target_channel or not self.bot_token or not items:
+            return
+
+        import html as _html
+
+        def e(s: str) -> str:
+            return _html.escape(str(s))
+
+        specs: list[tuple[str, str, str]] = []       # (verdict, desc, odds) in first-seen order
+        who: list[list[str]] = []                    # linked capper names per spec
+        seen: dict[tuple[str, str, str], int] = {}
+        for it in items:
+            key = (it["verdict"], _format_pick(it["pick"]), _fmt_odds(it.get("odds")))
+            label = _capper_label(it.get("capper", ""))
+            link = _pick_link(it["channel_id"], it["message_id"])
+            linked = f'<a href="{link}">{e(label) if label else "view"}</a>'
+            idx = seen.get(key)
+            if idx is None:
+                seen[key] = len(specs)
+                specs.append(key)
+                who.append([linked])
+            elif linked not in who[idx]:
+                who[idx].append(linked)
+
+        lines = []
+        for (verdict, desc, odds_str), names in zip(specs, who):
+            odds_part = f" [{e(odds_str)}]" if odds_str else ""
+            lines.append(
+                f"{VERDICT_EMOJI.get(verdict, '')} <b>{e(desc)}</b>{odds_part} — {', '.join(names)}"
+            )
+
+        text = "\n".join(([f"<b>{e(header)}</b>"] if header else []) + lines)
+        link = _pick_link(items[0]["channel_id"], items[0]["message_id"])
+        await self._post_broadcast(
+            target=target_channel, text=text, reply_to_id=reply_to_id, link=link
+        )
+
+    async def _post_broadcast(
+        self, *, target: int, text: str, reply_to_id: int | None, link: str
+    ) -> None:
+        """POST one message to a broadcast results channel. Never raises."""
+        import html as _html
+
+        def e(s: str) -> str:
+            return _html.escape(str(s))
 
         payload: dict = {
             "chat_id": target,
