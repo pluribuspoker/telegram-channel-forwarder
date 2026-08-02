@@ -300,18 +300,24 @@ async def _resolve_game_keys(pending: list[dict], espn_cache: _ESPNCache) -> Non
 
 
 def _group_header(group: list[dict]) -> str:
-    """Game label for a merged broadcast — '⚾️ Yankees 2–5 Cubs · 8/1'.
+    """Game label for a merged broadcast — '⚾️ Yankees 2–5 Cubs', '… · 7/31' if stale.
 
     Degrades to the ESPN matchup, then the pick's own team labels, then the sport,
     when there is no final score: the header is context, never a reason to hold up
     or drop a result.
     """
     sport, game_date, _ = group[0]["game_key"]
-    try:
-        d = _date.fromisoformat(game_date)
-        date_tag = f"{d.month}/{d.day}"
-    except ValueError:
-        date_tag = game_date
+    # The date earns its place only when the game isn't today's — a pick graded late,
+    # or one game of a series against the same opponent where the matchup alone would
+    # be ambiguous. Results post within hours of the final almost every time, and
+    # those don't need to be told what day it is.
+    date_tag = ""
+    if game_date and game_date != _date.today().isoformat():
+        try:
+            d = _date.fromisoformat(game_date)
+            date_tag = f"· {d.month}/{d.day}"
+        except ValueError:
+            date_tag = f"· {game_date}"
 
     event = next((it["event"] for it in group if it.get("event")), None)
     matchup = ""
@@ -321,7 +327,7 @@ def _group_header(group: list[dict]) -> str:
         labels = group[0]["matchup"]
         matchup = " vs ".join(labels) if len(labels) == 2 else (labels[0] if labels else sport)
 
-    return " ".join(p for p in (_SPORT_EMOJI.get(sport, ""), matchup, f"· {date_tag}") if p)
+    return " ".join(p for p in (_SPORT_EMOJI.get(sport, ""), matchup, date_tag) if p)
 
 
 def _queue_broadcast(
