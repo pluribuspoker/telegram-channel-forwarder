@@ -170,8 +170,9 @@ Classification rules:
 - CFL = Canadian Football League. Classify as CFL if the pick involves CFL team names or explicit CFL context. CFL teams (resolve nicknames to the canonical full name in "teams"): BC Lions, Calgary Stampeders, Edmonton Elks, Hamilton Tiger-Cats (Tiger Cats), Montreal Alouettes, Ottawa Redblacks, Saskatchewan Roughriders (Roughriders/Riders), Toronto Argonauts (Argonauts/Argos), Winnipeg Blue Bombers (Blue Bombers/Bombers). Note: "Lions" alone during CFL season (June–November) with CFL context is BC Lions, not Detroit Lions.
 - KBO = Korean Baseball Organization. Classify as KBO if the pick involves KBO team names or explicit KBO context. KBO teams and their common nicknames/abbreviations (resolve any of these to the canonical full name in "teams"): KT Wiz (WIZ/KT), Samsung Lions (LIONS/SAMSUNG), LG Twins (TWINS/LG), Doosan Bears (BEARS/DOOSAN), Lotte Giants (GIANTS/LOTTE), NC Dinos (DINOS/NC), KIA Tigers (TIGERS/KIA), SSG Landers (LANDERS/SSG), Hanwha Eagles (EAGLES/HANWHA), Kiwoom Heroes (HEROES/KIWOOM). Critically: "LIONS" alone is ALWAYS Samsung Lions (not Lotte Giants), "GIANTS" alone is ALWAYS Lotte Giants, etc. Never invent an opponent that isn't in the message text.
 - KBO/MLB team name collisions: "Tigers" (KIA Tigers KBO / Detroit Tigers MLB), "Giants" (Lotte Giants KBO / San Francisco Giants MLB), "Twins" (LG Twins KBO / Minnesota Twins MLB). When these names appear alone without explicit KBO context (the word "KBO", a Korean team prefix like KIA/LG/Lotte, or another KBO team as opponent), default to MLB. Only classify as KBO when the message explicitly says "KBO" or uses the full Korean team name (e.g. "KIA Tigers", "LG Twins", "Lotte Giants").
+- KBO requires textual evidence. NEVER map an unfamiliar nickname onto a KBO team by loose association — if the message does not literally contain "KBO" or one of the KBO club tokens above (KT/Wiz, Samsung, LG, Doosan, Lotte, NC/Dinos, KIA, SSG/Landers, Hanwha, Kiwoom), the pick is NOT KBO. An unrecognised nickname belongs to whichever US league fits the context, not to KBO.
 - Soccer/FIFA: if the pick involves country or national team names (e.g. Japan, Brazil, France, Germany, Argentina, Mexico, England, Spain, Italy, Portugal, Netherlands, USA, South Korea, Australia, Canada, etc.) as the team in a spread, moneyline, or total, classify as Soccer. Country names are never used for NBA/MLB/NFL/NHL/NCAAB teams — they always indicate international soccer (FIFA World Cup, friendlies, qualifiers). Use the full country name in "teams" (e.g. "South Korea" not "Korea").
-- Lacrosse (PLL) = Premier Lacrosse League, professional field lacrosse. Classify as Lacrosse if the pick involves PLL team names or explicit PLL/lacrosse context. PLL teams (resolve nicknames to the canonical full name in "teams"): Boston Cannons (Cannons), California Redwoods (Redwoods), Carolina Chaos (Chaos), Denver Outlaws (Outlaws), Maryland Whipsnakes (Whipsnakes), New York Atlas (Atlas), Philadelphia Waterdogs (Waterdogs), Utah Archers (Archers). Use the full canonical name in "teams" (e.g. "Carolina Chaos", not "Chaos" and never "Chaos LC"). Note: "Atlas" can also be a Liga MX soccer club — only treat it as PLL when the message has lacrosse/PLL context.
+- Lacrosse (PLL) = Premier Lacrosse League, professional field lacrosse. Classify as Lacrosse if the pick involves PLL team names or explicit PLL/lacrosse context. PLL teams (resolve nicknames to the canonical full name in "teams"): Boston Cannons (Cannons), California Redwoods (Redwoods), Carolina Chaos (Chaos), Denver Outlaws (Outlaws), Maryland Whipsnakes (Whipsnakes/Snakes), New York Atlas (Atlas), Philadelphia Waterdogs (Waterdogs), Utah Archers (Archers). Use the full canonical name in "teams" (e.g. "Carolina Chaos", not "Chaos" and never "Chaos LC"). Note: "Atlas" can also be a Liga MX soccer club — only treat it as PLL when the message has lacrosse/PLL context. "Snakes" is the Maryland Whipsnakes — it is NEVER a KBO team.
 - MLB/NFL team name collisions: "Cardinals" can be Arizona Cardinals (NFL) or St. Louis Cardinals (MLB). "Giants" can be New York Giants (NFL) or San Francisco Giants (MLB). To disambiguate: (1) If an opponent team is mentioned and belongs to only one sport (e.g. "Red Sox", "Dodgers" → MLB; "Cowboys", "Eagles" → NFL), use that sport. (2) If no opponent context: outside the NFL season (mid-February through early September), always resolve to MLB. During NFL season overlap (September through early February), prefer NFL on Sunday/Monday/Thursday (typical NFL game days) and MLB on Tuesday/Wednesday/Friday/Saturday. Always use the full canonical MLB name ("St. Louis Cardinals", "San Francisco Giants") or NFL name ("Arizona Cardinals", "New York Giants") in the teams field.
 - If a single surname with a moneyline has no clear sport context and is not a known boxer or MMA fighter, default to UFC.
 - For parlays: list each leg as a separate pick with its REAL bet_type (moneyline, spread, etc.) and set is_parlay_leg=true on each. Do NOT use bet_type="parlay". When players/teams are slash-separated (e.g. "FAA/Shapovalov MLP" or "SPURS/GARCIA MLP"), split them into ONE pick per player/team — do not put two teams in one pick's teams field. IMPORTANT: when multiple bets are combined on a single line with "+" or "&" (e.g. "Egypt Double Chance + Under 2.5 Goals"), that is a parlay — split into separate picks and set is_parlay_leg=true on each leg.
@@ -386,18 +387,31 @@ async def claude_parse(
     if parsed and parsed.get("sport") == "Other" and "kbo" in text.lower():
         parsed["sport"] = "KBO"
 
-    # Reverse: KBO with ambiguous team names (Tigers/Giants/Twins) but no explicit
-    # KBO context in the message → default to MLB. Real KBO picks say "KBO" or use
-    # full Korean names (KIA Tigers, LG Twins, Lotte Giants).
-    _KBO_MLB_OVERLAP = {"tigers", "giants", "twins"}
-    if parsed and parsed.get("sport") == "KBO" and "kbo" not in text.lower():
-        all_teams = []
-        for pick in parsed.get("picks", []):
-            all_teams.extend(t.lower() for t in pick.get("teams", []))
-        # Only override if every team is an ambiguous overlap name
-        if all_teams and all(
-            any(frag in t for frag in _KBO_MLB_OVERLAP) for t in all_teams
-        ):
+    # Reverse: a KBO classification must be GROUNDED IN THE MESSAGE TEXT. Claude
+    # will otherwise bend an unfamiliar nickname onto the KBO roster — the only
+    # nickname glossary in the prompt — and invent a team that appears nowhere in
+    # the message ("Snakes -1.5" → "NC Dinos -1.5"). That is uniquely damaging:
+    # KBO grading routes to koreabaseball.com, and a KBO game that never
+    # completes (cancelled, or simply the wrong game) returns PENDING forever —
+    # no verdict, no emoji, no attempt cap, re-probed every cycle indefinitely.
+    #
+    # So we test the raw text, not the parsed teams: a team name Claude
+    # hallucinated cannot vouch for its own sport. Only KBO-distinctive tokens
+    # count as evidence — the club sponsor/city prefixes and the nicknames with
+    # no US-pro collision. The ambiguous ones (Tigers/Giants/Twins/Lions/Bears/
+    # Eagles) are deliberately excluded: alone they mean the US team, which is
+    # the Tigers/Giants/Twins rule this replaces. Testing the text rather than
+    # the parse also stops that older rule from clobbering an explicit
+    # "KIA Tigers" pick, whose parsed team matched the overlap list.
+    _KBO_TEXT_TOKENS = (
+        "kbo", "korea", "korean",
+        "kt", "wiz", "samsung", "lg", "doosan", "lotte",
+        "dinos", "kia", "ssg", "landers", "hanwha", "kiwoom", "heroes",
+    )
+    if parsed and parsed.get("sport") == "KBO":
+        low = text.lower()
+        if not any(re.search(rf"\b{tok}\b", low) for tok in _KBO_TEXT_TOKENS):
+            print("    [parse] KBO with no KBO token in text → MLB")
             parsed["sport"] = "MLB"
 
     if parsed and parsed.get("sport") == "Other" and "cfl" in text.lower():
