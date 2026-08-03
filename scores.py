@@ -1428,7 +1428,257 @@ def _swap_team_in_desc(desc: str, token: str, old_name: str, new_name: str) -> s
         out = re.sub(pat, new_name, desc, flags=re.IGNORECASE)
         if out != desc:
             return out
+    # None of the three matched. That happens when the parse garbled the name
+    # badly enough that the description shares no text with either the old name
+    # or the message token ("Meditbe Moneyline" for a bet on Uroš Medić) — which
+    # is exactly when the description is most wrong. Returning it unchanged
+    # would leave the contradiction this function exists to prevent, so fall
+    # back to replacing everything ahead of the bet-type keyword.
+    m = re.search(
+        r"\b(moneyline|ml|spread|puck ?line|run ?line|total|over|under|to win|"
+        r"[+-]\d|\d+(\.\d+)?u\b)", desc, flags=re.IGNORECASE)
+    if m and m.start() > 0:
+        return new_name + " " + desc[m.start():]
     return desc
+
+
+_VERIFY_STOPWORDS = {
+    "over", "under", "moneyline", "spread", "parlay", "leg", "the", "and", "vs",
+    "win", "wins", "ml", "tt", "unit", "units", "max", "lock", "play", "pick",
+    "team", "total", "line", "odds", "bet", "prop", "first", "half", "game",
+}
+
+
+# Promotions/leagues that share a sport bucket but NOT a schedule. If the
+# capper names one of these and it isn't what we classified, the slate we are
+# checking is simply the wrong one — a surname that happens to match somebody on
+# it is a coincidence, not a confirmation. Seen live: a PFL parlay classified as
+# UFC, whose "Medic" leg would otherwise bind to UFC's Uroš Medić and grade to a
+# verdict about a fight the capper never bet on. Stuck-and-flagged beats
+# confidently-wrong, so this suppresses the repair rather than risking it.
+_RIVAL_PROMOTIONS = {
+    "UFC": ("pfl", "bellator", "one championship", "one fc", "invicta", "ksw"),
+}
+
+
+def _promotion_conflict(sport: str, raw_text: str) -> str | None:
+    low = (raw_text or "").lower()
+    for name in _RIVAL_PROMOTIONS.get(sport, ()):
+        if re.search(rf"\b{re.escape(name)}\b", low):
+            return name.upper()
+    return None
+
+
+def _competitor_names(events: list[dict]) -> list[str]:
+    """Every competitor on the slate, teams and athletes alike.
+
+    UFC puts the whole card in ONE event with a competition per bout, so this
+    deliberately walks competitions rather than events.
+    """
+    names = []
+    for event in events:
+        for comp in event.get("competitions", [{}]):
+            for c in comp.get("competitors", []):
+                n = (c.get("team", {}).get("displayName", "")
+                     or c.get("athlete", {}).get("displayName", ""))
+                if n:
+                    names.append(n)
+    return names
+
+
+def _tokens_from_text(raw_text: str) -> list[str]:
+    """Candidate name tokens from the capper's own words."""
+    out = []
+    for t in re.split(r"[^\w'’\-]+", raw_text or ""):
+        t = t.strip("-'’")
+        if len(t) > 2 and not t.isdigit() and t.lower() not in _VERIFY_STOPWORDS:
+            out.append(t)
+    return out
+
+
+async def verify_picks_on_schedule(
+    picks: list[dict],
+    sport: str,
+    raw_text: str,
+    date_str: str,
+    scoreboard_cache: dict,
+    *,
+    day_hint: str | None = None,
+) -> list[dict]:
+    """Check every pick's team against the day's schedule; repair it from the
+    raw message when the parse names someone who isn't playing.
+
+    `validate_sport` already asks "does this team have a game?", but it answers
+    by returning its arguments unchanged — which is also what it returns when it
+    gives up, so a confirmed team and a hallucinated one are indistinguishable to
+    the caller. That gap is the whole bug: a parse can invent a fighter who is on
+    no card anywhere ("Ihor Medic" for a night whose main event was Uroš Medić),
+    grade UNKNOWN for free forever, and nothing says a word. Worse, it can invent
+    one who IS fighting in a different bout, in which case it grades cleanly to a
+    verdict about the wrong contest.
+
+    The repair is that the capper's own text already held the answer: the token
+    "Medic" matches Uroš Medić exactly. The parse threw that away by expanding a
+    surname into a full name it guessed at. So when the parsed team matches
+    nobody, we go back to the words that were actually written.
+
+    Returns one dict per pick: {index, status, teams, description, note} where
+    status is:
+      n/a         no ESPN schedule for this sport, or the fetch failed — an
+                  outage must never be read as a bad parse
+      confirmed   the parsed team is really competing that day
+      corrected   it wasn't; exactly one message token resolves, so use that
+      unverified  nothing resolves, or several do — flag it, never guess
+      suspect     it IS competing, but nobody in the message named them while a
+                  word they did write points at someone else — the wrong-contest
+                  case, which otherwise grades cleanly and silently
+
+    Costs no Claude calls and no extra HTTP: it reads the same `scoreboard_cache`
+    that `validate_sport` has already populated for this sport/date.
+    """
+    results: list[dict] = []
+    if not picks:
+        return results
+
+    # Which competitors are already spoken for by a leg that verified cleanly.
+    # Without this a parlay defeats the repair: "Medic/Rakic parlay" offers both
+    # tokens to every leg, so the broken leg sees two candidates and gives up.
+    claimed: set[str] = set()
+    slates: dict[str, list[str]] = {}
+
+    # Cappers routinely post the evening before ("SATURDAY BEST BET" sent
+    # Friday; KBO is always posted the night before), so checking only the post
+    # date would return "no schedule" for a large share of picks and skip
+    # verification on exactly the ones nobody is watching. Union the candidate
+    # days — matching is by competitor NAME, so a team appearing on both days
+    # collapses to one entry and cannot manufacture ambiguity.
+    cands = [d for d in (day_hint, date_str) if d]
+    try:
+        cands.append((_date.fromisoformat(date_str) + timedelta(days=1)).isoformat())
+    except ValueError:
+        pass
+    seen_days: list[str] = []
+    for d in cands:
+        if d not in seen_days:
+            seen_days.append(d)
+
+    async def _slate(psport: str) -> list[str] | None:
+        if psport not in ESPN_LEAGUES:
+            return None
+        if psport not in slates:
+            names: list[str] = []
+            for d in seen_days:
+                key = (psport, d)
+                if key not in scoreboard_cache:
+                    scoreboard_cache[key] = await fetch_espn(psport, d)
+                sb = scoreboard_cache[key]
+                if sb and sb.get("events"):
+                    names.extend(_competitor_names(sb.get("events", [])))
+            if not names:
+                return None
+            slates[psport] = names
+        return slates.get(psport)
+
+    # Pass 1 — confirm what we can, and record who each confirmed leg is using.
+    pending: list[int] = []
+    for i, pick in enumerate(picks):
+        psport = pick.get("sport") or sport
+        names = await _slate(psport)
+        if names is None:
+            results.append({"index": i, "status": "n/a", "teams": pick.get("teams", []),
+                            "description": pick.get("description", ""), "note": ""})
+            continue
+        teams = [t for t in (pick.get("teams") or []) if t]
+        hits = [n for t in teams for n in names if _team_matches(t.lower(), n.lower())]
+        if hits:
+            claimed.update(h.lower() for h in hits)
+            results.append({"index": i, "status": "confirmed", "teams": teams,
+                            "description": pick.get("description", ""), "note": "",
+                            "_hits": hits})
+        else:
+            results.append({"index": i, "status": "", "teams": teams,
+                            "description": pick.get("description", ""), "note": ""})
+            pending.append(i)
+
+    # Pass 2 — repair the rest from the capper's own words.
+    tokens = _tokens_from_text(raw_text)
+    for i in pending:
+        pick = picks[i]
+        psport = pick.get("sport") or sport
+        names = slates.get(psport) or []
+        matches: dict[str, str] = {}      # competitor -> token that found them
+        for tok in tokens:
+            for n in names:
+                if n.lower() in claimed:
+                    continue
+                if _team_matches(tok.lower(), n.lower()):
+                    matches.setdefault(n, tok)
+        old = " ".join(results[i]["teams"]) or "?"
+        rival = _promotion_conflict(psport, raw_text)
+        if rival:
+            results[i].update(
+                status="unverified",
+                note=f"{old!r} is on no {psport} slate for {'/'.join(seen_days)}, and the message "
+                     f"names {rival} — the pick is probably {rival}, which we do not carry, "
+                     f"so this is a coverage gap and not a repairable parse",
+            )
+        elif len(matches) == 1:
+            new_name, tok = next(iter(matches.items()))
+            claimed.add(new_name.lower())
+            results[i].update(
+                status="corrected",
+                teams=[new_name],
+                description=_swap_team_in_desc(
+                    pick.get("description", ""), tok,
+                    (results[i]["teams"] or [tok])[0], new_name),
+                note=f"{old!r} is on no {psport} slate for {'/'.join(seen_days)}; "
+                     f"message says {tok!r} → {new_name}",
+            )
+        elif len(matches) > 1:
+            results[i].update(
+                status="unverified",
+                note=f"{old!r} is on no {psport} slate for {'/'.join(seen_days)}; message tokens are ambiguous "
+                     f"between {', '.join(sorted(matches))} — not guessing",
+            )
+        else:
+            results[i].update(
+                status="unverified",
+                note=f"{old!r} matches no competitor on the {psport} slate for {'/'.join(seen_days)}, "
+                     f"and neither does anything in the message",
+            )
+
+    # Pass 3 — the quiet one. A leg can confirm against the slate and still be
+    # about the wrong contest: "Medic/Rakic parlay" parsed as Mateusz Rębecki,
+    # who really was fighting that night, just not in the bout anyone bet on. It
+    # found a real market, priced it, and graded to a clean verdict — nothing
+    # downstream can tell that from a correct pick, which is what makes it the
+    # dangerous failure and not the loud one. The tell is textual, not
+    # schedule-based: nobody in the message ever names this competitor, while a
+    # word they DID write points at someone still unspoken for. Both halves are
+    # required — that conjunction is what keeps a legitimate nickname the slate
+    # doesn't spell out ("Snakes" for the D-backs) from tripping it. Reported,
+    # never auto-corrected: overriding a team that genuinely is playing on a
+    # textual hunch is its own way to grade the wrong game.
+    for res in results:
+        if res["status"] != "confirmed":
+            continue
+        hits = res.pop("_hits", [])
+        if any(_team_matches(tok.lower(), h.lower()) for tok in tokens for h in hits):
+            continue                      # the capper's own words back this pick
+        psport = picks[res["index"]].get("sport") or sport
+        others = sorted({
+            n for tok in tokens for n in (slates.get(psport) or [])
+            if n.lower() not in claimed and _team_matches(tok.lower(), n.lower())
+        })
+        if others:
+            res["status"] = "suspect"
+            res["note"] = (
+                f"parsed {', '.join(hits)!r} but the message never names them; "
+                f"it does name {', '.join(others)} — verify which contest this bet is on"
+            )
+    for res in results:
+        res.pop("_hits", None)
+    return results
 
 
 async def resolve_nickname_collision(

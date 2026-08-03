@@ -9,6 +9,7 @@ Usage:
 
 import asyncio
 import hashlib
+import html as _html
 import json
 import os
 import argparse
@@ -28,7 +29,7 @@ from common import (
 )
 from scores import (
     fetch_espn, odds_requests_used, try_early_grade_math, build_early_context,
-    validate_sport, resolve_nickname_collision,
+    validate_sport, resolve_nickname_collision, verify_picks_on_schedule,
 )
 from odds import fetch_odds, fetch_odds_current, quota_used as odds_quota_used
 from pikkit import get_pick_splits
@@ -646,6 +647,41 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                 pick["sport"] = new_ps
                             if new_pt != pt:
                                 pick["teams"] = new_pt
+
+                    # Last line of defence: does each pick name someone who is
+                    # actually competing? Everything above answers "which sport"
+                    # and only for picks[0] (plus legs carrying one of six
+                    # sports), and it reports failure by returning its input
+                    # unchanged — so a fighter who is on no card anywhere sails
+                    # through and then grades UNKNOWN for free, forever. This
+                    # covers every leg and distinguishes confirmed from unproven.
+                    for res in await verify_picks_on_schedule(
+                        picks, sport, text, date_str, scoreboard_cache,
+                        day_hint=day_hint,
+                    ):
+                        pick = picks[res["index"]]
+                        if res["status"] == "corrected":
+                            print(f"  schedule repair: {res['note']}")
+                            # description is load-bearing (grading, odds routing,
+                            # tag placement) — it moves with the team or the
+                            # grader gets a contradiction.
+                            pick["teams"] = res["teams"]
+                            pick["description"] = res["description"]
+                            await audit.warn(
+                                f"🔧 <b>parse repaired from schedule</b>: {_html.escape(res['note'])}\n{capper}"
+                            )
+                        elif res["status"] == "unverified":
+                            print(f"  ⚠ unverified pick: {res['note']}")
+                            await audit.warn(
+                                f"⚠️ <b>pick names no one on the slate</b>: {_html.escape(res['note'])}\n{capper}"
+                            )
+                        elif res["status"] == "suspect":
+                            # Grades fine and grades WRONG — the only chance to
+                            # catch it is here, before a real market prices it.
+                            print(f"  ⚠ possible wrong contest: {res['note']}")
+                            await audit.warn(
+                                f"⚠️ <b>possible wrong contest</b>: {_html.escape(res['note'])}\n{capper}"
+                            )
 
                 if not picks:
                     failed += 1
