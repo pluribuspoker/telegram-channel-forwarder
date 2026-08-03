@@ -462,6 +462,16 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                 await _edit_msg(channel_id, msg.id, _odds_text, msg.media is not None and not isinstance(msg.media, MessageMediaWebPage))
                                 await asyncio.sleep(0.5)
                     continue  # primary row carries the +N dup annotation
+                # Entries the daemon retired (deleted message, unresolvable leg) carry a
+                # reason and are terminal — unlike the parse-failure `_failed` below,
+                # which re-tries when the capper edits the text. Without this they fall
+                # through that text_hash check (a retired entry has no hash) and get
+                # re-graded and re-recorded to audit every run, which is the loop the
+                # retirement exists to end.
+                if isinstance(cached, dict) and cached.get("_failed") and cached.get("_failed_reason"):
+                    print(f"\n{msg.id:<{_ID_W}} {_trunc(capper, _CAP_W):<{_CAP_W}}  "
+                          f"{_trunc('retired: ' + cached['_failed_reason'], _DESC_W):<{_DESC_W}} ⏹")
+                    continue
                 # {"_failed": True} is stored after the first audit notification so we
                 # don't spam the audit channel. We only re-try parsing if the message
                 # text has changed (i.e. the capper edited it) — otherwise skip Claude.

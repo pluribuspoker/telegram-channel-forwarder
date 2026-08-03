@@ -78,6 +78,14 @@ CYCLE_TIMEOUT = int(os.getenv("GRADE_DAEMON_CYCLE_TIMEOUT", "300"))
 # to keep the per-capper look until the spam is worse. 0/1 would "group" lone picks,
 # so the floor is 2.
 GROUP_MIN = max(2, int(os.getenv("GRADE_DAEMON_GROUP_MIN", "2")))
+# An entry only settles once EVERY leg has a verdict, so one leg that can never
+# resolve (a garbled parse with no findable game — it context-skips for free and
+# so never even trips the ungradeable-attempt cap) pins the whole entry open:
+# its resolved siblings stay broadcasted=False, and the tracker re-records them
+# to the audit channel every single run until the 14-day eviction. Bound it —
+# once every date the entry could still be waiting on is this far past, nothing
+# is going to resolve and the entry is retired instead of churning.
+STALE_UNRESOLVED_DAYS = int(os.getenv("GRADE_STALE_UNRESOLVED_DAYS", "3"))
 
 _CACHE_PATH = os.path.join(os.path.dirname(__file__), "parse_cache.json")
 
@@ -147,6 +155,48 @@ def _retire_deleted(entry: dict, cache: dict, cache_key: str) -> None:
     cache[cache_key] = entry
     _save_pending_cache(cache)
     print(f"  ⏹ {cache_key} retired — pick message deleted (no broadcast)")
+
+
+def _stale_reference_date(leg_verdicts: dict, odds_by_pick: dict, msg_date: str) -> str:
+    """Latest date this entry could still legitimately be waiting on.
+
+    Ages off the GAME, not the post: a pick posted Monday for Saturday's game is
+    unresolved for five days by design, and aging it off the post date would
+    retire it before it ever had a chance to grade. Any game date we know about —
+    from a graded sibling leg or from the odds match — pushes the horizon out.
+    A leg we could never even find a game for contributes nothing, which is the
+    point: it falls back to the post date and is exactly the leg worth retiring.
+    """
+    dates = [d for d in [msg_date] if d]
+    for src in (leg_verdicts, odds_by_pick):
+        for v in (src or {}).values():
+            if isinstance(v, dict):
+                gd = v.get("game_date")
+                if isinstance(gd, str) and len(gd) == 10:
+                    dates.append(gd)
+    return max(dates) if dates else msg_date
+
+
+async def _retire_stale(
+    entry: dict, cache: dict, cache_key: str, audit: AuditLog,
+    unresolved: list[int], picks: list[dict], days: int,
+) -> None:
+    """Retire an entry whose unresolved legs are never going to resolve.
+
+    Same terminal flag as `_retire_deleted` (honoured by this daemon and the
+    tracker, preserved by `_pending_entry` across the cache rebuild) and the same
+    no-broadcast rule: we could not grade every leg, so publishing a result off
+    the legs that did grade would be asserting an outcome we never verified.
+    Notifies audit ONCE — a pick dying quietly is exactly what nobody notices.
+    """
+    descs = ", ".join((picks[i].get("description") or f"leg {i}")[:40] for i in unresolved)
+    reason = f"unresolvable after {days}d — {descs}"
+    entry["_failed"] = True
+    entry["_failed_reason"] = reason
+    cache[cache_key] = entry
+    _save_pending_cache(cache)
+    print(f"  ⏹ {cache_key} retired — {reason} (no broadcast)")
+    await audit.warn(f"⏹ <code>{cache_key}</code> retired — {reason} (no broadcast)")
 
 
 def _build_user_send_channels() -> set[int]:
@@ -536,6 +586,18 @@ async def _grade_cycle(
                 if parlay_lost:
                     continue  # parlay already lost — pending leg is moot
                 unresolved_indices.append(i)
+
+        # Nothing here will ever resolve — retire instead of re-grading forever.
+        if unresolved_indices:
+            try:
+                stale_days = (_date.today() - _date.fromisoformat(
+                    _stale_reference_date(leg_verdicts, odds_by_pick, msg_date))).days
+            except ValueError:
+                stale_days = 0     # unparseable date — leave the entry alone
+            if stale_days > STALE_UNRESOLVED_DAYS:
+                await _retire_stale(entry, cache, cache_key, audit,
+                                    unresolved_indices, picks, stale_days)
+                continue
 
         if not unresolved_indices:
             # A parlay settled on a lost leg: its still-pending legs are moot and
