@@ -16,6 +16,7 @@ Usage (from other modules):
 """
 
 import asyncio
+import hashlib
 import os
 import re
 import sqlite3
@@ -170,7 +171,36 @@ _MIGRATIONS = [
     "ALTER TABLE grades ADD COLUMN odds INTEGER",
     "ALTER TABLE grades ADD COLUMN odds_bookmaker TEXT",
     "ALTER TABLE grades ADD COLUMN odds_match_type TEXT",
+    "ALTER TABLE grades ADD COLUMN post_fingerprint TEXT",
 ]
+
+
+def _post_fingerprint(row: dict, channel_name: str, capper_name: str, edit_failed: bool) -> str:
+    """Hash of everything `_post_telegram` actually renders.
+
+    The audit channel is a log of grading *actions*, and both loops re-grade a
+    message on every pass, so a message that never reaches a terminal state gets
+    re-recorded forever. Re-posting a record identical to the last one for the
+    same message says nothing new — it is pure noise — so the fingerprint is
+    compared against the stored one and the post is skipped when it matches.
+
+    Cover exactly the fields that shape the message: a changed verdict, calc,
+    pick list or edit-failure IS news and must still post. `graded_at`, odds and
+    the captions are deliberately excluded — they move without changing a word
+    of what the reader sees.
+    """
+    parts = [
+        str(row.get("verdict") or ""),
+        str(row.get("pick_desc") or ""),
+        str(row.get("calc") or ""),
+        str(row.get("sport") or ""),
+        str(row.get("date") or ""),
+        str(row.get("dry_run") or 0),
+        "1" if edit_failed else "0",
+        channel_name or "",
+        capper_name or "",
+    ]
+    return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()[:32]
 
 
 
@@ -214,15 +244,30 @@ class AuditLog:
                 except Exception:
                     pass  # column already exists
 
-    def _insert(self, row: dict) -> None:
+    def _insert(self, row: dict) -> bool:
         """Insert or replace a grade row (idempotent on channel_id+message_id).
-        Opens its own connection because this runs in a background thread via asyncio.to_thread."""
+
+        Returns True when this row's audit post would say something the last
+        post for this message didn't — see `_post_fingerprint`. The read and the
+        replace share one connection so the comparison is against the row we are
+        about to overwrite, not one a concurrent writer slipped in.
+
+        Opens its own connection because this runs in a background thread via
+        asyncio.to_thread."""
         cols = ", ".join(row.keys())
         placeholders = ", ".join("?" for _ in row)
         sql = f"INSERT OR REPLACE INTO grades ({cols}) VALUES ({placeholders})"
         with self._connect() as conn:
+            prior = conn.execute(
+                "SELECT post_fingerprint FROM grades WHERE channel_id = ? AND message_id = ?",
+                (row["channel_id"], row["message_id"]),
+            ).fetchone()
+            # NULL for rows written before this column existed — post once, then settle.
+            prior_fp = prior["post_fingerprint"] if prior else None
+            changed = prior_fp != row.get("post_fingerprint")
             conn.execute(sql, list(row.values()))
             conn.commit()
+        return changed
 
     # ── Core record method ─────────────────────────────────────────────────────
 
@@ -269,8 +314,10 @@ class AuditLog:
             "odds_bookmaker":  odds_bookmaker,
             "odds_match_type": odds_match_type,
         }
-        await asyncio.to_thread(self._insert, row)
-        await self._post_telegram(row, channel_name=channel_name, capper_name=capper_name, edit_failed=edit_failed)
+        row["post_fingerprint"] = _post_fingerprint(row, channel_name, capper_name, edit_failed)
+        changed = await asyncio.to_thread(self._insert, row)
+        if changed:
+            await self._post_telegram(row, channel_name=channel_name, capper_name=capper_name, edit_failed=edit_failed)
 
     # ── Telegram audit channel ─────────────────────────────────────────────────
 
