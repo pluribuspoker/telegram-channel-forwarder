@@ -1,0 +1,19 @@
+[Unit]
+Description=Telegram NFL Intake Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+ExecStart=/home/forwarder/app/run_intake_bot.sh
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

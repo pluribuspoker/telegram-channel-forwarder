@@ -3,7 +3,7 @@
 ## Goal
 
 Add a Telegram-based NFL lean intake system. A user DMs a dedicated intake bot
-with `/intake-nfl`, the bot presents the available NFL games (read live from a
+with `/guess_nfl_game`, the bot presents the available NFL games (read live from a
 Google Sheet), and the user taps a game. The bot shows first-observed and latest
 BetOnline spread, moneyline, and total prices from The Odds API, then requires the user to select a market and side
 before entering a free-text opinion, including any line or price at which their
@@ -19,6 +19,24 @@ This file is the authoritative implementation record. As work progresses, record
 material decisions here with their rationale and status before or alongside the
 code change. If implementation differs from an earlier proposal, update the
 proposal rather than leaving contradictory guidance in place.
+
+## VPS environment update rule
+
+Never replace `/home/forwarder/app/.env` with a complete local file.
+
+Every VPS environment change must:
+
+1. Read the existing VPS `.env`.
+2. Check whether the exact key already exists.
+3. Replace only that key when present, or append it when absent.
+4. Preserve every unrelated key and `.env.local`.
+5. Write atomically, keep `forwarder:forwarder` ownership, and enforce mode
+   `600`.
+6. Validate required key presence without printing secret values.
+
+This rule applies even when a local helper such as `syncenv` is unavailable.
+Whole-file `scp`/install replacement is prohibited because a local environment
+may not contain the VPS's complete production configuration.
 
 ## Implementation status
 
@@ -39,7 +57,85 @@ proposal rather than leaving contradictory guidance in place.
 ### Next
 
 - Observe the collector timer through at least one naturally due polling window.
-- Create the dedicated intake bot and begin the native Telegram prototype.
+- Capture the authorized Telegram user ID and begin the native prototype using
+  the configured dedicated bot.
+
+### Completed — 2026-08-04: Dedicated bot registration
+
+- Created and validated the dedicated bot **NFL Guesser**
+  (`@nflguesser_bot`).
+- Stored its token only in untracked environment configuration as
+  `INTAKE_BOT_TOKEN`; the token is not committed or documented here.
+- Telegram `getMe` authentication succeeded.
+- The four non-bot members of the intended private group are configured by
+  numeric Telegram ID in untracked `.env` through `INTAKE_ALLOWED_USER_IDS`.
+  The IDs themselves are not committed or documented here.
+
+### Completed — 2026-08-04: Native intake prototype
+
+Adopted slate behavior:
+
+- `/guess_nfl_game` initially shows games in the next 10 days.
+- `/suggest` opens a native ForceReply input for freeform product feedback. Each
+  response is appended to the `suggestions` worksheet with UTC/ET timestamps,
+  Telegram user identity fields, message ID, and suggestion text.
+- Inline controls can expand the window to 30 or 365 days.
+- Results are paginated so the 365-day view does not create an oversized
+  Telegram keyboard.
+- Selecting a game shows first-observed and latest BetOnline lines for the full
+  game, first half, and first quarter.
+- The detail view keeps full team names in the title, then uses team emojis in
+  repeated spread/moneyline rows to reduce visual noise.
+- Team-to-emoji mappings live in the `team_emojis` worksheet with `team_name`
+  and `emoji` columns. The bot reloads the tab for each interaction, so worksheet
+  edits apply consistently without a restart; unmapped teams display `🏈`.
+- A TL;DR at the top derives BetOnline's implied Q1, halftime, and final score
+  from each latest total and spread. Missing period markets display `nodata`.
+- Game details use Telegram HTML formatting: Spread, Moneyline, and Total labels
+  are underlined, and Opening/Latest labels are separated from their market rows
+  by a blank line.
+- Selecting a game now continues through button-only period, market, and side
+  choices. Periods are full game, first half, and first quarter; markets are
+  spread, moneyline, and total; valid sides are the two teams or over/under.
+- After the structured choices, a ForceReply prompt captures the only free-text
+  guess input: the lean, reasoning, and line/price where the preference changes.
+- The final selected period/market/side and opening/latest prices are displayed
+  in a Telegram blockquote, providing a native bordered summary immediately
+  above the ForceReply prompt.
+- Successful submissions append to `nfl_leans`, confirm the selected
+  period/market/side, clear in-memory state, and restore the persistent command
+  buttons.
+- Every structured step has reverse navigation: side → market → period/game
+  detail → game list. Returning from the free-text stage deletes and invalidates
+  its ForceReply prompt so a stale reply cannot be submitted accidentally.
+
+This slice intentionally stops before market/side selection and text capture.
+Those interactions will be implemented after the game browser is tested in the
+real dedicated bot.
+
+Prototype issue log:
+
+- **Telegram menu command syntax:** Bot API command names allow letters, digits,
+  and underscores, but not hyphens. `setMyCommands` rejected `intake-nfl`.
+  Resolution: `/guess_nfl_game` is now the single spelling used by the persistent
+  keyboard, command menu, handlers, documentation, and tests.
+- **VPS `.env` overwrite:** the collector deployment copied an incomplete local
+  `.env` over the production file, removing existing Telegram and application
+  keys from disk. The running listener still held the original values in its
+  process environment, so the production file was reconstructed from a strict
+  allowlist of those live application keys, merged with the new collector keys,
+  minified for safe parsing, backed up as `.env.pre-recovery-20260804`, restored
+  with mode `600`, and copied back locally. No service was restarted while the
+  file was incomplete. Future updates must follow the key-level rule above.
+- **Telethon session helper prompted for a phone:** entering
+  `TelegramClient` as a synchronous context manager auto-started authentication
+  before the bot token was supplied. The helper was changed to construct the
+  client, call `start(bot_token=...)` explicitly, save the session, and
+  disconnect without using the auto-starting context manager.
+- **Total line displayed with an odds sign:** the first real game-detail test
+  rendered a total of `35` as `+35` because spread points, American odds, and
+  totals shared one formatter. Totals now use unsigned line formatting while
+  spreads and prices retain explicit signs.
 
 ### Completed — 2026-08-04: VPS collector deployment
 
@@ -108,7 +204,7 @@ rationale, and any price-dependent conditions.
  ├──────────────────────────────────────────────────────────────┤
  │                                                              │
  │                                    ┌───────────────────────┐  │
- │                                    │  /intake-nfl          │  │  ← user
+ │                                    │  /guess_nfl_game      │  │  ← user
  │                                    └───────────────────────┘  │
  │                                                              │
  │  ┌────────────────────────────────────────────────┐          │
@@ -181,10 +277,24 @@ before deciding whether a hosted form is justified:
   exactly as drawn, submitting both fields at once. Requires hosting + a bot
   domain; natural upgrade if the form grows.
 
+### Input UX invariant
+
+The user should never need to type commands, dates, games, periods, markets, or
+sides.
+
+- `/start` installs persistent reply-keyboard buttons labeled
+  `/guess_nfl_game` and `/suggest`.
+- The Telegram command menu also exposes `/guess_nfl_game` and `/suggest`.
+- Slate windows, pagination, games, periods, markets, and sides use inline
+  buttons.
+- Free-text input is limited to the final lean/rationale flow and the explicit
+  `/suggest` feedback flow. Commands and all structured game choices remain
+  button-driven.
+
 Text-transcript form of the same flow:
 
 ```
-User: /intake-nfl
+User: /guess_nfl_game
 Bot:  "NFL — available games:"     [inline keyboard, one button per game]
         [ Dolphins @ Bills · Sun 1:00 PM ] ...
 User: (taps "Dolphins @ Bills")
@@ -325,10 +435,43 @@ Example away value:
 
 ### `nfl_leans` — Telegram submissions
 
-This remains append-only and will include submission/user/game metadata, the
-selected period/market/side, target line or price, and free-text reasoning. Its
-final line-context columns will be finalized before the bot writer is
-implemented; do not assume the current placeholder header layout is final.
+This is append-only with a finalized compact 33-column schema:
+
+- Submission/user identity: deterministic `submission_id`, UTC/ET timestamps,
+  Telegram user ID, username, first/last name, and message ID.
+- Game identity: event/season/week metadata, kickoff times, teams, and bookmaker.
+- Structured choice: period, market, and side.
+- Selected market context: opening/latest selected line and price. Missing
+  values use `nodata`.
+- Full context: the same six packed opening/latest away, home, and totals columns
+  used by `nfl_games`.
+- Free text: `lean_text`.
+
+The original 75-column provisional header expanded every period/field pair. It
+was replaced before any submissions existed because the packed columns preserve
+the same information with substantially less workbook cell growth.
+
+`submission_id` is deterministically derived from Telegram user ID and message
+ID. Before appending, the bot checks the first column and treats a repeated
+message as already saved, preventing duplicate rows on retries.
+
+### `suggestions` — freeform product feedback
+
+Append one row for each reply to a `/suggest` ForceReply prompt:
+
+- `submitted_at_utc`
+- `submitted_at_et`
+- `telegram_user_id`
+- `telegram_username`
+- `telegram_first_name`
+- `telegram_last_name`
+- `telegram_message_id`
+- `suggestion`
+
+The bot stores the prompt message ID in memory and accepts the suggestion only
+when the incoming message replies to that exact prompt. Unrelated direct
+messages are ignored. After a successful append, the pending prompt is cleared
+and the persistent `/guess_nfl_game` and `/suggest` buttons are restored.
 
 ---
 
@@ -359,9 +502,8 @@ and must never be committed.
 In-memory dict keyed by `telegram_user_id`:
 `{ user_id: {"stage": ..., "sport": "nfl", "game": {...}, "lines": {...}, "market": ..., "side": ..., "prompt_msg_id": ...} }`.
 
-- Set on `/intake-nfl`, advanced on game selection → market selection → side
-  selection → text
-  reply, cleared on submit/cancel.
+- Set on game selection, advanced through period → market → side → text reply,
+  and cleared on submission or when the user reopens the game browser.
 - Guard: match the reply via `event.message.reply_to` pointing at the bot's
   ForceReply prompt (`prompt_msg_id`) so we don't capture unrelated DMs.
 
@@ -432,14 +574,16 @@ allowlist remain intentionally deferred until the data pipeline is scheduled.
 - Telethon `TelegramClient(StringSession(BOT_SESSION), API_ID, API_HASH)` started
   with `bot_token=BOT_TOKEN` (same as `listener.py`).
 - `load_dotenv()` + `.env.local` override (repo convention).
-- Register `events.NewMessage(pattern=r'^/intake-nfl')`, allowlist gate, reply
+- Register `events.NewMessage(pattern=r'^/guess_nfl_game')`, allowlist gate, reply
   with inline keyboard from `list_games`.
-- **Verify:** `python intake_bot.py` locally; `/intake-nfl` returns the game
+- **Verify:** `python intake_bot.py` locally; `/guess_nfl_game` returns the game
   list; non-allowlisted user is refused.
 
-### Step 3 — Game, market, and side selection
+### Step 3 — Game, period, market, and side selection (completed)
 - `events.CallbackQuery` handler (game): display opening/latest spread, total,
-  and moneyline, then present `[ Spread ][ Moneyline ][ Total ][ Other ]`.
+  and moneyline, then present full-game/first-half/first-quarter buttons.
+- Period handler stores the period and presents
+  `[ Spread ][ Moneyline ][ Total ]`.
 - Market handler: store the selected market and present valid sides (teams for
   spread/moneyline, over/under for total).
 - Side handler: store the side and send a `ForceReply` asking for the lean,
@@ -449,21 +593,28 @@ allowlist remain intentionally deferred until the data pipeline is scheduled.
 - **Verify:** tapping Dolphins @ Bills shows correct opening/latest lines;
   selecting Spread → Miami Dolphins opens the expected reply prompt.
 
-### Step 4 — Capture prediction + write row
+### Step 4 — Capture prediction + write row (completed)
 - `events.NewMessage` (incoming, is-reply) handler: match `reply_to ==
   prompt_msg_id`, combine the stored line snapshot, market, side, and reply body,
   append the structured row, confirm to the user, and clear state.
 - **Verify:** submitting writes a correct row to the intake sheet; confirmation
   echoes game · type · prediction.
 
-### Step 5 — Deploy artifacts
+Implementation verification completed with the finalized live worksheet schema
+and 33 focused collector/bot tests. Live user testing successfully appended a
+first-quarter total-under submission for a preseason game. Its selected
+opening/latest fields correctly stored `nodata` because BetOnline had not
+supplied Q1 markets, while all identity, game, selection, packed-context, and
+lean fields were preserved. VPS deployment remains.
+
+### Step 5 — Deploy artifacts (implemented)
 - `run_intake_bot.sh` (mirror `run_grade_daemon.sh`).
 - `deploy/systemd/telegram-intake.service` (mirror `grade-daemon.service`:
   `User=forwarder`, `EnvironmentFile=.env` + `-.env.local`, `Restart=on-failure`).
   No `WatchdogSec` needed for v1 (add later if it can wedge).
 - Add the unit to `scripts/check_deploy_sync.sh` coverage.
 - **Verify:** `bash scripts/check_deploy_sync.sh` clean; service starts on VPS,
-  survives a restart, still handles `/intake-nfl`.
+  survives a restart, still handles `/guess_nfl_game`.
 
 ### Step 6 — Docs
 - Add an "Intake bot" section to `CLAUDE.md` (service name, env vars, allowlist,
@@ -474,7 +625,8 @@ allowlist remain intentionally deferred until the data pipeline is scheduled.
 
 ## Extensibility (design for it, don't build yet)
 
-- `/intake-nfl` is the first of a family (`/intake-nba`, `/intake-nhl`, …).
+- `/guess_nfl_game` is the first of a family (`/guess_nba_game`,
+  `/guess_nhl_game`, …).
   Keep sport-specific config (source sheet id/tab, allowed prediction prefixes)
   in a small `INTAKE_SPORTS` dict/JSON in `.env` so new sports are config-only.
 - Market and side are structured now. The initial version keeps rationale and
@@ -548,6 +700,9 @@ permissions, and lifecycle should remain independent.
 - `nfl_games` — one current row per Odds API event, optimized for bot reads.
 - `nfl_line_snapshots` — append-only line history.
 - `nfl_leans` — append-only Telegram submissions.
+- `team_emojis` — editable team-name to emoji mapping used by bot views.
+- `suggestions` — append-only freeform feedback with Telegram identity and
+  submission timestamps.
 
 There is no separate schedule-only tab. The Odds API event response supplies the
 event ID, teams, and kickoff time together with the markets.
@@ -692,10 +847,10 @@ The data source, workbook, credentials, and schemas are resolved. Inputs still
 needed before the Telegram bot is deployed:
 
 1. **Allowlist** — the list of Telegram **user IDs** permitted to run
-   `/intake-nfl`.
+   `/guess_nfl_game`.
 2. **Bot** — create the dedicated bot and provide its token/session plus desired
    display name and profile image.
-3. **Slate scope** — decide whether `/intake-nfl` shows the current week, accepts
+3. **Slate scope** — decide whether `/guess_nfl_game` shows the current week, accepts
    a week/date argument, or offers both. Default recommendation: current week.
 4. **Markets** — confirm the set is `Spread`, `Moneyline`, `Total`, `Other`, and
    define how `Other` should identify its market.

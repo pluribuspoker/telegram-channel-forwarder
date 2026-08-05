@@ -112,6 +112,9 @@ LEAN_HEADERS = [
     "submitted_at_et",
     "telegram_user_id",
     "telegram_username",
+    "telegram_first_name",
+    "telegram_last_name",
+    "telegram_message_id",
     "event_id",
     "season",
     "season_type",
@@ -120,41 +123,24 @@ LEAN_HEADERS = [
     "commence_time_et",
     "away_team",
     "home_team",
+    "bookmaker",
+    "period",
     "market",
     "side",
-    "target_line_or_price",
-    "lean_text",
-    "bookmaker",
     "opening_captured_at",
     "latest_captured_at",
-    "opening_away_spread",
-    "opening_away_spread_price",
-    "latest_away_spread",
-    "latest_away_spread_price",
-    "opening_home_spread",
-    "opening_home_spread_price",
-    "latest_home_spread",
-    "latest_home_spread_price",
-    "opening_away_moneyline",
-    "latest_away_moneyline",
-    "opening_home_moneyline",
-    "latest_home_moneyline",
-    "opening_total",
-    "opening_over_price",
-    "opening_under_price",
-    "latest_total",
-    "latest_over_price",
-    "latest_under_price",
-    "period",
+    "opening_selected_line",
+    "opening_selected_price",
+    "latest_selected_line",
+    "latest_selected_price",
+    OPENING_AWAY_COLUMN,
+    OPENING_HOME_COLUMN,
+    OPENING_TOTALS_COLUMN,
+    LATEST_AWAY_COLUMN,
+    LATEST_HOME_COLUMN,
+    LATEST_TOTALS_COLUMN,
+    "lean_text",
 ]
-for _period in PERIOD_PREFIXES:
-    for _field in LINE_FIELDS:
-        LEAN_HEADERS.extend(
-            [
-                f"opening_{_period}_{_field}",
-                f"latest_{_period}_{_field}",
-            ]
-        )
 
 
 @dataclass(frozen=True)
@@ -858,6 +844,30 @@ def _decode_groups(value: str) -> list[tuple[float | int | None, ...]]:
     while len(groups) < 3:
         groups.append((None, None, None))
     return groups[:3]
+
+
+def decode_packed_markets(
+    away_value: str, home_value: str, totals_value: str
+) -> dict[str, dict[str, float | int | None]]:
+    away = _decode_groups(away_value)
+    home = _decode_groups(home_value)
+    totals = _decode_groups(totals_value)
+    decoded = {}
+    for index, period in enumerate(
+        ("game", "first_half", "first_quarter")
+    ):
+        decoded[period] = {
+            "away_spread": away[index][0],
+            "away_spread_price": away[index][1],
+            "away_moneyline": away[index][2],
+            "home_spread": home[index][0],
+            "home_spread_price": home[index][1],
+            "home_moneyline": home[index][2],
+            "total": totals[index][0],
+            "over_price": totals[index][1],
+            "under_price": totals[index][2],
+        }
+    return decoded
 
 
 def should_append_snapshot(
