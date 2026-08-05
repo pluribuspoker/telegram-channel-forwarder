@@ -1,25 +1,78 @@
-# Telegram Intake Form → Google Sheets — Plan
+# NFL Telegram Lean Intake → Google Sheets — Plan
 
 ## Goal
 
-Add a Telegram-based intake system. A user DMs the bot a command such as
-`/intake-wnba`, the bot presents the day's available WNBA games (read live from a
-Google Sheet), the user taps a game, the bot shows that game's info (spread &
-totals, read from a Google Sheet), the user replies with a free-text prediction
-(assumed to start with `Total: ` or `Spread: `), and the submission is appended
-to a **new dedicated intake Google Sheet/tab**.
+Add a Telegram-based NFL lean intake system. A user DMs a dedicated intake bot
+with `/intake-nfl`, the bot presents the available NFL games (read live from a
+Google Sheet), and the user taps a game. The bot shows first-observed and latest
+BetOnline spread, moneyline, and total prices from The Odds API, then requires the user to select a market and side
+before entering a free-text opinion, including any line or price at which their
+preference would change. The submission is appended to a **new dedicated intake
+Google Sheet/tab**.
 
 Reuses the Google Sheets access patterns proven in the `line-movement/` repo
 (service-account auth + read/write rate-limit buckets + 429 backoff).
+
+## Living-plan rule
+
+This file is the authoritative implementation record. As work progresses, record
+material decisions here with their rationale and status before or alongside the
+code change. If implementation differs from an earlier proposal, update the
+proposal rather than leaving contradictory guidance in place.
+
+## Implementation status
+
+### Completed — 2026-08-04: NFL line data foundation
+
+- Created a new Google workbook dedicated to this project; no sheets from
+  `line-movement` are reused.
+- Created `nfl_games`, `nfl_line_snapshots`, and `nfl_leans` tabs with structured
+  headers.
+- Configured a dedicated Google service account through base64
+  `GOOGLE_CREDENTIALS`; the workbook ID is configured through
+  `NFL_INTAKE_SHEET_ID`.
+- Added `nfl_lines.py` and `scripts/fetch_nfl_lines.py`.
+- Added focused coverage in `scripts/test_nfl_lines.py`.
+- Completed a live BetOnline fetch and real Sheet write. The immediate repeat
+  updated game freshness without appending duplicate snapshots.
+
+### Next
+
+- Deploy and enable the completed VPS systemd service/timer.
+- Build the dedicated Telegram bot only after the recurring data source is
+  running reliably.
+
+### In progress — 2026-08-04: VPS collector deployment
+
+Deployment checklist:
+
+1. Commit and push the fetcher, tests, runner, timer, and living-plan updates.
+2. Sync `ODDS_API_KEY`, `GOOGLE_CREDENTIALS`, and `NFL_INTAKE_SHEET_ID` to the
+   VPS through the repository's existing environment workflow.
+3. Pull the commit on the VPS.
+4. Install `nfl-lines-fetcher.service` and `nfl-lines-fetcher.timer`.
+5. Enable the timer and trigger one manual service run.
+6. Confirm service logs, timer state, no-op cadence behavior, and workbook
+   integrity.
+
+Issues and deviations encountered during this phase will be recorded below
+before the phase is marked complete.
+
+Deployment issue log:
+
+- **Stale local clone:** the local checkout was 225 commits behind
+  `origin/main`, while the VPS already matched the current remote head. The
+  collector work was stashed, `main` was fast-forwarded to `b2ed682`, and the
+  work was reapplied without conflicts before committing.
 
 ---
 
 ## User flow (end-to-end experience)
 
-The walkthrough below is a WNBA example: the user asks for today's games, the bot
-lists them and asks which one, the user selects a game, the bot shows game detail,
-and the user submits a prediction via a **type dropdown** (`Total` / `Spread` /
-`Moneyline` / `Other`) with a free-text **input box** next to it.
+The walkthrough below is an NFL example: the user asks for the current slate, the
+bot lists the games, the user selects a game, and the bot shows opening and latest
+prices. The user then selects a market and side before submitting a lean,
+rationale, and any price-dependent conditions.
 
 ```
  ┌──────────────────────────────────────────────────────────────┐
@@ -27,58 +80,59 @@ and the user submits a prediction via a **type dropdown** (`Total` / `Spread` /
  ├──────────────────────────────────────────────────────────────┤
  │                                                              │
  │                                    ┌───────────────────────┐  │
- │                                    │  /intake-wnba         │  │  ← user
+ │                                    │  /intake-nfl          │  │  ← user
  │                                    └───────────────────────┘  │
  │                                                              │
  │  ┌────────────────────────────────────────────────┐          │
- │  │ 🏀  WNBA — games today (Thu Jul 16)             │          │  ← bot
+ │  │ 🏈  NFL — available games                        │          │  ← bot
  │  │ Which game do you want to predict?              │          │
  │  │                                                 │          │
  │  │  ┌───────────────────────────────────────────┐ │          │
- │  │  │  Aces @ Liberty        · 7:00 PM ET       │ │  ◄ tap    │
+ │  │  │  Dolphins @ Bills      · Sun 1:00 PM ET   │ │  ◄ tap    │
  │  │  ├───────────────────────────────────────────┤ │          │
- │  │  │  Sky @ Sun             · 7:30 PM ET       │ │          │
+ │  │  │  Ravens @ Bengals      · Sun 1:00 PM ET   │ │          │
  │  │  ├───────────────────────────────────────────┤ │          │
- │  │  │  Mercury @ Storm       · 10:00 PM ET      │ │          │
+ │  │  │  Packers @ Bears       · Sun 4:25 PM ET   │ │          │
  │  │  ├───────────────────────────────────────────┤ │          │
- │  │  │  Fever @ Wings         · 8:00 PM ET       │ │          │
+ │  │  │  Cowboys @ Eagles      · Sun 8:20 PM ET   │ │          │
  │  │  └───────────────────────────────────────────┘ │          │
  │  │        (inline keyboard — one button per game)  │          │
  │  └────────────────────────────────────────────────┘          │
  │                                                              │
  │                                    ┌───────────────────────┐  │
- │                                    │ (taps “Aces @ Liberty”)│ │  ← user
+ │                                    │ (taps “Dolphins @ Bills”)│  ← user
  │                                    └───────────────────────┘  │
  │                                                              │
  │  ┌────────────────────────────────────────────────┐          │
- │  │ 📋  Aces @ Liberty — 7:00 PM ET                 │          │  ← bot
+ │  │ 📋  Dolphins @ Bills — Sun 1:00 PM ET           │          │  ← bot
  │  │ ─────────────────────────────────────────────   │          │
- │  │   Spread :  NY -4.5                             │          │
- │  │   Total  :  165.5                               │          │
- │  │   ML     :  LV +160 / NY -190                   │          │
+ │  │   Spread :  Open BUF -3.5 · Latest BUF -2.5     │          │
+ │  │   Total  :  Open 47.5 · Latest 46.5             │          │
+ │  │   ML     :  Open MIA +155 · Latest MIA +130     │          │
  │  │ ─────────────────────────────────────────────   │          │
  │  │ Enter your prediction:                          │          │
  │  │                                                 │          │
- │  │   Type ▾            Your prediction             │          │
+ │  │   Market ▾          Your lean                    │          │
  │  │  ┌───────────────┐ ┌───────────────────────────┐│          │
- │  │  │ Total       ▾ │ │ Under 165.5 — slow pace,  ││  ◄ type   │
- │  │  │───────────────│ │ both D's elite            ││    +      │
- │  │  │ Total         │ └───────────────────────────┘│    input  │
- │  │  │ Spread        │        [ Submit ]             │          │
- │  │  │ Moneyline     │                               │          │
+ │  │  │ Spread      ▾ │ │ Dolphins +2.5. Prefer +3  ││  ◄ type   │
+ │  │  │───────────────│ │ or better; ML at +140.    ││    +      │
+ │  │  │ Spread        │ └───────────────────────────┘│    input  │
+ │  │  │ Moneyline     │        [ Submit ]             │          │
+ │  │  │ Total         │                               │          │
  │  │  │ Other         │                               │          │
  │  │  └───────────────┘                               │          │
  │  └────────────────────────────────────────────────┘          │
  │                                                              │
  │                                    ┌───────────────────────┐  │
- │                                    │ Type: Total           │  │  ← user
- │                                    │ Under 165.5 — slow…   │  │
+ │                                    │ Market: Spread        │  │  ← user
+ │                                    │ Side: Miami Dolphins  │  │
+ │                                    │ Prefer +3 or better…  │  │
  │                                    └───────────────────────┘  │
  │                                                              │
  │  ┌────────────────────────────────────────────────┐          │
  │  │ ✅  Logged your prediction                       │          │  ← bot
- │  │   Aces @ Liberty · Total                        │          │
- │  │   “Under 165.5 — slow pace, both D's elite”     │          │
+ │  │   Dolphins @ Bills · Spread · Miami Dolphins    │          │
+ │  │   “Prefer +3 or better; ML at +140”             │          │
  │  │   → saved to intake sheet                       │          │
  │  └────────────────────────────────────────────────┘          │
  │                                                              │
@@ -87,14 +141,14 @@ and the user submits a prediction via a **type dropdown** (`Total` / `Spread` /
 
 ### How the “dropdown + input box” maps to Telegram
 
-Telegram DMs have **no native side-by-side dropdown-with-textbox widget**, so the
-mockup above is the *intended experience*; it maps to one of two implementations
-(see "Design decision — form UI mechanism"):
+Telegram DMs have **no native side-by-side dropdown-with-textbox widget**. The
+initial implementation will deliberately prototype the closest native experience
+before deciding whether a hosted form is justified:
 
-- **Native (v1, no hosting):** the **Type** dropdown becomes an inline-button row
-  (`[ Total ] [ Spread ] [ Moneyline ] [ Other ]`); tapping one opens a
-  `ForceReply` **input box** pre-labeled with that type, where the user types the
-  value + reason. Two taps + one text entry — the closest native analog.
+- **Native (v1, adopted):** inline buttons select the market and side; tapping
+  them opens a `ForceReply` input box where the user enters their rationale and
+  any line/price conditions. This prototype will use realistic NFL line movement
+  so the team can evaluate the experience before adding hosting.
 - **Telegram Web App (later):** a real HTML form renders the dropdown and text box
   exactly as drawn, submitting both fields at once. Requires hosting + a bot
   domain; natural upgrade if the form grows.
@@ -102,17 +156,22 @@ mockup above is the *intended experience*; it maps to one of two implementations
 Text-transcript form of the same flow:
 
 ```
-User: /intake-wnba
-Bot:  "WNBA — games today:"        [inline keyboard, one button per game]
-        [ Aces @ Liberty  7:00 PM ] [ Sky @ Sun 7:30 PM ] ...
-User: (taps "Aces @ Liberty")
-Bot:  "Aces @ Liberty — 7:00 PM ET
-       Spread: NY -4.5 | Total: 165.5 | ML: LV +160 / NY -190
-       Choose a prediction type:"  [ Total ][ Spread ][ Moneyline ][ Other ]
-User: (taps "Total")
-Bot:  "Total — reply with your prediction + reason:"   [ForceReply]
-User: (replies) "Under 165.5 — slow pace, both D's elite"
-Bot:  "✅ Logged. Aces @ Liberty · Total · Under 165.5 …"
+User: /intake-nfl
+Bot:  "NFL — available games:"     [inline keyboard, one button per game]
+        [ Dolphins @ Bills · Sun 1:00 PM ] ...
+User: (taps "Dolphins @ Bills")
+Bot:  "Dolphins @ Bills — Sun 1:00 PM ET
+       Spread: Open BUF -3.5 | Latest BUF -2.5
+       Total:  Open 47.5     | Latest 46.5
+       ML:     Open MIA +155 | Latest MIA +130
+       Choose a market:"  [ Spread ][ Moneyline ][ Total ][ Other ]
+User: (taps "Spread")
+Bot:  "Choose a side:"             [ Miami Dolphins ][ Buffalo Bills ]
+User: (taps "Miami Dolphins")
+Bot:  "Miami Dolphins spread — enter your lean, reasoning, and the line or
+       price at which your preference changes:"                 [ForceReply]
+User: (replies) "Dolphins +2.5. Prefer +3 or better; ML instead at +140."
+Bot:  "✅ Logged. Dolphins @ Bills · Spread · Miami Dolphins …"
       → row appended to the intake sheet
 ```
 
@@ -121,7 +180,7 @@ Bot:  "✅ Logged. Aces @ Liberty · Total · Under 165.5 …"
 ## Architecture
 
 ```
-intake_bot.py            ← new: Telethon bot, command + callback + reply handlers,
+intake_bot.py            ← new: dedicated Telethon bot, command/callback/reply handlers,
                             in-memory conversation state, allowlist gate
 intake_sheets.py         ← new: read game list + game info from source sheet(s),
                             append submission to the intake sheet
@@ -134,14 +193,14 @@ run_intake_bot.sh        ← new: venv launcher (mirrors run_grade_daemon.sh)
 ### Design decision — process isolation
 
 **Options considered:**
-- **A. Separate process/systemd service (recommended, adopted).** A standalone
-  bot process, Bot-API-only (`BOT_SESSION` / `BOT_TOKEN`), like `grade_daemon.py`.
+- **A. Separate process/systemd service (adopted).** A standalone, dedicated
+  Bot-API-only intake bot, like `grade_daemon.py`.
 - **B. Add handlers to the existing `listener.py` bot.** Reuse the already-running
   bot client and event loop.
 - **C. Extend the existing Telegram Channels Claude bot** (the tmux `claude`
   session) to handle intake.
 
-**Recommendation: A.** The forwarder `listener.py` runs a persistent Telethon
+**Decision: A.** The forwarder `listener.py` runs a persistent Telethon
 **user** session and is flood-wait sensitive (`CLAUDE.md`: "Deploy cautiously.
 Rapid bot session restarts trigger Telegram flood waits"). Adding stateful,
 frequently-iterated command handlers there means every intake code change forces
@@ -152,8 +211,9 @@ intake **Bot-API-only** (zero Telethon-user/session risk, exactly the isolation
 rationale behind `grade_daemon.py`), independently deployable and restartable, and
 a crash/flood-wait on either side can't take down the other.
 
-**Trade-off accepted:** one more service to run and monitor, and a second Bot API
-poll loop. Worth it for fault isolation.
+**Trade-off accepted:** one more service, bot token, session, and identity to
+manage. This avoids update-polling ambiguity and allows a custom name and profile
+picture without coupling intake to the forwarding bot.
 
 ### Design decision — bot framework
 
@@ -181,7 +241,7 @@ update parsing/keyboards by hand for no benefit.
 - **B. Numbered text menu** ("reply 1–8 to choose a game").
 - **C. Telegram Web App / custom keyboard form.**
 
-**Recommendation: A.** Inline buttons give an unambiguous, tap-to-select game
+**Decision: A for the prototype.** Inline buttons give an unambiguous, tap-to-select game
 choice (no parsing of "which game did they mean"), and the **prediction type**
 (`Total`/`Spread`/`Moneyline`/`Other`) is a second inline-button row — the native
 stand-in for the dropdown in the mockup — after which `ForceReply` opens a reply
@@ -189,78 +249,90 @@ box we can positively match via `reply_to`, capturing exactly the prediction and
 not unrelated DMs. B is brittle (users mistype, indexes drift if the list changes
 between prompt and reply). C (Web App) is the only way to render a true
 dropdown-plus-input side by side, but it needs hosting, a bot domain, and JS —
-beyond a "text field to start" v1, though it's the natural upgrade path if the
-form grows into many structured fields.
+beyond the native prototype. After the prototype is used with realistic NFL
+examples, the team will decide whether the improved UX justifies hosting.
 
 ---
 
 ## Data model
 
-### Source sheet(s) — READ (see "Information needed")
-Two logical reads (may be one tab or two):
-1. **Game list** for the target date — e.g. columns `game_date, away_team,
-   home_team, game_time` (this is exactly the shape
-   `line-movement/sheets_utils.py::get_schedule_for_date` already returns).
-2. **Game info** — `spread`, `over_under`/`total` for the selected game (may live
-   in the same schedule row, or a separate odds/lines tab keyed by game).
+### `nfl_games` — current bot-facing state
 
-### Intake sheet — WRITE (new, dedicated)
-Proposed columns (append-only):
+One row per Odds API `event_id`, updated in place. The tab has 20 columns:
 
-| Col | Field | Source |
-|---|---|---|
-| A | `submitted_at` | server timestamp (ET) |
-| B | `telegram_user_id` | from `event.sender_id` |
-| C | `telegram_username` | from sender entity |
-| D | `sport` | command (`wnba`) |
-| E | `game_date` | selected game |
-| F | `away_team` | selected game |
-| G | `home_team` | selected game |
-| H | `game_time` | selected game |
-| I | `spread` | game info sheet |
-| J | `total` | game info sheet |
-| K | `prediction_type` | dropdown selection (`Total` / `Spread` / `Moneyline` / `Other`) |
-| L | `prediction_text` | free-text input (value + reason) |
+- Event metadata: event ID, season/type/week/status, UTC/ET kickoff, teams, and
+  bookmaker.
+- `opening_captured_at` and `latest_captured_at`.
+- Three packed opening columns: away, home, totals.
+- Three packed latest columns: away, home, totals.
+- `last_updated_at` and `period_last_checked_at`.
 
-Header-based lookup (like line-movement) so column reordering is safe.
+The six market columns use the same positional format as the snapshot tab. This
+keeps bot reads small while retaining all full-game, first-half, and
+first-quarter markets.
+
+### `nfl_line_snapshots` — append-only movement history
+
+Append one row only when a market payload differs from the latest persisted
+payload for that event. The tab has 12 columns: seven identity/time columns,
+three packed market columns, and two API-quota columns.
+
+Packed columns:
+
+- `away_game_spread_spreadprice_moneyline__h1_spread_spreadprice_moneyline__q1_spread_spreadprice_moneyline`
+- `home_game_spread_spreadprice_moneyline__h1_spread_spreadprice_moneyline__q1_spread_spreadprice_moneyline`
+- `totals_game_total_overprice_underprice__h1_total_overprice_underprice__q1_total_overprice_underprice`
+
+Encoding rules:
+
+- `|` separates full game, first half, and first quarter.
+- `,` separates the fields documented by the column name.
+- `nodata` explicitly represents a missing value.
+
+Example away value:
+
+```text
+3.5,-105,165|nodata,nodata,nodata|nodata,nodata,nodata
+```
+
+### `nfl_leans` — Telegram submissions
+
+This remains append-only and will include submission/user/game metadata, the
+selected period/market/side, target line or price, and free-text reasoning. Its
+final line-context columns will be finalized before the bot writer is
+implemented; do not assume the current placeholder header layout is final.
 
 ---
 
 ## Design decision — Google auth
 
-There are **two different Google auth conventions** already in play:
+There are currently **two different Google auth conventions** in the related
+codebases:
 
-- **A. line-movement pattern (recommended, adopted):** base64-encoded
+- **A. line-movement pattern (adopted repo-wide):** base64-encoded
   `GOOGLE_CREDENTIALS` env var, scopes `spreadsheets` + `drive`, with
   `sheets_read`/`sheets_write` cooldown + 429-retry helpers
   (`line-movement/sheets_utils.py`).
-- **B. forwarder pattern:** `GOOGLE_SERVICE_ACCOUNT_JSON` (path to a
+- **B. forwarder pattern (to be retired):** `GOOGLE_SERVICE_ACCOUNT_JSON` (path to a
   service-account JSON file), scope `spreadsheets` only
   (`telegram-channel-forwarder/sheets.py`).
 
-**Recommendation: A.** We're porting the read/write logic from line-movement, so
-taking its **battle-tested 429 handling and separate read/write rate-limit
-buckets** with it avoids re-deriving that behavior — and intake does both reads
-(game list/info) and writes (submission) that could otherwise collide with the
-grader's Sheets quota. Keep it **self-contained in `intake_sheets.py`** (copy the
-helpers) so the existing `sheets.py` used by the grader is untouched. Add
-`GOOGLE_CREDENTIALS` to `.env` alongside the current config.
-
-**Why not B:** it lacks the cooldown/backoff, and env-var credentials (base64)
-are easier to sync across machines than a file path that must exist on each host.
-**Trade-off accepted:** a second credential form lives in `.env`. If you'd prefer
-a single credential, the fallback is to reuse `GOOGLE_SERVICE_ACCOUNT_JSON` and
-port **only** the `sheets_read`/`sheets_write` cooldown logic onto it (still gets
-the rate-limit safety, one credential). Captured in "Open decisions".
+**Decision: A only.** Migrate the existing forwarder Sheets consumer and the new
+intake service together so both decode `GOOGLE_CREDENTIALS` and share the proven
+cooldown/backoff behavior. Remove `GOOGLE_SERVICE_ACCOUNT_JSON` after the
+migration is deployed and verified; do not retain dual loaders or silent
+fallbacks. The credential remains only in untracked environment configuration
+and must never be committed.
 
 ---
 
 ## Conversation state
 
 In-memory dict keyed by `telegram_user_id`:
-`{ user_id: {"stage": "awaiting_game"|"awaiting_type"|"awaiting_prediction", "sport": ..., "game": {...}, "info": {...}, "prediction_type": ..., "prompt_msg_id": ...} }`.
+`{ user_id: {"stage": ..., "sport": "nfl", "game": {...}, "lines": {...}, "market": ..., "side": ..., "prompt_msg_id": ...} }`.
 
-- Set on `/intake-wnba`, advanced on game selection → type selection → text
+- Set on `/intake-nfl`, advanced on game selection → market selection → side
+  selection → text
   reply, cleared on submit/cancel.
 - Guard: match the reply via `event.message.reply_to` pointing at the bot's
   ForceReply prompt (`prompt_msg_id`) so we don't capture unrelated DMs.
@@ -275,7 +347,7 @@ In-memory dict keyed by `telegram_user_id`:
 - **C. Stateless** — encode the whole selected game + info into the callback data
   / prompt so no server state is needed.
 
-**Recommendation: A for v1.** The flow is a few seconds long and a restart is
+**Decision: A for v1.** The flow is a few seconds long and a restart is
 rare; if state is lost the user simply re-runs the command — cheap and obvious.
 This is the least code. **Why not B (yet):** durability isn't worth a schema and
 migration for a transient 3-step flow, but it's the clear upgrade if we later want
@@ -284,6 +356,11 @@ sessions to survive restarts (add an `intake_sessions` table next to
 small to carry a game blob + spread/total reliably, so we'd still need a lookup —
 defeating the point. **Trade-off accepted:** in-flight forms are dropped on
 restart.
+
+For a future Telegram Web App, signed query parameters may carry a short-lived,
+non-sensitive state identifier across restarts. The server must still validate
+Telegram identity and load authoritative line snapshots server-side; raw prices
+or trusted user data must not be accepted from the URL.
 
 ---
 
@@ -298,37 +375,27 @@ Only an allowlist of Telegram user IDs may use the command (user-selected).
 ## Design decision — bot identity
 
 **Options considered:**
-- **A. Reuse the existing `BOT_TOKEN` / `BOT_SESSION` (recommended, adopted).**
-- **B. Register a dedicated intake bot** (new token + session).
-
-**Recommendation: A.** No new BotFather setup, no extra session to generate/rotate
-(`scripts/get_bot_session.py` already produces `BOT_SESSION`), and users interact
-with the same known bot. Because the intake bot is a **separate process**, running
-two clients on the same token is fine as long as only one long-polls DMs — the
-forwarder bot sends to channels, and the intake bot handles command DMs, so their
-update scopes don't collide in practice.
-
-**Why consider B:** cleaner separation of concerns and independent rate-limit
-budget; if the forwarder bot and intake bot ever contend for `getUpdates` on the
-same DM chat, a dedicated token removes any ambiguity. **Trade-off of A:** shared
-token means a token rotation affects both. If DM update contention shows up in
-testing, switch to B. Captured in "Open decisions".
+Use a **dedicated intake bot** with its own token, session, name, and profile.
+This is a resolved requirement, not an open decision. It prevents update-polling
+conflicts, isolates failures and token rotation, and gives the intake experience
+room for its own identity.
 
 ---
 
 ## Steps (each independently landable)
 
-### Step 0 — Confirm inputs (blocked on "Information needed")
-Gather sheet IDs/tab names and column headers for the game list and game-info
-reads, and create the new intake sheet shared with the service account. Nothing
-to code until the source shape is known.
+### Step 0 — Data-source setup (completed)
+The dedicated workbook, service account, BetOnline Odds API source, tab schemas,
+and environment variables are configured. Dedicated bot registration and the
+allowlist remain intentionally deferred until the data pipeline is scheduled.
 
 ### Step 1 — `intake_sheets.py` (read + write, no bot)
 - Port `get_gspread_client`, `sheets_read`, `sheets_write` (cooldown + 429) from
   `line-movement/sheets_utils.py`.
 - `list_games(sport, date) -> list[dict]` — reads the game-list sheet
   (adapts `get_schedule_for_date`).
-- `get_game_info(sport, game) -> dict` — reads spread/total for the game.
+- `get_game_info(sport, game) -> dict` — reads opening/latest spread, moneyline,
+  and total snapshots for the game.
 - `append_submission(row: dict) -> None` — header-based append to intake sheet.
 - **Verify:** a throwaway `python -c` / script call lists today's games and
   appends a test row locally (in a venv).
@@ -337,29 +404,27 @@ to code until the source shape is known.
 - Telethon `TelegramClient(StringSession(BOT_SESSION), API_ID, API_HASH)` started
   with `bot_token=BOT_TOKEN` (same as `listener.py`).
 - `load_dotenv()` + `.env.local` override (repo convention).
-- Register `events.NewMessage(pattern=r'^/intake-wnba')`, allowlist gate, reply
+- Register `events.NewMessage(pattern=r'^/intake-nfl')`, allowlist gate, reply
   with inline keyboard from `list_games`.
-- **Verify:** `python intake_bot.py` locally; `/intake-wnba` returns the game
+- **Verify:** `python intake_bot.py` locally; `/intake-nfl` returns the game
   list; non-allowlisted user is refused.
 
-### Step 3 — Game selection + type selection + info display
-- `events.CallbackQuery` handler (game): decode selected game, call
-  `get_game_info`, display spread/total/ML, and present the **type dropdown** as
-  an inline-button row `[ Total ][ Spread ][ Moneyline ][ Other ]`; set state to
-  `awaiting_type`.
-- `events.CallbackQuery` handler (type): store `prediction_type`, send a
-  `ForceReply` prompt ("<Type> — reply with your prediction + reason"), store
-  `prompt_msg_id`, set state to `awaiting_prediction`.
+### Step 3 — Game, market, and side selection
+- `events.CallbackQuery` handler (game): display opening/latest spread, total,
+  and moneyline, then present `[ Spread ][ Moneyline ][ Total ][ Other ]`.
+- Market handler: store the selected market and present valid sides (teams for
+  spread/moneyline, over/under for total).
+- Side handler: store the side and send a `ForceReply` asking for the lean,
+  rationale, and any line/price at which the preference changes.
 - Callback data must be compact (Telegram 64-byte limit) — use short game
   index/key + type token into the state, not the full game blob.
-- **Verify:** tapping a game shows correct spread/total/ML and the type row;
-  tapping a type opens a reply box labeled with that type.
+- **Verify:** tapping Dolphins @ Bills shows correct opening/latest lines;
+  selecting Spread → Miami Dolphins opens the expected reply prompt.
 
 ### Step 4 — Capture prediction + write row
 - `events.NewMessage` (incoming, is-reply) handler: match `reply_to ==
-  prompt_msg_id`, take `prediction_type` from state (the dropdown selection) and
-  the reply body as `prediction_text`, build the row, `append_submission`,
-  confirm to user, clear state.
+  prompt_msg_id`, combine the stored line snapshot, market, side, and reply body,
+  append the structured row, confirm to the user, and clear state.
 - **Verify:** submitting writes a correct row to the intake sheet; confirmation
   echoes game · type · prediction.
 
@@ -370,7 +435,7 @@ to code until the source shape is known.
   No `WatchdogSec` needed for v1 (add later if it can wedge).
 - Add the unit to `scripts/check_deploy_sync.sh` coverage.
 - **Verify:** `bash scripts/check_deploy_sync.sh` clean; service starts on VPS,
-  survives a restart, still handles `/intake-wnba`.
+  survives a restart, still handles `/intake-nfl`.
 
 ### Step 6 — Docs
 - Add an "Intake bot" section to `CLAUDE.md` (service name, env vars, allowlist,
@@ -381,11 +446,12 @@ to code until the source shape is known.
 
 ## Extensibility (design for it, don't build yet)
 
-- `/intake-wnba` is the first of a family (`/intake-nba`, `/intake-nhl`, …).
+- `/intake-nfl` is the first of a family (`/intake-nba`, `/intake-nhl`, …).
   Keep sport-specific config (source sheet id/tab, allowed prediction prefixes)
   in a small `INTAKE_SPORTS` dict/JSON in `.env` so new sports are config-only.
-- Prediction is free text now; a future version can validate/parse the
-  `Total:`/`Spread:` payload into structured fields.
+- Market and side are structured now. The initial version keeps rationale and
+  movement-dependent conditions as free text; a later version may parse
+  `target_line_or_price` automatically or collect it through another control.
 
 ---
 
@@ -403,57 +469,207 @@ to code until the source shape is known.
 
 | File | Change | Notes |
 |---|---|---|
+| `nfl_lines.py` | New | BetOnline fetch, normalization, opening/latest merge, Sheet persistence |
+| `scripts/fetch_nfl_lines.py` | New | Dry-run and `--write` CLI |
+| `scripts/test_nfl_lines.py` | New | Parsing, season, opening, row-index, and snapshot tests |
+| `run_nfl_lines_fetcher.sh` | New | Scheduled-mode VPS launcher |
+| `deploy/systemd/nfl-lines-fetcher.service` | New | One-shot line fetch service |
+| `deploy/systemd/nfl-lines-fetcher.timer` | New | 30-minute cadence-check timer |
 | `intake_sheets.py` | New | Sheets read/write, ports line-movement helpers |
 | `intake_bot.py` | New | Telethon bot: command, callback, reply, allowlist |
 | `run_intake_bot.sh` | New | venv launcher |
 | `deploy/systemd/telegram-intake.service` | New | systemd unit |
 | `scripts/check_deploy_sync.sh` | Modified | include new unit |
 | `CLAUDE.md` | Modified | document the intake bot |
-| `.env` / `.env.local` | Modified | new env vars (below) |
+| `.env` / `.env.local` | Modified | dedicated bot and intake env vars |
 
 New env vars:
 - `INTAKE_ALLOWED_USER_IDS` — comma-separated numeric Telegram user IDs
-- `INTAKE_SHEET_ID` — new dedicated intake sheet (and `:gid`/tab as needed)
-- `INTAKE_WNBA_SOURCE_SHEET` — source sheet id/tab for game list + info
-- `GOOGLE_CREDENTIALS` — base64 service-account JSON (if adopting line-movement auth)
+- `NFL_INTAKE_SHEET_ID` — dedicated workbook containing all three intake tabs
+- `INTAKE_BOT_TOKEN` / `INTAKE_BOT_SESSION` — dedicated intake bot credentials
+- `GOOGLE_CREDENTIALS` — base64 service-account JSON, used repo-wide
+- `ODDS_API_KEY` — The Odds API credential used for BetOnline lines
 
 ---
 
-## Open decisions
+## Resolved decisions
 
-1. **Auth form:** adopt line-movement's base64 `GOOGLE_CREDENTIALS` (recommended)
-   vs. reuse the forwarder's `GOOGLE_SERVICE_ACCOUNT_JSON` path.
-2. **State durability:** in-memory (v1) vs. SQLite table (`intake_sessions`).
-3. **Same bot vs. new bot token:** reuse existing `BOT_TOKEN`/`BOT_SESSION`
-   (simplest) vs. a dedicated intake bot token (cleaner separation, another
-   session to manage).
+1. Start with a native Telegram prototype; consider a Web App only after using
+   the prototype with realistic NFL data.
+2. Run a separate process with a dedicated intake bot.
+3. Keep transient multi-step state in memory for v1.
+4. Use line-movement's base64 `GOOGLE_CREDENTIALS` approach repo-wide.
+5. Require structured market and side selection; store the opening/latest line
+   snapshot and keep reasoning/price conditions as text initially.
+6. Use the Miami Dolphins in all sample user selections and submitted opinions.
+7. Use BetOnline (`betonlineag`) through The Odds API as the fixed bookmaker so
+   movement is always an apples-to-apples comparison.
+
+## Implementation decision log
+
+### 2026-08-04 — Dedicated workbook
+
+**Decision:** Create a new workbook for this intake system rather than reuse any
+`line-movement` workbook or tab.
+
+**Rationale:** The projects may reuse code patterns, but their operational data,
+permissions, and lifecycle should remain independent.
+
+**Workbook layout:**
+
+- `nfl_games` — one current row per Odds API event, optimized for bot reads.
+- `nfl_line_snapshots` — append-only line history.
+- `nfl_leans` — append-only Telegram submissions.
+
+There is no separate schedule-only tab. The Odds API event response supplies the
+event ID, teams, and kickoff time together with the markets.
+
+### 2026-08-04 — BetOnline as the fixed line source
+
+**Decision:** Fetch `h2h`, `spreads`, and `totals` from BetOnline
+(`betonlineag`) through The Odds API.
+
+**Rationale:** Comparing the same bookmaker over time measures actual movement.
+Selecting the best available book on each poll could create false movement when
+the selected bookmaker changes.
+
+Both active sport keys are collected:
+
+- `americanfootball_nfl_preseason`
+- `americanfootball_nfl`
+
+### 2026-08-04 — Meaning of “opening”
+
+**Decision:** “Opening” means the first valid value observed by this system for
+each market, not necessarily BetOnline's true market-open price.
+
+**Rationale:** The current Odds API poll supplies the latest price. If polling
+begins after a market was posted, claiming that first captured value as the
+book's original opener would be misleading. A market omitted in the first
+response initializes its opening value when it first becomes available.
+
+### 2026-08-04 — Current rows plus append-only history
+
+**Decision:** Upsert every event into `nfl_games`, preserving opening fields and
+updating latest fields. Append to `nfl_line_snapshots` only when any market
+changes.
+
+**Rationale:** The bot gets a small, fast current-state table while the snapshot
+tab preserves movement history without adding unchanged hourly rows.
+
+Manual blank rows in the workbook are tolerated: updates use physical Sheet row
+numbers rather than positions in a filtered list.
+
+### 2026-08-04 — Duplicate prevention
+
+**Decision:** Every append path must perform an application-level duplicate
+check before writing.
+
+- `nfl_games` is unique by Odds API `event_id` and is updated in place.
+- `nfl_line_snapshots` compares the candidate market payload with the latest
+  persisted payload for that event and appends only when it differs.
+- Multiple copies of an event returned or passed within one run are collapsed by
+  `event_id`.
+- `nfl_leans` will use a unique `submission_id`; retries must check that ID before
+  appending.
+
+A line returning to a previously seen value is **not** considered a duplicate
+when an intervening value existed; that reversal is real movement and should be
+recorded.
+
+### 2026-08-04 — Full-game and period markets
+
+**Decision:** Track spread, moneyline, and total for all three periods:
+
+- Full game
+- First half
+- First quarter
+
+Full-game markets come from the sport-level endpoint. First-half and first-quarter
+markets require The Odds API's per-event endpoint, so the fetcher checks every
+upcoming event on every run rather than limiting period checks to games within a
+specific number of days.
+
+**Rationale:** Period markets may be posted at different times, including well
+before kickoff. Checking every event avoids missing their first observed value.
+The live BetOnline probe returned no period markets for the currently available
+games, but unavailable markets consumed no additional quota. Period fields remain
+blank until BetOnline publishes them, then initialize their opening value from
+the first valid observation.
+
+The workbook schemas now include all three periods. `nfl_games` stores six packed
+market columns (opening/latest × away/home/totals), while
+`nfl_line_snapshots` stores three packed market columns (away/home/totals).
+Missing values are written as the literal `nodata` so positions remain explicit
+and survive CSV/Sheet transformations.
+
+### 2026-08-04 — Google Sheets capacity
+
+**Constraint:** Design against Google Sheets' standard **10 million cells per
+spreadsheet** limit. The limit applies across every tab in the workbook, so
+adding more tabs to the same spreadsheet does not increase capacity.
+
+The packed format and change-only snapshot appends substantially reduce cell
+growth, but they do not remove the long-term limit. Monitor workbook cell usage
+before each season and establish an archival threshold well below 10 million.
+
+When capacity becomes material, choose one of:
+
+1. Archive completed seasons into additional **spreadsheet files** and keep the
+   active season in the operational workbook.
+2. Move line history to a database and retain Google Sheets only as a current
+   view/export and human-facing intake surface.
+
+A database is the preferred long-term destination if the history becomes large
+or needs non-trivial querying.
+
+### 2026-08-04 — Scheduling location
+
+**Decision:** Run the recurring fetcher through a VPS systemd timer, not GitHub
+Actions.
+
+**Rationale:** Credentials already live on the VPS, systemd scheduling is more
+predictable than scheduled Actions, and the repository already operates and
+monitors recurring jobs this way.
+
+The timer wakes every 30 minutes, but scheduled mode reads `nfl_games` first and
+exits without an Odds API call when nothing is due. Adopted per-game bands:
+
+| Time to kickoff | Poll interval |
+|---|---:|
+| More than 7 days | 24 hours |
+| More than 24 hours through 7 days | 12 hours |
+| More than 4 hours through 24 hours | 1 hour |
+| 4 hours or less | 30 minutes |
+| Started or past | Stop polling |
+
+`last_updated_at` gates the sport-level full-game refresh.
+`period_last_checked_at` independently gates first-half/first-quarter per-event
+requests. Whenever a sport-level call is due, it returns all listed games, so
+distant full-game lines may be refreshed more often at no additional request.
+If a game's period request is not due, the writer preserves its last known H1/Q1
+values rather than replacing them with `nodata` or recording false movement.
+
+Implemented artifacts:
+
+- `run_nfl_lines_fetcher.sh`
+- `deploy/systemd/nfl-lines-fetcher.service`
+- `deploy/systemd/nfl-lines-fetcher.timer`
 
 ---
 
-## Information needed (please provide before Step 1)
+## Remaining inputs
 
-These are the concrete inputs required — none are decided yet:
+The data source, workbook, credentials, and schemas are resolved. Inputs still
+needed before the Telegram bot is deployed:
 
-1. **Game list source** — Google Sheet **ID**, **tab name**, and **column
-   headers** for the list of available WNBA games (need at least: date field,
-   away team, home team, game time). Is it the `line-movement` `wnba_schedule`
-   tab, or a different sheet?
-2. **Game info source** — Sheet **ID** + **tab name** + **column headers** for
-   **spread** and **total/over_under** per game. Same tab as #1, or separate?
-   How is a game keyed (e.g. by `game_date` + team names)?
-3. **Intake (output) sheet** — the new dedicated sheet's **ID** and **tab name**,
-   and confirmation it's **shared with the service account** email.
-4. **Service account** — which credential to use (existing
-   `GOOGLE_SERVICE_ACCOUNT_JSON`, or provide base64 `GOOGLE_CREDENTIALS`), and the
-   service-account email to share sheets with.
-5. **Allowlist** — the list of Telegram **user IDs** permitted to run
-   `/intake-wnba`.
-6. **Bot** — confirm reuse of the existing `BOT_TOKEN`/`BOT_SESSION`, or provide a
-   new bot token for a dedicated intake bot.
-7. **Date scope** — should `/intake-wnba` show **today's** games (ET), or a date
-   argument like `/intake-wnba 2026-07-17`? Default assumed: today (ET).
-8. **Prediction types** — confirm the dropdown set is exactly `Total`, `Spread`,
-   `Moneyline`, `Other` (add/remove any), and whether `Other` requires the user to
-   name the market in the text or is free-form.
-9. **Game info fields** — the mockup shows Spread, Total, and Moneyline (ML). Is
-   ML available in the source sheet, or only spread/total for now?
+1. **Allowlist** — the list of Telegram **user IDs** permitted to run
+   `/intake-nfl`.
+2. **Bot** — create the dedicated bot and provide its token/session plus desired
+   display name and profile image.
+3. **Slate scope** — decide whether `/intake-nfl` shows the current week, accepts
+   a week/date argument, or offers both. Default recommendation: current week.
+4. **Markets** — confirm the set is `Spread`, `Moneyline`, `Total`, `Other`, and
+   define how `Other` should identify its market.
+5. **Target condition structure** — confirm free text for v1, with an optional
+   best-effort parsed `target_line_or_price`, rather than another required step.

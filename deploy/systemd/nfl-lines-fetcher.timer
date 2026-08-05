@@ -1,0 +1,12 @@
+[Unit]
+Description=Check NFL line polling cadence every 30 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+AccuracySec=30s
+Persistent=true
+Unit=nfl-lines-fetcher.service
+
+[Install]
+WantedBy=timers.target
