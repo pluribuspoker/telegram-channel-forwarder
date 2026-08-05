@@ -719,6 +719,9 @@ permissions, and lifecycle should remain independent.
 - `team_emojis` — editable team-name to emoji mapping used by bot views.
 - `suggestions` — append-only freeform feedback with Telegram identity and
   submission timestamps.
+- `allowed_users` — reference table containing each authorized user's current
+  Telegram display name, numeric user ID, and username when available. Runtime
+  enforcement remains the untracked `INTAKE_ALLOWED_USER_IDS` environment key.
 
 There is no separate schedule-only tab. The Odds API event response supplies the
 event ID, teams, and kickoff time together with the markets.
