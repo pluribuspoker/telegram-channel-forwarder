@@ -97,6 +97,10 @@ Adopted slate behavior:
 - Selecting a game now continues through button-only period, market, and side
   choices. Periods are full game, first half, and first quarter; markets are
   spread, moneyline, and total; valid sides are the two teams or over/under.
+- After selecting a period, the bot displays that period's opening/latest
+  spread, moneyline, and total before asking for the market. After selecting a
+  market, it displays opening/latest values for both valid sides before asking
+  for the side.
 - After the structured choices, a ForceReply prompt captures the only free-text
   guess input: the lean, reasoning, and line/price where the preference changes.
 - The final selected period/market/side and opening/latest prices are displayed

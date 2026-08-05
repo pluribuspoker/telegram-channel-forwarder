@@ -20,7 +20,9 @@ from intake_bot import (
     implied_score,
     implied_score_tldr,
     market_buttons,
+    market_side_summary,
     page_games,
+    period_market_summary,
     select_games,
     selected_market_context,
     side_buttons,
@@ -171,6 +173,35 @@ class GameSelectionTest(unittest.TestCase):
             ["market:spread", "market:moneyline", "market:total"],
         )
         self.assertEqual(buttons[1][0].data.decode(), "back:game")
+
+    def test_period_summary_shows_all_three_markets(self):
+        text = period_market_summary(
+            _game("miami", 1),
+            period="game",
+        )
+
+        self.assertIn("<b>Full game</b>", text)
+        self.assertIn("<u>Spread</u>", text)
+        self.assertIn("<u>Moneyline</u>", text)
+        self.assertIn("<u>Total</u>", text)
+        self.assertIn("Choose a market:", text)
+
+    def test_market_summary_shows_both_sides_before_selection(self):
+        spread_text = market_side_summary(
+            _game("miami", 1),
+            period="game",
+            market="spread",
+        )
+        total_text = market_side_summary(
+            _game("miami", 1),
+            period="game",
+            market="total",
+        )
+
+        self.assertIn("Opening\n🐬 +3.5 (-105) · ☠️ -3.5 (-115)", spread_text)
+        self.assertIn("Latest\n🐬 +3.5 (-105) · ☠️ -3.5 (-115)", spread_text)
+        self.assertIn("Opening\nOver 40.5 (-110) · Under 40.5 (-110)", total_text)
+        self.assertIn("Choose a side:", total_text)
 
     def test_selected_market_context_uses_requested_period_and_side(self):
         context = selected_market_context(

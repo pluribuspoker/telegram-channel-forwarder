@@ -460,6 +460,98 @@ def selection_price_text(
     return f"{side_label} {_signed(line)} ({_signed(price)})"
 
 
+def period_market_summary(
+    game: dict[str, Any],
+    *,
+    period: str,
+    team_emojis: dict[str, str] | None = None,
+) -> str:
+    opening = decode_packed_markets(
+        str(game[OPENING_AWAY_COLUMN]),
+        str(game[OPENING_HOME_COLUMN]),
+        str(game[OPENING_TOTALS_COLUMN]),
+    )[period]
+    latest = decode_packed_markets(
+        str(game[LATEST_AWAY_COLUMN]),
+        str(game[LATEST_HOME_COLUMN]),
+        str(game[LATEST_TOTALS_COLUMN]),
+    )[period]
+    away = str(game["away_team"])
+    home = str(game["home_team"])
+    return "\n\n".join(
+        [
+            (
+                f"🏈 <b>{team_emoji(away, team_emojis)} {html.escape(away)} @ "
+                f"{team_emoji(home, team_emojis)} {html.escape(home)}</b>"
+            ),
+            _period_lines(
+                PERIOD_LABELS[period],
+                opening,
+                latest,
+                away,
+                home,
+                team_emojis,
+            ),
+            "Choose a market:",
+        ]
+    )
+
+
+def market_side_summary(
+    game: dict[str, Any],
+    *,
+    period: str,
+    market: str,
+    team_emojis: dict[str, str] | None = None,
+) -> str:
+    opening = decode_packed_markets(
+        str(game[OPENING_AWAY_COLUMN]),
+        str(game[OPENING_HOME_COLUMN]),
+        str(game[OPENING_TOTALS_COLUMN]),
+    )[period]
+    latest = decode_packed_markets(
+        str(game[LATEST_AWAY_COLUMN]),
+        str(game[LATEST_HOME_COLUMN]),
+        str(game[LATEST_TOTALS_COLUMN]),
+    )[period]
+    away = str(game["away_team"])
+    home = str(game["home_team"])
+    away_icon = team_emoji(away, team_emojis)
+    home_icon = team_emoji(home, team_emojis)
+
+    def values(snapshot: dict[str, Any]) -> str:
+        if market == "spread":
+            return (
+                f"{away_icon} {_signed(snapshot['away_spread'])} "
+                f"({_signed(snapshot['away_spread_price'])}) · "
+                f"{home_icon} {_signed(snapshot['home_spread'])} "
+                f"({_signed(snapshot['home_spread_price'])})"
+            )
+        if market == "moneyline":
+            return (
+                f"{away_icon} {_signed(snapshot['away_moneyline'])} · "
+                f"{home_icon} {_signed(snapshot['home_moneyline'])}"
+            )
+        return (
+            f"Over {_line(snapshot['total'])} "
+            f"({_signed(snapshot['over_price'])}) · "
+            f"Under {_line(snapshot['total'])} "
+            f"({_signed(snapshot['under_price'])})"
+        )
+
+    return "\n\n".join(
+        [
+            (
+                f"🏈 <b>{team_emoji(away, team_emojis)} {html.escape(away)} @ "
+                f"{team_emoji(home, team_emojis)} {html.escape(home)}</b>"
+            ),
+            f"<b>{PERIOD_LABELS[period]} · {market.title()}</b>",
+            f"Opening\n{values(opening)}\n\nLatest\n{values(latest)}",
+            "Choose a side:",
+        ]
+    )
+
+
 def build_lean_row(
     *,
     submitted_at: datetime,
@@ -818,11 +910,10 @@ async def main() -> None:
             state.pop("market", None)
             state.pop("side", None)
             state.pop("prompt_msg_id", None)
-            game = state["game"]
-            text = (
-                f"<b>{html.escape(str(game['away_team']))} @ "
-                f"{html.escape(str(game['home_team']))}</b>\n\n"
-                f"{PERIOD_LABELS[state['period']]}\nChoose a market:"
+            text = period_market_summary(
+                state["game"],
+                period=state["period"],
+                team_emojis=team_emojis,
             )
             await edit_callback(event, text, market_buttons())
             return
@@ -838,9 +929,11 @@ async def main() -> None:
                 await client.delete_messages(event.chat_id, [prompt_msg_id])
             state.pop("side", None)
             game = state["game"]
-            text = (
-                f"<b>{PERIOD_LABELS[state['period']]} · "
-                f"{state['market'].title()}</b>\n\nChoose a side:"
+            text = market_side_summary(
+                game,
+                period=state["period"],
+                market=state["market"],
+                team_emojis=team_emojis,
             )
             await edit_callback(
                 event,
@@ -861,11 +954,10 @@ async def main() -> None:
                 )
                 return
             state["period"] = period
-            game = state["game"]
-            text = (
-                f"<b>{html.escape(str(game['away_team']))} @ "
-                f"{html.escape(str(game['home_team']))}</b>\n\n"
-                f"{PERIOD_LABELS[period]}\nChoose a market:"
+            text = period_market_summary(
+                state["game"],
+                period=period,
+                team_emojis=team_emojis,
             )
             await edit_callback(event, text, market_buttons())
             return
@@ -883,9 +975,11 @@ async def main() -> None:
                 return
             state["market"] = market
             game = state["game"]
-            text = (
-                f"<b>{PERIOD_LABELS[state['period']]} · "
-                f"{market.title()}</b>\n\nChoose a side:"
+            text = market_side_summary(
+                game,
+                period=state["period"],
+                market=market,
+                team_emojis=team_emojis,
             )
             await edit_callback(
                 event,
