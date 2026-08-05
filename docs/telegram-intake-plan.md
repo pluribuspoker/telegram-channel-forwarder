@@ -38,11 +38,10 @@ proposal rather than leaving contradictory guidance in place.
 
 ### Next
 
-- Deploy and enable the completed VPS systemd service/timer.
-- Build the dedicated Telegram bot only after the recurring data source is
-  running reliably.
+- Observe the collector timer through at least one naturally due polling window.
+- Create the dedicated intake bot and begin the native Telegram prototype.
 
-### In progress — 2026-08-04: VPS collector deployment
+### Completed — 2026-08-04: VPS collector deployment
 
 Deployment checklist:
 
@@ -64,6 +63,35 @@ Deployment issue log:
   `origin/main`, while the VPS already matched the current remote head. The
   collector work was stashed, `main` was fast-forwarded to `b2ed682`, and the
   work was reapplied without conflicts before committing.
+- **Initial push denied:** Git was authenticated as
+  `sahirboghani_microsoft`, which has read-only access to this repository. The
+  collector commit remained intact locally; authentication was switched to the
+  previously approved `sboghani1` collaborator account before retrying.
+- **`syncenv` unavailable locally:** the documented helper was not installed or
+  defined in the current shell environment. Its behavior was reproduced
+  explicitly: `.env` was uploaded to a temporary VPS path and atomically
+  installed as `/home/forwarder/app/.env` with `forwarder:forwarder` ownership
+  and mode `600`; `.env.local` was not touched.
+
+Deployment outcome:
+
+- Collector implementation committed as `5fae910` and pushed to `main`.
+- VPS checkout fast-forwarded to the collector commit without modifying its
+  pre-existing unrelated dirty/untracked files.
+- Installed and enabled `nfl-lines-fetcher.timer`; it is active and wakes every
+  30 minutes.
+- The timer's automatic run and a manual oneshot run both exited successfully
+  with `No NFL games are due for polling; no API calls made.`
+- An explicit live preseason fetch was run as the `forwarder` user to exercise
+  VPS Odds API and Google Sheets credentials. It fetched one upcoming game,
+  updated its existing `nfl_games` row, and appended zero duplicate snapshots.
+- Workbook verification after deployment found 19 game rows, 19 unique event
+  IDs, zero duplicate game IDs, and 20 legitimate movement snapshots.
+- Required VPS environment keys are present:
+  `ODDS_API_KEY`, `GOOGLE_CREDENTIALS`, and `NFL_INTAKE_SHEET_ID`.
+
+This phase is complete. The next implementation phase is the dedicated native
+Telegram intake bot.
 
 ---
 
