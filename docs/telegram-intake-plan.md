@@ -616,6 +616,18 @@ lean fields were preserved. VPS deployment remains.
 - **Verify:** `bash scripts/check_deploy_sync.sh` clean; service starts on VPS,
   survives a restart, still handles `/guess_nfl_game`.
 
+### Completed — 2026-08-04: VPS intake bot deployment
+
+- Committed and pushed the native intake implementation.
+- Merged only `INTAKE_BOT_TOKEN` and `INTAKE_ALLOWED_USER_IDS` into the existing
+  VPS `.env`, preserving all unrelated values.
+- Generated `INTAKE_BOT_SESSION` on the VPS as the `forwarder` user and retained
+  `.env.local` ownership/mode requirements.
+- Installed and enabled `telegram-intake.service`.
+- Confirmed the service is active and running as `@nflguesser_bot`.
+- Confirmed all repository deployment artifacts match their live VPS copies
+  through `scripts/check_deploy_sync.sh`.
+
 ### Step 6 — Docs
 - Add an "Intake bot" section to `CLAUDE.md` (service name, env vars, allowlist,
   sheet IDs, manual run command, test-mode notes).
