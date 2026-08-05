@@ -92,6 +92,40 @@ DEFAULT_NFL_TEAM_EMOJIS = {
     "Tennessee Titans": "⚔️",
     "Washington Commanders": "🪖",
 }
+DEFAULT_NFL_TEAM_ABBREVS = {
+    "Arizona Cardinals": "ARI",
+    "Atlanta Falcons": "ATL",
+    "Baltimore Ravens": "BAL",
+    "Buffalo Bills": "BUF",
+    "Carolina Panthers": "CAR",
+    "Chicago Bears": "CHI",
+    "Cincinnati Bengals": "CIN",
+    "Cleveland Browns": "CLE",
+    "Dallas Cowboys": "DAL",
+    "Denver Broncos": "DEN",
+    "Detroit Lions": "DET",
+    "Green Bay Packers": "GB",
+    "Houston Texans": "HOU",
+    "Indianapolis Colts": "IND",
+    "Jacksonville Jaguars": "JAX",
+    "Kansas City Chiefs": "KC",
+    "Las Vegas Raiders": "LV",
+    "Los Angeles Chargers": "LAC",
+    "Los Angeles Rams": "LAR",
+    "Miami Dolphins": "MIA",
+    "Minnesota Vikings": "MIN",
+    "New England Patriots": "NE",
+    "New Orleans Saints": "NO",
+    "New York Giants": "NYG",
+    "New York Jets": "NYJ",
+    "Philadelphia Eagles": "PHI",
+    "Pittsburgh Steelers": "PIT",
+    "San Francisco 49ers": "SF",
+    "Seattle Seahawks": "SEA",
+    "Tampa Bay Buccaneers": "TB",
+    "Tennessee Titans": "TEN",
+    "Washington Commanders": "WAS",
+}
 
 
 def _parse_time(value: str) -> datetime:
@@ -154,12 +188,18 @@ def page_games(
     )
 
 
-def _game_button_label(game: dict[str, Any]) -> str:
+def team_abbrev(team: str, team_abbrevs: dict[str, str] | None = None) -> str:
+    mapping = DEFAULT_NFL_TEAM_ABBREVS if team_abbrevs is None else team_abbrevs
+    return mapping.get(team, team)
+
+
+def _game_button_label(
+    game: dict[str, Any], team_abbrevs: dict[str, str] | None = None
+) -> str:
     kickoff = _parse_time(str(game["commence_time_utc"])).astimezone(ET)
-    return (
-        f"{kickoff:%a %-m/%-d %-I:%M %p} · "
-        f"{game['away_team']} @ {game['home_team']}"
-    )
+    away = team_abbrev(str(game["away_team"]), team_abbrevs)
+    home = team_abbrev(str(game["home_team"]), team_abbrevs)
+    return f"{kickoff:%-m/%-d} {away}@{home}"
 
 
 def game_browser(
@@ -168,6 +208,7 @@ def game_browser(
     days: int,
     page: int,
     now: datetime,
+    team_abbrevs: dict[str, str] | None = None,
 ) -> tuple[str, list[list[Button]]]:
     games = select_games(records, days=days, now=now)
     current, page, page_count = page_games(games, page)
@@ -181,7 +222,9 @@ def game_browser(
     buttons: list[list[Button]] = []
     for game in current:
         callback = f"game:{days}:{page}:{game['event_id']}".encode()
-        buttons.append([Button.inline(_game_button_label(game), callback)])
+        buttons.append(
+            [Button.inline(_game_button_label(game, team_abbrevs), callback)]
+        )
 
     navigation = []
     if page > 0:
@@ -611,7 +654,7 @@ def build_lean_row(
     }
 
 
-def load_intake_data() -> tuple[list[dict[str, Any]], dict[str, str]]:
+def load_intake_data() -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
     credentials = os.environ["GOOGLE_CREDENTIALS"]
     sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
     spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
@@ -625,7 +668,13 @@ def load_intake_data() -> tuple[list[dict[str, Any]], dict[str, str]]:
         if str(row.get("team_name", "")).strip()
         and str(row.get("emoji", "")).strip()
     }
-    return games, team_emojis
+    team_abbrevs = {
+        str(row["team_name"]).strip(): str(row.get("abbreviation", "")).strip()
+        for row in emoji_rows
+        if str(row.get("team_name", "")).strip()
+        and str(row.get("abbreviation", "")).strip()
+    }
+    return games, team_emojis, team_abbrevs
 
 
 def build_suggestion_row(
@@ -688,7 +737,7 @@ def append_lean(row: dict[str, Any]) -> bool:
     return True
 
 
-async def _intake_data() -> tuple[list[dict[str, Any]], dict[str, str]]:
+async def _intake_data() -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
     return await asyncio.to_thread(load_intake_data)
 
 
@@ -730,12 +779,13 @@ async def main() -> None:
                 buttons=command_keyboard(),
             )
         guess_states.pop(event.sender_id, None)
-        records, _ = await _intake_data()
+        records, _, team_abbrevs = await _intake_data()
         text, buttons = game_browser(
             records,
             days=10,
             page=0,
             now=datetime.now(timezone.utc),
+            team_abbrevs=team_abbrevs,
         )
         await event.respond(text, buttons=buttons)
 
@@ -843,7 +893,7 @@ async def main() -> None:
             await event.answer("Not authorized.", alert=True)
             return
         data = event.data.decode()
-        records, team_emojis = await _intake_data()
+        records, team_emojis, team_abbrevs = await _intake_data()
         if data.startswith("games:"):
             guess_states.pop(event.sender_id, None)
             _, days_raw, page_raw = data.split(":", 2)
@@ -852,6 +902,7 @@ async def main() -> None:
                 days=int(days_raw),
                 page=int(page_raw),
                 now=datetime.now(timezone.utc),
+                team_abbrevs=team_abbrevs,
             )
             await edit_callback(event, text, buttons)
             return
