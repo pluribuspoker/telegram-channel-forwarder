@@ -9,6 +9,10 @@
 
 When sending/forwarding messages, always preserve `msg.entities` (bold, italic, blockquotes, etc.) via `formatting_entities=`. Never rebuild message text without passing entities through. Use `text_suffix` in `send_group` to append text without dropping entities.
 
+**`entities` pair with `raw_text`, never with `text`.** Telethon's `msg.text` is `parse_mode.unparse(raw_text, entities)` — the markdown *render*, with `**`/`__`/`~~`/backticks inserted as literal characters — while entity offsets index `raw_text`. Passing `formatting_entities=` also tells Telethon to **skip parsing**, so the mismatch is never re-derived: the delimiters stay in the message and every entity from the first one onward lands N chars early. It renders as a *partly* correct message, which is why it survives review — `**SATURDAY**` came out bold over `**SATURD` with a stray `AY**`, and the blockquote 4 chars downstream swallowed the wrong lines (fixed 33c3e31). Rule: **whatever string goes to Telegram beside `formatting_entities` must be `raw_text`.** Text sent *without* entities is the opposite case — `enrich_caption` keeps `.text` deliberately, because that caption is markdown-parsed on the way out.
+
+The same `.text`/`.raw_text` confusion is silent everywhere else it appears: `filter_pattern` regexes, `reply_chain_cappers` prefixes and any other content matching run against `.text` see `**Tony POD**`, so an anchored `^Tony POD` stops matching and the pick is **dropped with no error anywhere**. Match on `raw_text`. `scripts/test_forward_entities_regression.py` pins all four send paths.
+
 ## VPS
 
 - **Reserved IP:** `209.38.51.86` (always use this, not the droplet IP)
