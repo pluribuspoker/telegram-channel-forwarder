@@ -125,7 +125,7 @@ def _anthropic():
 
 def _group_summary(group):
     """Return (text_preview, media_tag) for a message group."""
-    text = next((m.text for m in group if m.text), "")
+    text = next((m.raw_text for m in group if m.raw_text), "")
     preview = "  ".join(text.split("\n")).strip()   # flatten newlines
     preview = " ".join(preview.split())             # collapse extra whitespace
     if len(preview) > 65:
@@ -179,7 +179,11 @@ def passes_filter(group, mapping):
     pattern = mapping.get("filter_pattern")
     if not pattern:
         return True
-    return any(re.search(pattern, m.text or "") for m in group)
+    # raw_text: patterns are authored against the text a human reads. `.text` is the
+    # markdown render, so a bolded capper name arrives as `**Tony POD**` and an
+    # anchored pattern like `^Tony POD` silently stops matching — a dropped pick with
+    # no error anywhere.
+    return any(re.search(pattern, m.raw_text or "") for m in group)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -228,6 +232,9 @@ async def enrich_caption(group, mapping, client):
     """
     if not mapping.get("ocr_odds"):
         return None, None
+    # Deliberately `.text`, not `.raw_text`: this caption is returned as
+    # caption_override and sent with entities=None, so Telethon markdown-PARSES it on
+    # the way out. Keeping the rendered form is what preserves bold/italic here.
     text = next((m.text for m in group if m.text), "")
     media_msg = next((m for m in group if m.media), None)
     if not media_msg:
@@ -290,7 +297,17 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
     Uses `sender` client for writing if provided, otherwise uses `client`.
     caption_override replaces the message text (e.g. after OCR enrichment).
     text_only=True skips all media and sends just the caption as a plain message.
-    text_suffix appends text (e.g. source label) without discarding original entities."""
+    text_suffix appends text (e.g. source label) without discarding original entities.
+
+    INVARIANT: whatever text we hand to Telegram alongside `formatting_entities`
+    must be `msg.raw_text`. Telethon's `msg.text` is `parse_mode.unparse(raw_text,
+    entities)` — the markdown *render*, with `**`/`__`/`~~`/backticks inserted —
+    while the entity offsets index `raw_text`. Passing `formatting_entities` also
+    tells Telethon to skip parsing, so the pairing is never re-derived: the
+    delimiters stay as literal characters and every entity at or after the first
+    one lands N characters early. Only `caption_override` may be `.text`, because
+    it is sent with entities=None and is therefore markdown-parsed on the way out.
+    text_suffix is appended at the END, so it shifts no existing offset."""
     sender = sender or client
     if text_only and caption_override:
         sent = await sender.send_message(dest_entity, caption_override, silent=False, reply_to=reply_to)
@@ -304,8 +321,12 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
             buf = io.BytesIO(data)
             buf.name = "photo.jpg"
             files.append(buf)
-            if m.text and caption_override is None:
-                caption = m.text
+            if m.raw_text and caption_override is None:
+                # raw_text, NOT text: entity offsets index the raw string, while `.text`
+                # is the markdown *render* of it (bold → literal `**…**`). Passing the
+                # rendered form alongside the raw offsets leaves the delimiters in the
+                # message and shifts every later entity. See send_group's docstring.
+                caption = m.raw_text
                 caption_entities = m.entities
         if caption_override is not None:
             caption = caption_override
@@ -321,7 +342,7 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
             sent = await sender.send_file(dest_entity, files, caption=caption, formatting_entities=caption_entities, silent=False, reply_to=reply_to)
     else:
         msg = group[0]
-        cap = caption_override if caption_override is not None else (msg.text or "")
+        cap = caption_override if caption_override is not None else (msg.raw_text or "")
         ents = None if caption_override is not None else msg.entities
         if text_suffix:
             cap = f"{cap}\n\n{text_suffix}" if cap else text_suffix

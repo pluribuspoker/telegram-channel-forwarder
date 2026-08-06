@@ -397,7 +397,9 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
         chain_cappers = mapping.get("reply_chain_cappers")
         capper_key = None
         if chain_cappers and dest_ch:
-            msg_text = group[0].text or ""
+            # raw_text: `.text` is the markdown render, so a bolded capper name
+            # arrives as `**OG Kelly**` and the prefix match below misses.
+            msg_text = group[0].raw_text or ""
             capper_key = _extract_capper_key(msg_text, chain_cappers)
             # Single-capper mapping: default to the only capper even if prefix missing
             if capper_key is None and len(chain_cappers) == 1:
