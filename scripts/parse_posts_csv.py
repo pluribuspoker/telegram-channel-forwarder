@@ -8,19 +8,24 @@ Three-phase pipeline:
      the image and send it to Claude along with the text
   3. Dedup: remove duplicate picks (same bet from multiple tweets)
 
+Step 2 of the capper backfill pipeline:
+    fetch_x_posts -> parse_posts_csv -> grade_csv -> format_graded_csv
+
 Usage:
-    python scripts/parse_posts_csv.py [--limit N] [--skip-images]
+    python scripts/parse_posts_csv.py --account boyerBets_ [--limit N] [--skip-images]
+    python scripts/parse_posts_csv.py --account boyerBets_ --days 1   # test on one day
 """
 
 import argparse
 import asyncio
+import collections
 import csv
 import json
 import re
 import sys
 import os
 import base64
-from datetime import date as _d
+from datetime import date as _d, timedelta
 
 import httpx
 
@@ -28,75 +33,154 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from ai import _claude_create_with_retry, usage_cost, fmt_cost
 
-INPUT = os.path.join(os.path.dirname(__file__), "output", "BookitWithTrent_posts.csv")
-OUTPUT = os.path.join(os.path.dirname(__file__), "output", "BookitWithTrent_parsed.csv")
+OUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 
 CONCURRENCY = 10
 
 OUT_FIELDS = [
     "id", "date", "text", "photos", "videos", "url",
-    "sport", "description", "bet_type", "teams", "player",
+    "sport", "category", "multi", "is_parlay",
+    "description", "bet_type", "teams", "player",
     "prop_stat", "line", "direction", "period",
 ]
 
-# ── Signals that a post MIGHT contain a pick (used to identify image candidates)
+# Categories kept by default when grading. Only the free Play of the Day, because
+# it is the one category posted publicly, pre-game, every time — so the sample is
+# not selected on outcome.
+#
+# "result" is the dangerous one: those posts reveal a pick only after it won, so
+# including them manufactures a near-perfect record out of nothing. "max" and
+# "secondary" are real pre-game posts but are announced inconsistently (max plays
+# are VIP and surface publicly mostly as wins), so they bias the sample too.
+# Override with grade_csv.py --categories.
+GRADEABLE_CATEGORIES = {"pod"}
+
+# ── Signals that a post MIGHT contain a pick.
+# Only used to pick image-parse candidates in phase 2, never to reject a post in
+# phase 1 — phase 1 sends every non-retweet to Claude, so a capper whose wording
+# isn't listed here still gets his text picks parsed. Missing a signal only costs
+# us a bet slip that lives in an image with no telltale text.
 _PICK_SIGNALS = [
-    "mortal mega", "mortal", "mega max", "nuke", "nuking",
-    "official", "play of", "square of", "last chance u",
-    "i'm on", "i'll be on", "i will be taking", "i'm riding",
-    "i have $", "dropping", "10u", "10 unit",
-    "slip", "fugazi",
+    "official", "play of", "lock of", "bet of", "pick of",
+    "i'm on", "im on", "i'll be on", "i will be taking", "i'm taking",
+    "i'm riding", "riding with", "hammering", "hammer",
+    "i have $", "dropping", "tailing", "fading",
+    "unit", "10u", "5u", "1u", "slip", "bet slip", "parlay",
 ]
+
+# ── Per-account vocabulary.
+# Cappers brand their bets ("mortal mega", "nuke"). That branding is a strong
+# pick signal for that account and pure noise for every other one, so it lives
+# here rather than in the shared prompt. An account with no entry just runs the
+# generic prompt, which is the correct starting point for a new handle.
+_ACCOUNT_VOCAB: dict[str, dict] = {
+    "BookitWithTrent": {
+        "signals": [
+            "mortal mega", "mortal", "mega max", "nuke", "nuking",
+            "square of", "last chance u", "fugazi", "10 unit",
+        ],
+        "notes": """\
+This account's signature vocabulary:
+- "mortal mega" / "mortal mega max" / "mega" — signature bet branding
+- "nuke" / "nuking" / "I'm nuking [team]" — placing a big bet
+- "play of year" / "square of year" / "play of the day"
+- "FUGAZI 5" / "[N]-man nuke" — named parlay formats (multi-leg, so return null)
+- "Last Chance U slip" — named bet format
+Account-specific non-picks:
+- "CASH THE MORTAL MEGA", "howsya", "BANGGGG" — celebrations
+- "chalked", "GGs", "🥀" — loss reactions
+- "mortal megas?👀", "the next nuke is loading...", "I wanna nuke it so bad" — teasers
+- "I have the mortal mega" with no team/line named — teaser, not a pick yet""",
+    },
+    "boyerBets_": {
+        "signals": [
+            "play of the day", "pod", "potd", "max play", "free card",
+            "full card", "second play", "adding:", "play #",
+        ],
+        "notes": """\
+This account's format is highly templated. Use it:
+- "📝🆓 MLB Play of the Day" / "🚨 MLB PLAY OF THE DAY 🚨" / "#NBA Play of the Day" /
+  "🆓🥊UFC Play of the Day" — the free POD. category="pod".
+- "MLB Play #2" / "Play #3" / "Second Play⭐️" / "⚾️Adding: ..." — category="secondary".
+- "MAX Play" naming the pick pre-event — category="max".
+- "Full Card" / "Free Card" listing several plays — category="card", multi=true.
+- "CASH THE PLAY OF THE DAY", "CASH THAT ONE", "CASH THE MAX PLAY", "ANOTHER FIRST
+  INNING CASH", "Results Speak for Themselves", "Your Welcome Fathers'" — these are
+  RESULT posts. They name the pick with a 💰 or ✅ next to it AFTER it won.
+  category="result". They are never "pod", no matter how they are worded.
+- A "(POD)" tag inside a card marks which leg was the free Play of the Day.
+- Record lines ("📈 119 - 44 Overall POD Record", "9-0 POD streak", "(12-3 Run)🔮")
+  are context only — never a pick.
+- "50 Likes❤️ for Play #2" is a promise, not a pick. If no second pick is named in
+  that same tweet, the tweet is just the POD.
+He bets MLB almost exclusively, heavy on F5 (first 5 innings) and team totals.""",
+    },
+}
+
+
+def _vocab(account: str) -> dict:
+    return _ACCOUNT_VOCAB.get(account, {})
+
 
 # ─── Prompts ─────────────────────────────────────────────────────────────────
 
 _PICK_PROMPT = """\
-You are analyzing a tweet from a sports bettor to determine if it contains an OFFICIAL PICK PLACEMENT — a real wager being announced.
+You are analyzing a tweet from a sports bettor. Extract any specific wager it names, and classify what ROLE the tweet plays.
+
+Extraction and policy are deliberately separate: your job is to pull out every named wager and label it honestly. Deciding which categories to keep happens later, so do NOT suppress a wager because it looks like a result post or a paywalled play — label it and move on.
 
 {date_context}
-STEP 1: Is this an official pick ANNOUNCEMENT?
+STEP 1: Does the tweet name a SPECIFIC wager (a team/side/player with a bet type, and usually a line or odds)?
 
-An official pick is a tweet where the bettor is ANNOUNCING a wager they are placing RIGHT NOW. Look for these signals:
-- "mortal mega" / "mortal mega max" / "mega" — signature bet branding
-- "nuke" / "nuking" / "I'm nuking [team]" — placing a big bet
-- "OFFICIAL PLAY:" / "BEST PLAY:" — designates the pick in multi-prediction posts
-- "I'm on [pick]" / "I'll be on" / "I will be taking" / "I'm riding with"
+If no concrete wager is named, return null. A tweet that only teases ("who wants today's play?", "a Max Play has been dropped in VIP", "I have a banger today") names no wager — return null.
+
+STEP 2: Classify the ROLE of the tweet. This is the most important field. Choose exactly one:
+
+- "pod" — the free Play of the Day: a pre-game announcement of the day's headline pick, posted publicly. Usually branded "Play of the Day", "POD", "🆓", or "PLAY OF THE DAY". This is the primary free play.
+- "secondary" — an additional play beyond the POD: "Play #2", "Play #3", "Second Play", "Adding: ...". Still a pre-game announcement, just not the headline play.
+- "max" — a "Max Play" (his larger-stake play), announced PRE-GAME with the pick named.
+- "card" — a post listing SEVERAL separate plays at once ("Full Card", "Free Card"). Set "multi": true.
+- "result" — the tweet is reporting the OUTCOME of a bet, not announcing it. Signals: "CASH THE...", "CASH THAT ONE", "Results Speak for Themselves", ✅/❌/💰 marks next to picks, "Record improves to", past tense. A result post often names the pick — extract it anyway and label it "result".
+- "other" — names a wager but is commentary, a lean without placement, a correction, reminiscing, or someone else's pick.
+
+CRITICAL: a tweet naming a pick alongside "CASH", "✅", "💰", or a record that just improved is a "result", NEVER a "pod". The pick is being revealed after the fact. Getting this wrong corrupts the whole analysis, because results only ever reveal winners.
+
+Signals that a tweet is a genuine pre-game announcement:
+- "OFFICIAL PLAY:" / "BEST PLAY:" / "LOCK OF THE DAY" — designates the pick in multi-prediction posts
+- "I'm on [pick]" / "I'll be on" / "I will be taking" / "I'm riding with" / "hammering [team]"
 - "I have $X on [team]" / "dropping $X on"
-- "10u" / "10 unit" / "$X,000" — unit/dollar sizing
-- "play of year" / "square of year" / "play of the day"
-- "FUGAZI 5" / "[N]-man nuke" — named parlay formats
-- "Last Chance U slip" — named bet format
+- "10u" / "5 units" / "$X,000" — unit/dollar sizing attached to a named side
+- A bare, confidently stated side with a line and/or odds ("Rangers -1.5 +115"), posted as its own tweet — cappers often announce a play with no verb at all
 - Explicit first-person declaration of placing a specific bet with a named team/side/line
-
-NOT an official pick (return null):
-- Celebrations/results: "BANGGGG", "✅✅✅", "CASH THE MORTAL MEGA", "howsya", win announcements
-- Loss reactions: "chalked", "GGs", "dead", "fuck", "horrible wager", "🥀", "❌"
-- In-game commentary: "if this goes over", "they ain't scoring", "I wanna throw up"
-- Hopes/wishes without placement: "Life on line, Mbappe is NOT scoring", "will do anything for an Austria bang"
-- Rhetorical/teasers: "why shouldn't I just put...", "I wanna nuke it so bad", "mortal megas?👀", "the next nuke is loading..."
-- Off-topic: giveaways, streams, card ripping, podcast links
-- Pure excitement about a game event: "CEASE NO HITTER" x3 (celebrating in progress, not a bet)
+{vocab_notes}
+Return null (no wager named) for:
+- Pure celebration or reaction with no pick named: "BANGGGG", "chalked", "GGs", "🥀"
+- In-game commentary: "if this goes over", "they ain't scoring"
+- Hopes/wishes without a bet: "Life on line, Mbappe is NOT scoring"
+- Teasers naming no pick: "who wants today's POD?", "the next one is loading...", "100 likes and I'll drop it"
+- Off-topic: giveaways, streams, podcast links, promo codes, affiliate plugs, sports news
 - Score updates, goal celebrations, general commentary
-- Teaser without naming the pick: "I have the mortal mega" / "I have the mortal mega. 😈" (no team/line named = not a pick yet)
-- Referencing a PAST or EXISTING bet without announcing it: "I lost $X on...", "if you took [team] you're sharp", "mom has no clue I have $5k on [team]", "I will tell my grandchildren about [pick]" — these mention a bet but are NOT the original announcement
-- Corrections or clarifications of a PRIOR pick: "AI switched the wording, this is [team] +1.5" — this is clarifying a pick already announced in an earlier tweet, not a new pick
+- A record or streak with no pick attached: "121-44 Overall Record", "9-0 POD streak"
 
-The KEY distinction: the tweet must be the ORIGINAL ANNOUNCEMENT where the bettor declares they are placing the wager. Tweets that reference, joke about, reminisce about, or correct an already-announced bet are NOT picks.
+A tweet that mentions "3 STRAIGHT WINNERS ✅✅✅" at the top but then announces the NEXT pick below is a pre-game announcement — the ✅ line is prior context, the actual pick follows. Judge the role by the pick being named, not by stray emoji elsewhere in the tweet.
 
-A tweet that mentions "3 STRAIGHT WINNERS ✅✅✅" at the top but then announces the NEXT pick below is still a pick placement — the ✅ line is context, the actual pick follows.
+STEP 3: Extract the wager.
 
-STEP 2: If the post IS an official pick, extract exactly ONE pick.
+If the post has "OFFICIAL PLAY:" or "BEST PLAY:", extract ONLY that designated pick, ignore score predictions and other sides listed.
 
-If the post has "OFFICIAL PLAY:" or "BEST PLAY:", extract ONLY that designated pick, ignore the score predictions and other sides listed.
+If the post is a single-game bet, extract it.
 
-If the post announces a single bet (e.g. "Germany -1.5 for a mortal mega"), extract that.
+If the post is a multi-leg PARLAY (legs combined into one wager, e.g. "Brewers+Phillies MLP"), set "is_parlay": true and describe the whole parlay.
 
-If the post is a named parlay (FUGAZI 5, 4-man nuke, etc.) with multiple legs, return null — we only want single-game picks.
+If the post is a "card" listing several separate plays, set "multi": true and extract the play tagged "(POD)" if one is tagged, otherwise the FIRST play listed.
 
-Return JSON (no markdown fences). Return null if no official pick or if the pick is a multi-leg parlay:
+Return JSON (no markdown fences). Return null only when no specific wager is named:
 
 {{
-  "sport": "NBA|NCAAB|MLB|NFL|NHL|UFL|CFL|Tennis|UFC|Boxing|KBO|Soccer|Other",
+  "sport": "NBA|WNBA|NCAAB|MLB|NFL|NCAAF|NHL|UFL|CFL|Tennis|UFC|Boxing|KBO|Soccer|Other",
+  "category": "pod|secondary|max|card|result|other",
+  "multi": false,
+  "is_parlay": false,
   "pick": {{
     "description": "concise one-line summary of the exact bet",
     "bet_type": "spread|moneyline|total|team_total|prop|double_chance|draw_no_bet",
@@ -118,6 +202,15 @@ Sport classification rules:
 - UFC/Boxing: individual fighter names
 - For ambiguous names, use context (World Cup = Soccer, playoffs context, etc.)
 
+Notation rules — these change how the bet grades, so read them carefully:
+- "F5" / "First 5" / "1st 5" means the first five innings of a baseball game. Set period="1h" (baseball's first half IS the first 5 innings) and KEEP the "F5" wording in the description. An F5 bet graded as a full game is simply wrong.
+- "TT" means team total — that one team's runs/points only. bet_type="team_total". "F5 TT o2.5" is BOTH: period="1h" AND bet_type="team_total".
+- A bare "o"/"u" prefix means over/under: "u10.5" → direction="under", line=10.5.
+- "ML" = moneyline. "-0.5"/"+1.5" style numbers are the spread line; three-digit numbers like "-130"/"+115" are the ODDS, not the line. Never put odds in "line".
+- "MLP" means a moneyline parlay of the named teams — set is_parlay=true.
+- "AB@BC o5.5" names the two teams in a game and a game total; teams should list both.
+- The period belongs only to the leg it is written on. Sanity-check it: an MLB F5 total is ~3.5-7.5 runs, so a total above 7.5 marked "F5" is really a full-game line.
+
 Tweet:
 {text}"""
 
@@ -126,16 +219,28 @@ This tweet from a sports bettor contains a bet slip or wager image. \
 The tweet text alone does not specify the exact pick — it is shown in the attached image.
 
 {date_context}
-Extract the SINGLE official pick from the image. If the image shows a multi-leg parlay \
-(multiple bets combined into one slip), return null — we only want single-game picks. \
-If the image shows multiple separate single bets, return null.
+Extract the SINGLE wager from the image and classify the ROLE of the post, exactly as
+for text posts:
+- "pod" — the free Play of the Day, announced pre-game
+- "secondary" — an additional pre-game play (Play #2/#3, Second Play, Adding)
+- "max" — a Max Play announced pre-game
+- "card" — several separate plays listed at once (set "multi": true)
+- "result" — the post reports the OUTCOME of a bet (CASH..., ✅, 💰, record improved).
+  Extract the pick anyway and label it "result" — never "pod".
+- "other" — commentary, a lean, or someone else's pick
+
+If the image shows a multi-leg parlay (legs combined into one slip), set "is_parlay": true.
+If it shows multiple separate single bets, set "multi": true and extract the first.
 
 Tweet text: {text}
 
-Return JSON (no markdown fences). Return null if multi-leg parlay or no clear single pick:
+Return JSON (no markdown fences). Return null only if no specific wager is shown:
 
 {{
-  "sport": "NBA|NCAAB|MLB|NFL|NHL|UFL|CFL|Tennis|UFC|Boxing|KBO|Soccer|Other",
+  "sport": "NBA|WNBA|NCAAB|MLB|NFL|NCAAF|NHL|UFL|CFL|Tennis|UFC|Boxing|KBO|Soccer|Other",
+  "category": "pod|secondary|max|card|result|other",
+  "multi": false,
+  "is_parlay": false,
   "pick": {{
     "description": "concise one-line summary of the exact bet",
     "bet_type": "spread|moneyline|total|team_total|prop|double_chance|draw_no_bet",
@@ -146,7 +251,11 @@ Return JSON (no markdown fences). Return null if multi-leg parlay or no clear si
     "line": null,
     "direction": "over|under|null"
   }}
-}}"""
+}}
+
+Notation: "F5"/"First 5" = first five innings of a baseball game → period="1h", and keep
+"F5" in the description. "TT" = team total → bet_type="team_total". "o"/"u" prefix =
+over/under. Three-digit numbers like "-130" are ODDS, not the line."""
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -176,6 +285,9 @@ def _build_row(row: dict, parsed: dict) -> dict:
     return {
         **row,
         "sport": parsed.get("sport", ""),
+        "category": parsed.get("category", "other"),
+        "multi": "1" if parsed.get("multi") else "",
+        "is_parlay": "1" if parsed.get("is_parlay") else "",
         "description": pick.get("description", ""),
         "bet_type": pick.get("bet_type", ""),
         "teams": json.dumps(pick.get("teams", [])),
@@ -187,9 +299,9 @@ def _build_row(row: dict, parsed: dict) -> dict:
     }
 
 
-def _has_pick_signal(text: str) -> bool:
+def _has_pick_signal(text: str, extra_signals: list[str] = ()) -> bool:
     tl = text.lower()
-    return any(s in tl for s in _PICK_SIGNALS)
+    return any(s in tl for s in (*_PICK_SIGNALS, *extra_signals))
 
 
 def _is_retweet(text: str) -> bool:
@@ -229,7 +341,7 @@ def _normalize_teams_key(teams_json: str) -> str:
 
 # ─── Phase 1: Text parse ─────────────────────────────────────────────────────
 
-async def parse_text(row: dict) -> dict | None:
+async def parse_text(row: dict, vocab_notes: str = "") -> dict | None:
     text = row.get("text", "").strip()
     if not text or _is_retweet(text):
         return None
@@ -238,7 +350,8 @@ async def parse_text(row: dict) -> dict | None:
             model="claude-sonnet-4-6",
             max_tokens=500,
             messages=[{"role": "user", "content": _PICK_PROMPT.format(
-                text=text, date_context=_date_ctx(row.get("date", ""))
+                text=text, date_context=_date_ctx(row.get("date", "")),
+                vocab_notes=f"\n{vocab_notes}\n" if vocab_notes else "",
             )}],
         )
     except Exception as e:
@@ -311,16 +424,20 @@ def dedup(rows: list[dict]) -> list[dict]:
             unique.append(r)
     rows = unique
 
-    # 2. Dedup by pick identity (same day + normalized teams + same bet_type)
+    # 2. Dedup by pick identity (same day + normalized teams + bet_type + period).
     #    Line is excluded from the key because the same pick announced in text
     #    may include odds (e.g. "-150") while the image version omits them.
-    #    Keeps the first (earliest) occurrence — the original announcement.
+    #    Period IS in the key: a capper can play both "Cardinals F5 ML" and
+    #    "Cardinals ML" on the same day, and those are two different bets.
+    #    Sorting by date keeps the EARLIEST occurrence, which is what collapses a
+    #    later "CASH THE POD" result post into the original pre-game announcement.
     rows.sort(key=lambda r: r["date"])
     seen_picks = set()
     final = []
     for r in rows:
         norm_teams = _normalize_teams_key(r["teams"])
-        key = (r["date"][:10], norm_teams, r["bet_type"])
+        key = (r["date"][:10], norm_teams, r["bet_type"],
+               r.get("period", "game"), r.get("direction", ""))
         if key not in seen_picks:
             seen_picks.add(key)
             final.append(r)
@@ -332,12 +449,25 @@ def dedup(rows: list[dict]) -> list[dict]:
 
 async def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--account", required=True, help="X handle, e.g. boyerBets_")
     parser.add_argument("--limit", type=int, default=0, help="Process only first N rows (0=all)")
+    parser.add_argument("--days", type=int, default=0,
+                        help="Only the most recent N days of posts (0=all). Use for cheap test runs.")
     parser.add_argument("--skip-images", action="store_true", help="Skip phase 2 (image parsing)")
+    parser.add_argument("--output", default=None, help="Override output CSV path")
     args = parser.parse_args()
 
-    with open(INPUT, newline="", encoding="utf-8") as f:
+    input_csv = os.path.join(OUT_DIR, f"{args.account}_posts.csv")
+    output_csv = args.output or os.path.join(OUT_DIR, f"{args.account}_parsed.csv")
+
+    with open(input_csv, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
+
+    if args.days:
+        latest = max(r["date"][:10] for r in rows)
+        cutoff = (_d.fromisoformat(latest) - timedelta(days=args.days - 1)).isoformat()
+        rows = [r for r in rows if r["date"][:10] >= cutoff]
+        print(f"--days {args.days}: {len(rows)} posts from {cutoff} to {latest}")
 
     if args.limit:
         rows = rows[:args.limit]
@@ -350,6 +480,12 @@ async def main():
 
     total = len(rows)
 
+    vocab = _vocab(args.account)
+    vocab_notes = vocab.get("notes", "")
+    extra_signals = vocab.get("signals", [])
+    if vocab_notes:
+        print(f"Using account vocabulary for {args.account}")
+
     # ── Phase 1: Text parse ──────────────────────────────────────────────
     print(f"Phase 1: Text-parsing {total} rows...")
     results = []
@@ -359,7 +495,7 @@ async def main():
 
     async def process_text(i: int, row: dict):
         async with sem:
-            result = await parse_text(row)
+            result = await parse_text(row, vocab_notes)
         if result:
             async with lock:
                 results.append(result)
@@ -378,7 +514,7 @@ async def main():
             r for r in rows
             if r["id"] not in text_kept_ids
             and r.get("photos", "").strip()
-            and _has_pick_signal(r.get("text", ""))
+            and _has_pick_signal(r.get("text", ""), extra_signals)
         ]
         if image_candidates:
             print(f"Phase 2: Image-parsing {len(image_candidates)} candidates...")
@@ -402,13 +538,20 @@ async def main():
     results = dedup(results)
 
     # ── Write output ─────────────────────────────────────────────────────
-    with open(OUTPUT, "w", newline="", encoding="utf-8") as f:
+    with open(output_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=OUT_FIELDS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(results)
 
-    print(f"\nDone! {len(results)} unique official picks")
-    print(f"Output: {OUTPUT}")
+    by_cat = collections.Counter(r.get("category", "other") for r in results)
+    print(f"\nDone! {len(results)} unique wagers extracted")
+    print("By category:")
+    for cat, n in by_cat.most_common():
+        keep = "KEEP" if cat in GRADEABLE_CATEGORIES else "excluded"
+        print(f"  {cat:10s} {n:4d}  {keep}")
+    gradeable = sum(n for c, n in by_cat.items() if c in GRADEABLE_CATEGORIES)
+    print(f"  {'-' * 28}\n  gradeable  {gradeable:4d}")
+    print(f"Output: {output_csv}")
     print(f"Total API cost: {fmt_cost(usage_cost())}")
 
 

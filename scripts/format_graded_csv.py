@@ -1,13 +1,17 @@
 """
 format_graded_csv.py — Convert graded CSV to the Sharp Syndicate spreadsheet format.
 
-Reads BookitWithTrent_graded.csv and outputs BookitWithTrent_sheet.csv with columns:
+Step 4 of the capper backfill pipeline:
+    fetch_x_posts -> parse_posts_csv -> grade_csv -> format_graded_csv
+
+Reads <account>_graded.csv and outputs <account>_sheet.csv with columns:
   Game date, League, Play, Wagered Units, Bet type, Odds, W/L, Return, Position
 
 Usage:
-    python scripts/format_graded_csv.py
+    python scripts/format_graded_csv.py --account boyerBets_
 """
 
+import argparse
 import asyncio
 import csv
 import json
@@ -19,8 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from odds import fetch_odds
 
-INPUT = os.path.join(os.path.dirname(__file__), "output", "BookitWithTrent_graded.csv")
-OUTPUT = os.path.join(os.path.dirname(__file__), "output", "BookitWithTrent_sheet.csv")
+OUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 
 
 def _american_to_decimal(american: float) -> float:
@@ -130,8 +133,11 @@ def _row_to_pick(row: dict) -> dict:
     }
 
 
-async def run() -> None:
-    with open(INPUT, newline="", encoding="utf-8") as f:
+async def run(account: str) -> None:
+    input_csv = os.path.join(OUT_DIR, f"{account}_graded.csv")
+    output_csv = os.path.join(OUT_DIR, f"{account}_sheet.csv")
+
+    with open(input_csv, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
     out_rows = []
@@ -208,7 +214,7 @@ async def run() -> None:
 
     fieldnames = ["Game date", "League", "Play", "Wagered Units", "Bet type",
                   "Odds", "W/L", "Return", "Position"]
-    with open(OUTPUT, "w", newline="", encoding="utf-8") as f:
+    with open(output_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(out_rows)
@@ -219,11 +225,14 @@ async def run() -> None:
     total_return = sum(r["Return"] for r in out_rows if isinstance(r["Return"], (int, float)))
     with_odds = sum(1 for r in out_rows if r["Odds"])
 
-    print(f"\nWrote {len(out_rows)} rows to {os.path.basename(OUTPUT)}")
+    print(f"\nWrote {len(out_rows)} rows to {os.path.basename(output_csv)}")
     print(f"Record: {wins}W - {losses}L - {pushes}P")
     print(f"Total return: {total_return:+.2f}U")
     print(f"Odds: {with_odds}/{len(out_rows)} ({api_hits} from API, {with_odds - api_hits} from text, {api_misses} missed)")
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--account", required=True, help="X handle, e.g. boyerBets_")
+    args = parser.parse_args()
+    asyncio.run(run(args.account))

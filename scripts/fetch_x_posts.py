@@ -1,9 +1,13 @@
 """Fetch posts from an X/Twitter user and write to CSV.
 
+Step 1 of the capper backfill pipeline:
+    fetch_x_posts -> parse_posts_csv -> grade_csv -> format_graded_csv
+
 Usage:
-    X_AUTH_TOKEN=xxx X_CT0=yyy python scripts/fetch_x_posts.py
-    X_AUTH_TOKEN=xxx X_CT0=yyy python scripts/fetch_x_posts.py --username SomeUser --since 2025-07-01
-    X_AUTH_TOKEN=xxx X_CT0=yyy python scripts/fetch_x_posts.py --output scripts/output/custom.csv
+    python scripts/fetch_x_posts.py --username boyerBets_ --since 2026-05-07
+    python scripts/fetch_x_posts.py --output scripts/output/custom.csv
+
+Credentials (X_AUTH_TOKEN / X_CT0) are read from .env.local.
 """
 
 import argparse
@@ -14,9 +18,14 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from twscrape import gather
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from dotenv import load_dotenv
+
+ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT / ".env")
+load_dotenv(ROOT / ".env.local", override=True)
+
 from scripts.x_client import XCredentialsError, build_api
 
 
@@ -65,8 +74,8 @@ def write_csv(rows: list[dict], path: str):
 
 def main():
     parser = argparse.ArgumentParser(description="Fetch X/Twitter user posts to CSV")
-    parser.add_argument("--username", default="BookitWithTrent")
-    parser.add_argument("--since", default="2025-06-12", help="YYYY-MM-DD cutoff date")
+    parser.add_argument("--username", required=True, help="X handle, without the @")
+    parser.add_argument("--since", required=True, help="YYYY-MM-DD cutoff date")
     parser.add_argument("--output", default=None, help="Output CSV path")
     parser.add_argument("--limit", type=int, default=2000, help="Max tweets to scan")
     args = parser.parse_args()
