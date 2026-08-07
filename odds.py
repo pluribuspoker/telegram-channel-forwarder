@@ -79,8 +79,17 @@ SPORT_KEYS: dict[str, str] = {
 # Event lists from every candidate key are merged into one list and scored
 # together, so the exact game wins on team-match count and proximity. Each event
 # carries its own "sport_key", which is what the odds call must use.
+#
+# The other three are listed for the same reason before their season comes round
+# (NBA/NHL preseason in late September, MLB spring training in February): out of
+# season the endpoint returns HTTP 200 with an empty list, and /events costs no
+# API quota at all (x-requests-last: 0), so an unused key is one cached HTTP
+# round-trip per 30 minutes and nothing else.
 _EXTRA_SPORT_KEYS: dict[str, list[str]] = {
     "NFL": ["americanfootball_nfl_preseason"],
+    "NBA": ["basketball_nba_preseason"],
+    "NHL": ["icehockey_nhl_preseason"],
+    "MLB": ["baseball_mlb_preseason"],
 }
 
 

@@ -97,7 +97,12 @@ check("fight card 5 days out still matches",
 check("NFL consults preseason key",
       _sport_key_candidates("NFL"),
       ["americanfootball_nfl", "americanfootball_nfl_preseason"])
-check("MLB unchanged", _sport_key_candidates("MLB"), ["baseball_mlb"])
+check("MLB consults spring training",
+      _sport_key_candidates("MLB"),
+      ["baseball_mlb", "baseball_mlb_preseason"])
+check("a sport with no second phase is untouched",
+      _sport_key_candidates("CFL"), ["americanfootball_cfl"])
+check("unknown sport yields no keys", _sport_key_candidates("Cricket"), [])
 
-print(f"\n{8 - len(failures)}/8 passed")
+print(f"\n{10 - len(failures)}/10 passed")
 sys.exit(1 if failures else 0)
