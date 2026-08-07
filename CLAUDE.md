@@ -156,7 +156,18 @@ Checks `day_hint`, the post date **and the next day** — cappers routinely post
 
 To force a re-fetch after manually restoring a cache entry: delete the `odds_by_pick` key from the relevant `parse_cache.json` entry — the next run will re-fetch and re-edit.
 
-> ⚠️ **Only safe before first pitch.** The tracker fetches via `fetch_odds_current`, so a re-fetch after the game starts can match the *next game in the series* — one day away, which slips under the `>2 days` wrong-game guard in `tracker.py`. You then get live/next-day prices instead of the pregame lines, **and** the bad `game_date` becomes `eff_date` (`tracker.py`), pointing grading at the wrong game. To repair odds on a game already underway, write the values in directly: pull the closing lines with `odds._try_pregame(...)` against the correct event id and set `game_date` yourself. Cross-check by confirming a leg whose cached odds were already correct reproduces exactly.
+> ⚠️ **Only safe before first pitch.** The tracker fetches via `fetch_odds_current`, so a re-fetch after the game starts returns **live** prices instead of the pregame lines. To repair odds on a game already underway, write the values in directly: pull the closing lines with `odds._try_pregame(...)` against the correct event id and set `game_date` yourself. Cross-check by confirming a leg whose cached odds were already correct reproduces exactly.
+>
+> It used to be worse — the re-fetch could match the *next game in the series*, one day away, slipping under the `>2 days` wrong-game guard and making the bad `game_date` become `eff_date`, which pointed grading at the wrong game. That is fixed: `_find_event_id` no longer treats "already kicked off" as strictly worse than any future game (`_STARTED_GRACE_H`), so a game in progress beats the same matchup tomorrow. See the event-matching note below.
+
+**A pick binds to an event by team name, and an absent game binds to the wrong one.** `_find_event_id` (`odds.py`) scores every event sharing a team name and returns the best — it never asks whether that event is plausibly the pick's game. So when a league's games are *missing* from the sport key we query, the pick doesn't miss: it silently prices off the same team's nearest listed game. The Odds API files preseason under separate keys, which is how a Panthers/Cardinals **preseason** total got Bears @ Panthers' Week 1 price (+320 against a real ~-125) and a Cardinals preseason ML got +455.
+
+Three things keep that closed, all in `_find_event_id`/`fetch_odds*`:
+- **`_EXTRA_SPORT_KEYS`** — extra keys carrying the same league in another phase (`americanfootball_nfl_preseason`, NBA/NHL preseason, MLB spring training). Event lists from every candidate key are merged and scored together and each event's own `sport_key` is used for the odds call. **Adding a league phase = one line here.** Out of season a key returns HTTP 200 + `[]`, and `/events` costs no quota (`x-requests-last: 0`), so carrying an unused key is free.
+- **`as_of`** — events are ranked against the date the pick is *about*, not `datetime.now()`. Ranking by date rather than clamping to a window is deliberate: a UFC card is routinely posted five days early, so any fixed window breaks it.
+- **Fail-closed on partial team matches** — a pick naming two teams that must be opponents rejects an event holding only one of them, *but only when the other is demonstrably on the schedule elsewhere*; a name variant `_team_matches` can't resolve must still fall through, or this drops odds we get right today.
+
+Don't "fix" a wrong price by widening a guard downstream: the `>2 days` guard in `tracker.py` already fired here and the historical fallback re-ran the same matcher, re-matched the same game, and returned the identical price — with no `game_date` to show for it. `scripts/test_event_match_regression.py` pins all of this offline.
 
 **Backtest / audit:**
 ```bash
