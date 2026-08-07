@@ -68,6 +68,36 @@ SPORT_KEYS: dict[str, str] = {
     "Lacrosse": "lacrosse_pll",
 }
 
+# Extra Odds API sport keys carrying the SAME league in a different phase of the
+# season. The Odds API files NFL preseason under its own key, so a preseason
+# pick finds no event in americanfootball_nfl — and _find_event_id does not fail
+# closed: it scores every event that shares a team name and returns the nearest
+# one, which in August is a REGULAR-season game five weeks out. A Panthers /
+# Cardinals preseason under 35.5 was priced off Bears @ Panthers in Week 1
+# (total 46.5) at +320 instead of the real ~-150.
+#
+# Event lists from every candidate key are merged into one list and scored
+# together, so the exact game wins on team-match count and proximity. Each event
+# carries its own "sport_key", which is what the odds call must use.
+_EXTRA_SPORT_KEYS: dict[str, list[str]] = {
+    "NFL": ["americanfootball_nfl_preseason"],
+}
+
+
+def _sport_key_candidates(sport: str) -> list[str]:
+    """Every Odds API sport key that may carry this sport's games, primary first."""
+    primary = SPORT_KEYS.get(sport)
+    if not primary:
+        return []
+    return [primary] + _EXTRA_SPORT_KEYS.get(sport, [])
+
+
+def _event_sport_key(event_list: list[dict], event_id: str, default: str) -> str:
+    """The sport key the matched event actually came from (lists may be merged)."""
+    event = next((e for e in event_list if e.get("id") == event_id), None)
+    return (event or {}).get("sport_key") or default
+
+
 # Outright tournament-winner sports. The Odds API prices "to lift the trophy" /
 # "to win the tournament" in a SEPARATE '{sport}_winner' sport (2-way outcomes,
 # includes ET/penalties) rather than on the game event. Maps a game sport_key to
@@ -144,6 +174,12 @@ MARKETS_BY_TYPE: dict[str, str] = {
 }
 
 MAX_LINE_GAP = 5
+
+# How long after kickoff an event still counts as "current" when picking which
+# event a pick refers to (see _find_event_id). Longer than any single event we
+# price — a UFC card runs about six hours — and shorter than the gap to the
+# next same-matchup game.
+_STARTED_GRACE_H = 8
 
 HALF_POINT_COST: dict[str, float] = {
     "NFL":   0.022,
@@ -423,6 +459,22 @@ async def _fetch_event_list(sport_key: str, date: str, conn: sqlite3.Connection)
     return events
 
 
+def _snapshot_time(date: str) -> datetime | None:
+    """The instant the historical event list was snapshotted, for _find_event_id."""
+    try:
+        return datetime.fromisoformat(f"{date}T18:00:00+00:00")
+    except ValueError:
+        return None
+
+
+async def _fetch_event_list_all(sport: str, date: str, conn: sqlite3.Connection) -> list[dict]:
+    """Historical event lists for every candidate sport key, merged (see _EXTRA_SPORT_KEYS)."""
+    events: list[dict] = []
+    for key in _sport_key_candidates(sport):
+        events.extend(await _fetch_event_list(key, date, conn))
+    return events
+
+
 async def _fetch_bookmakers(
     sport_key: str, event_id: str, date: str, markets: str, conn: sqlite3.Connection
 ) -> list[dict]:
@@ -574,7 +626,9 @@ def _betonline_both_sides(
     return None
 
 
-def _find_event_id(event_list: list[dict], teams: list[str]) -> str | None:
+def _find_event_id(
+    event_list: list[dict], teams: list[str], *, as_of: datetime | None = None,
+) -> str | None:
     """Pick the event that best matches the pick's teams list.
 
     Scoring (lower is better):
@@ -584,12 +638,35 @@ def _find_event_id(event_list: list[dict], teams: list[str]) -> str | None:
       2. first_team_miss (0 if the first team in the pick matches, else 1) —
          the first team is typically the subject of the bet, so we prefer it
          when no event matches both teams.
-      3. started (0 = not yet started, 1 = already started) — prefer upcoming
-         over completed games at the same time.
-      4. proximity to now.
+      3. long_finished (1 if the event began more than _STARTED_GRACE_H ago) —
+         prefer an upcoming game over a finished one at the same proximity.
+         Bounded on purpose: an event that has merely KICKED OFF is still the
+         likeliest subject of the pick, and a plain started/not-started flag
+         outranks proximity, so a game in its second quarter would lose to the
+         same team's game five weeks out. That is also the documented trap
+         where a re-fetch mid-series binds to tomorrow's game in the same
+         matchup. The grace covers the longest event we price (a fight card).
+      4. proximity to the reference time.
+
+    `as_of` is that reference, defaulting to now. Callers that know the date the
+    pick is ABOUT must pass it: steps 3 and 4 otherwise measure from now, so any
+    same-team game still in the future outranks the pick's own game the moment
+    it kicks off — which is how a Cardinals preseason moneyline resolved to
+    their Week 1 game five weeks later and priced it at +455 instead of -102.
+    Ranking against the pick's date rather than clamping to a window keeps a
+    fight card posted five days early (routine for UFC) matching correctly.
+
+    Fails closed when the pick names several teams that must be opponents (a
+    game total, "Panthers / Cardinals under 35.5") and the winning event holds
+    only ONE of them while the other is demonstrably on the schedule somewhere
+    else: that event is provably not the game the pick is about, and pricing it
+    is worse than reporting no game. The "demonstrably" half matters — a name
+    variant _team_matches can't resolve must still fall through to the partial
+    match, or this would drop odds we get correctly today.
     """
-    now = datetime.now(timezone.utc)
+    now = as_of or datetime.now(timezone.utc)
     teams_lower = [t.lower() for t in teams]
+    seen_anywhere: set[int] = set()
     scored: list[tuple[tuple[int, int, int, float], str]] = []
     for event in event_list:
         home = event.get("home_team", "")
@@ -601,21 +678,31 @@ def _find_event_id(event_list: list[dict], teams: list[str]) -> str | None:
         ]
         if not matched_idxs:
             continue
+        seen_anywhere.update(matched_idxs)
         ct = event.get("commence_time", "")
         try:
             commence = datetime.fromisoformat(ct.replace("Z", "+00:00"))
-            started = 1 if commence < now else 0
-            proximity = abs((commence - now).total_seconds())
+            elapsed = (now - commence).total_seconds()
+            started = 1 if elapsed > _STARTED_GRACE_H * 3600 else 0
+            proximity = abs(elapsed)
         except (ValueError, AttributeError):
             started = 1
             proximity = float("inf")
         match_count = len(matched_idxs)
         first_team_miss = 0 if 0 in matched_idxs else 1
-        scored.append(((-match_count, first_team_miss, started, proximity), event["id"]))
+        scored.append(((-match_count, first_team_miss, started, proximity),
+                       event["id"], frozenset(matched_idxs)))
     if not scored:
         return None
     scored.sort(key=lambda x: x[0])
-    return scored[0][1]
+    _, best_id, best_idxs = scored[0]
+
+    # Partial match on a multi-team pick: only reject when every team the pick
+    # names IS on the schedule, just not together in this event.
+    if len(teams_lower) > 1 and len(best_idxs) < len(teams_lower):
+        if seen_anywhere == set(range(len(teams_lower))):
+            return None
+    return best_id
 
 
 def _lookup_moneyline(bookmakers: list[dict], team: str, period: str = "game", market: str = "h2h", sport: str = "") -> dict:
@@ -978,12 +1065,13 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
             if not prop_market:
                 return OddsResult(match_type=f"prop_stat_unsupported({prop_stat})", pick_line=pick.get("line"))
 
-            event_list = await _fetch_event_list(sport_key, game_date, conn)
-            event_id   = _find_event_id(event_list, teams)
+            event_list = await _fetch_event_list_all(sport, game_date, conn)
+            event_id   = _find_event_id(event_list, teams, as_of=_snapshot_time(game_date))
             if not event_id:
                 return OddsResult(match_type="no_game", pick_line=pick.get("line"))
 
-            bookmakers = await _fetch_bookmakers(sport_key, event_id, game_date, prop_market, conn)
+            ev_key     = _event_sport_key(event_list, event_id, sport_key)
+            bookmakers = await _fetch_bookmakers(ev_key, event_id, game_date, prop_market, conn)
             r = _lookup_prop(bookmakers, pick.get("player") or "", prop_market,
                              pick.get("direction") or "over", float(pick.get("line") or 0.5))
             return OddsResult(
@@ -1004,10 +1092,11 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
         bookmakers: list[dict] = []
 
         # Odds API first (historical closing odds + alternate lines)
-        event_list = await _fetch_event_list(sport_key, game_date, conn)
-        event_id   = _find_event_id(event_list, teams)
+        event_list = await _fetch_event_list_all(sport, game_date, conn)
+        event_id   = _find_event_id(event_list, teams, as_of=_snapshot_time(game_date))
         if event_id:
-            bookmakers = await _fetch_bookmakers(sport_key, event_id, game_date, _markets_for_pick(pick, sport), conn)
+            ev_key     = _event_sport_key(event_list, event_id, sport_key)
+            bookmakers = await _fetch_bookmakers(ev_key, event_id, game_date, _markets_for_pick(pick, sport), conn)
 
         r = lookup_pick_odds(sport, pick, bookmakers)
 
@@ -1176,14 +1265,15 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
             prop_market = PROP_STAT_MARKETS.get(sport, {}).get(prop_stat)
             if not prop_market:
                 return OddsResult(match_type=f"prop_stat_unsupported({prop_stat})", pick_line=pick.get("line"))
-            event_list = await _fetch_current_event_list(sport_key, conn)
+            event_list = await _fetch_current_event_list_all(sport, conn)
             event_id   = _find_event_id(event_list, teams)
             if not event_id:
                 return OddsResult(match_type="no_game", pick_line=pick.get("line"))
-            gd = _get_event_date(event_list, event_id)
+            gd     = _get_event_date(event_list, event_id)
+            ev_key = _event_sport_key(event_list, event_id, sport_key)
             if _event_already_started(event_list, event_id):
-                live_bk = await _fetch_current_bookmakers(sport_key, event_id, prop_market, conn, live=True)
-                pregame = await _try_pregame(sport, sport_key, event_list, event_id, pick, db_path)
+                live_bk = await _fetch_current_bookmakers(ev_key, event_id, prop_market, conn, live=True)
+                pregame = await _try_pregame(sport, ev_key, event_list, event_id, pick, db_path)
                 if live_bk:
                     r = _lookup_prop(live_bk, pick.get("player") or "", prop_market,
                                      pick.get("direction") or "over", float(pick.get("line") or 0.5))
@@ -1201,7 +1291,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
                                       bookmaker=pregame.bookmaker, api_line=pregame.api_line,
                                       pick_line=pregame.pick_line, game_date=gd)
                 return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"), game_date=gd)
-            bookmakers = await _fetch_current_bookmakers(sport_key, event_id, prop_market, conn)
+            bookmakers = await _fetch_current_bookmakers(ev_key, event_id, prop_market, conn)
             r = _lookup_prop(bookmakers, pick.get("player") or "", prop_market,
                              pick.get("direction") or "over", float(pick.get("line") or 0.5))
             return OddsResult(
@@ -1223,13 +1313,14 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
         bookmakers: list[dict] = []
 
         # Odds API first (current pre-game and live)
-        event_list = await _fetch_current_event_list(sport_key, conn)
+        event_list = await _fetch_current_event_list_all(sport, conn)
         event_id   = _find_event_id(event_list, teams)
-        gd = _get_event_date(event_list, event_id) if event_id else None
+        gd     = _get_event_date(event_list, event_id) if event_id else None
+        ev_key = _event_sport_key(event_list, event_id, sport_key) if event_id else sport_key
         if event_id:
             if _event_already_started(event_list, event_id):
-                live_bk = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick, sport), conn, live=True)
-                pregame = await _try_pregame(sport, sport_key, event_list, event_id, pick, db_path)
+                live_bk = await _fetch_current_bookmakers(ev_key, event_id, _markets_for_pick(pick, sport), conn, live=True)
+                pregame = await _try_pregame(sport, ev_key, event_list, event_id, pick, db_path)
                 if live_bk:
                     r = lookup_pick_odds(sport, pick, live_bk)
                     if r.get("adjusted_odds") is not None:
@@ -1247,7 +1338,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
                                       pick_line=pregame.pick_line, game_date=gd)
                 return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"), game_date=gd)
             else:
-                bookmakers = await _fetch_current_bookmakers(sport_key, event_id, _markets_for_pick(pick, sport), conn)
+                bookmakers = await _fetch_current_bookmakers(ev_key, event_id, _markets_for_pick(pick, sport), conn)
 
         r = lookup_pick_odds(sport, pick, bookmakers)
 
@@ -1312,6 +1403,14 @@ async def _fetch_current_event_list(sport_key: str, conn: sqlite3.Connection) ->
         )
     events: list[dict] = data if isinstance(data, list) else []
     _save_events(conn, sport_key, "current", events)
+    return events
+
+
+async def _fetch_current_event_list_all(sport: str, conn: sqlite3.Connection) -> list[dict]:
+    """Current event lists for every candidate sport key, merged (see _EXTRA_SPORT_KEYS)."""
+    events: list[dict] = []
+    for key in _sport_key_candidates(sport):
+        events.extend(await _fetch_current_event_list(key, conn))
     return events
 
 
