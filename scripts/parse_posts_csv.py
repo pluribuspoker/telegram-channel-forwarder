@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import collections
 import csv
+import functools
 import json
 import re
 import sys
@@ -60,12 +61,18 @@ GRADEABLE_CATEGORIES = {"pod"}
 # phase 1 — phase 1 sends every non-retweet to Claude, so a capper whose wording
 # isn't listed here still gets his text picks parsed. Missing a signal only costs
 # us a bet slip that lives in an image with no telltale text.
+# Short tokens are matched on word boundaries so "pod" does not fire on "podcast".
 _PICK_SIGNALS = [
     "official", "play of", "lock of", "bet of", "pick of",
     "i'm on", "im on", "i'll be on", "i will be taking", "i'm taking",
     "i'm riding", "riding with", "hammering", "hammer",
     "i have $", "dropping", "tailing", "fading",
     "unit", "10u", "5u", "1u", "slip", "bet slip", "parlay",
+    # An emoji-legend post ("💙 = POD", "🩵 = POD 6-1 Run") carries the pick ONLY
+    # in the attached image and names no team, no side and no number in the text.
+    # Without these the post never becomes a phase-2 candidate and the pick is
+    # lost silently — 19 of @boyerBets_'s PODs went missing exactly this way.
+    "pod", "locked", "inbound", "card", "lock",
 ]
 
 # ── Per-account vocabulary.
@@ -299,14 +306,50 @@ def _build_row(row: dict, parsed: dict) -> dict:
     }
 
 
+@functools.lru_cache(maxsize=None)
+def _signal_re(extra: tuple[str, ...]) -> re.Pattern:
+    parts = []
+    for s in (*_PICK_SIGNALS, *extra):
+        esc = re.escape(s)
+        # Bare alphanumeric tokens get word boundaries; phrases with punctuation
+        # or spaces ("i'm on", "i have $") are matched as plain substrings.
+        parts.append(rf'\b{esc}\b' if s.isalnum() else esc)
+    return re.compile("|".join(parts), re.IGNORECASE)
+
+
 def _has_pick_signal(text: str, extra_signals: list[str] = ()) -> bool:
-    tl = text.lower()
-    return any(s in tl for s in (*_PICK_SIGNALS, *extra_signals))
+    return bool(_signal_re(tuple(extra_signals)).search(text))
 
 
-def _is_retweet(text: str) -> bool:
-    """Detect retweets (RT @user: ...)."""
-    return text.lstrip().startswith("RT @")
+_RT_RE = re.compile(r'^\s*RT @(\w+):\s*', re.DOTALL)
+
+
+def unwrap_retweet(text: str, account: str) -> str | None:
+    """Return the tweet body to parse, or None if this is someone else's retweet.
+
+    A SELF-retweet is the author's own pick, not a repost of another handle, so
+    dropping every "RT @" deletes real picks outright — for @boyerBets_ that was
+    45 of 50 self-RTs with no other copy in the corpus, including whole PODs like
+    "Twins F5 +0.5" (2026-07-24). Strip the prefix and parse the body; the
+    pick-level dedup collapses any that also appear as an original. Retweets of
+    other handles are still dropped — someone else's action, not this capper's.
+
+    Why the original is *missing* rather than merely duplicated: X's profile
+    timeline shows a self-retweet in place of the tweet it retweets, so the
+    original is never emitted by the UserTweets endpoint even though it is an
+    ordinary top-level post — verified, tweet_details returns 2080764014330581091
+    fine (inReplyToId None, conversation id itself) while two independent timeline
+    scans both omit it. fetch_x_posts.py now unwraps `retweetedTweet` at fetch
+    time, which is the real fix because it also recovers the original's timestamp
+    and media. This function remains the safety net for CSVs captured before that
+    change.
+    """
+    m = _RT_RE.match(text)
+    if not m:
+        return text
+    if m.group(1).lower() != account.lower().lstrip("@"):
+        return None
+    return text[m.end():]
 
 
 def _normalize_team(name: str) -> str:
@@ -329,21 +372,20 @@ def _normalize_team(name: str) -> str:
     return expansions.get(n, n)
 
 
-def _normalize_teams_key(teams_json: str) -> str:
-    """Parse teams JSON, normalize each name, sort, return stable string."""
+def _normalize_teams_set(teams_json: str) -> set[str]:
+    """Parse teams JSON into a set of normalized names for dedup comparison."""
     try:
-        teams = json.loads(teams_json)
+        teams = json.loads(teams_json or "[]")
     except (json.JSONDecodeError, TypeError):
-        return teams_json
-    normalized = sorted(_normalize_team(t) for t in teams)
-    return json.dumps(normalized)
+        return set()
+    return {_normalize_team(t) for t in teams}
 
 
 # ─── Phase 1: Text parse ─────────────────────────────────────────────────────
 
 async def parse_text(row: dict, vocab_notes: str = "") -> dict | None:
     text = row.get("text", "").strip()
-    if not text or _is_retweet(text):
+    if not text:
         return None
     try:
         resp = await _claude_create_with_retry(
@@ -432,15 +474,25 @@ def dedup(rows: list[dict]) -> list[dict]:
     #    Sorting by date keeps the EARLIEST occurrence, which is what collapses a
     #    later "CASH THE POD" result post into the original pre-game announcement.
     rows.sort(key=lambda r: r["date"])
-    seen_picks = set()
-    final = []
+    final: list[dict] = []
+    kept_teams: list[tuple] = []
     for r in rows:
-        norm_teams = _normalize_teams_key(r["teams"])
-        key = (r["date"][:10], norm_teams, r["bet_type"],
+        teams = _normalize_teams_set(r["teams"])
+        sig = (r["date"][:10], r["bet_type"],
                r.get("period", "game"), r.get("direction", ""))
-        if key not in seen_picks:
-            seen_picks.add(key)
-            final.append(r)
+        # Same wager, one copy naming only the side ("Twins ML") and the other
+        # naming the matchup ("Twins/Cardinals ML"). An exact team-set key misses
+        # this, so compare by subset: within one date+bet_type+period+direction,
+        # overlapping team sets where one contains the other are one bet. Two
+        # genuinely different bets that day differ in side, so they never nest.
+        dup = any(
+            sig == ksig and (teams <= kteams or kteams <= teams)
+            for ksig, kteams in kept_teams
+        )
+        if dup:
+            continue
+        kept_teams.append((sig, teams))
+        final.append(r)
 
     return final
 
@@ -455,13 +507,27 @@ async def main():
                         help="Only the most recent N days of posts (0=all). Use for cheap test runs.")
     parser.add_argument("--skip-images", action="store_true", help="Skip phase 2 (image parsing)")
     parser.add_argument("--output", default=None, help="Override output CSV path")
+    parser.add_argument("--input", default=None, help="Override input CSV path")
     args = parser.parse_args()
 
-    input_csv = os.path.join(OUT_DIR, f"{args.account}_posts.csv")
+    input_csv = args.input or os.path.join(OUT_DIR, f"{args.account}_posts.csv")
     output_csv = args.output or os.path.join(OUT_DIR, f"{args.account}_parsed.csv")
 
     with open(input_csv, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
+
+    # The fetch can emit the same tweet many times when pagination overlaps (one
+    # @boyerBets_ post landed 33x). Every copy would be a separate paid API call.
+    seen_ids: set[str] = set()
+    deduped = []
+    for r in rows:
+        if r.get("id") in seen_ids:
+            continue
+        seen_ids.add(r.get("id", ""))
+        deduped.append(r)
+    if len(deduped) < len(rows):
+        print(f"Dropped {len(rows) - len(deduped)} duplicate tweet ids")
+    rows = deduped
 
     if args.days:
         latest = max(r["date"][:10] for r in rows)
@@ -472,11 +538,23 @@ async def main():
     if args.limit:
         rows = rows[:args.limit]
 
-    # Pre-filter: skip retweets before sending to API
+    # Drop retweets of OTHER handles, but keep self-retweets with the "RT @me:"
+    # prefix stripped — see unwrap_retweet. Rewriting `text` here means every
+    # downstream phase (image candidacy, prompts, dedup) sees the clean body.
     original_count = len(rows)
-    rows = [r for r in rows if not _is_retweet(r.get("text", ""))]
-    if len(rows) < original_count:
-        print(f"Filtered {original_count - len(rows)} retweets")
+    kept = []
+    unwrapped = 0
+    for r in rows:
+        body = unwrap_retweet(r.get("text", ""), args.account)
+        if body is None:
+            continue
+        if body != r.get("text", ""):
+            r = {**r, "text": body}
+            unwrapped += 1
+        kept.append(r)
+    rows = kept
+    print(f"Filtered {original_count - len(rows)} retweets of other accounts; "
+          f"kept {unwrapped} self-retweets")
 
     total = len(rows)
 
