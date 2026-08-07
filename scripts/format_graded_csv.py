@@ -133,6 +133,40 @@ def _row_to_pick(row: dict) -> dict:
     }
 
 
+# A spread or total is bought at roughly even money; a price far off that means
+# the odds lookup found the wrong market or the wrong game. This is the only
+# signal that a wrong date silently produced plausible-looking output: a 4/21
+# Blazers +11.5 dated 4/22 came back at 1.22 (-455), which is not a real spread
+# price. A win priced wrong changes the P&L, so those are flagged loudest.
+_PLAUSIBLE = {
+    "SPREAD": (1.65, 2.35),
+    "TOTAL": (1.65, 2.35),
+    "MONEYLINE": (1.15, 4.00),
+}
+
+
+def _warn_implausible_odds(rows: list[dict]) -> None:
+    bad = []
+    for r in rows:
+        lo_hi = _PLAUSIBLE.get(r["Bet type"])
+        if not lo_hi or not r["Odds"]:
+            continue
+        lo, hi = lo_hi
+        if not (lo <= float(r["Odds"]) <= hi):
+            bad.append(r)
+    if not bad:
+        return
+    affects_pnl = [r for r in bad if r["W/L"] == "win"]
+    print(f"\n⚠ {len(bad)} row(s) with an implausible price "
+          f"({len(affects_pnl)} on WINS, which changes the P&L):")
+    for r in sorted(bad, key=lambda x: x["W/L"] != "win"):
+        flag = "  <-- WIN, affects P&L" if r["W/L"] == "win" else ""
+        print(f"    {r['Game date']:10s} {r['League']:6s} {r['Bet type']:9s} "
+              f"{r['Odds']:>5}  {r['Play'][:44]}{flag}")
+    print("    Check the game date first — a date that is off by one is the "
+          "usual cause.")
+
+
 async def run(account: str) -> None:
     input_csv = os.path.join(OUT_DIR, f"{account}_graded.csv")
     output_csv = os.path.join(OUT_DIR, f"{account}_sheet.csv")
@@ -218,6 +252,8 @@ async def run(account: str) -> None:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(out_rows)
+
+    _warn_implausible_odds(out_rows)
 
     wins = sum(1 for r in out_rows if r["W/L"] == "win")
     losses = sum(1 for r in out_rows if r["W/L"] == "lose")

@@ -223,6 +223,39 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/sauce_daily.py --channe
 
 **ESPN sport validation:** `validate_sport()` in `scores.py` verifies Claude's sport classification against ESPN game schedules. Catches ambiguous teams (Rangers, Cardinals, Giants, etc.). Also wired into the core tracker flow in `tracker.py`.
 
+## Capper backfill (Twitter → Google Sheet)
+
+**One command does the whole thing.** `scripts/backfill_capper.py` runs all five stages, then prints the exclusion table and the record:
+
+```bash
+python scripts/backfill_capper.py --account boyerBets_ --since 2026-01-01
+```
+
+Stages, each persisting to `scripts/output/<account>_*.csv`:
+`fetch_x_posts` → `parse_posts_csv` → `grade_csv` → `format_graded_csv` → `sheets_export`
+
+Because every stage persists, re-run only what you need instead of paying for the parse again (full parse of ~600 tweets ≈ $6; grading ~100 picks ≈ $0.50):
+
+```bash
+python scripts/backfill_capper.py --account X --from grade          # reuse the parse
+python scripts/backfill_capper.py --account X --only export         # just push to Sheets
+python scripts/backfill_capper.py --account X --since D --limit 20  # cheap trial
+```
+
+- **The fetch runs on the VPS by default** (X cookies live in its `.env.local`) and **auto-pauses `trent-monitor.timer`**, restoring it even if the fetch crashes — both share one X session and UserTweets has a ~15 min cooldown, so a concurrent run makes one of them fail. `--local-fetch` if cookies are set locally; running *on* the VPS is detected automatically.
+- **Subprocesses get `PYTHONIOENCODING=utf-8`**, so the Windows `cp1252` crash on emoji output can't happen.
+- **The excluded-picks table prints every run** and is written to `<account>_excluded.md` with tweet links. Not optional detail: only `pod` is graded by default, and the `result` category is picks revealed *after* they won — grading those manufactures a fake record. URLs come straight from the CSV; never reconstruct one from a tweet id.
+
+### Google Sheets export
+
+`scripts/sheets_export.py` writes `<account>_sheet.csv` into **one tab per account** in a shared workbook (`BACKFILL_SHEETS_ID` in `.env`). Numbers are sent as numbers so the Return column sums without cleanup; header is frozen + filtered, W/L cells colour-coded.
+
+One-time setup: share the workbook as **Editor** with `forwarder@api-project-349700129720.iam.gserviceaccount.com`. The script cannot create the workbook — the project's **Drive API is disabled**, so `gspread.create()` 403s; only the Sheets API is on, which suffices for writing into an already-shared workbook. (Enabling the Drive API would allow create+share, but that's console work this avoids.) A missing share prints a one-line fix and the pipeline still leaves the CSV on disk.
+
+### Odds sanity check
+
+`format_graded_csv.py` flags SPREAD/TOTAL priced outside 1.65–2.35 or MONEYLINE outside 1.15–4.00, and reports how many are on **wins** — only those move the P&L. Added because a wrong game date silently produced a Blazers +11.5 at **1.22 (−455)**, not a real spread price; a wrong date returning a *plausible* price would leave no trace at all. When it fires, check the game date first.
+
 ## Twitter/X pick parsing
 
 `scripts/parse_posts_csv.py` parses a capper's tweets CSV (from `fetch_x_posts.py`) to extract official pick placements. Three-phase pipeline:
@@ -250,10 +283,13 @@ Key design decisions:
 `scripts/grade_csv.py` batch-grades a parsed CSV (from `parse_posts_csv.py`) using the live grading pipeline (ESPN scores + Claude). Filters by sport and adds `grade`/`calc` columns.
 
 ```bash
-python scripts/grade_csv.py                  # Soccer rows (default)
-python scripts/grade_csv.py --sport NBA      # NBA rows
-python scripts/grade_csv.py --limit 5        # first 5 matching
+python scripts/grade_csv.py --account boyerBets_                 # every sport
+python scripts/grade_csv.py --account boyerBets_ --sport NBA     # one sport
+python scripts/grade_csv.py --account boyerBets_ --limit 5       # first 5 matching
+python scripts/grade_csv.py --account boyerBets_ --categories all  # ignore the POD filter
 ```
+
+Only rows whose parse `category` is in `GRADEABLE_CATEGORIES` (just `pod`) are graded by default — see the backfill section above for why that matters.
 
 **Soccer moneyline grading:** Soccer moneyline is 3-way — a draw is a LOSS, not a push. Only DNB (draw no bet) pushes on draws. "To advance" / "to qualify" picks use the final result (including extra time / penalties). This rule is in `_GRADE_PROMPT` in `ai.py`.
 
