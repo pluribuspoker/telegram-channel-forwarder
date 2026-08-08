@@ -166,6 +166,20 @@ async def _fetch_impl(since: datetime, limit: int) -> list[dict]:
     results = []
     old_streak = 0
     async for tw in api.user_tweets(user.id, limit=limit):
+        # user_tweets does NOT yield only this user's tweets. twscrape parses a
+        # timeline by flattening EVERY Tweet object in the GraphQL response
+        # (`to_old_rep` walks it recursively), so a tweet Trent *quotes* is
+        # yielded as its own top-level item, authored by whoever wrote it.
+        # Retweets are excluded by id (`retweeted_ids`); quotes are not — and
+        # `_is_retweet` can't see them either, since the quoted text carries no
+        # "RT @" prefix. Unfiltered, someone else's pick becomes Trent's, under
+        # a URL we fabricate from Trent's handle (2026-08-08: Krabs' "Outlaws
+        # -1.5" posted as Trent's while he had bet the other side, Atlas +1.5).
+        # Filter BEFORE the date check: a quoted tweet is usually older than
+        # `since`, and letting it feed old_streak can break the scan early and
+        # drop real picks behind it.
+        if (tw.user.username or "").lower() != USERNAME.lower():
+            continue
         if tw.date < since:
             old_streak += 1
             # Pinned tweets come first and may be old — skip them.
@@ -180,7 +194,10 @@ async def _fetch_impl(since: datetime, limit: int) -> list[dict]:
             "date": tw.date.isoformat(),
             "text": tw.rawContent,
             "photos": "|".join(photos),
-            "url": f"https://x.com/{user.username}/status/{tw.id}",
+            # Build from the tweet's OWN author, never the account we polled:
+            # x.com/<wrong-handle>/status/<id> resolves anyway (it 307s to the
+            # real author), so a fabricated URL looks valid to every check.
+            "url": f"https://x.com/{tw.user.username}/status/{tw.id}",
         })
 
     return results
