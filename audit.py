@@ -78,13 +78,16 @@ def _format_pick(pick: dict) -> str:
     if bet_type in ("total", "team_total") and line is not None:
         d = "O" if direction == "over" else "U" if direction == "under" else ""
         if bet_type == "team_total" and team:
-            prefix = f"{team} "
+            head = team
         elif len(teams) >= 2:
-            prefix = f"{teams[0]}/{teams[1]} "
+            head = f"{teams[0]}/{teams[1]}"
         elif team:
-            prefix = f"{team} "
+            head = team
         else:
-            prefix = ""
+            head = ""
+        # lstrip covers the headless game total, where period_tag is the whole
+        # prefix (" 1H " -> "1H "), and collapses to "" when both are empty.
+        prefix = f"{head}{period_tag} ".lstrip()
         stat = f" {prop_stat}" if prop_stat else ""
         return f"{prefix}{d}{line:g}{stat}"
 
@@ -92,8 +95,8 @@ def _format_pick(pick: dict) -> str:
         if line is not None and direction:
             d = "O" if direction == "over" else "U"
             stat = f" {prop_stat}" if prop_stat else ""
-            return f"{player} {d}{line:g}{stat}"
-        return player
+            return f"{player}{period_tag} {d}{line:g}{stat}"
+        return f"{player}{period_tag}"
 
     # Team-level props (BTTS, clean sheet, etc.) — no player, but has teams + prop_stat
     if bet_type == "prop" and prop_stat and teams:
