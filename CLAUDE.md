@@ -169,6 +169,8 @@ Three things keep that closed, all in `_find_event_id`/`fetch_odds*`:
 
 Don't "fix" a wrong price by widening a guard downstream: the `>2 days` guard in `tracker.py` already fired here and the historical fallback re-ran the same matcher, re-matched the same game, and returned the identical price — with no `game_date` to show for it. `scripts/test_event_match_regression.py` pins all of this offline.
 
+**A line the pick matched but that already states the capper's price IS the pick's line — stop there.** `_insert_odds` (`tracker_format.py`) skips such a line so we don't restate a number the capper already showed, and `_place` returns `None` for it. That `None` means "keep looking" for a line carrying a *different* pick's tag, but applying it to the source-price case walks the loop past the bet and onto whatever later line also matches — the write-up that names the team again, or an angle record holding the bet's number ("9-3 off 2 wins" for an over 9). The price then renders after the analysis instead of on the bet. Any such line resolves through the `src_declined` rule instead: quiet inside the 3% move threshold, `[-190 now]` on the pick line beyond it. `scripts/test_source_priced_odds.py` pins both halves offline (fall-through *and* later-line match). Note the sibling trap when repairing these live: the tracker rebuilds each edit from the current message text, so a tag on the wrong line must be **stripped**, not just re-placed.
+
 **Backtest / audit:**
 ```bash
 python scripts/audit_odds.py --days-back 7
