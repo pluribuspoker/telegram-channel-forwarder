@@ -60,9 +60,27 @@ WNBA_PPD = event("Golden State Valkyries", [26, 18, 30, 20], "Dallas Wings", [21
                  completed=False)
 
 
+# Texas Rangers beat Seattle 5-4 — the -1 run line case (margin exactly 1).
+MLB54 = event("Texas Rangers", [1, 0, 2, 1, 1, 0, 0, 0, 0], "Seattle Mariners",
+              [0, 2, 0, 1, 0, 1, 0, 0, 0])
+MLB54_LIVE = event("Texas Rangers", [1, 0, 2, 1, 1, 0, 0, 0, 0], "Seattle Mariners",
+                   [0, 2, 0, 1, 0, 1, 0, 0, 0], state="in")
+# A tied side bet refunds (NFL can tie).
+TIED = event("Golden State Valkyries", [7, 7, 7, 7], "Dallas Wings", [7, 7, 7, 7])
+
+
 def P(**kw):
     base = {"bet_type": "total", "teams": ["Dallas Wings"], "player": "",
             "line": 79.5, "direction": "under", "period": "1h", "sport": "WNBA"}
+    base.update(kw)
+    return base
+
+
+def S(**kw):
+    """A side bet (spread/moneyline): no direction, period defaults to the game."""
+    base = {"bet_type": "moneyline", "teams": ["Texas Rangers"], "player": "",
+            "line": None, "direction": None, "period": "game", "sport": "MLB",
+            "description": ""}
     base.update(kw)
     return base
 
@@ -108,10 +126,55 @@ CASES = [
     ("no scoreboard falls through", "WNBA", P(), None, None),
     ("team_total naming nobody in the game", "WNBA",
      P(bet_type="team_total", teams=["Chicago Sky"]), WNBA, None),
-    ("non-total bet types are not this function's job", "WNBA",
-     P(bet_type="moneyline"), WNBA, None),
+    # Bet types the scoreline can't settle stay with Claude.
+    ("player props are not this function's job", "WNBA",
+     P(bet_type="prop", player="Paige Bueckers"), WNBA, None),
+    ("double_chance is not this function's job", "WNBA",
+     P(bet_type="double_chance"), WNBA, None),
     ("missing direction falls through", "WNBA", P(direction=None), WNBA, None),
     ("missing line falls through", "WNBA", P(line=None), WNBA, None),
+
+    # ── spread / moneyline: final only, and PUSH is real ──────────────────────
+    # The second real defect: Rangers -1 run line, won 5-4. Margin is exactly 1,
+    # so a -1 line refunds. It was graded LOSS.
+    ("spread -1 won by exactly 1 = PUSH", "MLB",
+     S(bet_type="spread", line=-1, teams=["Texas Rangers"]), MLB54, ("PUSH", "push")),
+    ("spread -1.5 won by 1 = LOSS", "MLB",
+     S(bet_type="spread", line=-1.5, teams=["Texas Rangers"]), MLB54, ("LOSS", "-0.5")),
+    # Seattle lost 4-5, so +1.5 covers by half a point.
+    ("spread +1.5 losing by 1 = WIN", "MLB",
+     S(bet_type="spread", line=1.5, teams=["Seattle Mariners"]), MLB54, ("WIN", "+0.5")),
+    ("moneyline winner", "MLB",
+     S(bet_type="moneyline", teams=["Texas Rangers"]), MLB54, ("WIN", "5 vs 4")),
+    ("moneyline loser", "MLB",
+     S(bet_type="moneyline", teams=["Seattle Mariners"]), MLB54, ("LOSS", "4 vs 5")),
+    ("moneyline tie = PUSH", "NFL",
+     S(bet_type="moneyline", teams=["Dallas Wings"], sport="NFL"), TIED, ("PUSH", "push")),
+    ("period spread uses period scores", "WNBA",
+     S(bet_type="spread", line=-3.5, teams=["Dallas Wings"], period="1h", sport="WNBA"),
+     WNBA, ("LOSS", "1H")),
+
+    # A lead is not monotone, so a side bet must never settle before final.
+    ("spread mid-game never settles", "MLB",
+     S(bet_type="spread", line=-1.5, teams=["Texas Rangers"]), MLB54_LIVE, None),
+    ("moneyline mid-game never settles", "MLB",
+     S(bet_type="moneyline", teams=["Texas Rangers"]), MLB54_LIVE, None),
+
+    # Rules the scoreline cannot express → fall through to Claude.
+    ("regulation ML (OT counts against) falls through", "NHL",
+     S(bet_type="moneyline", teams=["Texas Rangers"], sport="NHL",
+       description="Rangers regulation ML 3-way"), MLB54, None),
+    ("to-advance falls through", "MLB",
+     S(bet_type="moneyline", teams=["Texas Rangers"],
+       description="Texas Rangers to advance"), MLB54, None),
+    ("spread with no line falls through", "MLB",
+     S(bet_type="spread", line=None, teams=["Texas Rangers"]), MLB54, None),
+    ("side bet naming nobody in the game", "MLB",
+     S(bet_type="moneyline", teams=["Chicago Cubs"]), MLB54, None),
+    ("UFC side bet stays with Claude", "UFC",
+     S(bet_type="moneyline", teams=["Texas Rangers"], sport="UFC"), MLB54, None),
+    ("soccer side bet stays with Claude (3-way)", "Soccer",
+     S(bet_type="moneyline", teams=["Texas Rangers"], sport="Soccer"), MLB54, None),
 ]
 
 

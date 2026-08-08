@@ -10,6 +10,9 @@ import re
 import httpx
 from datetime import date as _date, datetime as _datetime, timedelta, timezone
 
+# common.py imports nothing from here, so this stays one-directional.
+from common import is_regulation_ml
+
 
 # ─── ESPN ─────────────────────────────────────────────────────────────────────
 
@@ -1158,21 +1161,25 @@ def _is_period_complete(event: dict, sport: str, period: str) -> bool:
 def try_early_grade_math(
     sport: str, pick: dict, scoreboard: dict | None,
 ) -> tuple[str, str] | None:
-    """Grade a total/team_total pick by arithmetic whenever the box score settles it.
+    """Grade a total/team_total/spread/moneyline pick by arithmetic on the box score.
 
-    A total is addition over the linescores, so when the numbers are present there
-    is nothing for a model to decide. Two states qualify:
+    These four are all comparisons against numbers the scoreboard already gives us,
+    so when the numbers are present there is nothing for a model to decide. Which
+    states qualify depends on whether the quantity can still move against the bet:
 
-    * **mid-game** — only once the value has already passed the line, i.e. an over
-      that can no longer lose (the value is monotone, so this stays true).
-    * **final** — settles outright, including PUSH and the under side.
+    * **totals, mid-game** — only once the value has passed the line, i.e. an over
+      that can no longer lose. A running total is monotone, so this stays true.
+    * **totals, final** — settles outright, including PUSH and the under side.
+    * **spread / moneyline** — final only. A lead is *not* monotone; settling those
+      early would call a game that can still be lost.
 
-    The final case exists because grading a settled total was left entirely to
-    Claude, and it mis-summed one: "Dallas Wings 1H under 79.5" is `bet_type=total`
-    (the team name identifies the *game* — see the Drake example in `_GRADE_PROMPT`),
-    but it was graded as Dallas's own first half, 36, instead of the game's combined
-    80 — turning a half-point loss into a win. Nothing downstream could catch it:
-    a wrong total grades to a clean verdict exactly like a right one.
+    Grading settled bets was left entirely to Claude, and it got two wrong. A total:
+    "Dallas Wings 1H under 79.5" is `bet_type=total` (the team name identifies the
+    *game* — see the Drake example in `_GRADE_PROMPT`) but was graded as Dallas's own
+    first half, 36, instead of the game's combined 80, turning a half-point loss into
+    a win. And a spread: a -1 run line won by exactly 1 run is a PUSH, graded LOSS.
+    Neither is catchable downstream — a wrong verdict prices, grades and broadcasts
+    exactly like a right one.
 
     Returns (verdict, calc) or None to fall through to the normal context+Claude
     path — every guard here fails open, so anything unusual is still graded.
@@ -1181,20 +1188,36 @@ def try_early_grade_math(
         return None
 
     bet_type = pick.get("bet_type", "")
-    if bet_type not in ("total", "team_total"):
+    if bet_type not in ("total", "team_total", "spread", "moneyline"):
         return None
 
     if sport not in MATH_GRADABLE_SPORTS:
         return None
 
-    direction = pick.get("direction")
-    line = pick.get("line")
-    if line is None or direction not in ("over", "under"):
-        return None
-
     teams = pick.get("teams", [])
     player = pick.get("player", "")
     period = pick.get("period", "game")
+    direction = pick.get("direction")
+    line = pick.get("line")
+
+    if bet_type in ("total", "team_total"):
+        if line is None or direction not in ("over", "under"):
+            return None
+    else:
+        # Side bets need a team to attribute the result to, and a spread needs its
+        # number. Anything settled by a rule other than the scoreline is refused:
+        desc = pick.get("description", "") or ""
+        if not teams:
+            return None
+        if bet_type == "spread" and line is None:
+            return None
+        # "to advance/qualify" is decided by the tie/series, not this game's score.
+        if re.search(r"\bto\s+(advance|qualify)\b", desc, re.IGNORECASE):
+            return None
+        # Regulation ML must win in regulation — the final score includes OT, so
+        # this arithmetic would call an OT win a WIN when it is a LOSS.
+        if bet_type == "moneyline" and is_regulation_ml(desc):
+            return None
 
     event = _find_event_for_pick(scoreboard, teams, player)
     if not event:
@@ -1214,6 +1237,28 @@ def try_early_grade_math(
 
     away_name, away_score, home_name, home_score = scores
     period_tag = f" {period.upper()}" if period != "game" else ""
+
+    if bet_type in ("spread", "moneyline"):
+        # A lead can still be lost, so these settle at final only.
+        if not final:
+            return None
+        team_name = teams[0] if teams else ""
+        if _team_matches(team_name.lower(), away_name.lower()):
+            mine, theirs, name = away_score, home_score, away_name
+        elif _team_matches(team_name.lower(), home_name.lower()):
+            mine, theirs, name = home_score, away_score, home_name
+        else:
+            return None
+        spread = float(line) if bet_type == "spread" else 0.0
+        margin = mine + spread - theirs
+        shown = f"{name} {mine:g}{spread:+g} vs {theirs:g}" if bet_type == "spread" \
+            else f"{name} {mine:g} vs {theirs:g}"
+        if margin == 0:
+            # A whole-number spread landing exactly on the margin refunds, and so
+            # does a tied side bet. This is the case the -1 run line got wrong.
+            return ("PUSH", f"[final] {shown}{period_tag} — exact, push")
+        return ("WIN" if margin > 0 else "LOSS",
+                f"[final] {shown}{period_tag} -> {margin:+g}")
 
     if bet_type == "total":
         # A total names the GAME even when the pick text names one team, so both
