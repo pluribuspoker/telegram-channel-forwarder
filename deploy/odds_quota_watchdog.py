@@ -124,8 +124,20 @@ def probe() -> tuple[int | None, int | None, int | None]:
     return _int("x-requests-remaining"), _int("x-requests-used"), _int("x-requests-last")
 
 
-def damage_count(hours: int = 1) -> int:
-    """Pricing attempts that already failed on quota in the last `hours`."""
+def damage_signals(hours: int = 1) -> tuple[int, bool]:
+    """(quota failures in journald over the window, latest fast-path run failed too).
+
+    Two sources because journald alone under-reports: the listener's and the
+    Trent watcher's fast-path tracker runs are spawned with stdout/stderr
+    DEVNULL'd and land in logs/tracker_quick.log instead. On 2026-08-08 that
+    file held the only record of the failure while journald showed zero — a
+    count of 0 printed beside a live outage would repeat the very "no signal"
+    problem this watchdog exists to fix.
+
+    The quick log has no per-line timestamps (only per-run headers), so it
+    contributes a boolean about the most recent run rather than a windowed
+    count. Better an honest flag than a precise-looking wrong number.
+    """
     total = 0
     for unit in DAMAGE_UNITS.split(","):
         try:
@@ -137,7 +149,18 @@ def damage_count(hours: int = 1) -> int:
         except (OSError, subprocess.SubprocessError):
             continue
         total += out.count("OUT_OF_USAGE_CREDIT")
-    return total
+
+    quick = False
+    log = APP / "logs" / "tracker_quick.log"
+    try:
+        if log.exists():
+            tail = log.read_text(errors="replace")[-40000:]
+            # Only the last run in the file, so an old failure doesn't linger.
+            last_run = tail.rsplit("=" * 70, 2)[-1]
+            quick = "OUT_OF_USAGE_CREDIT" in last_run
+    except OSError:
+        pass
+    return total, quick
 
 
 def main() -> None:
@@ -190,11 +213,14 @@ def main() -> None:
 
     if force or remaining <= 0:
         if force or now - state.get("out_alert_at", 0) > OUT_DEBOUNCE_SECS:
-            failed = damage_count(1)
+            failed, quick_failed = damage_signals(1)
+            seen = f"Failed pricing attempts logged in the last hour: {failed}"
+            if quick_failed:
+                seen += "\nThe latest fast-path tracker run also failed on quota."
             msg = (
                 f"🛑 Odds API quota exhausted\n\n"
                 f"Used {used}, remaining {remaining}.\n"
-                f"Failed pricing attempts in the last hour: {failed}\n\n"
+                f"{seen}\n\n"
                 f"Picks are being posted with NO price right now, and the miss is "
                 f"cached — the tracker fetches odds once per pick, so every pick "
                 f"stranded during this outage stays priceless even after the quota "
