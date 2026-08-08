@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the Odds API quota watchdog hourly
+
+[Timer]
+# :23 past the hour — clear of the :00/:05 tracker cadence and of the spend
+# watchdog at :07, so the probe and its journal scan don't collide with a
+# grading run.
+OnCalendar=*:23
+Persistent=true
+
+[Install]
+WantedBy=timers.target

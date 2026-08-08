@@ -1,0 +1,11 @@
+[Unit]
+Description=Odds API quota watchdog (alerts operator via Telegram before pricing goes dark)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/deploy/odds_quota_watchdog.py
