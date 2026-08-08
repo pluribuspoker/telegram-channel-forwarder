@@ -524,14 +524,23 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         #   "moneyline" → "ml", "under X" → "uX", "over X" → "oX"
         desc = _norm_abbr((pick.get("description") or "").lower().strip())
         desc_matched = False
+        # A line that matched this pick but already carries the capper's own
+        # price IS this pick's line — that's the premise the src_declined block
+        # below is built on. So once one is found, STOP searching: every later
+        # line that happens to share a team name is prose, not the bet. Without
+        # this the loop walks past the declined pick line and strands the tag on
+        # the write-up ("• Roughriders 1Q -0.5 (-125)" declined, tag landing
+        # after the analysis blockquote that mentions the Roughriders again).
         if desc:
             for j, line in enumerate(lines):
                 if desc in _norm_abbr(line.lower()):
                     if _place(j, odds_tag, allow_source=moved, declined=src_declined):
                         desc_matched = True
                         break
+                    if src_declined:
+                        break
 
-        if not desc_matched:
+        if not desc_matched and not src_declined:
             for j, line in enumerate(lines):
                 if " @ " in line and not _BET_LINE_RE.search(line):
                     continue  # skip game-info headers, but keep pick lines
@@ -539,10 +548,12 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                     if _place(j, odds_tag, allow_source=moved, declined=src_declined):
                         desc_matched = True
                         break
+                    if src_declined:
+                        break
 
         # Third fallback: strip team/player names from desc and search for the remainder.
         # Catches abbreviations like "Dbacks ML (2 units)" when AI parsed "Arizona Diamondbacks ML".
-        if not desc_matched and desc:
+        if not desc_matched and not src_declined and desc:
             player = pick.get("player") or ""
             teams = pick.get("teams") or []
             identifiers = [player] if player else teams
@@ -566,11 +577,13 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                         if _place(j, odds_tag, allow_source=moved, declined=src_declined):
                             desc_matched = True
                             break
+                        if src_declined:
+                            break
 
         # Fourth fallback: search for the raw bet line number (e.g. "236.5" or "-7.5").
         # Catches heavily abbreviated team names (e.g. "Twolves / Sixers under 236.5")
         # where no team name or description fragment survived the previous passes.
-        if not desc_matched:
+        if not desc_matched and not src_declined:
             pick_line = pick.get("line")
             if pick_line is not None:
                 pick_line_f = float(pick_line)
@@ -581,6 +594,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                     if line_str in row:
                         if _place(j, odds_tag, allow_source=moved, declined=src_declined):
                             desc_matched = True
+                            break
+                        if src_declined:
                             break
 
         if not desc_matched and src_declined:
