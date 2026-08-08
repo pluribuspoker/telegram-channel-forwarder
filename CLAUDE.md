@@ -154,6 +154,8 @@ This exists because grading settled bets was Claude's alone and it got two wrong
 - `Dallas Wings 1H under 79.5` is `bet_type=total` (the team name identifies the *game* — see the Drake example in `_GRADE_PROMPT`) but was graded as Dallas's own half, 36, instead of the combined 80: a half-point loss booked as a win.
 - A `-1` run line won by exactly 1 run is a **PUSH**; it was booked a LOSS. Whole-number spreads and tied side bets refund, and the old `> line` shape could not express that at all.
 
+**Don't try to fix this class with prompt text — the rule was already there and already correct.** `_GRADE_PROMPT` states "PUSH if exactly X" for spreads, and the Drake example for totals; both bugs violated a rule written directly above them. The decisive evidence is the run line: a pick fanned out to two dest channels is graded independently per channel, and the *same* text on the *same* game with the *same* prompt came back **PUSH in one channel and LOSS in the other** (`-1002486251914:3530` vs `-1004339684312:244`). One of those two calls was always going to be wrong, and no wording makes a sampled answer deterministic. Arithmetic on the box score is the only fix that holds.
+
 For the total, two independent defects had to line up: the arithmetic only ran mid-game, *and* `PERIOD_MAP` had no WNBA entry, so `_extract_period_scores` returned None and the path was dead for that sport in every state.
 
 Three rules follow:
