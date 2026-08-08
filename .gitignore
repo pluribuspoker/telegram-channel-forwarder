@@ -213,6 +213,7 @@ backtest_*.txt
 parse_cache.json
 parse_cache.json.lock
 data/
+logs/
 scripts/output/
 accounts.db
 angles/data/activity.db

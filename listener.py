@@ -323,8 +323,13 @@ async def _trigger_tracker_soon():
 
             started = time.monotonic()
             try:
+                # Tag this run's Claude spend so the ledger separates it from the
+                # timer-driven tracker — both are tracker.py, but this one's output
+                # never reaches journald, which is how its spend went uncounted.
+                quick_env = {**os.environ, "CLAUDE_SPEND_SOURCE": "tracker-fastpath"}
                 proc = await asyncio.create_subprocess_exec(
                     *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                    env=quick_env,
                 )
                 out, _ = await proc.communicate()
                 rc = proc.returncode

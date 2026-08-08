@@ -14,6 +14,15 @@ next cost blowup whose cause we haven't thought of yet.
   * ⚡ hourly — trailing 1h spend over CLAUDE_SPEND_HOUR_ALERT_USD, which
     catches a fast leak long before the daily figure crosses.
 
+Spend is read from logs/claude_spend.jsonl, which ai.py appends to at the single
+choke point every Claude call passes through. It replaced a journald scan of four
+systemd units that could not see any other caller: sauce_daily (cron) and the
+listener's fast-path tracker (a subprocess) were together ~$0.14/day against the
+~$0.15/day the scan could see, so the reported figure ran ~40% low and the $3/day
+threshold really tripped nearer $5. journald remains the fallback for a window the
+ledger doesn't reach back through yet — the two are never summed, since for those
+four units they describe the same calls.
+
 Reuses WATCHDOG_BOT_TOKEN / WATCHDOG_USER_ID from .env. State (for debounce)
 lives in ~/.claude_spend_watchdog_state.json.
 
@@ -37,6 +46,13 @@ STATE = Path.home() / ".claude_spend_watchdog_state.json"
 
 DEFAULT_UNITS = "grade-daemon,telegram-tracker,telegram-forwarder,trent-monitor"
 COST_RE = re.compile(r"\[Claude\]\s+\$([0-9]+(?:\.[0-9]+)?)")
+
+# Preferred source: ai.py appends one record per call here, at the single choke
+# point every Claude call passes through, so it counts callers that aren't
+# systemd units (sauce_daily via cron, the listener's fast-path tracker, manual
+# backfill scripts) — all of which the journald scan below cannot see at all.
+LEDGER = APP / "logs" / "claude_spend.jsonl"
+LEDGER_KEEP_DAYS = int(os.environ.get("CLAUDE_SPEND_LEDGER_DAYS", "30"))
 
 DAY_DEBOUNCE_SECS = 12 * 60 * 60   # at most one 💸 alert per 12h
 HOUR_DEBOUNCE_SECS = 6 * 60 * 60   # at most one ⚡ alert per 6h
@@ -112,6 +128,79 @@ def collect(units: list[str], since: str) -> tuple[float, int, dict[str, tuple[f
     return total, calls, per
 
 
+def read_ledger() -> tuple[list[tuple[float, float, str]], float | None]:
+    """(records, earliest_ts). records are (ts, usd, source); earliest_ts is None
+    if the ledger is absent or unreadable."""
+    try:
+        raw = LEDGER.read_text(errors="replace")
+    except OSError:
+        return [], None
+    recs: list[tuple[float, float, str]] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+            recs.append((float(d["ts"]), float(d["usd"]), str(d.get("source", "unknown"))))
+        except (ValueError, KeyError, TypeError):
+            continue  # a torn line from a concurrent append is not worth failing over
+    if not recs:
+        return [], None
+    return recs, min(r[0] for r in recs)
+
+
+def ledger_window(recs: list[tuple[float, float, str]], since_ts: float
+                  ) -> tuple[float, int, dict[str, tuple[float, int]]]:
+    per: dict[str, tuple[float, int]] = {}
+    total = 0.0
+    calls = 0
+    for ts, usd, src in recs:
+        if ts < since_ts:
+            continue
+        d, n = per.get(src, (0.0, 0))
+        per[src] = (d + usd, n + 1)
+        total += usd
+        calls += 1
+    return total, calls, per
+
+
+def prune_ledger(recs: list[tuple[float, float, str]], now: float) -> None:
+    """Drop records older than LEDGER_KEEP_DAYS. Rewrite-and-replace, so a
+    concurrent append is never interleaved into a half-written file."""
+    cutoff = now - LEDGER_KEEP_DAYS * 86400
+    keep = [r for r in recs if r[0] >= cutoff]
+    if len(keep) == len(recs):
+        return
+    try:
+        tmp = LEDGER.with_suffix(".jsonl.tmp")
+        tmp.write_text("".join(
+            json.dumps({"ts": ts, "usd": usd, "source": src}, separators=(",", ":")) + "\n"
+            for ts, usd, src in keep))
+        os.replace(tmp, LEDGER)
+    except OSError as e:
+        print(f"ledger prune failed: {e}", file=sys.stderr)
+
+
+def window(units: list[str], recs: list[tuple[float, float, str]], earliest: float | None,
+           now: float, hours: float, since_str: str
+           ) -> tuple[float, int, dict[str, tuple[float, int]], str]:
+    """Spend over the trailing `hours`, plus which source produced it.
+
+    The ledger is authoritative *only* once it reaches back past the start of the
+    window — otherwise a freshly-deployed ledger would report near-zero and the
+    alert would go quiet exactly when it still had journald history to use. The
+    two are never summed: for the four systemd units they describe the same calls.
+    """
+    since_ts = now - hours * 3600
+    if earliest is not None and earliest <= since_ts:
+        t, c, per = ledger_window(recs, since_ts)
+        return t, c, per, "ledger"
+    t, c, per = collect(units, since_str)
+    note = "journald (ledger too new)" if earliest is not None else "journald (no ledger)"
+    return t, c, per, note
+
+
 def fmt_breakdown(per: dict[str, tuple[float, int]]) -> str:
     if not per:
         return "  (no Claude calls logged)"
@@ -128,19 +217,24 @@ def main() -> None:
     day_limit = float(os.environ.get("CLAUDE_SPEND_DAY_ALERT_USD", "3.00"))
     hour_limit = float(os.environ.get("CLAUDE_SPEND_HOUR_ALERT_USD", "0.60"))
 
-    day_total, day_calls, day_per = collect(units, "24 hours ago")
-    hour_total, hour_calls, hour_per = collect(units, "1 hour ago")
+    now = time.time()
+    recs, earliest = read_ledger()
 
-    print(f"trailing 24h: ${day_total:.2f} ({day_calls} calls, limit ${day_limit:.2f})")
+    day_total, day_calls, day_per, day_src = window(units, recs, earliest, now, 24, "24 hours ago")
+    hour_total, hour_calls, hour_per, hour_src = window(units, recs, earliest, now, 1, "1 hour ago")
+
+    print(f"trailing 24h: ${day_total:.2f} ({day_calls} calls, limit ${day_limit:.2f}) [{day_src}]")
     print(fmt_breakdown(day_per))
-    print(f"trailing 1h : ${hour_total:.2f} ({hour_calls} calls, limit ${hour_limit:.2f})")
+    print(f"trailing 1h : ${hour_total:.2f} ({hour_calls} calls, limit ${hour_limit:.2f}) [{hour_src}]")
     print(fmt_breakdown(hour_per))
 
     if report_only:
         return
 
+    if recs:
+        prune_ledger(recs, now)
+
     state = load_state()
-    now = time.time()
     sent_any = False
 
     # A steady per-cycle rate is the signature of a re-grade loop rather than
@@ -154,6 +248,7 @@ def main() -> None:
                 f"Trailing 24h: ${day_total:.2f} ({day_calls} calls)\n\n"
                 f"A steady ~1 call/min with nothing resolving means a pick is being "
                 f"re-graded in a loop, not real volume.\n"
+                f"Source: {hour_src}\n"
                 f"Check: journalctl -u grade-daemon --since '1 hour ago' | grep -B6 '\\[Claude\\]'"
             )
             if send(msg):
@@ -176,6 +271,7 @@ def main() -> None:
                 f"{fmt_breakdown(day_per)}\n\n"
                 f"Last hour: ${hour_total:.2f} ({hour_calls} calls)\n\n"
                 f"Projected month at this rate: ${day_total * 30:.0f}\n\n"
+                f"Source: {day_src}\n"
                 f"{verdict}"
             )
             if send(msg):

@@ -4,7 +4,10 @@ ai.py — Claude AI layer: parsing, grading, and context building.
 
 import asyncio
 import json
+import os
 import re
+import sys
+import time
 
 from datetime import date as _date, timedelta
 
@@ -245,6 +248,45 @@ def fmt_cost(cost: float) -> str:
     return f"${cost:.2f}" if cost == 0 else f"${cost:.4f}"
 
 
+# ─── Spend ledger ─────────────────────────────────────────────────────────────
+# Every Claude call funnels through _claude_create_with_retry, so one append here
+# counts *all* spend regardless of how the process was started.
+#
+# Why not keep grepping journald: the spend watchdog reads `[Claude] $` lines out
+# of four systemd units, which means any caller that isn't one of those units is
+# invisible to it. Two already were — the listener's fast-path tracker (a
+# subprocess whose stdout goes to logs/tracker_quick.log) and sauce_daily (cron,
+# stdout to /tmp/sauce_daily_cron.log) — together ~$0.14/day against the
+# ~$0.15/day the watchdog could see, so its figure ran ~40% low and the $3/day
+# threshold really tripped nearer $5. Neither log timestamps its cost lines, so
+# they can't be windowed; and parsing them would still miss the *next* entry
+# point. A ledger written at the choke point is complete by construction.
+_SPEND_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "claude_spend.jsonl")
+
+# argv[0] is the honest default; CLAUDE_SPEND_SOURCE overrides it where one
+# script has two distinct roles (listener's fast-path tracker vs the timer's).
+_SPEND_SOURCE = os.getenv("CLAUDE_SPEND_SOURCE") or os.path.basename(
+    (sys.argv[0] or "unknown")).removesuffix(".py") or "unknown"
+
+
+def _record_spend(usd: float) -> None:
+    """Append one timestamped spend record. Never raises — a ledger write must
+    not be able to kill a grade."""
+    try:
+        os.makedirs(os.path.dirname(_SPEND_LOG), exist_ok=True)
+        line = json.dumps({"ts": round(time.time(), 3), "usd": round(usd, 6),
+                           "source": _SPEND_SOURCE}, separators=(",", ":")) + "\n"
+        # O_APPEND + a single write under PIPE_BUF is atomic between the daemon,
+        # the tracker, the fast-path tracker and cron all writing concurrently.
+        fd = os.open(_SPEND_LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, line.encode("utf-8"))
+        finally:
+            os.close(fd)
+    except Exception:  # noqa: BLE001 - accounting must never break the caller
+        pass
+
+
 async def _claude_create_with_retry(**kwargs) -> object:
     """Call claude().messages.create with up to 4 retries on transient errors (500, 529).
     Accumulates token usage and prints the per-call cost."""
@@ -256,6 +298,7 @@ async def _claude_create_with_retry(**kwargs) -> object:
             delta = usage_cost() - before
             if delta > 0:
                 print(f"    [Claude] {fmt_cost(delta)}")
+                _record_spend(delta)
             return resp
         except (anthropic.InternalServerError, anthropic.APIStatusError) as exc:
             status = getattr(exc, "status_code", None)
