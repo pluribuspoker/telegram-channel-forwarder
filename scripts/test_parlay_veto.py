@@ -15,18 +15,25 @@ differs. The prompt listed the labels it had seen ("N-LEG PARLAY", "PARLAY",
 0.5 HR, one $2000 stake, one +130 price) was forwarded to the singles-only
 channel as msg 53.
 
-The old prompt did not fail cleanly, and that is the reason both headers are
-fixtures rather than just the one that leaked. Replayed on these same slips it
-vetoed the "6-Pick Entry" 1 time in 5 and the "2-Leg Parlay" it supposedly did
-know only 3 in 5 — a coin-flip near the decision boundary, not a gap with a
-label on one side of it. Two of its own rules pushed a same-layout ticket
-toward false: per-leg cards look like the "several separate slips" exclusion,
-and "anything you are not sure about → false" turns any hesitation into a
-forward. So the veto's own default-to-pass — which is correct, since a false
-positive silently drops real picks — is what makes a label whitelist dangerous
-rather than merely incomplete: an unrecognised header doesn't fail loudly, it
-ships the parlay. Adding "N-Pick Entry" to the list would have left the ticket
-one Pikkit rename away from leaking again.
+Both headers are fixtures, not just the one that leaked, because the split
+between them is the whole bug: replayed on these slips the old prompt vetoed
+the "2-Leg Parlay" 6/6 and the "6-Pick Entry" 0/6. Two of its own rules land an
+unlisted header on false — per-leg cards look like the "several separate slips"
+exclusion, and "anything you are not sure about → false" turns any hesitation
+into a forward — so the label list was not one rule among several, it was the
+whole decision. That is what makes a whitelist dangerous here rather than
+merely incomplete: default-to-pass is correct (a false positive silently drops
+real picks), but it means an unrecognised header doesn't fail loudly, it ships
+the parlay. Adding "N-Pick Entry" to the list would hold only until Pikkit
+renames the header again.
+
+FIXTURE TEXT MUST BE THE TWEET'S EXACT rawContent — that is why these strings
+carry their real t.co tokens and trailing spaces. Hand-typing them (an invented
+t.co token, two dropped trailing spaces) moved the OLD prompt's verdicts on
+both slips and produced an apparent nondeterminism that I nearly recorded as
+the root cause: "borderline classifier" instead of "deterministic format gap",
+which would have argued for a different fix. Pull the text from the tweet
+object; never retype it.
 
 Hence the rule the prompt now states, and the reason both headers are fixtures:
 describe the SHAPE of a multi-leg ticket (a header that counts selections, or
@@ -52,15 +59,13 @@ FIX = Path(__file__).resolve().parent / "fixtures" / "parlay_veto"
 CASES = [
     (
         "parlay_6pick_entry.jpg",
-        "BRAVES/YANKS NO HR LAY: ✋\U0001f6ab\n\nNONE OF THESE BOZOS ARE GOING YARD "
-        "AT PIKKIT AT THE PARK. https://t.co/Rk0Yt4vHqA",
+        "BRAVES/YANKS NO HR LAY: ✋🚫\n\nNONE OF THESE BOZOS ARE GOING YARD AT PIKKIT AT THE PARK. https://t.co/mBHbCg5Avx",
         True,
         'Pikkit "6-Pick Entry" — 6x Under 0.5 HR, same game, $2000 @ +130 (the miss)',
     ),
     (
         "parlay_2leg_pikkit.jpg",
-        "HAPPY SALE DAY\n\nBRAVES ML + SALE 7+ FOR A MEGA\n\nSEE YOU AT @pikkitsports "
-        "AT THE PARK https://t.co/Vn7D9xER94",
+        "HAPPY SALE DAY \n\nBRAVES ML + SALE 7+ FOR A MEGA \n\nSEE YOU AT @pikkitsports AT THE PARK https://t.co/Vn7D9xER94",
         True,
         'Pikkit "2-Leg Parlay" — same layout, header the old prompt did know',
     ),
@@ -78,7 +83,7 @@ CASES = [
     ),
 ]
 
-RUNS = 2  # the veto is temperature=0, but a borderline prompt still wobbles
+RUNS = 2  # cheap insurance: a prompt edit can leave a fixture answering by luck
 
 
 async def main() -> int:

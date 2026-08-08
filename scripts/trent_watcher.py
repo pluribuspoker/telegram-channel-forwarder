@@ -450,16 +450,18 @@ async def is_parlay_image(tweet: dict) -> bool:
     to this singles-only channel (msg 53) because the list held "N-LEG PARLAY"
     and not "N-Pick Entry".
 
-    It did not fail cleanly, which is the part worth keeping: re-run on the real
-    slips, the old prompt vetoed that ticket 1 time in 5 and the "2-Leg Parlay"
-    it supposedly did know only 3 in 5. Two of its own rules pushed a
-    same-layout ticket toward false — per-leg cards read as the "several
-    separate slips" exclusion, and "anything you are not sure about" turns any
-    hesitation into a forward — leaving it on the decision boundary, where
-    temperature=0 buys nothing. So the fix is not "add the missing label": it is
-    the header-COUNT clause, the explicit same-game/own-card allowances, and the
-    counting rule, which move the shape off that boundary (9/9 on both tickets,
-    0 false positives in 42 classifications over previously-forwarded singles).
+    The gap is deterministic, not a near-miss: replayed on the real slips the
+    old prompt vetoed the "2-Leg Parlay" 6/6 and the "6-Pick Entry" 0/6. Two of
+    its own rules land an unlisted header on false — per-leg cards read as the
+    "several separate slips" exclusion, and "anything you are not sure about"
+    turns any hesitation into a forward — so the label list wasn't one rule
+    among several, it was the whole decision.
+
+    The fix is therefore not "add the missing label", which would hold only
+    until Pikkit renames the header again: it is the header-COUNT clause, the
+    explicit same-game/own-card allowances, and the counting rule, which decide
+    on shape (6/6 on both tickets, 0/6 on a single slip and on promo art, and 0
+    false positives across the 10 previously-forwarded singles).
 
     Default-to-pass stays, and it is why a whitelist is dangerous here rather
     than merely incomplete: an unrecognised header doesn't fail loudly, it ships
