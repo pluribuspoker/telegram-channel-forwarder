@@ -178,8 +178,85 @@ CASES = [
 ]
 
 
-def main() -> int:
+def _cfl_game(**kw):
+    base = {
+        "date": "2026-08-07", "away_abbr": "TOR", "home_abbr": "CGY",
+        "away_name": "Toronto Argonauts", "home_name": "Calgary Stampeders",
+        "away_quarters": [7, 3, 7, 0], "home_quarters": [0, 10, 7, 7],
+        "away_total": 17, "home_total": 24,
+        "final": True, "live": False, "current_period": 4,
+    }
+    base.update(kw)
+    return base
+
+
+def cfl_checks() -> int:
+    """CFL is scraped, not on the ESPN scoreboard, so it needs its own shaping.
+
+    The state mapping is the load-bearing part. `live` and `final` are
+    independent flags and an unplayed game is neither, so the old
+    "in if live else post" would present a game that hasn't kicked off as a
+    finished 0-0 — invisible while only build_early_context consumed it (it
+    ignores state), but the arithmetic path reads it and would grade a game
+    before it happened.
+    """
+    from scores import _cfl_event
     failures = 0
+
+    def check(label, cond):
+        nonlocal failures
+        if not cond:
+            failures += 1
+        print(f"[{'PASS' if cond else 'FAIL'}] {label}")
+
+    fin = _cfl_event(_cfl_game())
+    check("CFL final -> state=post, completed=True",
+          fin["status"]["type"] == {"state": "post", "completed": True})
+
+    live = _cfl_event(_cfl_game(final=False, live=True))
+    check("CFL live -> state=in, completed=False",
+          live["status"]["type"] == {"state": "in", "completed": False})
+
+    pre = _cfl_event(_cfl_game(final=False, live=False, away_quarters=[], home_quarters=[],
+                               away_total=0, home_total=0))
+    check("CFL not started -> state=pre (never graded as a 0-0 final)",
+          pre["status"]["type"]["state"] == "pre")
+
+    # An unplayed game must not settle a total, whatever the line.
+    sb_pre = {"events": [pre]}
+    got = try_early_grade_math("CFL", {
+        "bet_type": "total", "teams": ["Toronto Argonauts"], "player": "",
+        "line": 40.5, "direction": "under", "period": "game", "sport": "CFL",
+    }, sb_pre)
+    check("CFL unplayed game declines instead of grading 0-0 under", got is None)
+
+    # Final CFL game: 17 + 24 = 41.
+    sb_fin = {"events": [fin]}
+    for label, pick, want in [
+        ("CFL total under 40.5 -> LOSS (41)",
+         {"bet_type": "total", "line": 40.5, "direction": "under"}, "LOSS"),
+        ("CFL total over 40.5 -> WIN (41)",
+         {"bet_type": "total", "line": 40.5, "direction": "over"}, "WIN"),
+        ("CFL 1H total: 10+10=20 vs 19.5 -> WIN over",
+         {"bet_type": "total", "line": 19.5, "direction": "over", "period": "1h"}, "WIN"),
+        ("CFL spread +7.5 -> WIN (lost by 7)",
+         {"bet_type": "spread", "line": 7.5}, "WIN"),
+        ("CFL spread -7 lost by exactly 7 -> PUSH",
+         {"bet_type": "spread", "line": 7.0}, "PUSH"),
+        ("CFL moneyline on the loser -> LOSS",
+         {"bet_type": "moneyline"}, "LOSS"),
+    ]:
+        p = {"teams": ["Toronto Argonauts"], "player": "", "period": "game",
+             "sport": "CFL", "line": None, "direction": None, "description": ""}
+        p.update(pick)
+        got = try_early_grade_math("CFL", p, sb_fin)
+        check(label, got is not None and got[0] == want)
+
+    return failures
+
+
+def main() -> int:
+    failures = cfl_checks()
 
     # PERIOD_MAP coverage — the gap that made the arithmetic dead for WNBA.
     for sport in ("WNBA", "Lacrosse", "NBA", "CFL"):
@@ -202,7 +279,7 @@ def main() -> int:
             print(f"   expected: {expected}")
             print(f"   got:      {got}")
 
-    total = len(CASES) + 4
+    total = len(CASES) + 4 + 10
     print(f"\n{total - failures}/{total} passed")
     return 1 if failures else 0
 

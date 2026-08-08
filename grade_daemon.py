@@ -41,6 +41,7 @@ from common import (
 from scores import (
     fetch_espn,
     try_early_grade_math,
+    fetch_cfl_scoreboard,
     build_early_context,
     _find_event_for_pick,
 )
@@ -712,8 +713,11 @@ async def _grade_cycle(
             sb = await espn_cache.get(pick_sport, eff_date)
 
             # Totals are arithmetic: settled outright at final (incl. PUSH), or
-            # mid-game once the score has passed the line.
-            early = try_early_grade_math(pick_sport, pick, sb)
+            # mid-game once the score has passed the line. CFL is not on the
+            # ESPN scoreboard, so the math path needs its scraped card instead —
+            # `sb` stays as-is, since validate_sport relies on it being empty.
+            math_sb = await fetch_cfl_scoreboard(eff_date) if pick_sport == "CFL" else sb
+            early = try_early_grade_math(pick_sport, pick, math_sb)
             if early:
                 verdict, calc = early
                 game_date = eff_date

@@ -29,6 +29,7 @@ from common import (
 )
 from scores import (
     fetch_espn, odds_requests_used, try_early_grade_math, build_early_context,
+    fetch_cfl_scoreboard,
     validate_sport, resolve_nickname_collision, verify_picks_on_schedule,
 )
 from odds import fetch_odds, fetch_odds_current, quota_used as odds_quota_used
@@ -864,7 +865,12 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
                         # Totals are arithmetic: settled outright at final (incl.
                         # PUSH), or mid-game once the score has passed the line.
-                        early = try_early_grade_math(pick_sport, pick, sb)
+                        # CFL is not on the ESPN scoreboard, so the math path
+                        # needs its scraped card instead — `sb` stays as-is,
+                        # since validate_sport relies on it being empty.
+                        math_sb = (await fetch_cfl_scoreboard(eff_date)
+                                   if pick_sport == "CFL" else sb)
+                        early = try_early_grade_math(pick_sport, pick, math_sb)
                         if early:
                             verdict, calc = early
                             game_date = eff_date

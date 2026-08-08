@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import re
+import time
 
 import httpx
 from datetime import date as _date, datetime as _datetime, timedelta, timezone
@@ -377,14 +378,8 @@ def _format_cfl_line_scores(game: dict) -> str:
     return header + "\n" + "\n".join(lines)
 
 
-def _cfl_scoreboard(game: dict) -> dict:
-    """Wrap a parsed cfl.ca game in an ESPN-shaped scoreboard.
-
-    Lets CFL reuse the shared early-grading helpers, which are written against
-    ESPN's schema. Without this CFL has no early grading at all: ESPN serves
-    zero CFL events, so `build_early_context` is handed an empty scoreboard and
-    always returns None.
-    """
+def _cfl_event(game: dict, event_id: str = "cfl") -> dict:
+    """One parsed cfl.ca game as an ESPN-shaped event."""
     def competitor(side: str) -> dict:
         linescores = []
         for q in game[f"{side}_quarters"]:
@@ -399,14 +394,100 @@ def _cfl_scoreboard(game: dict) -> dict:
             "linescores": linescores,
         }
 
-    return {"events": [{
-        "id": "cfl",
+    # `live` and `final` are independent flags, and a game that has not kicked
+    # off is neither. Mapping "not live" straight to "post" (as this used to)
+    # would present an unplayed game as a finished 0-0 one — harmless while the
+    # only consumer was build_early_context, which ignores state, but the
+    # arithmetic path reads it and would grade the game before it happened.
+    if game.get("live"):
+        state, completed = "in", False
+    elif game.get("final"):
+        state, completed = "post", True
+    else:
+        state, completed = "pre", False
+
+    return {
+        "id": event_id,
         "status": {
             "period": game.get("current_period") or 0,
-            "type": {"state": "in" if game.get("live") else "post"},
+            "type": {"state": state, "completed": completed},
         },
         "competitions": [{"competitors": [competitor("away"), competitor("home")]}],
-    }]}
+    }
+
+
+def _cfl_scoreboard(game: dict) -> dict:
+    """Wrap a single parsed cfl.ca game in an ESPN-shaped scoreboard.
+
+    Lets CFL reuse the shared early-grading helpers, which are written against
+    ESPN's schema. Without this CFL has no early grading at all: ESPN serves
+    zero CFL events, so `build_early_context` is handed an empty scoreboard and
+    always returns None.
+    """
+    return {"events": [_cfl_event(game)]}
+
+
+# The schedule page is one request covering every game, so cache the parse and
+# share it between the context path and the arithmetic path instead of
+# scraping cfl.ca once per pick.
+_CFL_GAMES_TTL = 60
+# Failures are cached too, briefly. The daemon calls this per unresolved CFL
+# pick every 10s, so an un-cached failure would turn a cfl.ca outage into one
+# request per pick per cycle aimed at a site that is already struggling.
+_CFL_GAMES_FAIL_TTL = 15
+_cfl_games_cache: tuple[float, list[dict]] | None = None
+
+
+async def _fetch_cfl_games() -> list[dict]:
+    """Parsed cfl.ca schedule, cached briefly. Returns [] on any fetch failure."""
+    global _cfl_games_cache
+    if _cfl_games_cache:
+        age = time.monotonic() - _cfl_games_cache[0]
+        ttl = _CFL_GAMES_TTL if _cfl_games_cache[1] else _CFL_GAMES_FAIL_TTL
+        if age < ttl:
+            return _cfl_games_cache[1]
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as http:
+        try:
+            r = await http.get("https://www.cfl.ca/schedule/")
+            r.raise_for_status()
+        except Exception as exc:
+            print(f"    [CFL error] schedule fetch: {exc}")
+            _cfl_games_cache = (time.monotonic(), [])
+            return []
+    games = _parse_cfl_schedule(r.text)
+    _cfl_games_cache = (time.monotonic(), games)
+    return games
+
+
+async def fetch_cfl_scoreboard(date: str) -> dict:
+    """CFL games near `date` as an ESPN-shaped scoreboard, for the math path.
+
+    Deliberately NOT wired into `fetch_espn`: `validate_sport` keys off CFL's
+    ESPN scoreboard being empty to stop CFL teams fuzzy-matching other sports
+    ("Blue Bombers" -> MLB "Blue Jays"), so populating it globally would change
+    sport validation as a side effect. This feeds grading only.
+
+    Each event gets a unique id — `find_event_ids` returns ids and the caller
+    resolves the first match, so a shared id would silently bind every pick to
+    whichever game happened to be first.
+    """
+    games = await _fetch_cfl_games()
+    if not games:
+        return {"events": []}
+    try:
+        target = _date.fromisoformat(date)
+    except ValueError:
+        return {"events": []}
+
+    events = []
+    for i, g in enumerate(games):
+        try:                                  # ±1 day for timezone differences
+            if abs((_date.fromisoformat(g["date"]) - target).days) > 1:
+                continue
+        except (ValueError, KeyError):
+            continue
+        events.append(_cfl_event(g, event_id=f"cfl-{g['date']}-{i}"))
+    return {"events": events}
 
 
 async def fetch_cfl_context(
@@ -420,15 +501,9 @@ async def fetch_cfl_context(
     the live card while the game is still in progress; everything else waits
     for the final. Returns (context_str, game_date).
     """
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as http:
-        try:
-            r = await http.get("https://www.cfl.ca/schedule/")
-            r.raise_for_status()
-        except Exception as exc:
-            print(f"    [CFL error] schedule fetch: {exc}")
-            return "", date
-
-    games = _parse_cfl_schedule(r.text)
+    games = await _fetch_cfl_games()
+    if not games:
+        return "", date
     team_lower = team.lower().strip()
 
     # Try odds_game_date first, then pick date — odds API sometimes returns
