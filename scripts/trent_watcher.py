@@ -320,19 +320,25 @@ Tweet text: {text}
 Return only: true or false"""
 
 _IMAGE_IS_PARLAY_PROMPT = """\
-Does this image show a MULTI-LEG PARLAY — two or more selections combined onto ONE ticket \
+Does this image show a MULTI-LEG bet — two or more selections combined onto ONE ticket \
 that all must win for the bet to cash?
 
-Return true ONLY when you can see that combining:
-- A slip listing 2+ teams/players under a single wager, with ONE combined price and ONE payout
+Return true when the image shows either:
+- A ticket whose header COUNTS its selections ("6-Pick Entry", "6 open", "N picks", "N legs"), \
+or that lists 2+ teams/players/props sharing ONE stake, ONE combined price and ONE payout — \
+this still counts when each leg is drawn in its own separate box or card, and when every leg \
+comes from the SAME game
 - An explicit label: "N-LEG PARLAY", "PARLAY", "FUGAZI FIVE"/"FUGAZI 5", "[N]-man nuke", \
 "Last Chance U slip", "round robin", "SGP" / "same game parlay"
 
 Return false for everything else:
-- A single-game bet slip (one selection)
-- Several SEPARATE slips side by side, each its own straight bet with its own payout
+- A single-game bet slip — ONE selection, one price
+- Several INDEPENDENT slips shown side by side, each with its OWN stake and its OWN payout
 - A promo graphic, team logo, matchup art, meme, screenshot, or any photo with no bet slip
 - Anything you are not sure about
+
+Counting rule: if you can count 2 or more distinct selections that share a single stake or a \
+single payout, it is a parlay — return true.
 
 The tweet text may only describe ONE leg of the slip — judge the IMAGE, not the text.
 
@@ -435,6 +441,29 @@ async def is_parlay_image(tweet: dict) -> bool:
     attached to a FUGAZI FIVE 5-leg slip). Checking the image only as a
     fallback for a "no" text verdict, as this used to, made the parlay rule
     unreachable in exactly the case it exists for.
+
+    The prompt must describe the SHAPE of a multi-leg ticket, never a list of
+    labels the book happens to print. Pikkit draws every multi-leg ticket the
+    same way — a header, then one card per leg — and only the header wording
+    differs, so a label whitelist puts the whole judgement on a string the book
+    chose. A 6-leg same-game HR-under ticket headed "6-Pick Entry" was forwarded
+    to this singles-only channel (msg 53) because the list held "N-LEG PARLAY"
+    and not "N-Pick Entry".
+
+    It did not fail cleanly, which is the part worth keeping: re-run on the real
+    slips, the old prompt vetoed that ticket 1 time in 5 and the "2-Leg Parlay"
+    it supposedly did know only 3 in 5. Two of its own rules pushed a
+    same-layout ticket toward false — per-leg cards read as the "several
+    separate slips" exclusion, and "anything you are not sure about" turns any
+    hesitation into a forward — leaving it on the decision boundary, where
+    temperature=0 buys nothing. So the fix is not "add the missing label": it is
+    the header-COUNT clause, the explicit same-game/own-card allowances, and the
+    counting rule, which move the shape off that boundary (9/9 on both tickets,
+    0 false positives in 42 classifications over previously-forwarded singles).
+
+    Default-to-pass stays, and it is why a whitelist is dangerous here rather
+    than merely incomplete: an unrecognised header doesn't fail loudly, it ships
+    the parlay. `scripts/test_parlay_veto.py` pins both headers.
     """
     for img_url in _photo_urls(tweet)[:_PARLAY_VETO_MAX_PHOTOS]:
         if await _ask_about_image(tweet, img_url, _IMAGE_IS_PARLAY_PROMPT, "parlay-check"):
