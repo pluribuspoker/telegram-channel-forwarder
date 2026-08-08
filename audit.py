@@ -36,22 +36,43 @@ def _clean_desc(desc: str) -> str:
     return desc.strip()
 
 
+def _period_tag(pick: dict) -> str:
+    """The period qualifier for a pick's label ("" for a full-game bet)."""
+    period = pick.get("period") or "game"
+    # Baseball "1H" is conventionally called "F5" (first 5 innings)
+    if period == "1h" and pick.get("sport", "") in ("MLB", "KBO"):
+        return " F5"
+    return f" {period.upper()}" if period and period != "game" else ""
+
+
 def _format_pick(pick: dict) -> str:
-    """Build a standardized, odds-free pick description from structured Claude parse fields."""
+    """Build a standardized, odds-free pick description from structured parse fields.
+
+    Wraps `_format_pick_body` with a net for the period qualifier: every branch is
+    supposed to interpolate it, and two of them didn't, so a first-half under went
+    out as a full-game one. If a future branch forgets, appending the tag names the
+    right bet in a slightly odd order — strictly better than naming the wrong one.
+    """
+    label = _format_pick_body(pick)
+    tag = _period_tag(pick)
+    if not tag or tag.strip() in label:
+        return label
+    # The description fallback carries the capper's own wording ("First 5 Innings"),
+    # which states the period without matching the tag — don't double it up.
+    if label == _clean_desc(pick.get("description", "")):
+        return label
+    return f"{label}{tag}"
+
+
+def _format_pick_body(pick: dict) -> str:
     bet_type  = pick.get("bet_type", "")
     teams     = pick.get("teams") or []
     line      = pick.get("line")
     direction = pick.get("direction") or ""
-    period    = pick.get("period") or "game"
     player    = pick.get("player") or ""
     prop_stat = pick.get("prop_stat") or ""
 
-    sport     = pick.get("sport", "")
-    # Baseball "1H" is conventionally called "F5" (first 5 innings)
-    if period == "1h" and sport in ("MLB", "KBO"):
-        period_tag = " F5"
-    else:
-        period_tag = f" {period.upper()}" if period and period != "game" else ""
+    period_tag = _period_tag(pick)
     team = teams[0] if teams else ""
 
     if bet_type == "spread" and team and line is not None:
@@ -75,8 +96,10 @@ def _format_pick(pick: dict) -> str:
             suffix = " ML"
         return f"{team}{period_tag}{suffix}"
 
-    if bet_type in ("total", "team_total") and line is not None:
-        d = "O" if direction == "over" else "U" if direction == "under" else ""
+    # Without a direction there is no O/U to print and the label would read
+    # "Dallas Wings 79.5" — a number with no bet. Fall through to the description.
+    if bet_type in ("total", "team_total") and line is not None and direction in ("over", "under"):
+        d = "O" if direction == "over" else "U"
         if bet_type == "team_total" and team:
             head = team
         elif len(teams) >= 2:

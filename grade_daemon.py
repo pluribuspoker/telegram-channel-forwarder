@@ -711,7 +711,8 @@ async def _grade_cycle(
 
             sb = await espn_cache.get(pick_sport, eff_date)
 
-            # Early grade: totals where score already exceeds the line
+            # Totals are arithmetic: settled outright at final (incl. PUSH), or
+            # mid-game once the score has passed the line.
             early = try_early_grade_math(pick_sport, pick, sb)
             if early:
                 verdict, calc = early

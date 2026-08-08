@@ -1063,12 +1063,30 @@ def _ufc_bout_completed(data: dict, teams: list[str], player: str = "") -> bool:
 _QUARTER_PERIODS = {"1h": [1, 2], "2h": [3, 4], "1q": [1], "2q": [2], "3q": [3], "4q": [4]}
 _BASEBALL_PERIODS = {"1h": [1, 2, 3, 4, 5], "2h": [6, 7, 8, 9]}
 
+# Every quarter-based sport in ESPN_LEAGUES belongs here. WNBA and Lacrosse were
+# missing, which silently disabled ALL period math for them — `_extract_period_scores`
+# returns None on an unmapped (sport, period), so a WNBA 1H total never reached the
+# arithmetic below and fell through to Claude, which graded a bet_type=total as one
+# team's half score. Adding a sport means checking this map, not just ESPN_LEAGUES.
 PERIOD_MAP: dict[tuple[str, str], list[int]] = {
-    **{(s, p): v for s in ("NBA", "NCAAB", "NFL", "NCAAF", "UFL", "CFL") for p, v in _QUARTER_PERIODS.items()},
+    **{(s, p): v for s in ("NBA", "WNBA", "NCAAB", "NFL", "NCAAF", "UFL", "CFL", "Lacrosse")
+       for p, v in _QUARTER_PERIODS.items()},
     **{(s, p): v for s in ("MLB", "KBO") for p, v in _BASEBALL_PERIODS.items()},
     ("NHL", "1h"): [1],
     ("NHL", "1p"): [1], ("NHL", "2p"): [2], ("NHL", "3p"): [3],
 }
+
+
+# Sports whose scoreboard is a two-competitor scoreline that can be added up.
+# An ALLOWLIST, not a denylist: anything unlisted falls through to Claude, which
+# is the safe direction. UFC is the reason it must be explicit — an event holds
+# many bouts and `_extract_period_scores` reads competitions[0], so a round total
+# would "add" two unrelated bout scores and grade to a confident, wrong verdict.
+# Soccer is out for the extra-time rule (see _GRADE_PROMPT). CFL/KBO are scraped
+# rather than fetched from ESPN, so they decline on empty data anyway.
+MATH_GRADABLE_SPORTS = frozenset({
+    "MLB", "NBA", "WNBA", "NCAAB", "NCAAF", "NFL", "UFL", "NHL", "Lacrosse", "CFL",
+})
 
 
 def _find_event_for_pick(
@@ -1140,15 +1158,33 @@ def _is_period_complete(event: dict, sport: str, period: str) -> bool:
 def try_early_grade_math(
     sport: str, pick: dict, scoreboard: dict | None,
 ) -> tuple[str, str] | None:
-    """Grade a total/team_total pick early if the score already exceeds the line.
+    """Grade a total/team_total pick by arithmetic whenever the box score settles it.
 
-    Returns (verdict, calc) or None if the outcome isn't determined yet.
+    A total is addition over the linescores, so when the numbers are present there
+    is nothing for a model to decide. Two states qualify:
+
+    * **mid-game** — only once the value has already passed the line, i.e. an over
+      that can no longer lose (the value is monotone, so this stays true).
+    * **final** — settles outright, including PUSH and the under side.
+
+    The final case exists because grading a settled total was left entirely to
+    Claude, and it mis-summed one: "Dallas Wings 1H under 79.5" is `bet_type=total`
+    (the team name identifies the *game* — see the Drake example in `_GRADE_PROMPT`),
+    but it was graded as Dallas's own first half, 36, instead of the game's combined
+    80 — turning a half-point loss into a win. Nothing downstream could catch it:
+    a wrong total grades to a clean verdict exactly like a right one.
+
+    Returns (verdict, calc) or None to fall through to the normal context+Claude
+    path — every guard here fails open, so anything unusual is still graded.
     """
     if not scoreboard:
         return None
 
     bet_type = pick.get("bet_type", "")
     if bet_type not in ("total", "team_total"):
+        return None
+
+    if sport not in MATH_GRADABLE_SPORTS:
         return None
 
     direction = pick.get("direction")
@@ -1164,10 +1200,14 @@ def try_early_grade_math(
     if not event:
         return None
 
-    state = event.get("status", {}).get("type", {}).get("state", "")
-    if state != "in":  # only for in-progress games
+    stype = (event.get("status") or {}).get("type") or {}
+    state = stype.get("state", "")
+    if state not in ("in", "post"):
         return None
-
+    final = state == "post"
+    # "post" also covers postponed/suspended/cancelled — those carry no result.
+    if final and not stype.get("completed"):
+        return None
     scores = _extract_period_scores(event, sport, period)
     if scores is None:
         return None
@@ -1176,22 +1216,30 @@ def try_early_grade_math(
     period_tag = f" {period.upper()}" if period != "game" else ""
 
     if bet_type == "total":
-        combined = away_score + home_score
-        if combined > line:
-            calc = f"[mid-game] {away_score:g}+{home_score:g}={combined:g} vs {line}{period_tag}"
-            return ("WIN", calc) if direction == "over" else ("LOSS", calc)
-
-    elif bet_type == "team_total":
+        # A total names the GAME even when the pick text names one team, so both
+        # sides are always added — this is the sum Claude got wrong.
+        value = away_score + home_score
+        label = f"{away_score:g}+{home_score:g}={value:g}"
+    else:  # team_total — only the named team's score
         team_name = teams[0] if teams else ""
         if _team_matches(team_name.lower(), away_name.lower()):
-            team_score, used_name = away_score, away_name
+            value, label = away_score, f"{away_name} {away_score:g}"
         elif _team_matches(team_name.lower(), home_name.lower()):
-            team_score, used_name = home_score, home_name
+            value, label = home_score, f"{home_name} {home_score:g}"
         else:
             return None
-        if team_score > line:
-            calc = f"[mid-game] {used_name} {team_score:g} vs {line}{period_tag}"
-            return ("WIN", calc) if direction == "over" else ("LOSS", calc)
+
+    if final:
+        if value == line:
+            return ("PUSH", f"[final] {label} vs {line}{period_tag} — exact, push")
+        hit = (value > line) if direction == "over" else (value < line)
+        return ("WIN" if hit else "LOSS",
+                f"[final] {label} vs {line}{period_tag}")
+
+    # Mid-game: only a value already past the line is decided.
+    if value > line:
+        calc = f"[mid-game] {label} vs {line}{period_tag}"
+        return ("WIN", calc) if direction == "over" else ("LOSS", calc)
 
     return None
 

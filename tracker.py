@@ -862,7 +862,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             scoreboard_cache[ps_key] = await fetch_espn(pick_sport, eff_date)
                         sb = scoreboard_cache[ps_key]
 
-                        # Early grade: totals where score already exceeds the line
+                        # Totals are arithmetic: settled outright at final (incl.
+                        # PUSH), or mid-game once the score has passed the line.
                         early = try_early_grade_math(pick_sport, pick, sb)
                         if early:
                             verdict, calc = early
