@@ -201,6 +201,8 @@ python scripts/pikkit_auth.py --validate
 
 ## Broadcast results
 
+**`_format_pick` (`audit.py`) is the one renderer — every branch must interpolate `period_tag`.** It builds the label for the broadcast, the merged multi-capper broadcast, *and* the Google Sheets log (`sheets.py` imports it), so an omission there is wrong in three places at once. The tag is computed once at the top and then each `bet_type` branch formats its own string, which is exactly how a branch forgets it: totals and player props dropped it, so `.5u Wings 1H u79.5` posted as `Dallas Wings U79.5` — a different bet at a different line, and one nothing downstream can flag because a missing qualifier is indistinguishable from a game-period pick. Spread/ML are the format to match (`Toronto Argonauts 1H ML`); the tag goes after the team/player, before the bet. `scripts/test_period_tag.py` pins every bet type offline — **adding a `bet_type` branch means adding its case there**, including the MLB/KBO `1h`→`F5` rename.
+
 **Testing workflow** (reset emojis and re-run locally):
 ```bash
 python scripts/clear_emojis.py --channel -100xxxxxxxxxx  # strip emojis (today)
