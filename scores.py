@@ -2080,13 +2080,17 @@ def _pc_side_for_team(competition: dict, teams: list[str], desc: str) -> str | N
     return best[0] if best and best[0] else None
 
 
-async def espn_closing_odds(sport: str, date: str, pick: dict) -> dict | None:
+async def espn_closing_odds(sport: str, date: str, pick: dict, *,
+                            allow_open: bool = False) -> dict | None:
     """Closing American odds for `pick` from ESPN pickcenter, or None.
 
     Game-level moneyline/spread/total only — pickcenter has no period markets.
     A spread/total whose closing line differs from the pick's is refused: that is
     a different bet, and pricing it would misstate the payout for a grade that
     was decided at the pick's own line.
+
+    `allow_open` also accepts the open/current number, for a game that has not
+    finished and therefore has no close yet (see espn_current_odds).
     """
     if (pick.get("period") or "game") != "game":
         return None
@@ -2116,17 +2120,24 @@ async def espn_closing_odds(sport: str, date: str, pick: dict) -> dict | None:
 
     if bet_type == "total":
         direction = (pick.get("direction") or "over").lower()
-        node = ((pc.get("total") or {}).get("over" if direction == "over" else "under") or {}).get("close") or {}
+        _side = (pc.get("total") or {}).get("over" if direction == "over" else "under") or {}
+        node, open_node = _side.get("close") or {}, _side.get("open") or {}
     else:
         side = _pc_side_for_team(competition, teams, pick.get("description", ""))
         if not side:
             return None
-        node = ((pc.get(_PICKCENTER_SIDE_FIELD[bet_type]) or {}).get(side) or {}).get("close") or {}
+        _side = (pc.get(_PICKCENTER_SIDE_FIELD[bet_type]) or {}).get(side) or {}
+        node, open_node = _side.get("close") or {}, _side.get("open") or {}
 
     odds = _pc_american(node.get("odds"))
+    line = _pc_line(node.get("line"))
+    if odds is None and allow_open:
+        # A scheduled or in-progress game has no close yet; ESPN still carries
+        # the opening/current number, which is the live market price we want.
+        odds = _pc_american((open_node or {}).get("odds"))
+        line = _pc_line((open_node or {}).get("line")) if line is None else line
     if odds is None:
         return None
-    line = _pc_line(node.get("line"))
     if bet_type in ("spread", "total") and pick.get("line") is not None and line is not None:
         try:
             if abs(line - float(pick["line"])) > 1e-6:
@@ -2134,6 +2145,27 @@ async def espn_closing_odds(sport: str, date: str, pick: dict) -> dict | None:
         except (TypeError, ValueError):
             return None
     return {"odds": odds, "line": line, "bookmaker": book, "match_type": "espn_close"}
+
+
+async def espn_current_odds(sport: str, date: str, pick: dict) -> dict | None:
+    """ESPN price for a game that may not have finished — the free stand-in while
+    the Odds API quota is out.
+
+    Tries the post date and the NEXT day: 93% of picks are posted on game day,
+    but cappers do post the night before, and ESPN only carries odds for the
+    current day's slate (measured: present 6h+ before first pitch, absent for
+    tomorrow's games entirely). Nothing here can price a pick posted two days
+    out — it is retried on a later run instead.
+    """
+    for offset in (0, 1):
+        try:
+            d = (_date.fromisoformat(date[:10]) + timedelta(days=offset)).isoformat()
+        except ValueError:
+            return None
+        got = await espn_closing_odds(sport, d, pick, allow_open=True)
+        if got:
+            return {**got, "match_type": "espn_current", "game_date": d}
+    return None
 
 
 # ── How far back ESPN still has closing odds ──────────────────────────────────

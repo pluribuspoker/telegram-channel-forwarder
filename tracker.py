@@ -29,10 +29,11 @@ from common import (
 )
 from scores import (
     fetch_espn, odds_requests_used, try_early_grade_math, build_early_context,
-    fetch_cfl_scoreboard,
+    fetch_cfl_scoreboard, espn_current_odds,
     validate_sport, resolve_nickname_collision, verify_picks_on_schedule,
 )
-from odds import fetch_odds, fetch_odds_current, quota_used as odds_quota_used
+from odds import (fetch_odds, fetch_odds_current, quota_used as odds_quota_used,
+                  quota_exhausted as odds_quota_exhausted, OddsResult)
 from pikkit import get_pick_splits
 from ai import (
     claude_parse,
@@ -746,6 +747,22 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                 if hist.odds is not None:
                                     print(f"  [odds] current matched wrong game ({result.game_date}), using historical ({date_str})")
                                     result = hist
+                        # Quota out: take ESPN's free number rather than post the
+                        # pick with no price at all. One book instead of best-of-
+                        # eleven (measured ~1.4pp worse), recorded as espn_current
+                        # so the source stays visible in the cache and the sheet.
+                        if result.odds is None and odds_quota_exhausted():
+                            espn = await espn_current_odds(pick_sport, date_str, pick)
+                            if espn:
+                                result = OddsResult(
+                                    match_type="espn_current", odds=espn["odds"],
+                                    bookmaker=espn.get("bookmaker"),
+                                    api_line=espn.get("line"), pick_line=pick.get("line"),
+                                    game_date=espn.get("game_date"),
+                                )
+                                print(f"  [odds] quota out — ESPN {espn['bookmaker']} "
+                                      f"{espn['odds']:+d} for {pick.get('description','')[:50]}")
+
                         display_odds, warn = result.validate_for_display()
                         pick_desc = pick.get("description", "")
                         if display_odds is None:

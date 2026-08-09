@@ -430,6 +430,7 @@ def _save_bookmakers(
 
 _quota_remaining: str | None = None
 _quota_used: int = 0
+_QUOTA_EXHAUSTED = False
 
 # ── Quota cost control ────────────────────────────────────────────────────────
 # Cost is [unique markets RETURNED] x [regions SPECIFIED], x10 on the historical
@@ -490,7 +491,17 @@ async def _api_get(http: httpx.AsyncClient, url: str, params: dict) -> dict | li
         _quota_remaining = r.headers.get("x-requests-remaining", _quota_remaining)
         return r.json()
     except httpx.HTTPStatusError as exc:
-        print(f"[odds] API {exc.response.status_code} {url.split('/')[-1]}: {exc.response.text[:120]}")
+        # Quota exhaustion has to be distinguishable from a genuine miss. It used
+        # to fall through as a plain failure and the caller recorded no_game —
+        # the same value a missing event produces — so an outage looked exactly
+        # like "this pick has no market" and nothing downstream could tell.
+        body = exc.response.text or ""
+        if exc.response.status_code == 401 and "OUT_OF_USAGE_CREDIT" in body:
+            global _QUOTA_EXHAUSTED
+            if not _QUOTA_EXHAUSTED:
+                print("[odds] quota exhausted — falling back to free sources for this run")
+            _QUOTA_EXHAUSTED = True
+        print(f"[odds] API {exc.response.status_code} {url.split('/')[-1]}: {body[:120]}")
         return None
     except Exception as exc:
         print(f"[odds] API error {url}: {exc}")
@@ -1551,6 +1562,15 @@ async def _fetch_current_bookmakers(
 def quota_used() -> int:
     """Return the number of Odds API quota units consumed this process."""
     return _quota_used
+
+
+def quota_exhausted() -> bool:
+    """True once a call this process came back OUT_OF_USAGE_CREDIT.
+
+    Latched rather than probed: the 401 is free and definitive, so the first
+    failure tells us for the rest of the run without spending another request.
+    """
+    return _QUOTA_EXHAUSTED
 
 
 async def quota_remaining() -> int | None:
