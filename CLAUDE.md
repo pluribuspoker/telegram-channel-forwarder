@@ -261,6 +261,10 @@ Stages, each persisting to `scripts/output/<account>_*.csv`:
 
 Because every stage persists, re-run only what you need instead of paying for the parse again (full parse of ~600 tweets ≈ $6; grading ~100 picks ≈ $0.50):
 
+> ⚠️ **The `export` stage's odds lookups can cost a whole month of Odds API quota — budget it before running.** `format_graded_csv.py` calls `fetch_odds` (the **historical** entry point) once per pick, and historical costs **10 per region per market** vs 1 for current. Measured against the live cache: historical requests average **48 credits** each, current ones **4** — so a few hundred backfilled picks is 15,000–20,000 credits against a 20,000/month plan. This is what exhausted the quota on 2026-08-08, and it leaves **no server-side trace** when run locally, which is why the VPS logs only accounted for ~3,300 of the 20,000. Quota resets on the **subscription anniversary** (the day of the month the plan started), not the 1st.
+>
+> Two things that look like savings and aren't: cost is charged on **markets returned**, not requested, so trimming the 34-entry `MARKETS_FULL` list saves nothing (and empty responses are free). The multiplier that *is* real is `regions` — it's counted **as specified**, so `regions="us,us2"` doubles every single request.
+
 ```bash
 python scripts/backfill_capper.py --account X --from grade          # reuse the parse
 python scripts/backfill_capper.py --account X --only export         # just push to Sheets
