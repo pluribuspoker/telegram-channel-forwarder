@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from odds import (fetch_odds, set_economy as odds_set_economy,
                   quota_remaining as odds_quota_remaining, quota_used as odds_quota_used)
+from scores import espn_closing_odds
 
 OUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 
@@ -209,23 +210,31 @@ async def _preflight_quota(rows: list[dict], full_fidelity: bool, force: bool) -
     return False
 
 
-async def run(account: str, full_fidelity: bool = False, force: bool = False) -> None:
+async def run(account: str, full_fidelity: bool = False, force: bool = False,
+              use_odds_api: bool = False) -> None:
     input_csv = os.path.join(OUT_DIR, f"{account}_graded.csv")
     output_csv = os.path.join(OUT_DIR, f"{account}_sheet.csv")
 
     with open(input_csv, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
-    # Backfills don't need every alternate line and every book — a miss just
-    # falls back to -110 — so they fetch the one market the pick reads.
-    if not full_fidelity:
-        odds_set_economy(True)
-    if not await _preflight_quota(rows, full_fidelity, force):
-        return
+    if use_odds_api:
+        # Backfills don't need every alternate line and every book — a miss just
+        # falls back to -110 — so they fetch the one market the pick reads.
+        if not full_fidelity:
+            odds_set_economy(True)
+        if not await _preflight_quota(rows, full_fidelity, force):
+            return
+    else:
+        print("Odds: text -> ESPN closing line (free). Odds API disabled "
+              "(--use-odds-api to enable).")
 
     out_rows = []
     api_hits = 0
     api_misses = 0
+    espn_hits = 0
+    text_hits = 0
+    defaulted = 0
 
     for i, row in enumerate(rows):
         grade = row.get("grade", "")
@@ -246,9 +255,22 @@ async def run(account: str, full_fidelity: bool = False, force: bool = False) ->
         # Try text extraction first (free, no API call)
         odds = _extract_odds_from_text(desc, line_val, bet_type)
         odds_source = "text" if odds else None
+        if odds:
+            text_hits += 1
 
-        # Fall back to Odds API for missing odds
+        # Then ESPN's closing line — also free, no key and no quota. Covers
+        # game-level ML/spread/total, which is most of a capper's book.
         if not odds:
+            pick = _row_to_pick(row)
+            espn = await espn_closing_odds(row.get("sport", ""), iso, pick)
+            if espn:
+                odds = _american_to_decimal(espn["odds"])
+                odds_source = "espn"
+                espn_hits += 1
+
+        # The Odds API is opt-in: its historical endpoint costs 10 per region
+        # per market and is what drained the month's quota on 2026-08-08.
+        if not odds and use_odds_api:
             pick = _row_to_pick(row)
             result = await fetch_odds(row.get("sport", ""), iso, pick)
             # Only accept exact/exact_alt matches — proximity adjustments
@@ -263,6 +285,7 @@ async def run(account: str, full_fidelity: bool = False, force: bool = False) ->
         # Default missing odds to -110 (1.91 decimal)
         if not odds:
             odds = _american_to_decimal(-110)
+            defaulted += 1
 
         mapped_type = _map_bet_type(bet_type, prop_stat, row.get("sport", ""), desc)
         position = _map_position(bet_type, prop_stat, direction, line_val, odds)
@@ -313,7 +336,12 @@ async def run(account: str, full_fidelity: bool = False, force: bool = False) ->
     print(f"\nWrote {len(out_rows)} rows to {os.path.basename(output_csv)}")
     print(f"Record: {wins}W - {losses}L - {pushes}P")
     print(f"Total return: {total_return:+.2f}U")
-    print(f"Odds: {with_odds}/{len(out_rows)} ({api_hits} from API, {with_odds - api_hits} from text, {api_misses} missed)")
+    # Counted, never derived: a residual silently folds the -110 defaults into
+    # "from text" and a coverage gap then reads as full coverage.
+    priced = text_hits + espn_hits + api_hits
+    print(f"Odds: {priced}/{len(out_rows)} priced "
+          f"({text_hits} text, {espn_hits} ESPN, {api_hits} Odds API); "
+          f"{defaulted} defaulted to -110")
     print(f"Odds API credits used this run: {odds_quota_used()}")
 
 
@@ -325,5 +353,9 @@ if __name__ == "__main__":
                              "economy: one market per pick, misses fall back to -110.")
     parser.add_argument("--force", action="store_true",
                         help="Run even if the estimated cost exceeds the remaining quota.")
+    parser.add_argument("--use-odds-api", action="store_true",
+                        help="Also use the paid Odds API for gaps ESPN can't fill. "
+                             "Off by default — backfills cost zero quota.")
     args = parser.parse_args()
-    asyncio.run(run(args.account, full_fidelity=args.full_fidelity, force=args.force))
+    asyncio.run(run(args.account, full_fidelity=args.full_fidelity, force=args.force,
+                    use_odds_api=args.use_odds_api))

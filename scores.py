@@ -2022,3 +2022,115 @@ async def validate_sport(
             return alt_sport, corrected_teams
 
     return sport, teams
+
+
+# ── Free closing odds from ESPN (backfills) ───────────────────────────────────
+# ESPN's summary `pickcenter` carries a sportsbook's OPEN and CLOSE for the
+# moneyline, spread (line + juice) and total — no API key, no quota. That makes
+# it the right source for backfills, where the Odds API's historical endpoint
+# costs 10 per region per market and a season's worth of picks is a whole
+# month's plan (it is what exhausted the quota on 2026-08-08).
+#
+# It is NOT a drop-in for live pricing. Measured against 62 picks the Odds API
+# had already priced exactly, ESPN's close runs a median 1.37 points of implied
+# probability worse for the bettor (worse on 50/62) — because this is ONE book's
+# closing number against the Odds API's best-of-eleven. For a capper's historical
+# record that is arguably the fairer basis; for a live pick it is money left on
+# the table, which is why nothing in the tracker calls this.
+
+_PICKCENTER_SIDE_FIELD = {"moneyline": "moneyline", "spread": "pointSpread"}
+
+
+def _pc_american(raw: object) -> int | None:
+    """'+130' / '-157' / 'EVEN' -> int."""
+    if raw is None:
+        return None
+    s = str(raw).replace("+", "").strip()
+    if s.lower() in ("even", "pk", ""):
+        return 100
+    try:
+        return int(float(s))
+    except ValueError:
+        return None
+
+
+def _pc_line(raw: object) -> float | None:
+    """'o9.5' / 'u9' / '-1.5' / 'PK' -> float."""
+    if raw is None:
+        return None
+    s = str(raw).lower().lstrip("ou").replace("+", "").strip()
+    if s in ("pk", "even", ""):
+        return 0.0
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _pc_side_for_team(competition: dict, teams: list[str], desc: str) -> str | None:
+    """'home'/'away' for the picked team. Longest name match wins, so 'Chicago
+    White Sox' doesn't lose to a bare 'Chicago' on the other side."""
+    want = (" ".join(t for t in teams if t) or desc or "").lower()
+    best: tuple[str, int] | None = None
+    for c in competition.get("competitors", []):
+        t = c.get("team", {}) or {}
+        for nm in (t.get("displayName"), t.get("shortDisplayName"), t.get("name"), t.get("location")):
+            if nm and nm.lower() in want and (best is None or len(nm) > best[1]):
+                best = (c.get("homeAway", ""), len(nm))
+    return best[0] if best and best[0] else None
+
+
+async def espn_closing_odds(sport: str, date: str, pick: dict) -> dict | None:
+    """Closing American odds for `pick` from ESPN pickcenter, or None.
+
+    Game-level moneyline/spread/total only — pickcenter has no period markets.
+    A spread/total whose closing line differs from the pick's is refused: that is
+    a different bet, and pricing it would misstate the payout for a grade that
+    was decided at the pick's own line.
+    """
+    if (pick.get("period") or "game") != "game":
+        return None
+    bet_type = pick.get("bet_type", "")
+    if bet_type not in ("moneyline", "spread", "total"):
+        return None
+    if sport not in ESPN_LEAGUES:
+        return None
+
+    sb = await fetch_espn(sport, date)
+    if not sb:
+        return None
+    events = sb.get("events", [])
+    teams = [t for t in (pick.get("teams") or []) if t]
+    ids = find_event_ids(events, teams or [pick.get("description", "")])
+    if not ids:
+        return None
+    event = next((e for e in events if e.get("id") == ids[0]), None)
+    competition = (event or {}).get("competitions", [{}])[0]
+
+    summary = await fetch_espn_summary(sport, ids[0])
+    providers = (summary or {}).get("pickcenter") or []
+    if not providers:
+        return None
+    pc = providers[0]
+    book = ((pc.get("provider") or {}).get("name") or "ESPN")
+
+    if bet_type == "total":
+        direction = (pick.get("direction") or "over").lower()
+        node = ((pc.get("total") or {}).get("over" if direction == "over" else "under") or {}).get("close") or {}
+    else:
+        side = _pc_side_for_team(competition, teams, pick.get("description", ""))
+        if not side:
+            return None
+        node = ((pc.get(_PICKCENTER_SIDE_FIELD[bet_type]) or {}).get(side) or {}).get("close") or {}
+
+    odds = _pc_american(node.get("odds"))
+    if odds is None:
+        return None
+    line = _pc_line(node.get("line"))
+    if bet_type in ("spread", "total") and pick.get("line") is not None and line is not None:
+        try:
+            if abs(line - float(pick["line"])) > 1e-6:
+                return None
+        except (TypeError, ValueError):
+            return None
+    return {"odds": odds, "line": line, "bookmaker": book, "match_type": "espn_close"}
