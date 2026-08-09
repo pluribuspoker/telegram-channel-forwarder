@@ -44,8 +44,13 @@ STATE = Path.home() / ".odds_quota_watchdog_state.json"
 # A free endpoint: it returns the usage headers while spending nothing.
 PROBE_URL = "https://api.the-odds-api.com/v4/sports/"
 
-OUT_DEBOUNCE_SECS = 6 * 60 * 60    # at most one 🛑 per 6h (it's actively breaking pricing)
-LOW_DEBOUNCE_SECS = 12 * 60 * 60   # at most one 📉 per 12h
+# Alert on STATE CHANGE, not on a timer. A quota outage lasts until the monthly
+# reset — under the old 6h debounce that was ~72 identical messages for one
+# condition the operator already knew about and could do nothing about, which is
+# how a real alert becomes something you swipe away. Same principle as
+# audit.record fingerprinting: don't re-post a message that says what the last
+# one said. REMIND_SECS is the backstop so a months-long outage isn't forgotten.
+REMIND_SECS = int(os.environ.get("ODDS_QUOTA_REMIND_SECS", 3 * 24 * 60 * 60))
 HISTORY_KEEP_SECS = 8 * 24 * 60 * 60
 
 # Units whose journals log the 401 body, to count damage already done.
@@ -211,41 +216,60 @@ def main() -> None:
 
     sent_any = False
 
-    if force or remaining <= 0:
-        if force or now - state.get("out_alert_at", 0) > OUT_DEBOUNCE_SECS:
-            failed, quick_failed = damage_signals(1)
-            seen = f"Failed pricing attempts logged in the last hour: {failed}"
-            if quick_failed:
-                seen += "\nThe latest fast-path tracker run also failed on quota."
-            msg = (
-                f"🛑 Odds API quota exhausted\n\n"
-                f"Used {used}, remaining {remaining}.\n"
-                f"{seen}\n\n"
-                f"Picks are being posted with NO price right now, and the miss is "
-                f"cached — the tracker fetches odds once per pick, so every pick "
-                f"stranded during this outage stays priceless even after the quota "
-                f"resets. The 401 is recorded as match_type=no_game, which looks "
-                f"identical to a genuinely missing event.\n\n"
-                f"Repair after a reset needs historical closing lines "
-                f"(odds._try_pregame), not a re-fetch — by then the games have "
-                f"started and a re-fetch returns live prices."
-            )
-            if send(msg):
-                state["out_alert_at"] = now
-                sent_any = True
+    condition = "out" if remaining <= 0 else ("low" if remaining < low_limit else "ok")
+    prev = state.get("condition", "ok")
+    changed = condition != prev
+    reminder_due = now - state.get("condition_alert_at", 0) > REMIND_SECS
 
-    elif force or remaining < low_limit:
-        if force or now - state.get("low_alert_at", 0) > LOW_DEBOUNCE_SECS:
-            msg = (
-                f"📉 Odds API quota running low\n\n"
-                f"Remaining {remaining} of {(used or 0) + remaining} — threshold {low_limit}.\n"
-                f"{rate_line}\n\n"
-                f"At zero, picks price as no_game and the empty result is cached "
-                f"permanently. Raise the plan or cut request volume before then."
-            )
-            if send(msg):
-                state["low_alert_at"] = now
-                sent_any = True
+    if condition == "out" and (force or changed or reminder_due):
+        failed, quick_failed = damage_signals(1)
+        seen = f"Failed pricing attempts logged in the last hour: {failed}"
+        if quick_failed:
+            seen += "\nThe latest fast-path tracker run also failed on quota."
+        again = "" if (changed or force) else "(still out — reminder)\n"
+        msg = (
+            f"🛑 Odds API quota exhausted\n\n"
+            f"{again}"
+            f"Used {used}, remaining {remaining}.\n"
+            f"{seen}\n\n"
+            f"Picks still get a price: while the quota is out the tracker falls "
+            f"back to ESPN's free line (one book, ~1.4pp worse than best-of-books), "
+            f"recorded as match_type=espn_current. Moneylines carry well; a spread "
+            f"or total whose line differs from the pick's is refused rather than "
+            f"mispriced, so some still post without a price.\n\n"
+            f"Nothing to do but wait for the monthly reset — you'll get one ✅ when "
+            f"it lands."
+        )
+        if send(msg):
+            state["condition_alert_at"] = now
+            sent_any = True
+
+    elif condition == "low" and (force or changed or reminder_due):
+        msg = (
+            f"📉 Odds API quota running low\n\n"
+            f"Remaining {remaining} of {(used or 0) + remaining} — threshold {low_limit}.\n"
+            f"{rate_line}\n\n"
+            f"At zero, live pricing falls back to ESPN's single-book line. Cut "
+            f"request volume before then if you want best-of-books pricing."
+        )
+        if send(msg):
+            state["condition_alert_at"] = now
+            sent_any = True
+
+    elif condition == "ok" and prev in ("out", "low"):
+        # Recovery is the one repeat worth sending: it is the event the operator
+        # has actually been waiting for, and it means full pricing is back.
+        msg = (
+            f"✅ Odds API quota restored\n\n"
+            f"{remaining} credits available (was {prev}).\n"
+            f"Live pricing is back on best-of-books; the ESPN fallback stands down "
+            f"automatically. Picks already priced from ESPN keep that number."
+        )
+        if send(msg):
+            state["condition_alert_at"] = now
+            sent_any = True
+
+    state["condition"] = condition
 
     save_state(state)
     if sent_any:
