@@ -87,17 +87,22 @@ The tracker and grade daemon share `parse_cache.json` (atomic writes via `os.rep
 
 ### Environment files
 
-Two-file split to protect server-only secrets from `syncenv`:
+Environment split to protect server-only secrets from `syncenv` and keep the
+NFL Guesser's Odds API quota isolated:
 
 | File | Where | Synced | Contains |
 |---|---|---|---|
 | `.env` | local + server | ✅ `syncenv` copies this | config that exists on **both** machines |
 | `.env.local` | local + server (separately) | ❌ never touched | `TELEGRAM_SESSION`, `BOT_SESSION`, `X_AUTH_TOKEN`, `X_CT0`, `PIKKIT_TOKEN` |
+| `.env.guesser` | server only | ❌ never touched | `ODDS_API_KEY` override loaded only by `nfl-lines-fetcher.service` |
 
 > **Rule: any value that exists only on the server belongs in `.env.local`.**
 > `syncenv` *overwrites* the server's `.env` with the local copy, so a key present in the server's `.env` but absent from the local one is **silently deleted** on the next sync. This is not hypothetical: it wiped `X_AUTH_TOKEN`/`X_CT0` on 2026-07-19 and took the Trent watcher down for 2 days without a single alert. `syncenv` is safe to run freely *only as long as this rule holds*.
 
 `.env.local` is loaded after `.env` in both Python code and systemd, so it always wins.
+For the NFL Guesser only, systemd then loads `.env.guesser` last. Keep the
+paid/guesser key there so graders and the quota watchdog continue using the
+shared key from `.env`.
 
 **Regex escaping in `MAPPINGS_CONFIG`:** The JSON value is inside single quotes in the `.env` file, so regex backslashes need **four** backslashes (`\\\\`) to survive: shell quotes → JSON string → regex. For example, `\d+` becomes `\\\\d+` in `.env`.
 

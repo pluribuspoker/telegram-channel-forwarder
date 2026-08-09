@@ -10,6 +10,7 @@ Group=forwarder
 WorkingDirectory=/home/forwarder/app
 EnvironmentFile=/home/forwarder/app/.env
 EnvironmentFile=-/home/forwarder/app/.env.local
+EnvironmentFile=-/home/forwarder/app/.env.guesser
 ExecStart=/home/forwarder/app/run_nfl_lines_fetcher.sh
 TimeoutStartSec=600
 SyslogIdentifier=nfl-lines-fetcher
