@@ -169,6 +169,44 @@ def _warn_implausible_odds(rows: list[dict]) -> None:
           "usual cause.")
 
 
+# Calibrated against measured behaviour, not intuition: healthy in-window runs
+# price ~70% (pickcenter carries no period or alternate markets, so a -1 run line
+# or a 1H total legitimately finds nothing). Defaulting ~30% is NORMAL, so a
+# threshold below that would fire on every good run and teach the reader to skip
+# it. Half the sheet invented is not normal; and ESPN scoring zero while rows
+# needed it means the source is dead rather than merely patchy.
+_THIN_COVERAGE = 0.50
+_DEAD_SOURCE_COVERAGE = 0.25
+
+
+def _warn_thin_odds_coverage(out_rows: list[dict], defaulted: int, espn_hits: int,
+                             use_odds_api: bool) -> None:
+    """Flag a run where the prices are mostly the -110 default rather than real odds.
+
+    The usual cause is age: ESPN's pickcenter only retains closing odds for
+    roughly the last 8-9 months (measured 2026-08-09 — 100% back to 2026-01,
+    still present at 2025-12, gone by 2025-10), and that horizon MOVES, so a
+    backfill that worked last year returns nothing today. Missing odds don't
+    error, they quietly become -110.
+    """
+    total = len(out_rows)
+    if not total:
+        return
+    share = defaulted / total
+    dead_source = espn_hits == 0 and share >= _DEAD_SOURCE_COVERAGE
+    if share < _THIN_COVERAGE and not dead_source:
+        return
+    pct = 100 * share
+    print(f"\n⚠ {defaulted}/{total} rows ({pct:.0f}%) have no real price and were "
+          f"defaulted to -110 — the P&L above is largely invented.")
+    if espn_hits == 0:
+        print("    ESPN returned nothing at all. Its closing-odds history runs ~8-9 "
+              "months back and that window moves; older seasons are simply gone.")
+    print("    Options: restrict the backfill to the last ~8 months, accept the "
+          "defaults as an approximation, or re-run with --use-odds-api for the gaps "
+          "(paid, and it will pre-flight the quota).")
+
+
 # Historical odds cost 10 per region per market. In economy mode that is one
 # market in one region, so ~10 credits per priced row; full mode averaged 48.
 _CREDITS_PER_ROW_ECONOMY = 10
@@ -342,6 +380,7 @@ async def run(account: str, full_fidelity: bool = False, force: bool = False,
     print(f"Odds: {priced}/{len(out_rows)} priced "
           f"({text_hits} text, {espn_hits} ESPN, {api_hits} Odds API); "
           f"{defaulted} defaulted to -110")
+    _warn_thin_odds_coverage(out_rows, defaulted, espn_hits, use_odds_api)
     print(f"Odds API credits used this run: {odds_quota_used()}")
 
 
