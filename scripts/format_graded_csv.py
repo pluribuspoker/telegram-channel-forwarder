@@ -21,7 +21,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from odds import fetch_odds
+from odds import (fetch_odds, set_economy as odds_set_economy,
+                  quota_remaining as odds_quota_remaining, quota_used as odds_quota_used)
 
 OUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 
@@ -167,12 +168,60 @@ def _warn_implausible_odds(rows: list[dict]) -> None:
           "usual cause.")
 
 
-async def run(account: str) -> None:
+# Historical odds cost 10 per region per market. In economy mode that is one
+# market in one region, so ~10 credits per priced row; full mode averaged 48.
+_CREDITS_PER_ROW_ECONOMY = 10
+_CREDITS_PER_ROW_FULL = 48
+
+
+async def _preflight_quota(rows: list[dict], full_fidelity: bool, force: bool) -> bool:
+    """Refuse to start a backfill that would eat the month's quota.
+
+    This stage calls the HISTORICAL endpoint once per row with no odds in the
+    text, and a season's worth of picks is 15,000-20,000 credits against a
+    20,000/month plan — which is exactly how the quota hit zero on 2026-08-08
+    with no warning. The probe itself is free.
+    """
+    need = sum(1 for r in rows
+               if r.get("grade") in ("WIN", "LOSS", "PUSH")
+               and not _extract_odds_from_text(r.get("description", ""), r.get("line", ""),
+                                               r.get("bet_type", "")))
+    per = _CREDITS_PER_ROW_FULL if full_fidelity else _CREDITS_PER_ROW_ECONOMY
+    est = need * per
+    remaining = await odds_quota_remaining()
+    mode = "full-fidelity" if full_fidelity else "economy (1 market, us only)"
+    print(f"Odds API pre-flight: {need} row(s) need a price, {mode}, "
+          f"~{per} credits each -> ~{est} credits")
+    if remaining is None:
+        print("  quota unknown (no API key or probe failed) — continuing")
+        return True
+    print(f"  quota remaining: {remaining}")
+    if est <= remaining:
+        return True
+    print(f"\n⚠ This run would need ~{est} credits but only {remaining} remain.")
+    if force:
+        print("  --force given, continuing anyway (prices will drop to the -110 "
+              "default once the quota runs out).")
+        return True
+    print("  Refusing to start. Options: wait for the monthly reset (it renews on "
+          "your subscription anniversary), narrow the run with --since/--limit "
+          "upstream, or pass --force to accept partial pricing.")
+    return False
+
+
+async def run(account: str, full_fidelity: bool = False, force: bool = False) -> None:
     input_csv = os.path.join(OUT_DIR, f"{account}_graded.csv")
     output_csv = os.path.join(OUT_DIR, f"{account}_sheet.csv")
 
     with open(input_csv, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
+
+    # Backfills don't need every alternate line and every book — a miss just
+    # falls back to -110 — so they fetch the one market the pick reads.
+    if not full_fidelity:
+        odds_set_economy(True)
+    if not await _preflight_quota(rows, full_fidelity, force):
+        return
 
     out_rows = []
     api_hits = 0
@@ -265,10 +314,16 @@ async def run(account: str) -> None:
     print(f"Record: {wins}W - {losses}L - {pushes}P")
     print(f"Total return: {total_return:+.2f}U")
     print(f"Odds: {with_odds}/{len(out_rows)} ({api_hits} from API, {with_odds - api_hits} from text, {api_misses} missed)")
+    print(f"Odds API credits used this run: {odds_quota_used()}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--account", required=True, help="X handle, e.g. boyerBets_")
+    parser.add_argument("--full-fidelity", action="store_true",
+                        help="Fetch alternate lines too (~5x the quota cost). Default is "
+                             "economy: one market per pick, misses fall back to -110.")
+    parser.add_argument("--force", action="store_true",
+                        help="Run even if the estimated cost exceeds the remaining quota.")
     args = parser.parse_args()
-    asyncio.run(run(args.account))
+    asyncio.run(run(args.account, full_fidelity=args.full_fidelity, force=args.force))

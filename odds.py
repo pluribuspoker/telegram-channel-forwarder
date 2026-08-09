@@ -431,17 +431,63 @@ def _save_bookmakers(
 _quota_remaining: str | None = None
 _quota_used: int = 0
 
+# ── Quota cost control ────────────────────────────────────────────────────────
+# Cost is [unique markets RETURNED] x [regions SPECIFIED], x10 on the historical
+# endpoints. Two independent multipliers, both measured against the live cache
+# before being cut (2026-08-09, after the month's 20,000 credits ran out):
+#
+#  * regions — us2 (ballybet, betanysports, betparx, espnbet, fliff, hardrockbet*,
+#    rebet) is the ONLY source for 2.1% of priced outcomes and beats every us book
+#    on 3.0% of them, by a median 0.82 points of implied probability. Dropping it
+#    is a straight 50% cut for that 2.1%. Set ODDS_API_REGIONS=us,us2 to restore.
+#  * markets — the lists above ask for every period variant of a bet type, and we
+#    are billed for each one that happens to exist (2.59 came back per request when
+#    the pick reads 1-2). Narrowing to the pick's OWN period stops buying the rest.
+#
+# What is deliberately NOT cut: the `alternate_*` market. 22 of 208 priced picks
+# (10.6%) matched via exact_alt — five times the loss from dropping us2 — so
+# alternates stay for live pricing and are dropped only in economy mode, where a
+# miss falls back to the -110 default and nobody reads the line.
+REGIONS = os.getenv("ODDS_API_REGIONS", "us")
+
+_ECONOMY = False
+
+
+def set_economy(on: bool = True) -> None:
+    """Backfill mode: drop alternate lines too (one market per pick)."""
+    global _ECONOMY
+    _ECONOMY = on
+
+
+def economy() -> bool:
+    return _ECONOMY
+
+
+def _cache_markets(markets: str) -> str:
+    """Cache key for a markets string, namespaced by the regions that produced it.
+
+    A response fetched with fewer books must never be served later to a caller
+    expecting full coverage. Rows written before this existed were all us,us2, so
+    that value keeps the bare key and stays readable.
+    """
+    return markets if REGIONS == "us,us2" else f"{markets}@{REGIONS}"
+
 
 async def _api_get(http: httpx.AsyncClient, url: str, params: dict) -> dict | list | None:
     global _quota_remaining, _quota_used
     try:
         r = await http.get(url, params=params)
         r.raise_for_status()
-        prev = int(_quota_remaining) if _quota_remaining and _quota_remaining.isdigit() else None
+        # `x-requests-last` is the exact cost of THIS request, straight from the
+        # vendor. The previous version differenced `x-requests-remaining` across
+        # calls, which has no previous value on the first request of a process —
+        # so every run's first (and usually only) paid call was never counted.
+        # That is why a month that really spent 20,000 credits logged ~300, and
+        # the quota hit zero with no warning.
+        last = r.headers.get("x-requests-last", "")
+        if last.strip().lstrip("-").isdigit():
+            _quota_used += int(last)
         _quota_remaining = r.headers.get("x-requests-remaining", _quota_remaining)
-        curr = int(_quota_remaining) if _quota_remaining and _quota_remaining.isdigit() else None
-        if prev is not None and curr is not None:
-            _quota_used += prev - curr
         return r.json()
     except httpx.HTTPStatusError as exc:
         print(f"[odds] API {exc.response.status_code} {url.split('/')[-1]}: {exc.response.text[:120]}")
@@ -487,7 +533,7 @@ async def _fetch_event_list_all(sport: str, date: str, conn: sqlite3.Connection)
 async def _fetch_bookmakers(
     sport_key: str, event_id: str, date: str, markets: str, conn: sqlite3.Connection
 ) -> list[dict]:
-    cached = _get_bookmakers(conn, event_id, date, markets)
+    cached = _get_bookmakers(conn, event_id, date, _cache_markets(markets))
     if cached is not None:
         return cached
     if not ODDS_API_KEY:
@@ -496,13 +542,13 @@ async def _fetch_bookmakers(
         data = await _api_get(
             http,
             f"{ODDS_API_BASE}/historical/sports/{sport_key}/events/{event_id}/odds",
-            {"apiKey": ODDS_API_KEY, "regions": "us,us2", "markets": markets,
+            {"apiKey": ODDS_API_KEY, "regions": REGIONS, "markets": markets,
              "date": f"{date}T18:00:00Z", "oddsFormat": "american"},
         )
     bookmakers: list[dict] = []
     if isinstance(data, dict):
         bookmakers = data.get("data", {}).get("bookmakers", []) if "data" in data else data.get("bookmakers", [])
-    _save_bookmakers(conn, sport_key, event_id, date, markets, bookmakers)
+    _save_bookmakers(conn, sport_key, event_id, date, _cache_markets(markets), bookmakers)
     return bookmakers
 
 
@@ -988,6 +1034,61 @@ _MLB_INNINGS_MARKETS: dict[str, str] = {
 }
 
 
+_NARROW_BASE: dict[str, str] = {
+    "moneyline": "h2h", "spread": "spreads", "total": "totals", "team_total": "team_totals",
+}
+
+
+def _alt_market_for(base: str, suffix: str) -> str | None:
+    """The alternate market the matching `_lookup_*` will actually read, or None.
+
+    These conditions are NOT uniform across bet types — spreads consult an
+    alternate only at game level and MLB innings, totals also at hockey periods,
+    team totals always, and h2h has no alternate at all. Mirrored exactly from the
+    lookups below, because requesting one they never read is billed for nothing
+    while omitting one they do read silently costs an exact_alt match.
+    `scripts/test_market_narrowing.py` pins the two in sync.
+    """
+    if base == "spreads":
+        return f"alternate_spreads{suffix}" if (not suffix or suffix.startswith("_1st_")) else None
+    if base == "totals":
+        return (f"alternate_totals{suffix}"
+                if (not suffix or suffix.startswith("_1st_") or suffix.startswith("_p")) else None)
+    if base == "team_totals":
+        return f"alternate_team_totals{suffix}"
+    return None
+
+
+def _narrow_markets_for_pick(pick: dict, sport: str = "") -> str | None:
+    """Just the markets this pick's lookup actually reads, at its own period.
+
+    Mirrors what `_lookup_*` builds (`base + _get_period_suffix(...)`), so the
+    narrowed request answers the same question — a 1H total asks for totals_h1,
+    not totals, because the period decides the line. Everything else in the old
+    list was billed for being available, never read.
+
+    The `alternate_*` sibling is included: 10.6% of priced picks match through it
+    (exact_alt), so dropping it costs five times what dropping us2 does. Economy
+    mode drops it anyway — backfills fall back to -110 and nobody reads the line.
+
+    Returns None for anything not confidently reducible (props, to_qualify,
+    unknown bet types), which falls through to the existing wider list.
+    """
+    base = _NARROW_BASE.get(pick.get("bet_type", ""))
+    if not base:
+        return None
+    suffix = _get_period_suffix(pick.get("period") or "game", sport)
+    mkts = [base + suffix]
+    if not _ECONOMY:
+        alt = _alt_market_for(base, suffix)
+        if alt:
+            mkts.append(alt)
+    # 3-way/regulation moneylines are priced in a different market entirely.
+    if base == "h2h" and is_regulation_ml(pick.get("description", "")):
+        mkts.append("h2h_3_way" + suffix)
+    return ",".join(mkts)
+
+
 def _markets_for_pick(pick: dict, sport: str = "") -> str:
     """Minimal markets string for this pick's bet_type. Falls back to MARKETS_FULL."""
     desc = pick.get("description", "")
@@ -995,6 +1096,9 @@ def _markets_for_pick(pick: dict, sport: str = "") -> str:
     # market (or the outright winner fallback), never the 90-min h2h.
     if pick.get("bet_type") == "moneyline" and _is_advance_or_outright(desc):
         return MARKETS_BY_TYPE["to_advance"]
+    narrowed = _narrow_markets_for_pick(pick, sport)
+    if narrowed:
+        return narrowed
     base = MARKETS_BY_TYPE.get(pick.get("bet_type", ""), MARKETS_FULL)
     if sport == "MLB" and pick.get("period") in _MLB_PERIOD_SUFFIX:
         extra = _MLB_INNINGS_MARKETS.get(pick.get("bet_type", ""), "")
@@ -1208,21 +1312,21 @@ async def _try_pregame(
 
     conn = sqlite3.connect(db_path)
     try:
-        bookmakers = _get_bookmakers(conn, event_id, cache_date, markets)
+        bookmakers = _get_bookmakers(conn, event_id, cache_date, _cache_markets(markets))
         if bookmakers is None:
             if not ODDS_API_KEY:
                 return None
             async with httpx.AsyncClient(timeout=20) as http:
                 data = await _api_get(http,
                     f"{ODDS_API_BASE}/historical/sports/{sport_key}/events/{event_id}/odds",
-                    {"apiKey": ODDS_API_KEY, "regions": "us", "markets": markets,
+                    {"apiKey": ODDS_API_KEY, "regions": REGIONS, "markets": markets,
                      "date": commence_time, "oddsFormat": "american"},
                 )
             if isinstance(data, dict):
                 bookmakers = data.get("data", {}).get("bookmakers", []) if "data" in data else data.get("bookmakers", [])
             else:
                 bookmakers = []
-            _save_bookmakers(conn, sport_key, event_id, cache_date, markets, bookmakers)
+            _save_bookmakers(conn, sport_key, event_id, cache_date, _cache_markets(markets), bookmakers)
     finally:
         conn.close()
 
@@ -1429,7 +1533,7 @@ async def _fetch_current_bookmakers(
 ) -> list[dict]:
     """Fetch current odds for one event. live=True uses 5-min cache for in-progress games."""
     cache_key = "live" if live else "current"
-    cached = _get_bookmakers(conn, event_id, cache_key, markets)
+    cached = _get_bookmakers(conn, event_id, cache_key, _cache_markets(markets))
     if cached is not None:
         return cached
     if not ODDS_API_KEY:
@@ -1437,13 +1541,29 @@ async def _fetch_current_bookmakers(
     async with httpx.AsyncClient(timeout=20) as http:
         data = await _api_get(http,
             f"{ODDS_API_BASE}/sports/{sport_key}/events/{event_id}/odds",
-            {"apiKey": ODDS_API_KEY, "regions": "us,us2", "markets": markets, "oddsFormat": "american"},
+            {"apiKey": ODDS_API_KEY, "regions": REGIONS, "markets": markets, "oddsFormat": "american"},
         )
     bookmakers: list[dict] = data.get("bookmakers", []) if isinstance(data, dict) else []
-    _save_bookmakers(conn, sport_key, event_id, cache_key, markets, bookmakers)
+    _save_bookmakers(conn, sport_key, event_id, cache_key, _cache_markets(markets), bookmakers)
     return bookmakers
 
 
 def quota_used() -> int:
     """Return the number of Odds API quota units consumed this process."""
     return _quota_used
+
+
+async def quota_remaining() -> int | None:
+    """Credits left in the current billing period, or None if unknown.
+
+    Free to call: /v4/sports/ returns the usage headers at x-requests-last: 0.
+    """
+    if not ODDS_API_KEY:
+        return None
+    async with httpx.AsyncClient(timeout=20) as http:
+        try:
+            r = await http.get(f"{ODDS_API_BASE}/sports/", params={"apiKey": ODDS_API_KEY})
+            rem = r.headers.get("x-requests-remaining", "")
+            return int(rem) if rem.strip().lstrip("-").isdigit() else None
+        except Exception:  # noqa: BLE001 - a failed probe must not block the caller
+            return None
