@@ -11,8 +11,15 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-load_dotenv(ROOT / ".env")
-load_dotenv(ROOT / ".env.local", override=True)
+
+def _load_environment(root: Path) -> None:
+    # Existing process values (including systemd overrides) always win.
+    # Loading local first preserves its precedence for direct CLI runs.
+    load_dotenv(root / ".env.local")
+    load_dotenv(root / ".env")
+
+
+_load_environment(ROOT)
 
 from nfl_lines import (
     SHEET_TABS,
