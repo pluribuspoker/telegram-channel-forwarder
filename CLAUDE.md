@@ -261,8 +261,11 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/sauce_daily.py --channe
 **One command does the whole thing.** `scripts/backfill_capper.py` runs all five stages, then prints the exclusion table and the record:
 
 ```bash
+python scripts/backfill_capper.py --account boyerBets_              # since = the odds horizon
 python scripts/backfill_capper.py --account boyerBets_ --since 2026-01-01
 ```
+
+**`--since` defaults to as far back as we can still PRICE, and that date is probed, not hardcoded.** `scores.espn_odds_horizon()` walks back a month at a time until two consecutive months have games but no closing odds, then caches the answer for a week (`~/.espn_odds_horizon.json`, `refresh=True` to force). It returned `2025-12-01` on 2026-08-09, matching the hand-measured edge exactly (present at 2025-12-10, gone by 2025-10-12). Probing matters because the horizon **slides with the calendar** — a constant would be silently wrong within months. It samples only leagues actually in season that month (`_HORIZON_SPORTS_BY_MONTH`); an out-of-season league returns an empty scoreboard, which means *no games*, not *no odds*, and would report a far shorter horizon than the truth. Fetching tweets older than the horizon only adds rows the export can settle at `-110`.
 
 Stages, each persisting to `scripts/output/<account>_*.csv`:
 `fetch_x_posts` → `parse_posts_csv` → `grade_csv` → `format_graded_csv` → `sheets_export`

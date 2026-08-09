@@ -21,6 +21,7 @@ if X_AUTH_TOKEN / X_CT0 are set locally, or run this script on the VPS itself.
 """
 
 import argparse
+import asyncio
 import csv
 import os
 import shlex
@@ -35,6 +36,9 @@ from dotenv import load_dotenv
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(ROOT, ".env"))
 load_dotenv(os.path.join(ROOT, ".env.local"), override=True)
+
+# Imported after load_dotenv — scores reads API keys at import time.
+from scores import espn_odds_horizon  # noqa: E402
 
 OUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 STEPS = ["fetch", "parse", "grade", "format", "export"]
@@ -183,7 +187,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description="Twitter capper -> graded Google Sheet, in one command.")
     ap.add_argument("--account", required=True, help="X handle without the @")
-    ap.add_argument("--since", default=None, help="YYYY-MM-DD (required for fetch)")
+    ap.add_argument("--since", default=None,
+                    help="YYYY-MM-DD. Default: as far back as ESPN still has closing "
+                         "odds (~8-9 months, probed not hardcoded).")
     ap.add_argument("--limit", type=int, default=2000, help="Max tweets to scan")
     ap.add_argument("--from", dest="from_step", choices=STEPS, default=None,
                     help="Start at this step, reusing earlier outputs")
@@ -205,8 +211,14 @@ def main() -> int:
         steps = STEPS[start:]
     if args.no_sheet and "export" in steps:
         steps.remove("export")
-    if "fetch" in steps and not args.since:
-        ap.error("--since is required when running the fetch step")
+    since = args.since
+    if "fetch" in steps and not since:
+        # Default to as far back as we can still PRICE, not an arbitrary date.
+        # Fetching older tweets than that just adds rows the export can only
+        # settle at -110, which silently pads the sheet with invented prices.
+        since = asyncio.run(espn_odds_horizon())
+        print(f"--since not given; using the odds horizon: {since} "
+              f"(oldest date ESPN still has closing lines for)")
 
     acct = args.account
     t0 = time.time()
@@ -214,7 +226,7 @@ def main() -> int:
 
     if "fetch" in steps:
         _hr("1/5 FETCH")
-        step_fetch(acct, args.since, args.limit, args.local_fetch)
+        step_fetch(acct, since, args.limit, args.local_fetch)
 
     if "parse" in steps:
         _hr("2/5 PARSE")

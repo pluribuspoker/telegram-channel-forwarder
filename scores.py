@@ -2134,3 +2134,102 @@ async def espn_closing_odds(sport: str, date: str, pick: dict) -> dict | None:
         except (TypeError, ValueError):
             return None
     return {"odds": odds, "line": line, "bookmaker": book, "match_type": "espn_close"}
+
+
+# ── How far back ESPN still has closing odds ──────────────────────────────────
+# Measured 2026-08-09: 100% of 64 sampled games from 2026-01 to 2026-08 carried a
+# closing ML and total, still present at 2025-12, gone by 2025-10. So the useful
+# range is roughly the trailing 8-9 months — but that horizon MOVES with the
+# calendar, which is why this probes for it instead of hardcoding a date. A
+# backfill can then ask for "as far back as we have odds" and stay correct next
+# year without anyone editing a constant.
+_HORIZON_TTL_DAYS = 7
+_HORIZON_MAX_MONTHS = 18
+_HORIZON_MISS_STREAK = 2   # consecutive month misses before calling it the edge
+
+# Which leagues are actually playing in a given month — probing an out-of-season
+# league returns an empty scoreboard, which is "no games", NOT "no odds", and
+# would otherwise report a horizon far shorter than the truth.
+_HORIZON_SPORTS_BY_MONTH: dict[int, tuple[str, ...]] = {
+    1: ("NBA", "NHL"),   2: ("NBA", "NHL"),   3: ("NBA", "NHL"),
+    4: ("MLB", "NBA"),   5: ("MLB", "NBA"),   6: ("MLB", "WNBA"),
+    7: ("MLB", "WNBA"),  8: ("MLB", "WNBA"),  9: ("MLB", "NFL"),
+    10: ("MLB", "NBA"),  11: ("NBA", "NFL"),  12: ("NBA", "NFL"),
+}
+
+
+def _horizon_state_path() -> str:
+    return os.path.join(os.path.expanduser("~"), ".espn_odds_horizon.json")
+
+
+async def _month_has_odds(year: int, month: int) -> bool | None:
+    """True/False if a sampled game that month has closing odds; None if no games
+    were found at all (out of season / nothing scheduled) and it can't be judged."""
+    saw_games = False
+    for sport in _HORIZON_SPORTS_BY_MONTH.get(month, ("NBA", "MLB")):
+        for day in (15, 8, 22):
+            try:
+                sb = await fetch_espn(sport, f"{year:04d}-{month:02d}-{day:02d}")
+            except Exception:  # noqa: BLE001 - a probe must never break the caller
+                continue
+            events = (sb or {}).get("events", [])
+            if not events:
+                continue
+            saw_games = True
+            for ev in events[:2]:
+                summary = await fetch_espn_summary(sport, ev.get("id", ""))
+                providers = (summary or {}).get("pickcenter") or []
+                if not providers:
+                    continue
+                pc = providers[0]
+                ml = ((pc.get("moneyline") or {}).get("home") or {}).get("close", {}).get("odds")
+                tot = ((pc.get("total") or {}).get("over") or {}).get("close", {}).get("odds")
+                if ml or tot:
+                    return True
+            break  # found games for this sport/month and none had odds — try next sport
+    return False if saw_games else None
+
+
+async def espn_odds_horizon(*, refresh: bool = False) -> str:
+    """Oldest date ESPN still prices, as YYYY-MM-DD. Cached for a week.
+
+    Walks back a month at a time and stops after two consecutive months that had
+    games but no odds — one miss alone can be a quiet month rather than the edge.
+    Falls back to 8 months on any failure, which is the measured typical value.
+    """
+    path = _horizon_state_path()
+    if not refresh:
+        try:
+            with open(path) as f:
+                state = json.load(f)
+            checked = _date.fromisoformat(state["checked_at"])
+            if (_date.today() - checked).days < _HORIZON_TTL_DAYS:
+                return state["horizon"]
+        except (OSError, ValueError, KeyError):
+            pass
+
+    today = _date.today()
+    oldest_ok = today
+    misses = 0
+    for back in range(1, _HORIZON_MAX_MONTHS + 1):
+        y, m = today.year, today.month - back
+        while m <= 0:
+            m += 12
+            y -= 1
+        has = await _month_has_odds(y, m)
+        if has is None:
+            continue                      # no games to judge by; keep walking
+        if has:
+            oldest_ok = _date(y, m, 1)
+            misses = 0
+        else:
+            misses += 1
+            if misses >= _HORIZON_MISS_STREAK:
+                break
+    horizon = oldest_ok.isoformat()
+    try:
+        with open(path, "w") as f:
+            json.dump({"checked_at": today.isoformat(), "horizon": horizon}, f)
+    except OSError:
+        pass
+    return horizon
