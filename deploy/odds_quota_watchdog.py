@@ -49,8 +49,10 @@ PROBE_URL = "https://api.the-odds-api.com/v4/sports/"
 # condition the operator already knew about and could do nothing about, which is
 # how a real alert becomes something you swipe away. Same principle as
 # audit.record fingerprinting: don't re-post a message that says what the last
-# one said. REMIND_SECS is the backstop so a months-long outage isn't forgotten.
-REMIND_SECS = int(os.environ.get("ODDS_QUOTA_REMIND_SECS", 3 * 24 * 60 * 60))
+# one said. Repeats are OFF: an unchanged condition is not news, and the ✅ on
+# recovery already covers "is it back yet?". Set ODDS_QUOTA_REMIND_SECS to a
+# positive number of seconds to re-nag while a condition persists.
+REMIND_SECS = int(os.environ.get("ODDS_QUOTA_REMIND_SECS", 0))
 HISTORY_KEEP_SECS = 8 * 24 * 60 * 60
 
 # Units whose journals log the 401 body, to count damage already done.
@@ -219,7 +221,8 @@ def main() -> None:
     condition = "out" if remaining <= 0 else ("low" if remaining < low_limit else "ok")
     prev = state.get("condition", "ok")
     changed = condition != prev
-    reminder_due = now - state.get("condition_alert_at", 0) > REMIND_SECS
+    reminder_due = (REMIND_SECS > 0
+                    and now - state.get("condition_alert_at", 0) > REMIND_SECS)
 
     if condition == "out" and (force or changed or reminder_due):
         failed, quick_failed = damage_signals(1)
