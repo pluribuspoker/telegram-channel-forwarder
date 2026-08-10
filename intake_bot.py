@@ -654,6 +654,44 @@ def build_lean_row(
     }
 
 
+def snapshot_lean_submission(
+    state: dict[str, Any] | None,
+    *,
+    reply_to_msg_id: int | None,
+) -> tuple[str, dict[str, Any] | None]:
+    if (
+        state is None
+        or state.get("prompt_msg_id") != reply_to_msg_id
+    ):
+        return "unrelated", None
+
+    game = state.get("game")
+    period = state.get("period")
+    market = state.get("market")
+    side = state.get("side")
+    valid_sides = (
+        {"over", "under"} if market == "total" else {"away", "home"}
+    )
+    if (
+        not isinstance(game, dict)
+        or period not in PERIOD_LABELS
+        or market not in {"spread", "moneyline", "total"}
+        or side not in valid_sides
+    ):
+        return "invalid", None
+
+    return (
+        "ready",
+        {
+            "game": dict(game),
+            "period": period,
+            "market": market,
+            "side": side,
+            "prompt_msg_id": state["prompt_msg_id"],
+        },
+    )
+
+
 def load_intake_data() -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
     credentials = os.environ["GOOGLE_CREDENTIALS"]
     sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
@@ -848,11 +886,27 @@ async def main() -> None:
             return
 
         state = guess_states.get(event.sender_id)
-        if (
-            state is None
-            or state.get("prompt_msg_id") != event.reply_to_msg_id
-        ):
+        submission_status, submission = snapshot_lean_submission(
+            state,
+            reply_to_msg_id=event.reply_to_msg_id,
+        )
+        if submission_status == "unrelated":
             return
+        if submission_status == "invalid":
+            log.warning(
+                "Rejected stale NFL lean reply user=%s message=%s prompt=%s",
+                event.sender_id,
+                event.id,
+                event.reply_to_msg_id,
+            )
+            await event.respond(
+                "That selection changed or expired, so this lean wasn't "
+                "saved. Continue from the current menu or restart with "
+                "/guess_nfl_game.",
+                buttons=command_keyboard(),
+            )
+            return
+        assert submission is not None
         lean_text = event.raw_text.strip()
         if not lean_text:
             await event.respond(
@@ -867,20 +921,26 @@ async def main() -> None:
             first_name=getattr(sender, "first_name", None),
             last_name=getattr(sender, "last_name", None),
             message_id=event.id,
-            game=state["game"],
-            period=state["period"],
-            market=state["market"],
-            side=state["side"],
+            game=submission["game"],
+            period=submission["period"],
+            market=submission["market"],
+            side=submission["side"],
             lean_text=lean_text,
         )
         appended = await asyncio.to_thread(append_lean, row)
-        game = state["game"]
+        game = submission["game"]
         summary = (
-            f"{PERIOD_LABELS[state['period']]} · "
-            f"{state['market'].title()} · "
-            f"{selection_side_label(game, state['market'], state['side'])}"
+            f"{PERIOD_LABELS[submission['period']]} · "
+            f"{submission['market'].title()} · "
+            f"{selection_side_label(game, submission['market'], submission['side'])}"
         )
-        guess_states.pop(event.sender_id, None)
+        current_state = guess_states.get(event.sender_id)
+        if (
+            current_state is state
+            and current_state.get("prompt_msg_id")
+            == submission["prompt_msg_id"]
+        ):
+            guess_states.pop(event.sender_id, None)
         status = "✅ Guess saved." if appended else "✅ Guess was already saved."
         await event.respond(
             f"{status}\n{summary}",

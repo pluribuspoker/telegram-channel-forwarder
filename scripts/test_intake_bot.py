@@ -26,6 +26,7 @@ from intake_bot import (
     select_games,
     selected_market_context,
     side_buttons,
+    snapshot_lean_submission,
     team_emoji,
 )
 from nfl_lines import (
@@ -239,6 +240,40 @@ class GameSelectionTest(unittest.TestCase):
         self.assertEqual(row["opening_selected_line"], 40.5)
         self.assertEqual(row["opening_selected_price"], -110)
         self.assertEqual(row["lean_text"], "Over, but only at 40.5 or better.")
+
+    def test_submission_snapshot_rejects_incomplete_matching_state(self):
+        status, submission = snapshot_lean_submission(
+            {
+                "game": _game("miami", 1),
+                "prompt_msg_id": 456,
+            },
+            reply_to_msg_id=456,
+        )
+
+        self.assertEqual(status, "invalid")
+        self.assertIsNone(submission)
+
+    def test_submission_snapshot_survives_navigation_mutation(self):
+        state = {
+            "game": _game("miami", 1),
+            "period": "game",
+            "market": "spread",
+            "side": "away",
+            "prompt_msg_id": 456,
+        }
+
+        status, submission = snapshot_lean_submission(
+            state,
+            reply_to_msg_id=456,
+        )
+        state.pop("period")
+        state["game"]["away_team"] = "Changed Team"
+
+        self.assertEqual(status, "ready")
+        self.assertEqual(submission["period"], "game")
+        self.assertEqual(
+            submission["game"]["away_team"], "Miami Dolphins"
+        )
 
     def test_implied_score_uses_latest_total_and_spread(self):
         score = implied_score(
