@@ -160,8 +160,15 @@ def parse_standings(payload: dict[str, Any], season: int) -> list[dict[str, Any]
         for division in conference.get("children") or []:
             division_name = str(division.get("name") or "")
             standings = division.get("standings") or {}
+            entries = list(standings.get("entries") or [])
+            entries.sort(
+                key=lambda entry: (
+                    _number(entry.get("stats") or [], "playoffSeed")
+                    or 99
+                )
+            )
             for rank, entry in enumerate(
-                standings.get("entries") or [], start=1
+                entries, start=1
             ):
                 team = str((entry.get("team") or {}).get("displayName") or "")
                 stats = entry.get("stats") or []

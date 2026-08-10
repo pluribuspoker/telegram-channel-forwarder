@@ -77,6 +77,26 @@ class WinPredictionBackendTest(unittest.TestCase):
             {"2023->2024,2024->2025"},
         )
 
+    def test_division_rank_uses_playoff_seed_not_payload_order(self) -> None:
+        payload = _standings_payload(2025)
+        entries = payload["children"][0]["children"][0]["standings"][
+            "entries"
+        ]
+        entries[:] = [entries[1], entries[2], entries[3], entries[0]]
+
+        rows = parse_standings(payload, 2025)
+        division = [
+            row for row in rows if row["division"] == "Division 1"
+        ]
+
+        self.assertEqual(
+            [row["division_rank"] for row in division], [1, 2, 3, 4]
+        )
+        self.assertEqual(
+            [row["team"] for row in division],
+            list(TEAM_ABBREVIATIONS)[:4],
+        )
+
     def test_win_total_seed_requires_all_32_teams(self) -> None:
         totals = {
             team: 8.5 for team in TEAM_ABBREVIATIONS
