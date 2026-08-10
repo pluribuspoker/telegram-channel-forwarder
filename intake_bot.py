@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import html
 import os
+import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -32,6 +34,14 @@ from nfl_lines import (
     decode_packed_markets,
     get_gspread_client,
 )
+from nfl_win_predictions import (
+    PREDICTION_HEADERS,
+    TAB_HEADERS,
+    TEAM_ABBREVIATIONS,
+    build_latest_prediction_rows,
+    latest_predictions_for_user,
+    replace_rows,
+)
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -58,6 +68,11 @@ SUGGESTION_HEADERS = [
     "telegram_message_id",
     "suggestion",
 ]
+WIN_TOTALS_TAB = "nfl_win_totals"
+TEAM_HISTORY_TAB = "nfl_team_history"
+WIN_PREDICTIONS_TAB = "nfl_win_predictions"
+WIN_PREDICTIONS_LATEST_TAB = "nfl_win_predictions_latest"
+_WIN_PREDICTION_WRITE_LOCK = threading.Lock()
 DEFAULT_NFL_TEAM_EMOJIS = {
     "Arizona Cardinals": "🐦",
     "Atlanta Falcons": "🦅",
@@ -146,6 +161,11 @@ def command_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButtonRow(
                 buttons=[
                     KeyboardButton(text="/guess_nfl_game"),
+                    KeyboardButton(text="/predict_nfl_wins"),
+                ]
+            ),
+            KeyboardButtonRow(
+                buttons=[
                     KeyboardButton(text="/suggest"),
                 ]
             )
@@ -153,7 +173,7 @@ def command_keyboard() -> ReplyKeyboardMarkup:
         resize=True,
         single_use=False,
         persistent=True,
-        placeholder="Guess an NFL game or suggest an improvement",
+        placeholder="Choose an NFL prediction flow",
     )
 
 
@@ -692,6 +712,363 @@ def snapshot_lean_submission(
     )
 
 
+def _record(wins: Any, losses: Any, ties: Any = 0) -> str:
+    values = [str(int(wins)), str(int(losses))]
+    if int(ties or 0):
+        values.append(str(int(ties)))
+    return "–".join(values)
+
+
+def _number_text(value: float) -> str:
+    return str(int(value)) if value.is_integer() else str(value)
+
+
+def _ordinal(value: int) -> str:
+    if 10 <= value % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(value % 10, "th")
+    return f"{value}{suffix}"
+
+
+def _team_by_abbreviation(abbreviation: str) -> str | None:
+    return next(
+        (
+            team
+            for team, candidate in TEAM_ABBREVIATIONS.items()
+            if candidate == abbreviation
+        ),
+        None,
+    )
+
+
+def _current_win_totals(
+    totals: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not totals:
+        raise ValueError("No NFL win totals are available")
+    season = max(int(row["season"]) for row in totals)
+    current = [row for row in totals if int(row["season"]) == season]
+    if len(current) != 32:
+        raise ValueError(
+            f"NFL win totals for {season} contain {len(current)} teams"
+        )
+    return current
+
+
+def win_prediction_browser(
+    totals: list[dict[str, Any]],
+    predictions: list[dict[str, Any]],
+    *,
+    user_id: int,
+) -> tuple[str, list[list[Button]]]:
+    current_totals = _current_win_totals(totals)
+    market_by_team = {str(row["team"]): row for row in current_totals}
+    latest, counts = latest_predictions_for_user(predictions, user_id)
+    teams = sorted(
+        market_by_team,
+        key=lambda team: (
+            counts[team],
+            TEAM_ABBREVIATIONS.get(team, team),
+        ),
+    )
+    progress = len(latest)
+    season = int(current_totals[0]["season"])
+    text = (
+        f"🏈 <b>{season} NFL Win Predictions</b>\n"
+        f"Progress: {progress}/32 teams\n\n"
+        "Choose a team. Unmarked teams are shown first."
+    )
+    buttons: list[list[Button]] = []
+    row: list[Button] = []
+    for team in teams:
+        abbreviation = TEAM_ABBREVIATIONS[team]
+        previous = latest.get(team)
+        label = abbreviation
+        if previous:
+            label += f" · {previous['predicted_wins']}"
+        row.append(
+            Button.inline(label, f"winteam:{abbreviation}".encode())
+        )
+        if len(row) == 4:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    return text, buttons
+
+
+def _history_index(
+    history: list[dict[str, Any]],
+) -> dict[tuple[int, str], dict[str, Any]]:
+    return {
+        (int(row["season"]), str(row["team"])): row
+        for row in history
+    }
+
+
+def win_prediction_team_detail(
+    totals: list[dict[str, Any]],
+    history: list[dict[str, Any]],
+    predictions: list[dict[str, Any]],
+    *,
+    user_id: int,
+    abbreviation: str,
+) -> tuple[str, list[list[Button]]]:
+    team = _team_by_abbreviation(abbreviation)
+    if team is None:
+        raise ValueError(f"Unknown NFL team abbreviation: {abbreviation}")
+    market = next(
+        row for row in _current_win_totals(totals)
+        if str(row["team"]) == team
+    )
+    season = int(market["season"])
+    prior_season = season - 1
+    history_by_key = _history_index(history)
+    prior = history_by_key[(prior_season, team)]
+    division = str(prior["division"])
+    rank = int(prior["division_rank"])
+    division_rows = sorted(
+        (
+            row
+            for row in history
+            if int(row["season"]) == prior_season
+            and str(row["division"]) == division
+        ),
+        key=lambda row: int(row["division_rank"]),
+    )
+    latest, _ = latest_predictions_for_user(predictions, user_id)
+    sections = [
+        f"🏈 <b>{html.escape(team)} ({abbreviation})</b>",
+        f"BetOnline total: {_number_text(float(market['win_total']))} wins",
+    ]
+    previous = latest.get(team)
+    if previous:
+        sections.append(
+            f"Your previous prediction: {previous['predicted_wins']} wins"
+        )
+    standings = [f"<b>{prior_season} {html.escape(division)}:</b>"]
+    for row in division_rows:
+        row_abbreviation = str(row["team_abbreviation"])
+        label = (
+            f"({row_abbreviation})"
+            if row_abbreviation == abbreviation
+            else row_abbreviation
+        )
+        standings.append(
+            f"{int(row['division_rank'])}. {label} "
+            f"{_record(row['wins'], row['losses'], row['ties'])}"
+        )
+    sections.append("\n".join(standings))
+
+    cohorts: list[str] = [
+        (
+            "<b>Historical results for teams previously finishing "
+            f"{_ordinal(rank)}:</b>"
+        )
+    ]
+    completed_seasons = sorted(
+        {
+            int(row["season"])
+            for row in history
+            if row.get("next_season_wins") != ""
+        }
+    )[-2:]
+    for cohort_season in completed_seasons:
+        same_rank = [
+            row
+            for row in history
+            if int(row["season"]) == cohort_season
+            and int(row["division_rank"]) == rank
+            and row.get("next_season_wins") != ""
+        ]
+        same_division = next(
+            row for row in same_rank if str(row["division"]) == division
+        )
+        next_row = history_by_key[
+            (cohort_season + 1, str(same_division["team"]))
+        ]
+        other_wins = sorted(
+            (
+                int(row["next_season_wins"])
+                for row in same_rank
+                if str(row["division"]) != division
+            ),
+            reverse=True,
+        )
+        if len(other_wins) != 7:
+            raise ValueError(
+                f"{cohort_season} rank {rank} has "
+                f"{len(other_wins)} other-division results"
+            )
+        average = sum(other_wins) / len(other_wins)
+        same_abbreviation = str(same_division["team_abbreviation"])
+        cohorts.append(
+            "\n".join(
+                [
+                    f"<b>{cohort_season} → {cohort_season + 1}</b>",
+                    "Same division:",
+                    (
+                        f"{same_abbreviation} finished {_ordinal(rank)} in the "
+                        f"{cohort_season} {html.escape(division)} at "
+                        f"{_record(same_division['wins'], same_division['losses'], same_division['ties'])}."
+                    ),
+                    (
+                        f"Their {cohort_season + 1} record: "
+                        f"{_record(next_row['wins'], next_row['losses'], next_row['ties'])}."
+                    ),
+                    "",
+                    "Other 7 divisions:",
+                    (
+                        f"Average {cohort_season + 1} wins: "
+                        f"{average:.2f}"
+                    ),
+                    f"({', '.join(str(wins) for wins in other_wins)})",
+                ]
+            )
+        )
+    sections.append("\n\n".join(cohorts))
+    sections.append("How many regular-season wins do you predict?")
+
+    buttons = [
+        [
+            Button.inline(
+                str(wins),
+                f"winpick:{abbreviation}:{wins}".encode(),
+            )
+            for wins in range(start, start + 6)
+        ]
+        for start in (0, 6, 12)
+    ]
+    buttons.append([Button.inline("← Teams", b"wins:teams")])
+    return "\n\n".join(sections), buttons
+
+
+def win_prediction_confirmation(
+    totals: list[dict[str, Any]],
+    *,
+    abbreviation: str,
+    predicted_wins: int,
+) -> tuple[str, list[list[Button]]]:
+    team = _team_by_abbreviation(abbreviation)
+    if team is None:
+        raise ValueError(f"Unknown NFL team abbreviation: {abbreviation}")
+    market = next(
+        row for row in _current_win_totals(totals)
+        if str(row["team"]) == team
+    )
+    total = float(market["win_total"])
+    difference = predicted_wins - total
+    text = (
+        f"Confirm <b>{html.escape(team)}</b>: {predicted_wins} wins?\n\n"
+        f"BetOnline: {_number_text(total)}\n"
+        f"Your prediction: {predicted_wins}\n"
+        f"Difference: {difference:+g} wins"
+    )
+    return text, [
+        [
+            Button.inline(
+                "Save prediction",
+                f"winsave:{abbreviation}:{predicted_wins}".encode(),
+            ),
+            Button.inline(
+                "Change",
+                f"winteam:{abbreviation}".encode(),
+            ),
+        ]
+    ]
+
+
+def build_win_prediction_row(
+    *,
+    submitted_at: datetime,
+    user_id: int,
+    username: str | None,
+    first_name: str | None,
+    last_name: str | None,
+    team: str,
+    predicted_wins: int,
+    market: dict[str, Any],
+    prior: dict[str, Any],
+) -> dict[str, Any]:
+    submitted_at_utc = submitted_at.astimezone(timezone.utc)
+    display_name = " ".join(
+        value for value in (first_name, last_name) if value
+    )
+    return {
+        "revision_id": str(uuid.uuid4()),
+        "submitted_at_utc": submitted_at_utc.isoformat(),
+        "submitted_at_et": submitted_at_utc.astimezone(ET).isoformat(),
+        "telegram_user_id": user_id,
+        "telegram_username": username or "",
+        "telegram_display_name": display_name,
+        "season": market["season"],
+        "team": team,
+        "team_abbreviation": TEAM_ABBREVIATIONS[team],
+        "predicted_wins": predicted_wins,
+        "market_win_total": market["win_total"],
+        "market_captured_at_et": market["captured_at_et"],
+        "prior_season": prior["season"],
+        "prior_division": prior["division"],
+        "prior_division_rank": prior["division_rank"],
+        "actual_wins_at_submission": "",
+        "actual_week_at_submission": "",
+    }
+
+
+def load_win_prediction_data(
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    credentials = os.environ["GOOGLE_CREDENTIALS"]
+    sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
+    spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
+    totals = spreadsheet.worksheet(WIN_TOTALS_TAB).get_all_records(
+        expected_headers=TAB_HEADERS[WIN_TOTALS_TAB]
+    )
+    history = spreadsheet.worksheet(TEAM_HISTORY_TAB).get_all_records(
+        expected_headers=TAB_HEADERS[TEAM_HISTORY_TAB]
+    )
+    predictions = spreadsheet.worksheet(
+        WIN_PREDICTIONS_TAB
+    ).get_all_records(expected_headers=PREDICTION_HEADERS)
+    return totals, history, predictions
+
+
+def append_win_prediction(row: dict[str, Any]) -> bool:
+    credentials = os.environ["GOOGLE_CREDENTIALS"]
+    sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
+    with _WIN_PREDICTION_WRITE_LOCK:
+        spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
+        predictions_worksheet = spreadsheet.worksheet(WIN_PREDICTIONS_TAB)
+        predictions = predictions_worksheet.get_all_records(
+            expected_headers=PREDICTION_HEADERS
+        )
+        latest, _ = latest_predictions_for_user(
+            predictions, row["telegram_user_id"]
+        )
+        previous = latest.get(str(row["team"]))
+        if (
+            previous is not None
+            and int(previous["predicted_wins"])
+            == int(row["predicted_wins"])
+        ):
+            return False
+        predictions_worksheet.append_row(
+            [row.get(header, "") for header in PREDICTION_HEADERS],
+            value_input_option="RAW",
+        )
+        predictions.append(row)
+        totals = spreadsheet.worksheet(WIN_TOTALS_TAB).get_all_records(
+            expected_headers=TAB_HEADERS[WIN_TOTALS_TAB]
+        )
+        latest_rows = build_latest_prediction_rows(predictions, totals)
+        replace_rows(
+            spreadsheet.worksheet(WIN_PREDICTIONS_LATEST_TAB),
+            TAB_HEADERS[WIN_PREDICTIONS_LATEST_TAB],
+            latest_rows,
+        )
+        return True
+
+
 def load_intake_data() -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
     credentials = os.environ["GOOGLE_CREDENTIALS"]
     sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
@@ -779,6 +1156,11 @@ async def _intake_data() -> tuple[list[dict[str, Any]], dict[str, str], dict[str
     return await asyncio.to_thread(load_intake_data)
 
 
+async def _win_prediction_data(
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    return await asyncio.to_thread(load_win_prediction_data)
+
+
 async def edit_callback(event, text: str, buttons) -> None:
     try:
         await event.edit(text, buttons=buttons, parse_mode="html")
@@ -802,7 +1184,7 @@ async def main() -> None:
 
     @client.on(
         events.NewMessage(
-            pattern=r"^/(?:start|guess_nfl_game)(?:@\w+)?$",
+            pattern=r"^/(?:start|guess_nfl_game|predict_nfl_wins)(?:@\w+)?$",
             incoming=True,
             func=lambda event: event.is_private,
         )
@@ -813,9 +1195,20 @@ async def main() -> None:
             return
         if event.raw_text.startswith("/start"):
             await event.respond(
-                "Tap /guess_nfl_game to browse games or /suggest to send feedback.",
+                "Tap /guess_nfl_game to browse games, /predict_nfl_wins "
+                "to predict season totals, or /suggest to send feedback.",
                 buttons=command_keyboard(),
             )
+        if event.raw_text.startswith("/predict_nfl_wins"):
+            guess_states.pop(event.sender_id, None)
+            totals, _, predictions = await _win_prediction_data()
+            text, buttons = win_prediction_browser(
+                totals,
+                predictions,
+                user_id=event.sender_id,
+            )
+            await event.respond(text, buttons=buttons, parse_mode="html")
+            return
         guess_states.pop(event.sender_id, None)
         records, _, team_abbrevs = await _intake_data()
         text, buttons = game_browser(
@@ -953,6 +1346,141 @@ async def main() -> None:
             await event.answer("Not authorized.", alert=True)
             return
         data = event.data.decode()
+        if (
+            data == "wins:teams"
+            or data.startswith("winteam:")
+            or data.startswith("winpick:")
+            or data.startswith("winsave:")
+        ):
+            totals, history, predictions = await _win_prediction_data()
+            if data == "wins:teams":
+                text, buttons = win_prediction_browser(
+                    totals,
+                    predictions,
+                    user_id=event.sender_id,
+                )
+                await edit_callback(event, text, buttons)
+                return
+            if data.startswith("winteam:"):
+                abbreviation = data.split(":", 1)[1]
+                try:
+                    text, buttons = win_prediction_team_detail(
+                        totals,
+                        history,
+                        predictions,
+                        user_id=event.sender_id,
+                        abbreviation=abbreviation,
+                    )
+                except (KeyError, StopIteration, ValueError):
+                    await event.answer(
+                        "Team data is unavailable.", alert=True
+                    )
+                    return
+                await edit_callback(event, text, buttons)
+                return
+            if data.startswith("winpick:"):
+                _, abbreviation, wins_raw = data.split(":", 2)
+                predicted_wins = int(wins_raw)
+                if not 0 <= predicted_wins <= 17:
+                    await event.answer("Invalid prediction.", alert=True)
+                    return
+                try:
+                    text, buttons = win_prediction_confirmation(
+                        totals,
+                        abbreviation=abbreviation,
+                        predicted_wins=predicted_wins,
+                    )
+                except (StopIteration, ValueError):
+                    await event.answer(
+                        "Team data is unavailable.", alert=True
+                    )
+                    return
+                await edit_callback(event, text, buttons)
+                return
+            _, abbreviation, wins_raw = data.split(":", 2)
+            predicted_wins = int(wins_raw)
+            team = _team_by_abbreviation(abbreviation)
+            if team is None or not 0 <= predicted_wins <= 17:
+                await event.answer("Invalid prediction.", alert=True)
+                return
+            try:
+                market = next(
+                    row
+                    for row in _current_win_totals(totals)
+                    if str(row["team"]) == team
+                )
+                prior = next(
+                    row
+                    for row in history
+                    if str(row["team"]) == team
+                    and int(row["season"]) == int(market["season"]) - 1
+                )
+            except (StopIteration, ValueError):
+                await event.answer(
+                    "Team data is unavailable.", alert=True
+                )
+                return
+            sender = await event.get_sender()
+            prediction_row = build_win_prediction_row(
+                submitted_at=datetime.now(timezone.utc),
+                user_id=event.sender_id,
+                username=getattr(sender, "username", None),
+                first_name=getattr(sender, "first_name", None),
+                last_name=getattr(sender, "last_name", None),
+                team=team,
+                predicted_wins=predicted_wins,
+                market=market,
+                prior=prior,
+            )
+            appended = await asyncio.to_thread(
+                append_win_prediction, prediction_row
+            )
+            if appended:
+                predictions.append(prediction_row)
+            latest, _ = latest_predictions_for_user(
+                predictions, event.sender_id
+            )
+            unmarked = sorted(
+                (
+                    candidate
+                    for candidate in TEAM_ABBREVIATIONS
+                    if candidate not in latest
+                ),
+                key=lambda candidate: TEAM_ABBREVIATIONS[candidate],
+            )
+            status = (
+                f"✅ {html.escape(team)} saved at {predicted_wins} wins."
+                if appended
+                else (
+                    f"✅ {html.escape(team)} was already saved at "
+                    f"{predicted_wins} wins."
+                )
+            )
+            text = f"{status}\n\nProgress: {len(latest)}/32 teams"
+            buttons = []
+            if unmarked:
+                next_team = unmarked[0]
+                next_abbreviation = TEAM_ABBREVIATIONS[next_team]
+                text += (
+                    f"\nNext unmarked team: {html.escape(next_team)} "
+                    f"({next_abbreviation})"
+                )
+                buttons.append(
+                    [
+                        Button.inline(
+                            f"Next: {next_abbreviation}",
+                            f"winteam:{next_abbreviation}".encode(),
+                        ),
+                        Button.inline("All teams", b"wins:teams"),
+                    ]
+                )
+            else:
+                text += "\nAll 32 teams are complete."
+                buttons.append(
+                    [Button.inline("Review teams", b"wins:teams")]
+                )
+            await edit_callback(event, text, buttons)
+            return
         records, team_emojis, team_abbrevs = await _intake_data()
         if data.startswith("games:"):
             guess_states.pop(event.sender_id, None)
@@ -1170,6 +1698,10 @@ async def main() -> None:
                 types.BotCommand(
                     command="guess_nfl_game",
                     description="Browse NFL games and submit a guess",
+                ),
+                types.BotCommand(
+                    command="predict_nfl_wins",
+                    description="Predict every NFL team's season wins",
                 ),
                 types.BotCommand(
                     command="suggest",

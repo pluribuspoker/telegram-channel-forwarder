@@ -17,6 +17,7 @@ from nfl_win_predictions import (
     build_rank_benchmarks,
     build_team_history,
     build_win_total_rows,
+    latest_predictions_for_user,
     parse_standings,
     validate_prediction_revision,
 )
@@ -158,6 +159,36 @@ class WinPredictionBackendTest(unittest.TestCase):
         self.assertEqual(latest[-1]["team_abbreviation"], "ARI")
         self.assertEqual(latest[-1]["guess_count"], 1)
         self.assertEqual(latest[-1]["predicted_wins"], 6)
+
+    def test_latest_predictions_for_user_counts_revisions(self) -> None:
+        predictions = [
+            {
+                "revision_id": "revision-1",
+                "submitted_at_utc": "2026-08-10T01:00:00+00:00",
+                "telegram_user_id": "123",
+                "team": "Seattle Seahawks",
+                "predicted_wins": 10,
+            },
+            {
+                "revision_id": "revision-2",
+                "submitted_at_utc": "2026-08-10T02:00:00+00:00",
+                "telegram_user_id": 123,
+                "team": "Seattle Seahawks",
+                "predicted_wins": 11,
+            },
+            {
+                "revision_id": "other-user",
+                "submitted_at_utc": "2026-08-10T03:00:00+00:00",
+                "telegram_user_id": 456,
+                "team": "Seattle Seahawks",
+                "predicted_wins": 12,
+            },
+        ]
+
+        latest, counts = latest_predictions_for_user(predictions, 123)
+
+        self.assertEqual(latest["Seattle Seahawks"]["predicted_wins"], 11)
+        self.assertEqual(counts["Seattle Seahawks"], 2)
 
 
 if __name__ == "__main__":

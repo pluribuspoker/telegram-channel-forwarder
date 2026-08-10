@@ -362,6 +362,31 @@ def validate_prediction_revision(rows: list[dict[str, Any]]) -> None:
             raise ValueError("Predicted wins must be between 0 and 17")
 
 
+def latest_predictions_for_user(
+    predictions: Iterable[dict[str, Any]],
+    user_id: int | str,
+) -> tuple[dict[str, dict[str, Any]], Counter[str]]:
+    matching = [
+        row
+        for row in predictions
+        if str(row.get("telegram_user_id") or "") == str(user_id)
+    ]
+    counts = Counter(str(row.get("team") or "") for row in matching)
+    latest: dict[str, tuple[tuple[str, str], dict[str, Any]]] = {}
+    for row in matching:
+        team = str(row.get("team") or "")
+        key = (
+            str(row.get("submitted_at_utc") or ""),
+            str(row.get("revision_id") or ""),
+        )
+        if team and (team not in latest or key > latest[team][0]):
+            latest[team] = (key, row)
+    return (
+        {team: row for team, (_, row) in latest.items()},
+        counts,
+    )
+
+
 def build_latest_prediction_rows(
     predictions: list[dict[str, Any]],
     win_totals: list[dict[str, Any]],
@@ -383,19 +408,10 @@ def build_latest_prediction_rows(
             for row in predictions
             if str(row.get("telegram_user_id") or "") == user_id
         ]
-        counts = Counter(str(row["team"]) for row in user_rows)
-        latest = {}
-        for row in user_rows:
-            team = str(row["team"])
-            key = (
-                str(row.get("submitted_at_utc") or ""),
-                str(row.get("revision_id") or ""),
-            )
-            if team not in latest or key > latest[team][0]:
-                latest[team] = (key, row)
+        latest, counts = latest_predictions_for_user(user_rows, user_id)
         identity = user_rows[-1] if user_rows else {}
         for team, abbreviation in TEAM_ABBREVIATIONS.items():
-            row = latest.get(team, (None, {}))[1]
+            row = latest.get(team, {})
             market = market_by_team.get(team, {})
             output.append(
                 {

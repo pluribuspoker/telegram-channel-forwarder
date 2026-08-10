@@ -113,6 +113,30 @@ Adopted slate behavior:
   detail → game list. Returning from the free-text stage deletes and invalidates
   its ForceReply prompt so a stale reply cannot be submitted accidentally.
 
+### Completed — 2026-08-10: Season-win prediction flow
+
+- `/predict_nfl_wins` opens a 32-team picker backed by the seeded
+  `nfl_win_totals`, `nfl_team_history`, and `nfl_win_predictions` tabs.
+- Teams are ordered by the current user's number of submitted revisions,
+  ascending, then by abbreviation. This keeps unmarked teams first while moving
+  revised teams toward the end.
+- A team view shows its current BetOnline total, the prior season's complete
+  division standings, and places the selected abbreviation in parentheses.
+- Historical context is shown separately for each of the last two transition
+  cohorts. For each year it gives the following-season record of the team that
+  previously occupied the same rank in the same division, plus the average and
+  descending list of following-season win totals for same-ranked teams in the
+  other seven divisions.
+- If the user has a prior prediction for the selected team, it is displayed.
+  The line is omitted entirely for an unmarked team.
+- Inline buttons offer every integer from 0 through 17. The confirmation view
+  compares the selection with the BetOnline total before saving.
+- Saves append a per-team revision to `nfl_win_predictions` and immediately
+  rebuild `nfl_win_predictions_latest`. Re-saving the unchanged latest value is
+  acknowledged without adding a duplicate revision.
+- After a save, the bot reports progress and links directly to the next
+  unmarked team, or to the review screen after all 32 teams are complete.
+
 This slice intentionally stops before market/side selection and text capture.
 Those interactions will be implemented after the game browser is tested in the
 real dedicated bot.

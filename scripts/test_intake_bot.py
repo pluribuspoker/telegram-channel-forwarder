@@ -10,9 +10,11 @@ from datetime import datetime, timedelta, timezone
 from telethon.errors import MessageNotModifiedError
 
 from intake_bot import (
+    TEAM_ABBREVIATIONS as DEFAULT_WIN_TEAMS,
     SUGGESTION_HEADERS,
     build_lean_row,
     build_suggestion_row,
+    build_win_prediction_row,
     command_keyboard,
     edit_callback,
     game_browser,
@@ -28,6 +30,9 @@ from intake_bot import (
     side_buttons,
     snapshot_lean_submission,
     team_emoji,
+    win_prediction_browser,
+    win_prediction_confirmation,
+    win_prediction_team_detail,
 )
 from nfl_lines import (
     LEAN_HEADERS,
@@ -62,6 +67,143 @@ def _game(event_id: str, days: int, away: str = "Miami Dolphins") -> dict:
     }
 
 
+def _win_totals() -> list[dict]:
+    current = [
+        {
+            "season": 2026,
+            "team": team,
+            "team_abbreviation": abbreviation,
+            "bookmaker": "BetOnline",
+            "win_total": 10.5 if abbreviation == "SEA" else 8.5,
+            "over_price": "",
+            "under_price": "",
+            "captured_at_utc": "2026-08-10T03:34:34+00:00",
+            "captured_at_et": "2026-08-09T23:34:34-04:00",
+            "source": "user_paste",
+        }
+        for team, abbreviation in {
+            "Arizona Cardinals": "ARI",
+            "Los Angeles Rams": "LAR",
+            "San Francisco 49ers": "SF",
+            "Seattle Seahawks": "SEA",
+        }.items()
+    ]
+    other_teams = [
+        team
+        for team, abbreviation in DEFAULT_WIN_TEAMS.items()
+        if abbreviation not in {"ARI", "LAR", "SF", "SEA"}
+    ]
+    current.extend(
+        {
+            "season": 2026,
+            "team": team,
+            "team_abbreviation": DEFAULT_WIN_TEAMS[team],
+            "bookmaker": "BetOnline",
+            "win_total": 8.5,
+            "over_price": "",
+            "under_price": "",
+            "captured_at_utc": "2026-08-10T03:34:34+00:00",
+            "captured_at_et": "2026-08-09T23:34:34-04:00",
+            "source": "user_paste",
+        }
+        for team in other_teams
+    )
+    return current
+
+
+def _history() -> list[dict]:
+    division_teams = {
+        2023: [
+            ("San Francisco 49ers", "SF", 1, 12, 5, 6),
+            ("Los Angeles Rams", "LAR", 2, 10, 7, 10),
+            ("Seattle Seahawks", "SEA", 3, 9, 8, 10),
+            ("Arizona Cardinals", "ARI", 4, 4, 13, 8),
+        ],
+        2024: [
+            ("Los Angeles Rams", "LAR", 1, 10, 7, 12),
+            ("Seattle Seahawks", "SEA", 2, 10, 7, 14),
+            ("San Francisco 49ers", "SF", 3, 6, 11, 12),
+            ("Arizona Cardinals", "ARI", 4, 8, 9, 3),
+        ],
+        2025: [
+            ("Seattle Seahawks", "SEA", 1, 14, 3, None),
+            ("Los Angeles Rams", "LAR", 2, 12, 5, None),
+            ("San Francisco 49ers", "SF", 3, 12, 5, None),
+            ("Arizona Cardinals", "ARI", 4, 3, 14, None),
+        ],
+    }
+    rows = []
+    for season, teams in division_teams.items():
+        for team, abbreviation, rank, wins, losses, next_wins in teams:
+            rows.append(
+                {
+                    "season": season,
+                    "team": team,
+                    "team_abbreviation": abbreviation,
+                    "conference": "National Football Conference",
+                    "division": "NFC West",
+                    "division_rank": rank,
+                    "wins": wins,
+                    "losses": losses,
+                    "ties": 0,
+                    "playoff_team": rank <= 2,
+                    "next_season": season + 1 if next_wins is not None else "",
+                    "next_season_wins": (
+                        next_wins if next_wins is not None else ""
+                    ),
+                    "next_season_division_rank": "",
+                    "next_season_playoff_team": "",
+                    "win_change": "",
+                }
+            )
+    other_wins = {
+        2023: [15, 15, 13, 12, 10, 10, 7],
+        2024: [12, 12, 11, 9, 8, 8, 6],
+    }
+    for season, wins_list in other_wins.items():
+        for index, next_wins in enumerate(wins_list, start=1):
+            team = f"Other Team {season}-{index}"
+            rows.extend(
+                [
+                    {
+                        "season": season,
+                        "team": team,
+                        "team_abbreviation": f"O{index}",
+                        "conference": "AFC",
+                        "division": f"Other Division {index}",
+                        "division_rank": 1,
+                        "wins": 11,
+                        "losses": 6,
+                        "ties": 0,
+                        "playoff_team": True,
+                        "next_season": season + 1,
+                        "next_season_wins": next_wins,
+                        "next_season_division_rank": "",
+                        "next_season_playoff_team": "",
+                        "win_change": next_wins - 11,
+                    },
+                    {
+                        "season": season + 1,
+                        "team": team,
+                        "team_abbreviation": f"O{index}",
+                        "conference": "AFC",
+                        "division": f"Other Division {index}",
+                        "division_rank": 1,
+                        "wins": next_wins,
+                        "losses": 17 - next_wins,
+                        "ties": 0,
+                        "playoff_team": True,
+                        "next_season": "",
+                        "next_season_wins": "",
+                        "next_season_division_rank": "",
+                        "next_season_playoff_team": "",
+                        "win_change": "",
+                    },
+                ]
+            )
+    return rows
+
+
 class GameSelectionTest(unittest.TestCase):
     def test_command_keyboard_is_persistent(self):
         keyboard = command_keyboard()
@@ -71,7 +213,10 @@ class GameSelectionTest(unittest.TestCase):
         self.assertEqual(
             keyboard.rows[0].buttons[0].text, "/guess_nfl_game"
         )
-        self.assertEqual(keyboard.rows[0].buttons[1].text, "/suggest")
+        self.assertEqual(
+            keyboard.rows[0].buttons[1].text, "/predict_nfl_wins"
+        )
+        self.assertEqual(keyboard.rows[1].buttons[0].text, "/suggest")
 
     def test_default_window_includes_only_next_ten_days(self):
         records = [_game("a", 1), _game("b", 10), _game("c", 11)]
@@ -315,6 +460,105 @@ class GameSelectionTest(unittest.TestCase):
         self.assertEqual(row["telegram_last_name"], "Fan")
         self.assertEqual(row["telegram_message_id"], 456)
         self.assertEqual(row["suggestion"], "Add confidence levels.")
+
+    def test_win_browser_sorts_unmarked_teams_first(self):
+        predictions = [
+            {
+                "revision_id": "revision-1",
+                "submitted_at_utc": NOW.isoformat(),
+                "telegram_user_id": 123,
+                "team": "Arizona Cardinals",
+                "predicted_wins": 6,
+            }
+        ]
+
+        text, buttons = win_prediction_browser(
+            _win_totals(), predictions, user_id=123
+        )
+        labels = [button.text for row in buttons for button in row]
+
+        self.assertIn("Progress: 1/32 teams", text)
+        self.assertEqual(labels[:3], ["ATL", "BAL", "BUF"])
+        self.assertEqual(labels[-1], "ARI · 6")
+
+    def test_seattle_win_detail_matches_approved_exchange(self):
+        text, buttons = win_prediction_team_detail(
+            _win_totals(),
+            _history(),
+            [],
+            user_id=123,
+            abbreviation="SEA",
+        )
+
+        self.assertIn("BetOnline total: 10.5 wins", text)
+        self.assertNotIn("Your previous prediction", text)
+        self.assertIn("1. (SEA) 14–3", text)
+        self.assertIn("2. LAR 12–5", text)
+        self.assertIn("SF finished 1st", text)
+        self.assertIn("Their 2024 record: 6–11.", text)
+        self.assertIn("Average 2024 wins: 11.71", text)
+        self.assertIn("(15, 15, 13, 12, 10, 10, 7)", text)
+        self.assertIn("LAR finished 1st", text)
+        self.assertIn("Their 2025 record: 12–5.", text)
+        self.assertIn("Average 2025 wins: 9.43", text)
+        self.assertIn("(12, 12, 11, 9, 8, 8, 6)", text)
+        win_buttons = [
+            int(button.text)
+            for row in buttons[:-1]
+            for button in row
+        ]
+        self.assertEqual(win_buttons, list(range(18)))
+
+    def test_previous_prediction_is_only_shown_when_present(self):
+        text, _ = win_prediction_team_detail(
+            _win_totals(),
+            _history(),
+            [
+                {
+                    "revision_id": "revision-1",
+                    "submitted_at_utc": NOW.isoformat(),
+                    "telegram_user_id": 123,
+                    "team": "Seattle Seahawks",
+                    "predicted_wins": 11,
+                }
+            ],
+            user_id=123,
+            abbreviation="SEA",
+        )
+
+        self.assertIn("Your previous prediction: 11 wins", text)
+
+    def test_win_confirmation_and_row_capture_market_context(self):
+        text, buttons = win_prediction_confirmation(
+            _win_totals(),
+            abbreviation="SEA",
+            predicted_wins=11,
+        )
+        market = next(
+            row for row in _win_totals() if row["team_abbreviation"] == "SEA"
+        )
+        prior = next(
+            row
+            for row in _history()
+            if row["season"] == 2025 and row["team_abbreviation"] == "SEA"
+        )
+        row = build_win_prediction_row(
+            submitted_at=NOW,
+            user_id=123,
+            username="guesser",
+            first_name="NFL",
+            last_name="Fan",
+            team="Seattle Seahawks",
+            predicted_wins=11,
+            market=market,
+            prior=prior,
+        )
+
+        self.assertIn("Difference: +0.5 wins", text)
+        self.assertEqual(buttons[0][0].data, b"winsave:SEA:11")
+        self.assertEqual(row["telegram_display_name"], "NFL Fan")
+        self.assertEqual(row["market_win_total"], 10.5)
+        self.assertEqual(row["prior_division_rank"], 1)
 
 
 class CallbackEditTest(unittest.IsolatedAsyncioTestCase):
