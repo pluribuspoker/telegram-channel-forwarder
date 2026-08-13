@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import html
+import logging
 import os
+import re
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -13,6 +15,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
+from gspread.exceptions import WorksheetNotFound
 from telethon import Button, TelegramClient, events
 from telethon.errors import MessageNotModifiedError
 from telethon.sessions import StringSession
@@ -47,6 +50,8 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 load_dotenv(ROOT / ".env.local", override=True)
 
+log = logging.getLogger(__name__)
+
 ET = ZoneInfo("America/New_York")
 PAGE_SIZE = 6
 WINDOWS = (10, 30, 365)
@@ -73,6 +78,32 @@ TEAM_HISTORY_TAB = "nfl_team_history"
 WIN_PREDICTIONS_TAB = "nfl_win_predictions"
 WIN_PREDICTIONS_LATEST_TAB = "nfl_win_predictions_latest"
 _WIN_PREDICTION_WRITE_LOCK = threading.Lock()
+CELEBRITY_TAB = "celebrity_picks"
+# One row per (submission, celebrity name). Game context is denormalized onto
+# each row so season-long "who thinks alike on which game types" analysis pivots
+# without joining back to nfl_leans.
+CELEBRITY_HEADERS = [
+    "submission_id",
+    "submitted_at_utc",
+    "submitted_at_et",
+    "telegram_user_id",
+    "telegram_username",
+    "event_id",
+    "season",
+    "week",
+    "commence_time_et",
+    "away_team",
+    "home_team",
+    "period",
+    "market",
+    "side",
+    "celebrity_name",
+]
+# Toggle keyboards get unwieldy past a couple dozen buttons; ➕ New name always
+# stays reachable, so this only caps the prefilled roster shown at once.
+MAX_CELEBRITY_BUTTONS = 30
+MAX_CELEBRITY_NAME_LEN = 60
+MAX_CELEBRITY_NAMES = 10
 DEFAULT_NFL_TEAM_EMOJIS = {
     "Arizona Cardinals": "🐦",
     "Atlanta Falcons": "🦅",
@@ -1152,6 +1183,153 @@ def append_lean(row: dict[str, Any]) -> bool:
     return True
 
 
+def normalize_celebrity_name(raw: str) -> str:
+    """Collapse whitespace and cap length so the same person is stored one way."""
+    return " ".join(str(raw).split())[:MAX_CELEBRITY_NAME_LEN].strip()
+
+
+def parse_celebrity_names(raw: str) -> list[str]:
+    """Split a free-text reply on commas/newlines into clean, de-duplicated
+    display names (case-insensitive dedupe, order preserved, capped)."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for part in re.split(r"[,\n]", str(raw)):
+        name = normalize_celebrity_name(part)
+        if not name:
+            continue
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+        if len(names) >= MAX_CELEBRITY_NAMES:
+            break
+    return names
+
+
+def build_celebrity_rows(
+    *, submission: dict[str, Any], names: list[str]
+) -> list[dict[str, Any]]:
+    """One denormalized row per selected celebrity, sharing the lean's
+    submission context."""
+    return [{**submission, "celebrity_name": name} for name in names]
+
+
+def celebrity_screen(
+    *, saved_summary: str, roster: list[str], selected: list[str]
+) -> tuple[str, list[list[Button]]]:
+    """Render the toggle-and-confirm celebrity picker. Existing names are
+    tappable buttons (✅ when selected); ➕ New name adds one; Save finalizes
+    with whatever is selected (zero = no celebrity info)."""
+    text = (
+        f"{saved_summary}\n\n"
+        "🎤 <b>Whose read does this reflect?</b>\n"
+        "Tap anyone below, ➕ add new names, then Save — or Save with none."
+    )
+    rows: list[list[Button]] = []
+    pair: list[Button] = []
+    for index, name in enumerate(roster):
+        label = ("✅ " if name in selected else "") + name
+        pair.append(Button.inline(label, f"celeb:tog:{index}".encode()))
+        if len(pair) == 2:
+            rows.append(pair)
+            pair = []
+    if pair:
+        rows.append(pair)
+    rows.append([Button.inline("➕ New name", b"celeb:new")])
+    count = len(selected)
+    save_label = (
+        f"✅ Save ({count} selected)" if count else "Save — no celebrity info"
+    )
+    rows.append([Button.inline(save_label, b"celeb:save")])
+    return text, rows
+
+
+def _celebrity_worksheet(spreadsheet: Any) -> Any:
+    """Return the celebrity_picks worksheet, creating it with headers the first
+    time. Refuses to touch a tab whose existing header row disagrees."""
+    try:
+        worksheet = spreadsheet.worksheet(CELEBRITY_TAB)
+    except WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(
+            title=CELEBRITY_TAB, rows=1000, cols=len(CELEBRITY_HEADERS)
+        )
+        worksheet.update([CELEBRITY_HEADERS])
+        return worksheet
+    header = worksheet.row_values(1)
+    if not header:
+        worksheet.update([CELEBRITY_HEADERS])
+    elif header != CELEBRITY_HEADERS:
+        raise RuntimeError(
+            "celebrity_picks headers do not match the finalized schema"
+        )
+    return worksheet
+
+
+def load_celebrity_roster(limit: int = MAX_CELEBRITY_BUTTONS) -> list[str]:
+    """Distinct celebrity names seen so far, most-frequent first (recency breaks
+    ties), for prefilling the picker. Empty until someone is entered."""
+    credentials = os.environ["GOOGLE_CREDENTIALS"]
+    sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
+    spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
+    try:
+        worksheet = spreadsheet.worksheet(CELEBRITY_TAB)
+    except WorksheetNotFound:
+        return []
+    values = worksheet.get_all_values()
+    if len(values) < 2:
+        return []
+    try:
+        name_index = values[0].index("celebrity_name")
+    except ValueError:
+        return []
+    freq: dict[str, int] = {}
+    last_seen: dict[str, int] = {}
+    display: dict[str, str] = {}
+    for order, row in enumerate(values[1:]):
+        if len(row) <= name_index:
+            continue
+        name = str(row[name_index]).strip()
+        if not name:
+            continue
+        key = name.casefold()
+        freq[key] = freq.get(key, 0) + 1
+        last_seen[key] = order
+        display.setdefault(key, name)
+    ranked = sorted(freq, key=lambda key: (-freq[key], -last_seen[key]))
+    return [display[key] for key in ranked[:limit]]
+
+
+def append_celebrity_picks(rows: list[dict[str, Any]]) -> int:
+    """Append celebrity rows, skipping any (submission_id, celebrity_name) pair
+    that already exists so a double-tap can't duplicate. Returns rows written."""
+    if not rows:
+        return 0
+    credentials = os.environ["GOOGLE_CREDENTIALS"]
+    sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
+    spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
+    worksheet = _celebrity_worksheet(spreadsheet)
+    existing: set[tuple[str, str]] = set()
+    values = worksheet.get_all_values()
+    if len(values) > 1:
+        header_row = values[0]
+        sub_index = header_row.index("submission_id")
+        name_index = header_row.index("celebrity_name")
+        for row in values[1:]:
+            if len(row) > max(sub_index, name_index):
+                existing.add((row[sub_index], row[name_index]))
+    to_append: list[list[Any]] = []
+    for row in rows:
+        key = (str(row["submission_id"]), str(row["celebrity_name"]))
+        if key in existing:
+            continue
+        existing.add(key)
+        to_append.append([row.get(header, "") for header in CELEBRITY_HEADERS])
+    if to_append:
+        worksheet.append_rows(to_append, value_input_option="RAW")
+    return len(to_append)
+
+
 async def _intake_data() -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
     return await asyncio.to_thread(load_intake_data)
 
@@ -1279,6 +1457,49 @@ async def main() -> None:
             return
 
         state = guess_states.get(event.sender_id)
+        # Reply with celebrity name(s) after tapping ➕ New name.
+        if (
+            state is not None
+            and state.get("celeb_prompt_msg_id") is not None
+            and state.get("celeb_prompt_msg_id") == event.reply_to_msg_id
+        ):
+            additions = parse_celebrity_names(event.raw_text)
+            if not additions:
+                await event.respond(
+                    "No valid names found. Reply with one or more names "
+                    "separated by commas."
+                )
+                return
+            roster = state["celeb_roster"]
+            selected = state["celeb_selected"]
+            by_key = {name.casefold(): name for name in roster}
+            for name in additions:
+                canonical = by_key.get(name.casefold())
+                if canonical is None:
+                    roster.append(name)
+                    by_key[name.casefold()] = name
+                    canonical = name
+                if canonical not in selected:
+                    selected.append(canonical)
+            state["celeb_prompt_msg_id"] = None
+            text, buttons = celebrity_screen(
+                saved_summary=state["celeb_summary"],
+                roster=roster,
+                selected=selected,
+            )
+            try:
+                await client.edit_message(
+                    event.chat_id,
+                    state["celeb_msg_id"],
+                    text,
+                    buttons=buttons,
+                    parse_mode="html",
+                )
+            except MessageNotModifiedError:
+                pass
+            return
+
+        # Reply with the free-text lean itself (guarded against stale state).
         submission_status, submission = snapshot_lean_submission(
             state,
             reply_to_msg_id=event.reply_to_msg_id,
@@ -1321,24 +1542,55 @@ async def main() -> None:
             lean_text=lean_text,
         )
         appended = await asyncio.to_thread(append_lean, row)
-        game = submission["game"]
         summary = (
             f"{PERIOD_LABELS[submission['period']]} · "
             f"{submission['market'].title()} · "
-            f"{selection_side_label(game, submission['market'], submission['side'])}"
+            f"{html.escape(str(row['side']))}"
         )
-        current_state = guess_states.get(event.sender_id)
-        if (
-            current_state is state
-            and current_state.get("prompt_msg_id")
-            == submission["prompt_msg_id"]
-        ):
-            guess_states.pop(event.sender_id, None)
         status = "✅ Guess saved." if appended else "✅ Guess was already saved."
-        await event.respond(
-            f"{status}\n{summary}",
-            buttons=command_keyboard(),
+        saved_summary = f"{status}\n{summary}"
+
+        # If the user moved on while the lean was being saved, don't overwrite
+        # their new selection state with the celebrity step -- just confirm.
+        current_state = guess_states.get(event.sender_id)
+        if not (
+            current_state is state
+            and current_state.get("prompt_msg_id") == submission["prompt_msg_id"]
+        ):
+            await event.respond(
+                saved_summary, buttons=command_keyboard(), parse_mode="html"
+            )
+            return
+
+        # The lean is now persisted; the celebrity step is a purely additive
+        # follow-on keyed by the same submission_id, so abandoning it just
+        # leaves a lean with no celebrity rows.
+        roster = await asyncio.to_thread(load_celebrity_roster)
+        state.pop("prompt_msg_id", None)
+        state["celeb_roster"] = roster
+        state["celeb_selected"] = []
+        state["celeb_summary"] = saved_summary
+        state["celeb_submission"] = {
+            "submission_id": row["submission_id"],
+            "submitted_at_utc": row["submitted_at_utc"],
+            "submitted_at_et": row["submitted_at_et"],
+            "telegram_user_id": event.sender_id,
+            "telegram_username": getattr(sender, "username", None) or "",
+            "event_id": row["event_id"],
+            "season": row["season"],
+            "week": row["week"],
+            "commence_time_et": row["commence_time_et"],
+            "away_team": row["away_team"],
+            "home_team": row["home_team"],
+            "period": row["period"],
+            "market": row["market"],
+            "side": row["side"],
+        }
+        text, buttons = celebrity_screen(
+            saved_summary=saved_summary, roster=roster, selected=[]
         )
+        screen = await event.respond(text, buttons=buttons, parse_mode="html")
+        state["celeb_msg_id"] = screen.id
 
     @client.on(events.CallbackQuery)
     async def handle_callback(event):
@@ -1582,6 +1834,79 @@ async def main() -> None:
                     str(game["away_team"]),
                     str(game["home_team"]),
                 ),
+            )
+            return
+        if data.startswith("celeb:tog:"):
+            state = guess_states.get(event.sender_id)
+            if state is None or "celeb_roster" not in state:
+                await event.answer(
+                    "This guess expired. Choose the game again.", alert=True
+                )
+                return
+            try:
+                index = int(data.split(":", 2)[2])
+            except ValueError:
+                await event.answer("Invalid selection.", alert=True)
+                return
+            roster = state["celeb_roster"]
+            selected = state["celeb_selected"]
+            if 0 <= index < len(roster):
+                name = roster[index]
+                if name in selected:
+                    selected.remove(name)
+                else:
+                    selected.append(name)
+            text, buttons = celebrity_screen(
+                saved_summary=state["celeb_summary"],
+                roster=roster,
+                selected=selected,
+            )
+            await edit_callback(event, text, buttons)
+            return
+        if data == "celeb:new":
+            state = guess_states.get(event.sender_id)
+            if state is None or "celeb_roster" not in state:
+                await event.answer(
+                    "This guess expired. Choose the game again.", alert=True
+                )
+                return
+            prompt = await event.respond(
+                "Type the celebrity name(s), separated by commas:",
+                buttons=Button.force_reply(
+                    single_use=True,
+                    placeholder="e.g. LeBron, Drake",
+                ),
+            )
+            state["celeb_prompt_msg_id"] = prompt.id
+            await event.answer()
+            return
+        if data == "celeb:save":
+            state = guess_states.get(event.sender_id)
+            if state is None or "celeb_roster" not in state:
+                await event.answer(
+                    "This guess expired. Choose the game again.", alert=True
+                )
+                return
+            names = list(state.get("celeb_selected", []))
+            if names:
+                rows = build_celebrity_rows(
+                    submission=state["celeb_submission"], names=names
+                )
+                await asyncio.to_thread(append_celebrity_picks, rows)
+            guess_states.pop(event.sender_id, None)
+            if names:
+                receipt = (
+                    f"{state['celeb_summary']}\n\n"
+                    f"🎤 Celebrity reads: {html.escape(', '.join(names))}"
+                )
+            else:
+                receipt = (
+                    f"{state['celeb_summary']}\n\n🎤 No celebrity info added."
+                )
+            await edit_callback(event, receipt, None)
+            await event.respond(
+                "Tap /guess_nfl_game for another.",
+                buttons=command_keyboard(),
             )
             return
         if data.startswith("period:"):

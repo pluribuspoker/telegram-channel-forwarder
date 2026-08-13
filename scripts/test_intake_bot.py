@@ -4,26 +4,34 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from datetime import datetime, timedelta, timezone
 
+from gspread.exceptions import WorksheetNotFound
 from telethon.errors import MessageNotModifiedError
 
+import intake_bot
 from intake_bot import (
+    CELEBRITY_HEADERS,
     TEAM_ABBREVIATIONS as DEFAULT_WIN_TEAMS,
     SUGGESTION_HEADERS,
+    append_celebrity_picks,
+    build_celebrity_rows,
     build_lean_row,
     build_suggestion_row,
     build_win_prediction_row,
+    celebrity_screen,
     command_keyboard,
     edit_callback,
     game_browser,
     game_detail,
     implied_score,
     implied_score_tldr,
+    load_celebrity_roster,
     market_buttons,
     market_side_summary,
     page_games,
+    parse_celebrity_names,
     period_market_summary,
     select_games,
     selected_market_context,
@@ -559,6 +567,146 @@ class GameSelectionTest(unittest.TestCase):
         self.assertEqual(row["telegram_display_name"], "NFL Fan")
         self.assertEqual(row["market_win_total"], 10.5)
         self.assertEqual(row["prior_division_rank"], 1)
+
+
+class _FakeWorksheet:
+    def __init__(self, values):
+        self._values = [list(row) for row in values]
+        self.appended: list[list] = []
+
+    def row_values(self, index):
+        return list(self._values[index - 1]) if len(self._values) >= index else []
+
+    def get_all_values(self):
+        return [list(row) for row in self._values]
+
+    def update(self, data):
+        self._values = [list(row) for row in data] + self._values[1:]
+
+    def append_rows(self, rows, value_input_option="RAW"):
+        for row in rows:
+            self.appended.append(list(row))
+            self._values.append(list(row))
+
+
+class _FakeSpreadsheet:
+    def __init__(self, worksheet):
+        self._worksheet = worksheet
+
+    def worksheet(self, title):
+        if self._worksheet is None:
+            raise WorksheetNotFound("missing")
+        return self._worksheet
+
+    def add_worksheet(self, title, rows, cols):
+        self._worksheet = _FakeWorksheet([[""] * cols])
+        return self._worksheet
+
+
+class _FakeClient:
+    def __init__(self, spreadsheet):
+        self._spreadsheet = spreadsheet
+
+    def open_by_key(self, key):
+        return self._spreadsheet
+
+
+def _patch_gspread(worksheet):
+    return (
+        patch.dict(
+            intake_bot.os.environ,
+            {"GOOGLE_CREDENTIALS": "creds", "NFL_INTAKE_SHEET_ID": "sheet"},
+        ),
+        patch.object(
+            intake_bot,
+            "get_gspread_client",
+            return_value=_FakeClient(_FakeSpreadsheet(worksheet)),
+        ),
+    )
+
+
+class CelebrityPickTest(unittest.TestCase):
+    def test_parse_names_dedupes_case_insensitively_and_keeps_first_form(self):
+        names = parse_celebrity_names("LeBron, Drake\n lebron ,  ")
+
+        self.assertEqual(names, ["LeBron", "Drake"])
+
+    def test_parse_names_caps_count_and_length(self):
+        names = parse_celebrity_names(", ".join(f"Person{i}" for i in range(20)))
+        self.assertEqual(len(names), intake_bot.MAX_CELEBRITY_NAMES)
+
+        long = parse_celebrity_names("x" * 200)[0]
+        self.assertEqual(len(long), intake_bot.MAX_CELEBRITY_NAME_LEN)
+
+    def test_build_rows_one_per_name_carrying_submission_context(self):
+        submission = {header: "" for header in CELEBRITY_HEADERS[:-1]}
+        submission["submission_id"] = "telegram:1:2"
+        submission["away_team"] = "Miami Dolphins"
+
+        rows = build_celebrity_rows(submission=submission, names=["LeBron", "Drake"])
+
+        self.assertEqual([r["celebrity_name"] for r in rows], ["LeBron", "Drake"])
+        self.assertTrue(all(list(r) == CELEBRITY_HEADERS for r in rows))
+        self.assertTrue(all(r["away_team"] == "Miami Dolphins" for r in rows))
+
+    def test_screen_save_label_and_selected_marks(self):
+        text, buttons = celebrity_screen(
+            saved_summary="✅ Guess saved.",
+            roster=["LeBron", "Drake"],
+            selected=["Drake"],
+        )
+
+        self.assertIn("Whose read does this reflect?", text)
+        toggles = [b for row in buttons for b in row if b.data.startswith(b"celeb:tog")]
+        self.assertEqual(toggles[0].text, "LeBron")
+        self.assertEqual(toggles[1].text, "✅ Drake")
+        self.assertEqual(buttons[-1][0].text, "✅ Save (1 selected)")
+        self.assertEqual(buttons[-1][0].data, b"celeb:save")
+
+    def test_screen_save_label_when_none_selected(self):
+        _, buttons = celebrity_screen(
+            saved_summary="ok", roster=["LeBron"], selected=[]
+        )
+
+        self.assertEqual(buttons[-1][0].text, "Save — no celebrity info")
+
+    def test_roster_orders_by_frequency_then_recency(self):
+        worksheet = _FakeWorksheet(
+            [
+                CELEBRITY_HEADERS,
+                *[["telegram:1:1"] + [""] * 13 + ["Drake"] for _ in range(1)],
+                *[["telegram:1:2"] + [""] * 13 + ["LeBron"] for _ in range(3)],
+                ["telegram:1:3"] + [""] * 13 + ["Adele"],
+            ]
+        )
+        env_patch, client_patch = _patch_gspread(worksheet)
+        with env_patch, client_patch:
+            roster = load_celebrity_roster()
+
+        # LeBron (3) first; Drake and Adele each once, Adele more recent.
+        self.assertEqual(roster, ["LeBron", "Adele", "Drake"])
+
+    def test_roster_empty_when_tab_missing(self):
+        env_patch, client_patch = _patch_gspread(None)
+        with env_patch, client_patch:
+            self.assertEqual(load_celebrity_roster(), [])
+
+    def test_append_skips_existing_submission_name_pairs(self):
+        worksheet = _FakeWorksheet(
+            [CELEBRITY_HEADERS, ["telegram:1:2"] + [""] * 13 + ["LeBron"]]
+        )
+        rows = build_celebrity_rows(
+            submission={h: "" for h in CELEBRITY_HEADERS[:-1]}
+            | {"submission_id": "telegram:1:2"},
+            names=["LeBron", "Drake"],
+        )
+        env_patch, client_patch = _patch_gspread(worksheet)
+        with env_patch, client_patch:
+            written = append_celebrity_picks(rows)
+
+        self.assertEqual(written, 1)
+        self.assertEqual(len(worksheet.appended), 1)
+        self.assertEqual(worksheet.appended[0][-1], "Drake")
 
 
 class CallbackEditTest(unittest.IsolatedAsyncioTestCase):
