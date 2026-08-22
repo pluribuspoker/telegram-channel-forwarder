@@ -30,6 +30,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -1445,6 +1446,11 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
             if _event_already_started(event_list, event_id):
                 live_bk = await _fetch_current_bookmakers(ev_key, event_id, _markets_for_pick(pick, sport), conn, live=True)
                 pregame = await _try_pregame(sport, ev_key, event_list, event_id, pick, db_path)
+                if not live_bk and sport in _BOVADA_PATHS:
+                    # Bovada live fallback: a live_ price beats none, but the
+                    # closing line stays unknown (pregame_* stay None) — Bovada
+                    # has no history to ask.
+                    live_bk, _ = await _fetch_bovada_bookmakers(sport, teams, allow_started=True)
                 if live_bk:
                     r = lookup_pick_odds(sport, pick, live_bk)
                     if r.get("adjusted_odds") is not None:
@@ -1483,6 +1489,23 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
                 espn_bk = espn_bookmakers_for_teams(espn_data, teams)
                 if espn_bk:
                     r = lookup_pick_odds(sport, pick, espn_bk)
+
+        # Bovada fallback (pre-game only — _bovada_pick_event refuses a started
+        # game here, so a live price can't be recorded as a closing one). CFL
+        # has no ESPN odds, so during an Odds API outage this is the only
+        # source; it also covers a market the API's books simply don't carry.
+        if r.get("adjusted_odds") is None and sport in _BOVADA_PATHS:
+            bov_bk, bov_gd = await _fetch_bovada_bookmakers(sport, teams)
+            if bov_bk:
+                r2 = lookup_pick_odds(sport, pick, bov_bk)
+                # A Bovada miss verdict is adopted too when the API had nothing
+                # at all: "alt_line_gap_6.0pts" from a market Bovada actually
+                # served beats a blanket no_game.
+                if r2.get("adjusted_odds") is not None or r.get("match_type") == "no_game":
+                    r = r2
+                    bookmakers = bov_bk  # feeds the both-sides extraction below
+                    if gd is None:
+                        gd = bov_gd
 
         # Extract BetOnline odds for both sides (for dashboard liability card)
         bol = None
@@ -1557,6 +1580,196 @@ async def _fetch_current_bookmakers(
     bookmakers: list[dict] = data.get("bookmakers", []) if isinstance(data, dict) else []
     _save_bookmakers(conn, sport_key, event_id, cache_key, _cache_markets(markets), bookmakers)
     return bookmakers
+
+
+# ── Bovada free fallback ──────────────────────────────────────────────────────
+# ESPN is the free fallback for its leagues, but its CFL scoreboard is
+# deliberately empty (validate_sport keys off that), so a CFL pick has no
+# second source: when the Odds API quota ran out on 2026-08-08 every CFL pick
+# recorded no_game — the market call 401s while the free /events still matches
+# the game. Bovada's public coupon JSON (no auth, no quota) carries CFL
+# game/1H/1Q spreads, totals and moneylines including alternate lines; shaped
+# like an Odds API bookmakers list, the existing lookups read it unchanged.
+# Fallback only — it runs when the Odds API produced no usable price.
+
+_BOVADA_PATHS: dict[str, str] = {"CFL": "football/cfl"}
+_BOVADA_BASE = "https://www.bovada.lv/services/sports/event/v2/events/A/description"
+_BOVADA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+_BOVADA_TTL, _BOVADA_FAIL_TTL = 60.0, 15.0
+_bovada_cache: dict[str, tuple[float, list[dict]]] = {}
+
+# Bovada name → the canonical name the parse and the Odds API use. Only pairs
+# _team_matches cannot bridge belong here.
+_BOVADA_TEAM_ALIASES = {"British Columbia Lions": "BC Lions"}
+
+# Bovada period abbreviation → Odds API market suffix. Unmapped periods (RT =
+# regulation time, a 3-way market the scoreline rules refuse anyway) are
+# skipped entirely rather than mislabeled.
+_BOVADA_PERIOD_TO_SUFFIX = {"G": "", "1H": "_h1", "2H": "_h2",
+                            "Q1": "_q1", "Q2": "_q2", "Q3": "_q3", "Q4": "_q4"}
+
+_BOVADA_PERIOD_TAG_RE = re.compile(r"\s*-\s*(?:1H|2H|Q?[1-4]Q?|RT)$")
+
+
+def _bovada_team(name: str) -> str:
+    """Strip Bovada's ' - 1H' style outcome suffix and canonicalize the name."""
+    name = _BOVADA_PERIOD_TAG_RE.sub("", name or "").strip()
+    return _BOVADA_TEAM_ALIASES.get(name, name)
+
+
+def _bovada_american(a) -> int | None:
+    if a is None:
+        return None
+    s = str(a).strip().upper()
+    if s == "EVEN":
+        return 100
+    try:
+        return int(s.lstrip("+"))
+    except ValueError:
+        return None
+
+
+def _bovada_minimal_event(ev: dict) -> dict | None:
+    """One Bovada event → the minimal Odds-API event shape _find_event_id reads."""
+    comps = ev.get("competitors") or []
+    home = next((c.get("name") for c in comps if c.get("home")), None)
+    away = next((c.get("name") for c in comps if not c.get("home")), None)
+    if not (home and away):
+        return None
+    try:
+        commence = datetime.fromtimestamp(int(ev["startTime"]) / 1000, tz=timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return {"id": str(ev.get("id")),
+            "home_team": _bovada_team(home), "away_team": _bovada_team(away),
+            "commence_time": commence.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+def _bovada_bookmakers(ev: dict) -> list[dict]:
+    """One Bovada event → an Odds-API-shaped bookmakers list.
+
+    Game Lines / Alternate Lines groups at G/1H/Qn periods map onto the market
+    keys the _lookup_* functions read (spreads_h1, totals_q1, h2h,
+    team_totals, …). Alternate lines fold into the SAME key as the main
+    market rather than an API-style alternate_* sibling: the lookups only
+    read alternate_* where the Odds API sells it (alternate_spreads_h1 is
+    not a thing there), so a 1H alt line shaped under alternate_spreads_h1
+    would be invisible — and for a single-book scrape "main vs alternate"
+    is a request artifact, not a fact about the price. Player props
+    ("Total Passing Yards - X") must NOT leak into totals, so the totals
+    branch matches the bare titles only. Suspended markets/outcomes
+    (status != "O") are dropped — a frozen live price is worse than none.
+    """
+    markets: dict[str, list[dict]] = {}
+    for grp in ev.get("displayGroups") or []:
+        for mkt in grp.get("markets") or []:
+            if mkt.get("status") not in (None, "O"):
+                continue
+            sfx = _BOVADA_PERIOD_TO_SUFFIX.get((mkt.get("period") or {}).get("abbreviation"))
+            if sfx is None:
+                continue
+            desc = mkt.get("description") or ""
+            dlow = desc.lower()
+            team_total_team = None
+            if dlow.startswith("moneyline"):
+                key = "h2h" + sfx
+            elif "spread" in dlow:
+                key = "spreads" + sfx
+            elif dlow.startswith("total points - "):
+                team_total_team = _bovada_team(desc.split(" - ", 1)[1])
+                key = "team_totals" + sfx
+            elif dlow in ("total", "total points"):
+                key = "totals" + sfx
+            else:
+                continue
+            outs = []
+            for o in mkt.get("outcomes") or []:
+                if o.get("status") not in (None, "O"):
+                    continue
+                price = (o.get("price") or {})
+                american = _bovada_american(price.get("american"))
+                if american is None:
+                    continue
+                out = {"name": _bovada_team(o.get("description") or ""), "price": american}
+                if price.get("handicap") is not None:
+                    try:
+                        out["point"] = float(price["handicap"])
+                    except (TypeError, ValueError):
+                        pass
+                if team_total_team:
+                    out["description"] = team_total_team
+                outs.append(out)
+            if outs:
+                markets.setdefault(key, []).extend(outs)
+    if not markets:
+        return []
+    return [{"key": "bovada", "title": "Bovada",
+             "markets": [{"key": k, "outcomes": v} for k, v in markets.items()]}]
+
+
+def _bovada_pick_event(
+    events: list[dict], teams: list[str], *, allow_started: bool,
+    now: datetime | None = None,
+) -> tuple[dict | None, str | None]:
+    """Match the pick's teams against Bovada's coupon; (event, eastern date).
+
+    allow_started=False refuses an event past its start time: post-kickoff
+    Bovada serves live prices, and the pregame caller would record one under a
+    pregame-looking match_type — a mislabel nothing downstream could detect.
+    The started/live caller passes True.
+    """
+    pairs = [(m, e) for e in events if (m := _bovada_minimal_event(e))]
+    minimal = [m for m, _ in pairs]
+    eid = _find_event_id(minimal, teams)
+    if not eid:
+        return None, None
+    gd = _get_event_date(minimal, eid)
+    match = next((m, e) for m, e in pairs if m["id"] == eid)
+    if not allow_started:
+        commence = datetime.fromisoformat(match[0]["commence_time"].replace("Z", "+00:00"))
+        if commence <= (now or datetime.now(timezone.utc)):
+            return None, gd
+    return match[1], gd
+
+
+async def _fetch_bovada_events(sport: str) -> list[dict]:
+    """Bovada coupon events for a league, cached briefly. [] on any failure.
+
+    Full period markets are only present pregame — near kickoff Bovada trims
+    the coupon to game lines, and after it the prices are live.
+    """
+    path = _BOVADA_PATHS.get(sport)
+    if not path:
+        return []
+    now = time.time()
+    cached = _bovada_cache.get(sport)
+    if cached is not None:
+        ttl = _BOVADA_TTL if cached[1] else _BOVADA_FAIL_TTL
+        if now - cached[0] < ttl:
+            return cached[1]
+    events: list[dict] = []
+    try:
+        async with httpx.AsyncClient(
+            timeout=15, headers={"User-Agent": _BOVADA_UA, "Accept": "application/json"},
+        ) as http:
+            r = await http.get(f"{_BOVADA_BASE}/{path}", params={"lang": "en"})
+            r.raise_for_status()
+            for blk in r.json():
+                events.extend(blk.get("events") or [])
+    except Exception as exc:
+        print(f"[odds] bovada fetch failed ({sport}): {exc}")
+        events = []
+    _bovada_cache[sport] = (now, events)
+    return events
+
+
+async def _fetch_bovada_bookmakers(
+    sport: str, teams: list[str], *, allow_started: bool = False,
+) -> tuple[list[dict], str | None]:
+    """Shaped Bovada bookmakers for the pick's game, plus its eastern date."""
+    events = await _fetch_bovada_events(sport)
+    ev, gd = _bovada_pick_event(events, teams, allow_started=allow_started)
+    return (_bovada_bookmakers(ev) if ev else []), gd
 
 
 def quota_used() -> int:
