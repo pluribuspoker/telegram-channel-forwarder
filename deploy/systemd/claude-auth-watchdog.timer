@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the Claude auth watchdog every 6 hours
+
+[Timer]
+# :23 past, off every other watchdog's cadence. Six-hourly is deliberate: the
+# failure this catches is a once-a-year token expiry, so detection latency of a
+# few hours is irrelevant next to the ten days it took to notice last time.
+OnCalendar=0/6:23
+Persistent=true
+
+[Install]
+WantedBy=timers.target

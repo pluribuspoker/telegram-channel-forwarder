@@ -7,6 +7,13 @@ Type=simple
 User=forwarder
 Environment=HOME=/home/forwarder
 Environment=PATH=/home/forwarder/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:/home/forwarder/.bun/bin
+# CLAUDE_CODE_OAUTH_TOKEN — a 1-year token from `claude setup-token`, minted via
+# the watchdog bot's /reauth. Not in git: the file is 0600 in forwarder's home.
+# This replaces ~/.claude/.credentials.json, whose refresh token has a hard
+# expiry; when it lapsed on 2026-08-11 the CLI blanked the blob and the Telegram
+# session answered "Login expired" for ten days. `-` so a missing file doesn't
+# block startup — the CLI then falls back to .credentials.json as before.
+EnvironmentFile=-/home/forwarder/.claude/auth.env
 ExecStartPre=-/usr/bin/tmux kill-session -t claude
 ExecStart=/home/forwarder/app/deploy/run_claude_channels.sh
 ExecStop=/usr/bin/tmux kill-session -t claude

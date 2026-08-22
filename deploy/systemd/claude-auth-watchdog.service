@@ -1,0 +1,11 @@
+[Unit]
+Description=Claude auth watchdog (alerts operator via Telegram when VPS Claude credentials die)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/deploy/claude_auth_watchdog.py
