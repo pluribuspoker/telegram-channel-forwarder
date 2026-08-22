@@ -20,7 +20,7 @@ load_dotenv(".env.local", override=True)
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
-from tracker_format import _insert_emojis, _bot_edit_message, _user_edit_message
+from tracker_format import _insert_emojis, _bot_edit_message, _user_edit_message, to_bot_html
 
 CHANNEL = -1002486251914
 
@@ -30,12 +30,6 @@ MSG_IDS = [
     2955, 2954, 2953, 2952, 2951, 2946, 2945, 2944,
     2943, 2941, 2940, 2939,
 ]
-
-
-def _to_bot_html(text, entities):
-    from telethon.extensions import html as tl_html
-    ht = tl_html.unparse(text, entities or [])
-    return ht.replace("<spoiler>", "<tg-spoiler>").replace("</spoiler>", "</tg-spoiler>")
 
 
 async def main():
@@ -84,7 +78,7 @@ async def main():
                 print(f"  {mid}  SKIP (message not found)")
                 continue
 
-            html_text = _to_bot_html(msg.raw_text, msg.entities)
+            html_text = to_bot_html(msg.raw_text, msg.entities)
             new_text = _insert_emojis(html_text, verdicts)
 
             if new_text == html_text:

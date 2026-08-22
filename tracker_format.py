@@ -29,6 +29,51 @@ def _extract_source_odds(text: str) -> int | None:
     return int(m.group(0)) if m else None
 
 
+def patch_expandable_blockquotes() -> None:
+    """Teach Telethon's HTML codec the blockquote `collapsed` flag, both ways.
+
+    Stock Telethon renders every blockquote as a plain <blockquote> and parses
+    <blockquote expandable> without the flag, so any edit round-tripped
+    through it silently expands a collapsed quote — and the flag is
+    unrecoverable from the live message afterwards. Covers both edit paths:
+    unparse feeds Bot API edits (which need `<blockquote expandable>`), parse
+    feeds Telethon edits in send_as_user channels (parse_mode="html").
+
+    Telethon is imported lazily: grade_daemon imports this module and must
+    stay Telethon-free.
+    """
+    from telethon.extensions import html as tl_html
+    from telethon.tl.types import MessageEntityBlockquote
+
+    tl_html.ENTITY_TO_FORMATTER[MessageEntityBlockquote] = lambda e, _: (
+        "<blockquote expandable>" if getattr(e, "collapsed", False)
+        else "<blockquote>",
+        "</blockquote>",
+    )
+    parser_cls = tl_html.HTMLToTelegramParser
+    if not getattr(parser_cls, "_expandable_patched", False):
+        orig_starttag = parser_cls.handle_starttag
+
+        def handle_starttag(self, tag, attrs):
+            orig_starttag(self, tag, attrs)
+            if tag == "blockquote" and any(k == "expandable" for k, _ in attrs):
+                ent = self._building_entities.get("blockquote")
+                if ent is not None:
+                    ent.collapsed = True
+
+        parser_cls.handle_starttag = handle_starttag
+        parser_cls._expandable_patched = True
+
+
+def to_bot_html(text: str, entities) -> str:
+    """Convert Telethon message text+entities to Bot API-compatible HTML."""
+    from telethon.extensions import html as tl_html
+
+    patch_expandable_blockquotes()
+    ht = tl_html.unparse(text, entities or [])
+    return ht.replace("<spoiler>", "<tg-spoiler>").replace("</spoiler>", "</tg-spoiler>")
+
+
 # Lines that look like bet lines: contain odds, units, spread/total numbers, or bet-type keywords
 _OU_RE = re.compile(r'\b(over|under)(?:\s+|(?=\d))')
 _F5_RE = re.compile(r'\bfirst\s+5\s+innings\b')
@@ -803,6 +848,7 @@ async def _user_edit_message(
 ) -> bool:
     """Edit a message via user account (Telethon). For messages sent with send_as_user."""
     try:
+        patch_expandable_blockquotes()  # parse side: keep <blockquote expandable> collapsed
         await client.edit_message(channel_id, message_id, new_text, parse_mode="html")
         return True
     except Exception as exc:

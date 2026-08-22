@@ -56,6 +56,7 @@ from tracker_grading import _overall_verdict, grade_matches_label
 from tracker_format import (
     extract_label,
     strip_label,
+    to_bot_html,
     _insert_emojis,
     _insert_odds,
     _fmt_odds_audit,
@@ -135,11 +136,8 @@ def _annotate_blockquotes(text: str, entities) -> str:
     return "".join(parts)
 
 
-def _to_bot_html(text: str, entities) -> str:
-    """Convert Telethon message text+entities to Bot API-compatible HTML."""
-    from telethon.extensions import html as tl_html
-    ht = tl_html.unparse(text, entities or [])
-    return ht.replace("<spoiler>", "<tg-spoiler>").replace("</spoiler>", "</tg-spoiler>")
+# Kept as a module-level name: repair scripts import it from here.
+_to_bot_html = to_bot_html
 
 
 # Explicit betting signals. If the message text carries any of these, the pick
