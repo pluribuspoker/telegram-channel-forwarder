@@ -1,0 +1,77 @@
+{
+ "comment": "Byte-exact snapshot of -1001910823870:487735 (source, collapsed=True) and its forward -1002486251914:3651 after the odds edit expanded the quote (collapsed=False). Captured 2026-08-22.",
+ "source": {
+  "channel": -1001910823870,
+  "id": 487735,
+  "raw_text": "Andrew Cunningham\n\n• Ti-Cats 1H +3.5 (-115) / (4.6u) \n• Ti-Cats 1H ML (+140) / (1u) \n\nThis game is a classic CFL rivalry. Hamilton is 3-0 in their last 3 matchups when they play on the road against the Argos dating back to 2024. This Ti-Cats team was the biggest threat in the CFL until their starting QB Bo Levi Mitchell went down, it’s been a rough patch since then but it seems like they have now got back in a groove. Keep in mind, Tre Ford will get the start tonight against the Argos; this is the same guy that took down Toronto as a +4.5 / +5.5 point dog at home! Now the books are pricing Hamilton as a +4.5 dog, on the road, with the same QB starting that beat the Argos in week 7; the books are saying this is basically a PK but we are catching points. \n\nI think Hamilton can have a field day against this Argos defense.",
+  "entities": [
+   {
+    "type": "MessageEntityBlockquote",
+    "offset": 86,
+    "length": 744,
+    "collapsed": true,
+    "url": null,
+    "document_id": null
+   }
+  ],
+  "date": "2026-08-22 22:44:59+00:00",
+  "edit_date": "2026-08-22 22:45:12+00:00"
+ },
+ "dest": {
+  "channel": -1002486251914,
+  "id": 3651,
+  "raw_text": "Andrew Cunningham\n\n• Ti-Cats 1H +3.5 (-115) / (4.6u) \n• Ti-Cats 1H ML (+140) / (1u) [+160 now]\n\nThis game is a classic CFL rivalry. Hamilton is 3-0 in their last 3 matchups when they play on the road against the Argos dating back to 2024. This Ti-Cats team was the biggest threat in the CFL until their starting QB Bo Levi Mitchell went down, it’s been a rough patch since then but it seems like they have now got back in a groove. Keep in mind, Tre Ford will get the start tonight against the Argos; this is the same guy that took down Toronto as a +4.5 / +5.5 point dog at home! Now the books are pricing Hamilton as a +4.5 dog, on the road, with the same QB starting that beat the Argos in week 7; the books are saying this is basically a PK but we are catching points. \n\nI think Hamilton can have a field day against this Argos defense.",
+  "entities": [
+   {
+    "type": "MessageEntityBlockquote",
+    "offset": 96,
+    "length": 744,
+    "collapsed": false,
+    "url": null,
+    "document_id": null
+   }
+  ],
+  "date": "2026-08-22 22:45:00+00:00",
+  "edit_date": "2026-08-22 22:45:16+00:00"
+ },
+ "picks": [
+  {
+   "description": "Hamilton Tiger-Cats 1H spread +3.5 (-115)",
+   "sport": null,
+   "bet_type": "spread",
+   "is_parlay_leg": false,
+   "period": "1h",
+   "teams": [
+    "Hamilton Tiger-Cats"
+   ],
+   "player": null,
+   "prop_stat": null,
+   "line": 3.5,
+   "direction": null
+  },
+  {
+   "description": "Hamilton Tiger-Cats 1H moneyline (+140)",
+   "sport": null,
+   "bet_type": "moneyline",
+   "is_parlay_leg": false,
+   "period": "1h",
+   "teams": [
+    "Hamilton Tiger-Cats"
+   ],
+   "player": null,
+   "prop_stat": null,
+   "line": null,
+   "direction": null
+  }
+ ],
+ "odds_by_pick": {
+  "0": {
+   "odds": -125,
+   "match_type": "exact"
+  },
+  "1": {
+   "odds": 160,
+   "match_type": "exact"
+  }
+ }
+}
