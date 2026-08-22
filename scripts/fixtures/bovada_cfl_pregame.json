@@ -1,0 +1,1115 @@
+[
+ {
+  "path": [
+   {
+    "id": "27619",
+    "link": "/football/cfl",
+    "description": "CFL",
+    "type": "LEAGUE",
+    "sportCode": "FOOT",
+    "order": 4,
+    "leaf": true,
+    "current": true
+   },
+   {
+    "id": "1",
+    "link": "/football",
+    "description": "Football",
+    "type": "SPORT",
+    "sportCode": "FOOT",
+    "order": 6,
+    "leaf": false,
+    "current": false
+   }
+  ],
+  "events": [
+   {
+    "id": "28641603",
+    "description": "Winnipeg Blue Bombers @ Edmonton Elks",
+    "type": "GAMEEVENT",
+    "link": "/football/cfl/winnipeg-blue-bombers-edmonton-elks-202608212130",
+    "status": "U",
+    "sport": "FOOT",
+    "startTime": 1787362200000,
+    "live": false,
+    "awayTeamFirst": true,
+    "denySameGame": "NO",
+    "teaserAllowed": true,
+    "competitionId": "27619",
+    "notes": "",
+    "numMarkets": 46,
+    "lastModified": 1787360809908,
+    "competitors": [
+     {
+      "id": "28641603-17302",
+      "name": "Edmonton Elks",
+      "home": true,
+      "shortName": "Elks"
+     },
+     {
+      "id": "28641603-17306",
+      "name": "Winnipeg Blue Bombers",
+      "home": false,
+      "shortName": "Blue Bombers"
+     }
+    ],
+    "displayGroups": [
+     {
+      "id": "100-41",
+      "description": "Game Lines",
+      "defaultType": true,
+      "alternateType": false,
+      "markets": [
+       {
+        "id": "513441193",
+        "descriptionKey": "Head To Head",
+        "description": "Moneyline",
+        "key": "2W-12",
+        "marketTypeId": "11",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "119",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2357403369",
+          "description": "Winnipeg Blue Bombers",
+          "status": "O",
+          "type": "A",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37885214352",
+           "american": "+220",
+           "decimal": "3.200",
+           "fractional": "11/5"
+          }
+         },
+         {
+          "id": "2357403370",
+          "description": "Edmonton Elks",
+          "status": "O",
+          "type": "H",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37885214351",
+           "american": "-270",
+           "decimal": "1.370",
+           "fractional": "10/27"
+          }
+         }
+        ]
+       },
+       {
+        "id": "513441186",
+        "descriptionKey": "Main Dynamic Asian Handicap",
+        "description": "Point Spread",
+        "key": "2W-HCAP",
+        "marketTypeId": "120718",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "119",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2357403381",
+          "description": "Winnipeg Blue Bombers",
+          "status": "O",
+          "type": "A",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37885214360",
+           "handicap": "6.0",
+           "american": "-115",
+           "decimal": "1.870",
+           "fractional": "20/23"
+          }
+         },
+         {
+          "id": "2357403382",
+          "description": "Edmonton Elks",
+          "status": "O",
+          "type": "H",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37885214359",
+           "handicap": "-6.0",
+           "american": "-105",
+           "decimal": "1.952381",
+           "fractional": "20/21"
+          }
+         }
+        ]
+       },
+       {
+        "id": "513441190",
+        "descriptionKey": "Main Dynamic Over/Under",
+        "description": "Total",
+        "key": "2W-OU",
+        "marketTypeId": "120717",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "119",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2357403375",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37883597061",
+           "handicap": "58.5",
+           "american": "-105",
+           "decimal": "1.952381",
+           "fractional": "20/21"
+          }
+         },
+         {
+          "id": "2357403376",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37883597062",
+           "handicap": "58.5",
+           "american": "-115",
+           "decimal": "1.870",
+           "fractional": "20/23"
+          }
+         }
+        ]
+       },
+       {
+        "id": "513441189",
+        "descriptionKey": "Head To Head",
+        "description": "Moneyline",
+        "key": "2W-12",
+        "marketTypeId": "11",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "122",
+         "description": "First Half",
+         "abbreviation": "1H",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2357403371",
+          "description": "Winnipeg Blue Bombers - 1H",
+          "status": "O",
+          "type": "A",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37885223112",
+           "american": "+180",
+           "decimal": "2.800",
+           "fractional": "9/5"
+          }
+         },
+         {
+          "id": "2357403372",
+          "description": "Edmonton Elks - 1H",
+          "status": "O",
+          "type": "H",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37885223111",
+           "american": "-220",
+           "decimal": "1.454545",
+           "fractional": "5/11"
+          }
+         }
+        ]
+       },
+       {
+        "id": "513441191",
+        "descriptionKey": "Main Dynamic Asian Handicap",
+        "description": "Point Spread",
+        "key": "2W-HCAP",
+        "marketTypeId": "120718",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "122",
+         "description": "First Half",
+         "abbreviation": "1H",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2357403383",
+          "description": "Winnipeg Blue Bombers - 1H",
+          "status": "O",
+          "type": "A",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37885223115",
+           "handicap": "4.0",
+           "american": "-115",
+           "decimal": "1.870",
+           "fractional": "20/23"
+          }
+         },
+         {
+          "id": "2357403384",
+          "description": "Edmonton Elks - 1H",
+          "status": "O",
+          "type": "H",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37885223116",
+           "handicap": "-4.0",
+           "american": "-105",
+           "decimal": "1.952381",
+           "fractional": "20/21"
+          }
+         }
+        ]
+       },
+       {
+        "id": "513441192",
+        "descriptionKey": "Main Dynamic Over/Under",
+        "description": "Total",
+        "key": "2W-OU",
+        "marketTypeId": "120717",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "122",
+         "description": "First Half",
+         "abbreviation": "1H",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2357403377",
+          "description": "Over - 1H",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37882669107",
+           "handicap": "28.5",
+           "american": "-105",
+           "decimal": "1.952381",
+           "fractional": "20/21"
+          }
+         },
+         {
+          "id": "2357403378",
+          "description": "Under - 1H",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37882669108",
+           "handicap": "28.5",
+           "american": "-115",
+           "decimal": "1.870",
+           "fractional": "20/23"
+          }
+         }
+        ]
+       },
+       {
+        "id": "520011751",
+        "descriptionKey": "Head To Head",
+        "description": "Moneyline",
+        "key": "2W-12",
+        "marketTypeId": "11",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "124",
+         "description": "1st Quarter",
+         "abbreviation": "Q1",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2382671091",
+          "description": "Winnipeg Blue Bombers - 1Q",
+          "status": "O",
+          "type": "A",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37883506438",
+           "american": "+140",
+           "decimal": "2.400",
+           "fractional": "7/5"
+          }
+         },
+         {
+          "id": "2382671090",
+          "description": "Edmonton Elks - 1Q",
+          "status": "O",
+          "type": "H",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37883506439",
+           "american": "-180",
+           "decimal": "1.555556",
+           "fractional": "5/9"
+          }
+         }
+        ]
+       },
+       {
+        "id": "520011542",
+        "descriptionKey": "Main Dynamic Asian Handicap",
+        "description": "Point Spread",
+        "key": "2W-HCAP",
+        "marketTypeId": "120718",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "124",
+         "description": "1st Quarter",
+         "abbreviation": "Q1",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2382670466",
+          "description": "Winnipeg Blue Bombers - 1Q",
+          "status": "O",
+          "type": "A",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37885173050",
+           "handicap": "0.5",
+           "american": "-105",
+           "decimal": "1.952381",
+           "fractional": "20/21"
+          }
+         },
+         {
+          "id": "2382670467",
+          "description": "Edmonton Elks - 1Q",
+          "status": "O",
+          "type": "H",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37885173049",
+           "handicap": "-0.5",
+           "american": "-125",
+           "decimal": "1.800",
+           "fractional": "4/5"
+          }
+         }
+        ]
+       },
+       {
+        "id": "520011543",
+        "descriptionKey": "Main Dynamic Over/Under",
+        "description": "Total",
+        "key": "2W-OU",
+        "marketTypeId": "120717",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "124",
+         "description": "1st Quarter",
+         "abbreviation": "Q1",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2382670468",
+          "description": "Over - 1Q",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37882482196",
+           "handicap": "10.5",
+           "american": "-120",
+           "decimal": "1.833333",
+           "fractional": "5/6"
+          }
+         },
+         {
+          "id": "2382670469",
+          "description": "Under - 1Q",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37882482197",
+           "handicap": "10.5",
+           "american": "-110",
+           "decimal": "1.909091",
+           "fractional": "10/11"
+          }
+         }
+        ]
+       }
+      ],
+      "order": 1
+     },
+     {
+      "id": "100-86",
+      "description": "Alternate Lines",
+      "defaultType": false,
+      "alternateType": true,
+      "markets": [
+       {
+        "id": "G-2W-HCAP.Handicap - Asian.119",
+        "descriptionKey": "Handicap - Asian",
+        "description": "Spread",
+        "key": "2W-HCAP",
+        "marketTypeId": "1103",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "119",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2382073636",
+          "description": "Winnipeg Blue Bombers",
+          "status": "O",
+          "type": "A",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37885214365",
+           "handicap": "4.5",
+           "american": "+105",
+           "decimal": "2.050",
+           "fractional": "21/20"
+          }
+         },
+         {
+          "id": "2382073635",
+          "description": "Edmonton Elks",
+          "status": "O",
+          "type": "H",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37885214366",
+           "handicap": "-4.5",
+           "american": "-135",
+           "decimal": "1.741",
+           "fractional": "20/27"
+          }
+         },
+         {
+          "id": "2382054003",
+          "description": "Winnipeg Blue Bombers",
+          "status": "O",
+          "type": "A",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37885214358",
+           "handicap": "5.0",
+           "american": "-105",
+           "decimal": "1.952381",
+           "fractional": "20/21"
+          }
+         },
+         {
+          "id": "2382054002",
+          "description": "Edmonton Elks",
+          "status": "O",
+          "type": "H",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37885214357",
+           "handicap": "-5.0",
+           "american": "-125",
+           "decimal": "1.800",
+           "fractional": "4/5"
+          }
+         },
+         {
+          "id": "2381906658",
+          "description": "Winnipeg Blue Bombers",
+          "status": "O",
+          "type": "A",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37885214364",
+           "handicap": "5.5",
+           "american": "-110",
+           "decimal": "1.909091",
+           "fractional": "10/11"
+          }
+         },
+         {
+          "id": "2381906657",
+          "description": "Edmonton Elks",
+          "status": "O",
+          "type": "H",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37885214363",
+           "handicap": "-5.5",
+           "american": "-120",
+           "decimal": "1.833333",
+           "fractional": "5/6"
+          }
+         },
+         {
+          "id": "2382073634",
+          "description": "Winnipeg Blue Bombers",
+          "status": "O",
+          "type": "A",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37885214356",
+           "handicap": "6.5",
+           "american": "-125",
+           "decimal": "1.800",
+           "fractional": "4/5"
+          }
+         },
+         {
+          "id": "2382073633",
+          "description": "Edmonton Elks",
+          "status": "O",
+          "type": "H",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37885214355",
+           "handicap": "-6.5",
+           "american": "-105",
+           "decimal": "1.952381",
+           "fractional": "20/21"
+          }
+         },
+         {
+          "id": "2382073632",
+          "description": "Winnipeg Blue Bombers",
+          "status": "O",
+          "type": "A",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37885214362",
+           "handicap": "7.0",
+           "american": "-135",
+           "decimal": "1.741",
+           "fractional": "20/27"
+          }
+         },
+         {
+          "id": "2382073631",
+          "description": "Edmonton Elks",
+          "status": "O",
+          "type": "H",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37885214361",
+           "handicap": "-7.0",
+           "american": "+105",
+           "decimal": "2.050",
+           "fractional": "21/20"
+          }
+         },
+         {
+          "id": "2382073638",
+          "description": "Winnipeg Blue Bombers",
+          "status": "O",
+          "type": "A",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37885214354",
+           "handicap": "7.5",
+           "american": "-150",
+           "decimal": "1.666667",
+           "fractional": "2/3"
+          }
+         },
+         {
+          "id": "2382073637",
+          "description": "Edmonton Elks",
+          "status": "O",
+          "type": "H",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37885214353",
+           "handicap": "-7.5",
+           "american": "+115",
+           "decimal": "2.150",
+           "fractional": "23/20"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-HCAP.Handicap - Asian.122",
+        "descriptionKey": "Handicap - Asian",
+        "description": "Spread",
+        "key": "2W-HCAP",
+        "marketTypeId": "1103",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "122",
+         "description": "First Half",
+         "abbreviation": "1H",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2382785870",
+          "description": "Winnipeg Blue Bombers - 1H",
+          "status": "O",
+          "type": "A",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37885223113",
+           "handicap": "3.0",
+           "american": "+105",
+           "decimal": "2.050",
+           "fractional": "21/20"
+          }
+         },
+         {
+          "id": "2382785871",
+          "description": "Edmonton Elks - 1H",
+          "status": "O",
+          "type": "H",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37885223114",
+           "handicap": "-3.0",
+           "american": "-135",
+           "decimal": "1.741",
+           "fractional": "20/27"
+          }
+         },
+         {
+          "id": "2382785872",
+          "description": "Winnipeg Blue Bombers - 1H",
+          "status": "O",
+          "type": "A",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37885133975",
+           "handicap": "3.5",
+           "american": "-105",
+           "decimal": "1.952381",
+           "fractional": "20/21"
+          }
+         },
+         {
+          "id": "2382785873",
+          "description": "Edmonton Elks - 1H",
+          "status": "O",
+          "type": "H",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37885133974",
+           "handicap": "-3.5",
+           "american": "-125",
+           "decimal": "1.800",
+           "fractional": "4/5"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-OU.Total Points O/U.119",
+        "descriptionKey": "Total Points O/U",
+        "description": "Total Points",
+        "key": "2W-OU",
+        "marketTypeId": "10",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "119",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2382073639",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37883597055",
+           "handicap": "55.5",
+           "american": "-150",
+           "decimal": "1.666667",
+           "fractional": "2/3"
+          }
+         },
+         {
+          "id": "2382073640",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37883597056",
+           "handicap": "55.5",
+           "american": "+115",
+           "decimal": "2.150",
+           "fractional": "23/20"
+          }
+         },
+         {
+          "id": "2382073641",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37883597057",
+           "handicap": "56.5",
+           "american": "-135",
+           "decimal": "1.741",
+           "fractional": "20/27"
+          }
+         },
+         {
+          "id": "2382073642",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37883597058",
+           "handicap": "56.5",
+           "american": "+105",
+           "decimal": "2.050",
+           "fractional": "21/20"
+          }
+         },
+         {
+          "id": "2381901440",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37883506716",
+           "handicap": "57.5",
+           "american": "-130",
+           "decimal": "1.769230",
+           "fractional": "10/13"
+          }
+         },
+         {
+          "id": "2381901441",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37883506717",
+           "handicap": "57.5",
+           "american": "EVEN",
+           "decimal": "2.00",
+           "fractional": "1/1"
+          }
+         },
+         {
+          "id": "2382073645",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37883597065",
+           "handicap": "59.5",
+           "american": "EVEN",
+           "decimal": "2.00",
+           "fractional": "1/1"
+          }
+         },
+         {
+          "id": "2382073646",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37883597066",
+           "handicap": "59.5",
+           "american": "-130",
+           "decimal": "1.769230",
+           "fractional": "10/13"
+          }
+         },
+         {
+          "id": "2382073647",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37883597067",
+           "handicap": "60.5",
+           "american": "+110",
+           "decimal": "2.100",
+           "fractional": "11/10"
+          }
+         },
+         {
+          "id": "2382073648",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37883597068",
+           "handicap": "60.5",
+           "american": "-145",
+           "decimal": "1.690",
+           "fractional": "20/29"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-OU.Total Points O/U - Edmonton Elks.119",
+        "descriptionKey": "Total Points O/U - Edmonton Elks",
+        "description": "Total Points - Edmonton Elks",
+        "key": "2W-OU",
+        "marketTypeId": "10",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "119",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2382912076",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37883506579",
+           "handicap": "32.5",
+           "american": "-120",
+           "decimal": "1.833333",
+           "fractional": "5/6"
+          }
+         },
+         {
+          "id": "2382912077",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "competitorId": "28641603-17302",
+          "price": {
+           "id": "37883506580",
+           "handicap": "32.5",
+           "american": "-110",
+           "decimal": "1.909091",
+           "fractional": "10/11"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-OU.Total Points O/U - Winnipeg Blue Bombers.119",
+        "descriptionKey": "Total Points O/U - Winnipeg Blue Bombers",
+        "description": "Total Points - Winnipeg Blue Bombers",
+        "key": "2W-OU",
+        "marketTypeId": "10",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "119",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2382912245",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37883506577",
+           "handicap": "25.5",
+           "american": "-115",
+           "decimal": "1.870",
+           "fractional": "20/23"
+          }
+         },
+         {
+          "id": "2382912246",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "competitorId": "28641603-17306",
+          "price": {
+           "id": "37883506578",
+           "handicap": "25.5",
+           "american": "-115",
+           "decimal": "1.870",
+           "fractional": "20/23"
+          }
+         }
+        ]
+       }
+      ],
+      "order": 2
+     },
+     {
+      "id": "100-1932",
+      "description": "Passing Props",
+      "defaultType": false,
+      "alternateType": true,
+      "markets": [
+       {
+        "id": "G-2W-OU.Total Passing Touchdowns O/U - Cody Fajardo.119",
+        "descriptionKey": "Total Passing Touchdowns O/U - Cody Fajardo",
+        "description": "Total Passing Touchdowns - Cody Fajardo (EDM)",
+        "key": "2W-OU",
+        "marketTypeId": "121335",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "119",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2382073701",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "competitorId": "28641603-16637701",
+          "price": {
+           "id": "37880222946",
+           "handicap": "2.5",
+           "american": "+125",
+           "decimal": "2.250",
+           "fractional": "5/4"
+          }
+         },
+         {
+          "id": "2382073702",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "competitorId": "28641603-16637701",
+          "price": {
+           "id": "37880222947",
+           "handicap": "2.5",
+           "american": "-165",
+           "decimal": "1.606061",
+           "fractional": "20/33"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-OU.Total Passing Touchdowns O/U - Zach Collaros.119",
+        "descriptionKey": "Total Passing Touchdowns O/U - Zach Collaros",
+        "description": "Total Passing Touchdowns - Zach Collaros (WPG)",
+        "key": "2W-OU",
+        "marketTypeId": "121335",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "119",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2382073699",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "competitorId": "28641603-16637654",
+          "price": {
+           "id": "37880077172",
+           "handicap": "1.5",
+           "american": "-135",
+           "decimal": "1.741",
+           "fractional": "20/27"
+          }
+         },
+         {
+          "id": "2382073700",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "competitorId": "28641603-16637654",
+          "price": {
+           "id": "37880077173",
+           "handicap": "1.5",
+           "american": "+105",
+           "decimal": "2.050",
+           "fractional": "21/20"
+          }
+         }
+        ]
+       }
+      ],
+      "order": 8
+     }
+    ],
+    "availableSGP": true
+   }
+  ]
+ }
+]
