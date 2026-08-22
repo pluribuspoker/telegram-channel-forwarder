@@ -1,4 +1,4 @@
-"""Regression test: the Bovada free fallback for CFL odds.
+"""Regression test: the Bovada free fallback (CFL, MLB, UFC fixtures).
 
 Self-contained (no Telegram/API) — run it directly:
 
@@ -46,14 +46,14 @@ def check(label, got, want):
         failures.append(label)
 
 
-def lookup(pick, bookmakers):
-    r = lookup_pick_odds("CFL", pick, bookmakers)
+def lookup(pick, bookmakers, sport="CFL"):
+    r = lookup_pick_odds(sport, pick, bookmakers)
     return r.get("match_type"), r.get("adjusted_odds"), r.get("bookmaker")
 
 
 def main():
     event = json.load(open(FIXTURE))[0]["events"][0]
-    bk = _bovada_bookmakers(event)
+    bk = _bovada_bookmakers(event, "CFL")
 
     # ── Shaper: exactly the Odds API market keys the lookups read ─────────────
     keys = sorted(m["key"] for m in bk[0]["markets"])
@@ -161,6 +161,114 @@ def main():
                                allow_started=True, now=after)
     check("started + live caller: served", ev is not None, True)
 
+    # ── MLB (Atlanta Braves @ Milwaukee Brewers, captured 2026-08-22) ────────
+    # Pins the sport-specific shapes: the spread is "Runline", Bovada's "1H"
+    # period means First 5 Innings and must land on the *_1st_5_innings keys,
+    # and the group allowlist keeps "Total Strikeouts - Logan Henderson (MIL)"
+    # (Pitcher Props) out of team_totals and Game Props' 3-Way Moneyline out
+    # of h2h.
+    mlb_event = json.load(open(FIXTURE.parent / "bovada_mlb_pregame.json"))[0]["events"][0]
+    mbk = _bovada_bookmakers(mlb_event, "MLB")
+    check("MLB market keys", sorted(m["key"] for m in mbk[0]["markets"]), sorted([
+        "h2h", "spreads", "totals",
+        "h2h_1st_5_innings", "spreads_1st_5_innings", "totals_1st_5_innings",
+        "team_totals", "team_totals_1st_5_innings",
+    ]))
+    mlb_h2h = next(m for m in mbk[0]["markets"] if m["key"] == "h2h")
+    check("MLB h2h is 2-way (Game Props 3-way excluded)",
+          sorted(o["name"] for o in mlb_h2h["outcomes"]),
+          ["Atlanta Braves", "Milwaukee Brewers"])
+    for m in mbk[0]["markets"]:
+        if m["key"].startswith("team_totals"):
+            bad = [o["description"] for o in m["outcomes"]
+                   if o["description"] not in ("Atlanta Braves", "Milwaukee Brewers")]
+            check(f"no pitcher-prop leak in {m['key']}", bad, [])
+    check("MLB game ML Milwaukee",
+          lookup({"description": "Milwaukee Brewers ML", "bet_type": "moneyline",
+                  "period": "game", "teams": ["Milwaukee Brewers"], "line": None,
+                  "direction": None, "player": None, "prop_stat": None}, mbk, "MLB"),
+          ("exact", -168, "bovada"))
+    check("MLB game runline Atlanta +1.5",
+          lookup({"description": "Atlanta Braves +1.5", "bet_type": "spread",
+                  "period": "game", "teams": ["Atlanta Braves"], "line": 1.5,
+                  "direction": None, "player": None, "prop_stat": None}, mbk, "MLB"),
+          ("exact", -160, "bovada"))
+    check("MLB F5 runline Milwaukee -0.5",
+          lookup({"description": "Milwaukee Brewers F5 -0.5", "bet_type": "spread",
+                  "period": "1h", "teams": ["Milwaukee Brewers"], "line": -0.5,
+                  "direction": None, "player": None, "prop_stat": None}, mbk, "MLB"),
+          ("exact", -130, "bovada"))
+    check("MLB F5 runline Atlanta +0.5 (EVEN)",
+          lookup({"description": "Atlanta Braves F5 +0.5", "bet_type": "spread",
+                  "period": "1h", "teams": ["Atlanta Braves"], "line": 0.5,
+                  "direction": None, "player": None, "prop_stat": None}, mbk, "MLB"),
+          ("exact", 100, "bovada"))
+    check("MLB F5 alt spread Atlanta -0.5 (folded)",
+          lookup({"description": "Atlanta Braves F5 -0.5", "bet_type": "spread",
+                  "period": "1h", "teams": ["Atlanta Braves"], "line": -0.5,
+                  "direction": None, "player": None, "prop_stat": None}, mbk, "MLB"),
+          ("exact", 200, "bovada"))
+    check("MLB game total over 8.0",
+          lookup({"description": "over 8", "bet_type": "total", "period": "game",
+                  "teams": ["Atlanta Braves"], "line": 8.0, "direction": "over",
+                  "player": None, "prop_stat": None}, mbk, "MLB"),
+          ("exact", -105, "bovada"))
+    check("MLB F5 total under 4.5",
+          lookup({"description": "F5 under 4.5", "bet_type": "total", "period": "1h",
+                  "teams": ["Atlanta Braves"], "line": 4.5, "direction": "under",
+                  "player": None, "prop_stat": None}, mbk, "MLB"),
+          ("exact", -130, "bovada"))
+    r = lookup_pick_odds("MLB", {"description": "Atlanta team total over 3.5",
+                                 "bet_type": "team_total", "period": "game",
+                                 "teams": ["Atlanta Braves"], "line": 3.5,
+                                 "direction": "over", "player": None,
+                                 "prop_stat": None}, mbk)
+    check("MLB team total ATL over 3.5", (r.get("adjusted_odds"), r.get("api_line")),
+          (-105, 3.5))
+
+    # ── UFC (Shanelle Dyer vs Elise Reed, captured 2026-08-22) ───────────────
+    # "Fight Winner" is the moneyline, period B (bout) maps to the game
+    # suffix, "Main Total Rounds Over/Under" is the total, and Method of
+    # Victory props are excluded by the group allowlist.
+    ufc_event = json.load(open(FIXTURE.parent / "bovada_ufc_pregame.json"))[0]["events"][0]
+    ubk = _bovada_bookmakers(ufc_event, "UFC")
+    check("UFC market keys", sorted(m["key"] for m in ubk[0]["markets"]),
+          ["h2h", "spreads", "totals"])
+    mov = [o["name"] for m in ubk[0]["markets"] for o in m["outcomes"]
+           if "Wins" in o["name"]]
+    check("no method-of-victory leak", mov, [])
+    check("UFC fight winner underdog",
+          lookup({"description": "Elise Reed ML", "bet_type": "moneyline",
+                  "period": "game", "teams": ["Elise Reed"], "line": None,
+                  "direction": None, "player": None, "prop_stat": None}, ubk, "UFC"),
+          ("exact", 600, "bovada"))
+    check("UFC total rounds over 2.5",
+          lookup({"description": "over 2.5 rounds", "bet_type": "total",
+                  "period": "game", "teams": ["Shanelle Dyer"], "line": 2.5,
+                  "direction": "over", "player": None, "prop_stat": None}, ubk, "UFC"),
+          ("exact", 110, "bovada"))
+    umin = _bovada_minimal_event(ufc_event)
+    check("UFC event match by fighter",
+          _find_event_id([umin], ["Elise Reed"]), umin["id"])
+
+    # ── Cross-source guard: Bovada's game must be the API's game ─────────────
+    # Observed live: a Patriots pick whose actual game (PHI @ NE preseason,
+    # next day) is absent from Bovada's coupon matched Bovada's only listed
+    # Patriots event — Week 1, 18 days out. Price and game_date would have
+    # described different games.
+    from odds import _bovada_result_acceptable
+    ref = datetime(2026, 8, 22, 2, 0, tzinfo=timezone.utc)
+    check("guard: API date agrees",
+          _bovada_result_acceptable("2026-08-22", "2026-08-22", now=ref), True)
+    check("guard: API date disagrees (NE case)",
+          _bovada_result_acceptable("2026-08-22", "2026-09-09", now=ref), False)
+    check("guard: API abstained, game near",
+          _bovada_result_acceptable(None, "2026-08-25", now=ref), True)
+    check("guard: API abstained, game 18 days out",
+          _bovada_result_acceptable(None, "2026-09-09", now=ref), False)
+    check("guard: no dates at all",
+          _bovada_result_acceptable(None, None, now=ref), False)
+
     # ── Suspended markets/outcomes are dropped (synthetic — the pregame
     #    snapshot has none; live coupons do) ─────────────────────────────────
     frozen = {"displayGroups": [{"description": "Game Lines", "markets": [
@@ -177,7 +285,7 @@ def main():
               "price": {"american": "+220"}},
          ]},
     ]}]}
-    fbk = _bovada_bookmakers(frozen)
+    fbk = _bovada_bookmakers(frozen, "CFL")
     check("suspended market dropped",
           [m["key"] for m in fbk[0]["markets"]], ["h2h"])
     check("suspended outcome dropped",

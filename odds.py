@@ -32,7 +32,7 @@ import re
 import sqlite3
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
@@ -1449,8 +1449,11 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
                 if not live_bk and sport in _BOVADA_PATHS:
                     # Bovada live fallback: a live_ price beats none, but the
                     # closing line stays unknown (pregame_* stay None) — Bovada
-                    # has no history to ask.
-                    live_bk, _ = await _fetch_bovada_bookmakers(sport, teams, allow_started=True)
+                    # has no history to ask. Same-game guard applies: the API
+                    # matched this event, so Bovada must agree on the date.
+                    bov_live, bov_live_gd = await _fetch_bovada_bookmakers(sport, teams, allow_started=True)
+                    if _bovada_result_acceptable(gd, bov_live_gd):
+                        live_bk = bov_live
                 if live_bk:
                     r = lookup_pick_odds(sport, pick, live_bk)
                     if r.get("adjusted_odds") is not None:
@@ -1496,7 +1499,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
         # source; it also covers a market the API's books simply don't carry.
         if r.get("adjusted_odds") is None and sport in _BOVADA_PATHS:
             bov_bk, bov_gd = await _fetch_bovada_bookmakers(sport, teams)
-            if bov_bk:
+            if bov_bk and _bovada_result_acceptable(gd, bov_gd):
                 r2 = lookup_pick_odds(sport, pick, bov_bk)
                 # A Bovada miss verdict is adopted too when the API had nothing
                 # at all: "alt_line_gap_6.0pts" from a market Bovada actually
@@ -1583,32 +1586,69 @@ async def _fetch_current_bookmakers(
 
 
 # ── Bovada free fallback ──────────────────────────────────────────────────────
-# ESPN is the free fallback for its leagues, but its CFL scoreboard is
-# deliberately empty (validate_sport keys off that), so a CFL pick has no
-# second source: when the Odds API quota ran out on 2026-08-08 every CFL pick
-# recorded no_game — the market call 401s while the free /events still matches
-# the game. Bovada's public coupon JSON (no auth, no quota) carries CFL
-# game/1H/1Q spreads, totals and moneylines including alternate lines; shaped
-# like an Odds API bookmakers list, the existing lookups read it unchanged.
-# Fallback only — it runs when the Odds API produced no usable price.
+# The free second source when the Odds API produces no usable price and ESPN
+# has nothing either (no CFL at all; no period or alternate markets anywhere).
+# Born during the quota outage that started 2026-08-08: every CFL pick recorded
+# no_game — the market call 401s while the free /events still matches the game.
+# Bovada's public coupon JSON (no auth, no quota) carries game/period spreads,
+# totals and moneylines including alternate lines; shaped like an Odds API
+# bookmakers list, the existing lookups read it unchanged. Fallback only.
+#
+# Lacrosse (PLL) and KBO are not on Bovada (404/empty — probed 2026-08-22);
+# those sports still have no free odds source.
 
-_BOVADA_PATHS: dict[str, str] = {"CFL": "football/cfl"}
+_BOVADA_PATHS: dict[str, str] = {
+    "CFL":   "football/cfl",
+    "MLB":   "baseball/mlb",
+    "NFL":   "football/nfl",            # includes preseason
+    "NCAAF": "football/college-football",
+    "NBA":   "basketball/nba",
+    "WNBA":  "basketball/wnba",
+    "NCAAB": "basketball/college-basketball",
+    "NHL":   "hockey/nhl",
+    "UFC":   "ufc-mma",                 # all MMA orgs, like the Odds API key
+    "UFL":   "football/ufl",
+}
 _BOVADA_BASE = "https://www.bovada.lv/services/sports/event/v2/events/A/description"
 _BOVADA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 _BOVADA_TTL, _BOVADA_FAIL_TTL = 60.0, 15.0
 _bovada_cache: dict[str, tuple[float, list[dict]]] = {}
 
+# Only these displayGroups hold line markets. The allowlist is the structural
+# guard that keeps player props out: "Total Strikeouts - Logan Henderson (MIL)"
+# reads exactly like a team total to any description rule, but it lives in
+# "Pitcher Props" — and Game Props' "3-Way Moneyline" would land in h2h.
+_BOVADA_LINE_GROUPS = {"game lines", "alternate lines", "fight odds"}
+
 # Bovada name → the canonical name the parse and the Odds API use. Only pairs
 # _team_matches cannot bridge belong here.
 _BOVADA_TEAM_ALIASES = {"British Columbia Lions": "BC Lions"}
 
-# Bovada period abbreviation → Odds API market suffix. Unmapped periods (RT =
-# regulation time, a 3-way market the scoreline rules refuse anyway) are
-# skipped entirely rather than mislabeled.
-_BOVADA_PERIOD_TO_SUFFIX = {"G": "", "1H": "_h1", "2H": "_h2",
+# Bovada period abbreviation → Odds API market suffix. B = bout (UFC's whole
+# fight). Unmapped periods (RT = regulation time — a 3-way market the scoreline
+# rules refuse anyway; 1I = 1st inning) are skipped entirely rather than
+# mislabeled. NHL per-period abbreviations are deliberately absent: they could
+# not be observed pregame (period markets appear close to game time), and a
+# wrong mapping would mislabel a market where an absent one just skips it —
+# add them from a real payload when the season starts.
+_BOVADA_PERIOD_TO_SUFFIX = {"G": "", "B": "", "1H": "_h1", "2H": "_h2",
                             "Q1": "_q1", "Q2": "_q2", "Q3": "_q3", "Q4": "_q4"}
 
-_BOVADA_PERIOD_TAG_RE = re.compile(r"\s*-\s*(?:1H|2H|Q?[1-4]Q?|RT)$")
+_BOVADA_PERIOD_TAG_RE = re.compile(r"\s*-\s*(?:1H|2H|1I|Q?[1-4]Q?|RT)$")
+
+
+def _bovada_suffix(abbr: str | None, sport: str) -> str | None:
+    """Market suffix for a Bovada period abbreviation, sport-aware for MLB.
+
+    Bovada reuses "1H" for MLB's First 5 Innings, but the Odds API market the
+    lookups read is spreads/totals/h2h_1st_5_innings (_MLB_PERIOD_SUFFIX), not
+    *_h1 — mislabeling it _h1 would price an F5 pick off a market key the
+    lookup never reads for MLB, or worse, collide with a real half if one
+    existed. Mirrors _get_period_suffix's sport override.
+    """
+    if sport == "MLB" and abbr == "1H":
+        return "_1st_5_innings"
+    return _BOVADA_PERIOD_TO_SUFFIX.get(abbr)
 
 
 def _bovada_team(name: str) -> str:
@@ -1645,40 +1685,46 @@ def _bovada_minimal_event(ev: dict) -> dict | None:
             "commence_time": commence.strftime("%Y-%m-%dT%H:%M:%SZ")}
 
 
-def _bovada_bookmakers(ev: dict) -> list[dict]:
+def _bovada_bookmakers(ev: dict, sport: str) -> list[dict]:
     """One Bovada event → an Odds-API-shaped bookmakers list.
 
-    Game Lines / Alternate Lines groups at G/1H/Qn periods map onto the market
-    keys the _lookup_* functions read (spreads_h1, totals_q1, h2h,
-    team_totals, …). Alternate lines fold into the SAME key as the main
-    market rather than an API-style alternate_* sibling: the lookups only
-    read alternate_* where the Odds API sells it (alternate_spreads_h1 is
-    not a thing there), so a 1H alt line shaped under alternate_spreads_h1
-    would be invisible — and for a single-book scrape "main vs alternate"
-    is a request artifact, not a fact about the price. Player props
-    ("Total Passing Yards - X") must NOT leak into totals, so the totals
-    branch matches the bare titles only. Suspended markets/outcomes
+    Only _BOVADA_LINE_GROUPS are read (the structural guard against player
+    props and exotics — see the allowlist note). Market titles vary by sport:
+    the spread is "Point Spread" (football/basketball), "Runline" (MLB) or
+    "Puckline" (NHL); totals are "Total", "Total Runs O/U" or UFC's "Main
+    Total Rounds Over/Under"; a " - <Team>" suffix on a total marks a TEAM
+    total (outcomes carry the team in `description`, Over/Under in `name`,
+    matching the Odds API's team_totals shape); UFC's moneyline is "Fight
+    Winner". Alternate lines fold into the SAME key as the main market
+    rather than an API-style alternate_* sibling: the lookups only read
+    alternate_* where the Odds API sells it (alternate_spreads_h1 is not a
+    thing there), so a 1H alt line shaped under alternate_spreads_h1 would
+    be invisible — and for a single-book scrape "main vs alternate" is a
+    request artifact, not a fact about the price. Suspended markets/outcomes
     (status != "O") are dropped — a frozen live price is worse than none.
     """
     markets: dict[str, list[dict]] = {}
     for grp in ev.get("displayGroups") or []:
+        if (grp.get("description") or "").lower() not in _BOVADA_LINE_GROUPS:
+            continue
         for mkt in grp.get("markets") or []:
             if mkt.get("status") not in (None, "O"):
                 continue
-            sfx = _BOVADA_PERIOD_TO_SUFFIX.get((mkt.get("period") or {}).get("abbreviation"))
+            sfx = _bovada_suffix((mkt.get("period") or {}).get("abbreviation"), sport)
             if sfx is None:
                 continue
             desc = mkt.get("description") or ""
             dlow = desc.lower()
             team_total_team = None
-            if dlow.startswith("moneyline"):
+            is_total = dlow.startswith("total") or "total rounds" in dlow
+            if dlow.startswith("moneyline") or dlow == "fight winner":
                 key = "h2h" + sfx
-            elif "spread" in dlow:
+            elif "spread" in dlow or dlow in ("runline", "puckline"):
                 key = "spreads" + sfx
-            elif dlow.startswith("total points - "):
+            elif is_total and " - " in desc:
                 team_total_team = _bovada_team(desc.split(" - ", 1)[1])
                 key = "team_totals" + sfx
-            elif dlow in ("total", "total points"):
+            elif is_total:
                 key = "totals" + sfx
             else:
                 continue
@@ -1769,7 +1815,38 @@ async def _fetch_bovada_bookmakers(
     """Shaped Bovada bookmakers for the pick's game, plus its eastern date."""
     events = await _fetch_bovada_events(sport)
     ev, gd = _bovada_pick_event(events, teams, allow_started=allow_started)
-    return (_bovada_bookmakers(ev) if ev else []), gd
+    return (_bovada_bookmakers(ev, sport) if ev else []), gd
+
+
+# A Bovada match with no Odds API date to check it against is only trusted
+# this many days out. Cappers post 0–5 days ahead (UFC cards routinely 5).
+_BOVADA_MAX_DAYS_AHEAD = 7
+
+
+def _bovada_result_acceptable(
+    api_gd: str | None, bov_gd: str | None, now: datetime | None = None,
+) -> bool:
+    """Cross-source guard: the Bovada price must describe the API's game.
+
+    Bovada and the Odds API match events independently, so their answers can
+    be DIFFERENT games — the class this pipeline fears most, because a real
+    price on the wrong game verifies clean everywhere downstream. Seen live
+    while testing: a Patriots pick whose actual game (PHI @ NE preseason,
+    tomorrow) is not on Bovada's coupon matched Bovada's only listed Patriots
+    event — Week 1, 18 days out — and priced it, while game_date said
+    tomorrow. When the API matched a game, Bovada must agree on the eastern
+    date; when the API matched nothing, Bovada's game must at least be near
+    (within _BOVADA_MAX_DAYS_AHEAD), which keeps the genuine coverage win —
+    a card the API doesn't list this week — while refusing a far-future
+    stand-in for a game the coupon lacks.
+    """
+    if api_gd is not None:
+        return bov_gd == api_gd
+    if bov_gd is None:
+        return False
+    cutoff = ((now or datetime.now(timezone.utc)).astimezone(ZoneInfo("America/New_York"))
+              + timedelta(days=_BOVADA_MAX_DAYS_AHEAD)).strftime("%Y-%m-%d")
+    return bov_gd <= cutoff
 
 
 def quota_used() -> int:

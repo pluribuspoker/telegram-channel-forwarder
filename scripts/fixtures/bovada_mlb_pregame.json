@@ -1,0 +1,1801 @@
+[
+ {
+  "path": [
+   {
+    "id": "24736",
+    "link": "/baseball/mlb",
+    "description": "MLB",
+    "type": "LEAGUE",
+    "sportCode": "BASE",
+    "order": 1,
+    "leaf": true,
+    "current": true
+   },
+   {
+    "id": "226",
+    "link": "/baseball",
+    "description": "Baseball",
+    "type": "SPORT",
+    "sportCode": "BASE",
+    "order": 3,
+    "leaf": false,
+    "current": false
+   }
+  ],
+  "events": [
+   {
+    "id": "29701575",
+    "description": "Atlanta Braves @ Milwaukee Brewers",
+    "type": "GAMEEVENT",
+    "link": "/baseball/mlb/atlanta-braves-milwaukee-brewers-202608221410",
+    "status": "U",
+    "sport": "BASE",
+    "startTime": 1787422200000,
+    "live": false,
+    "awayTeamFirst": true,
+    "denySameGame": "NO",
+    "teaserAllowed": true,
+    "competitionId": "24736",
+    "notes": "",
+    "numMarkets": 54,
+    "lastModified": 1787362645208,
+    "competitors": [
+     {
+      "id": "29701575-16410113",
+      "name": "Milwaukee Brewers",
+      "home": true,
+      "shortName": "Brewers"
+     },
+     {
+      "id": "29701575-16409853",
+      "name": "Atlanta Braves",
+      "home": false,
+      "shortName": "Braves"
+     }
+    ],
+    "displayGroups": [
+     {
+      "id": "100-136",
+      "description": "Game Lines",
+      "defaultType": true,
+      "alternateType": false,
+      "markets": [
+       {
+        "id": "519531243",
+        "descriptionKey": "Head To Head",
+        "description": "Moneyline",
+        "key": "2W-12",
+        "marketTypeId": "19",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "205",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2380813040",
+          "description": "Atlanta Braves",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37881217282",
+           "american": "+140",
+           "decimal": "2.400",
+           "fractional": "7/5"
+          }
+         },
+         {
+          "id": "2380813193",
+          "description": "Milwaukee Brewers",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37881217281",
+           "american": "-168",
+           "decimal": "1.595238",
+           "fractional": "25/42"
+          }
+         }
+        ]
+       },
+       {
+        "id": "519532286",
+        "descriptionKey": "Main Dynamic Asian Runline",
+        "description": "Runline",
+        "key": "2W-HCAP",
+        "marketTypeId": "120724",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "205",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2380813045",
+          "description": "Atlanta Braves",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37885945950",
+           "handicap": "1.5",
+           "american": "-160",
+           "decimal": "1.625",
+           "fractional": "5/8"
+          }
+         },
+         {
+          "id": "2380813046",
+          "description": "Milwaukee Brewers",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37885945949",
+           "handicap": "-1.5",
+           "american": "+135",
+           "decimal": "2.350",
+           "fractional": "27/20"
+          }
+         }
+        ]
+       },
+       {
+        "id": "519532289",
+        "descriptionKey": "Main Dynamic Over/Under",
+        "description": "Total",
+        "key": "2W-OU",
+        "marketTypeId": "120723",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "205",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2380813498",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37881211775",
+           "handicap": "8.0",
+           "american": "-105",
+           "decimal": "1.952381",
+           "fractional": "20/21"
+          }
+         },
+         {
+          "id": "2380813043",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37881211774",
+           "handicap": "8.0",
+           "american": "-115",
+           "decimal": "1.870",
+           "fractional": "20/23"
+          }
+         }
+        ]
+       },
+       {
+        "id": "520916973",
+        "descriptionKey": "Head To Head",
+        "description": "Moneyline",
+        "key": "2W-12",
+        "marketTypeId": "19",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "11460",
+         "description": "First 5 Innings",
+         "abbreviation": "1H",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2386149705",
+          "description": "Atlanta Braves - 1H",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37882768466",
+           "american": "+150",
+           "decimal": "2.500",
+           "fractional": "6/4"
+          }
+         },
+         {
+          "id": "2386149704",
+          "description": "Milwaukee Brewers - 1H",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37882768465",
+           "american": "-200",
+           "decimal": "1.500",
+           "fractional": "1/2"
+          }
+         }
+        ]
+       },
+       {
+        "id": "520916964",
+        "descriptionKey": "Main Dynamic Asian Runline",
+        "description": "Runline",
+        "key": "2W-HCAP",
+        "marketTypeId": "120724",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "11460",
+         "description": "First 5 Innings",
+         "abbreviation": "1H",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2386149686",
+          "description": "Atlanta Braves - 1H",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37882768447",
+           "handicap": "0.5",
+           "american": "EVEN",
+           "decimal": "2.00",
+           "fractional": "1/1"
+          }
+         },
+         {
+          "id": "2386149687",
+          "description": "Milwaukee Brewers - 1H",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37882768446",
+           "handicap": "-0.5",
+           "american": "-130",
+           "decimal": "1.769230",
+           "fractional": "10/13"
+          }
+         }
+        ]
+       },
+       {
+        "id": "520916952",
+        "descriptionKey": "Main Dynamic Over/Under",
+        "description": "Total",
+        "key": "2W-OU",
+        "marketTypeId": "120723",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "11460",
+         "description": "First 5 Innings",
+         "abbreviation": "1H",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2386149666",
+          "description": "Over - 1H",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37882768467",
+           "handicap": "4.5",
+           "american": "EVEN",
+           "decimal": "2.00",
+           "fractional": "1/1"
+          }
+         },
+         {
+          "id": "2386149667",
+          "description": "Under - 1H",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37882768468",
+           "handicap": "4.5",
+           "american": "-130",
+           "decimal": "1.769230",
+           "fractional": "10/13"
+          }
+         }
+        ]
+       },
+       {
+        "id": "520916965",
+        "descriptionKey": "Head To Head",
+        "description": "Moneyline",
+        "key": "2W-12",
+        "marketTypeId": "19",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "206",
+         "description": "1st Inning",
+         "abbreviation": "1I",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2386149689",
+          "description": "Atlanta Braves - 1I",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37886096681",
+           "american": "+125",
+           "decimal": "2.250",
+           "fractional": "5/4"
+          }
+         },
+         {
+          "id": "2386149688",
+          "description": "Milwaukee Brewers - 1I",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37886106319",
+           "american": "-165",
+           "decimal": "1.606061",
+           "fractional": "20/33"
+          }
+         }
+        ]
+       }
+      ],
+      "order": 1
+     },
+     {
+      "id": "100-138",
+      "description": "Alternate Lines",
+      "defaultType": false,
+      "alternateType": false,
+      "markets": [
+       {
+        "id": "G-2W-HCAP.Handicap - Asian.205",
+        "descriptionKey": "Handicap - Asian",
+        "description": "Spread",
+        "key": "2W-HCAP",
+        "marketTypeId": "8030",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "205",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2386149693",
+          "description": "Atlanta Braves",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37886111343",
+           "handicap": "-1.5",
+           "american": "+235",
+           "decimal": "3.350",
+           "fractional": "47/20"
+          }
+         },
+         {
+          "id": "2386149692",
+          "description": "Milwaukee Brewers",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37886111342",
+           "handicap": "1.5",
+           "american": "-330",
+           "decimal": "1.30303",
+           "fractional": "10/33"
+          }
+         },
+         {
+          "id": "2386149691",
+          "description": "Atlanta Braves",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37886111345",
+           "handicap": "-2.5",
+           "american": "+375",
+           "decimal": "4.750",
+           "fractional": "15/4"
+          }
+         },
+         {
+          "id": "2386149690",
+          "description": "Milwaukee Brewers",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37886111344",
+           "handicap": "2.5",
+           "american": "-600",
+           "decimal": "1.166667",
+           "fractional": "1/6"
+          }
+         },
+         {
+          "id": "2386149694",
+          "description": "Atlanta Braves",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37886111339",
+           "handicap": "2.5",
+           "american": "-280",
+           "decimal": "1.357143",
+           "fractional": "5/14"
+          }
+         },
+         {
+          "id": "2386149695",
+          "description": "Milwaukee Brewers",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37886111338",
+           "handicap": "-2.5",
+           "american": "+205",
+           "decimal": "3.050",
+           "fractional": "41/20"
+          }
+         },
+         {
+          "id": "2386149698",
+          "description": "Atlanta Braves",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37886111347",
+           "handicap": "-3.5",
+           "american": "+550",
+           "decimal": "6.500",
+           "fractional": "11/2"
+          }
+         },
+         {
+          "id": "2386149699",
+          "description": "Milwaukee Brewers",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37886111346",
+           "handicap": "3.5",
+           "american": "-1000",
+           "decimal": "1.100",
+           "fractional": "1/10"
+          }
+         },
+         {
+          "id": "2386149700",
+          "description": "Atlanta Braves",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37886111337",
+           "handicap": "3.5",
+           "american": "-450",
+           "decimal": "1.222222",
+           "fractional": "2/9"
+          }
+         },
+         {
+          "id": "2386149701",
+          "description": "Milwaukee Brewers",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37886111336",
+           "handicap": "-3.5",
+           "american": "+300",
+           "decimal": "4.00",
+           "fractional": "3/1"
+          }
+         },
+         {
+          "id": "2386149696",
+          "description": "Atlanta Braves",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37885773920",
+           "handicap": "4.5",
+           "american": "-725",
+           "decimal": "1.137931",
+           "fractional": "4/29"
+          }
+         },
+         {
+          "id": "2386149697",
+          "description": "Milwaukee Brewers",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37885773919",
+           "handicap": "-4.5",
+           "american": "+430",
+           "decimal": "5.30",
+           "fractional": "43/10"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-HCAP.Handicap - Asian.11460",
+        "descriptionKey": "Handicap - Asian",
+        "description": "Spread",
+        "key": "2W-HCAP",
+        "marketTypeId": "8030",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "11460",
+         "description": "First 5 Innings",
+         "abbreviation": "1H",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2386149685",
+          "description": "Atlanta Braves - 1H",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37882869443",
+           "handicap": "-0.5",
+           "american": "+200",
+           "decimal": "3.00",
+           "fractional": "2/1"
+          }
+         },
+         {
+          "id": "2386149684",
+          "description": "Milwaukee Brewers - 1H",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37882869442",
+           "handicap": "0.5",
+           "american": "-275",
+           "decimal": "1.363636",
+           "fractional": "4/11"
+          }
+         },
+         {
+          "id": "2386228810",
+          "description": "Atlanta Braves - 1H",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37885967898",
+           "handicap": "-1.5",
+           "american": "+350",
+           "decimal": "4.50",
+           "fractional": "7/2"
+          }
+         },
+         {
+          "id": "2386228809",
+          "description": "Milwaukee Brewers - 1H",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37885967897",
+           "handicap": "1.5",
+           "american": "-550",
+           "decimal": "1.181818",
+           "fractional": "2/11"
+          }
+         },
+         {
+          "id": "2386149682",
+          "description": "Atlanta Braves - 1H",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37883458090",
+           "handicap": "1.5",
+           "american": "-190",
+           "decimal": "1.526316",
+           "fractional": "10/19"
+          }
+         },
+         {
+          "id": "2386149683",
+          "description": "Milwaukee Brewers - 1H",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37883458089",
+           "handicap": "-1.5",
+           "american": "+145",
+           "decimal": "2.450",
+           "fractional": "29/20"
+          }
+         },
+         {
+          "id": "2386228812",
+          "description": "Atlanta Braves - 1H",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37886110184",
+           "handicap": "-2.5",
+           "american": "+625",
+           "decimal": "7.250",
+           "fractional": "25/4"
+          }
+         },
+         {
+          "id": "2386228811",
+          "description": "Milwaukee Brewers - 1H",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37886110183",
+           "handicap": "2.5",
+           "american": "-1300",
+           "decimal": "1.076923",
+           "fractional": "1/13"
+          }
+         },
+         {
+          "id": "2386149681",
+          "description": "Atlanta Braves - 1H",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37885967890",
+           "handicap": "2.5",
+           "american": "-340",
+           "decimal": "1.294118",
+           "fractional": "5/17"
+          }
+         },
+         {
+          "id": "2386149680",
+          "description": "Milwaukee Brewers - 1H",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37885967889",
+           "handicap": "-2.5",
+           "american": "+240",
+           "decimal": "3.400",
+           "fractional": "12/5"
+          }
+         },
+         {
+          "id": "2386228808",
+          "description": "Atlanta Braves - 1H",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37886110172",
+           "handicap": "3.5",
+           "american": "-650",
+           "decimal": "1.153846",
+           "fractional": "2/13"
+          }
+         },
+         {
+          "id": "2386228807",
+          "description": "Milwaukee Brewers - 1H",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37886110171",
+           "handicap": "-3.5",
+           "american": "+400",
+           "decimal": "5.00",
+           "fractional": "4/1"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-OU.Total Runs O/U.205",
+        "descriptionKey": "Total Runs O/U",
+        "description": "Total Runs O/U",
+        "key": "2W-OU",
+        "marketTypeId": "18",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "205",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2386149675",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37886111310",
+           "handicap": "5.5",
+           "american": "-330",
+           "decimal": "1.30303",
+           "fractional": "10/33"
+          }
+         },
+         {
+          "id": "2386149674",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37886111311",
+           "handicap": "5.5",
+           "american": "+235",
+           "decimal": "3.350",
+           "fractional": "47/20"
+          }
+         },
+         {
+          "id": "2386149671",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37886111312",
+           "handicap": "6.5",
+           "american": "-230",
+           "decimal": "1.434783",
+           "fractional": "10/23"
+          }
+         },
+         {
+          "id": "2386149670",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37886111313",
+           "handicap": "6.5",
+           "american": "+170",
+           "decimal": "2.700",
+           "fractional": "17/10"
+          }
+         },
+         {
+          "id": "2386149676",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37885919867",
+           "handicap": "7.5",
+           "american": "-125",
+           "decimal": "1.800",
+           "fractional": "4/5"
+          }
+         },
+         {
+          "id": "2386149677",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37885919868",
+           "handicap": "7.5",
+           "american": "-105",
+           "decimal": "1.952381",
+           "fractional": "20/21"
+          }
+         },
+         {
+          "id": "2386149678",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37883482234",
+           "handicap": "8.5",
+           "american": "+110",
+           "decimal": "2.100",
+           "fractional": "11/10"
+          }
+         },
+         {
+          "id": "2386149679",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37883482235",
+           "handicap": "8.5",
+           "american": "-145",
+           "decimal": "1.690",
+           "fractional": "20/29"
+          }
+         },
+         {
+          "id": "2386149673",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37883888106",
+           "handicap": "9.5",
+           "american": "+170",
+           "decimal": "2.700",
+           "fractional": "17/10"
+          }
+         },
+         {
+          "id": "2386149672",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37883888107",
+           "handicap": "9.5",
+           "american": "-230",
+           "decimal": "1.434783",
+           "fractional": "10/23"
+          }
+         },
+         {
+          "id": "2386149669",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37886111322",
+           "handicap": "10.5",
+           "american": "+235",
+           "decimal": "3.350",
+           "fractional": "47/20"
+          }
+         },
+         {
+          "id": "2386149668",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37886111323",
+           "handicap": "10.5",
+           "american": "-330",
+           "decimal": "1.30303",
+           "fractional": "10/33"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-OU.Total Runs O/U - Atlanta Braves.205",
+        "descriptionKey": "Total Runs O/U - Atlanta Braves",
+        "description": "Total Runs O/U - Atlanta Braves",
+        "key": "2W-OU",
+        "marketTypeId": "18",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "205",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2386157253",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37881597437",
+           "handicap": "3.5",
+           "american": "-105",
+           "decimal": "1.952381",
+           "fractional": "20/21"
+          }
+         },
+         {
+          "id": "2386157254",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37881597438",
+           "handicap": "3.5",
+           "american": "-125",
+           "decimal": "1.800",
+           "fractional": "4/5"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-OU.Total Runs O/U - Milwaukee Brewers.205",
+        "descriptionKey": "Total Runs O/U - Milwaukee Brewers",
+        "description": "Total Runs O/U - Milwaukee Brewers",
+        "key": "2W-OU",
+        "marketTypeId": "18",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "205",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2386157249",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37881614557",
+           "handicap": "4.5",
+           "american": "+105",
+           "decimal": "2.050",
+           "fractional": "21/20"
+          }
+         },
+         {
+          "id": "2386157250",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37881614558",
+           "handicap": "4.5",
+           "american": "-135",
+           "decimal": "1.741",
+           "fractional": "20/27"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-OU.Total Runs O/U.11460",
+        "descriptionKey": "Total Runs O/U",
+        "description": "Total Runs O/U",
+        "key": "2W-OU",
+        "marketTypeId": "18",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "11460",
+         "description": "First 5 Innings",
+         "abbreviation": "1H",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2386228559",
+          "description": "Over - 1H",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37883458061",
+           "handicap": "0.5",
+           "american": "-6600",
+           "decimal": "1.015151",
+           "fractional": "1/66"
+          }
+         },
+         {
+          "id": "2386228560",
+          "description": "Under - 1H",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37883458062",
+           "handicap": "0.5",
+           "american": "+1200",
+           "decimal": "13.00",
+           "fractional": "12/1"
+          }
+         },
+         {
+          "id": "2386228561",
+          "description": "Over - 1H",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37886110149",
+           "handicap": "1.5",
+           "american": "-1100",
+           "decimal": "1.090909",
+           "fractional": "1/11"
+          }
+         },
+         {
+          "id": "2386228562",
+          "description": "Under - 1H",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37886110150",
+           "handicap": "1.5",
+           "american": "+575",
+           "decimal": "6.750",
+           "fractional": "23/4"
+          }
+         },
+         {
+          "id": "2386156639",
+          "description": "Over - 1H",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37886110151",
+           "handicap": "2.5",
+           "american": "-360",
+           "decimal": "1.277778",
+           "fractional": "5/18"
+          }
+         },
+         {
+          "id": "2386156638",
+          "description": "Under - 1H",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37886110152",
+           "handicap": "2.5",
+           "american": "+250",
+           "decimal": "3.500",
+           "fractional": "5/2"
+          }
+         },
+         {
+          "id": "2386156645",
+          "description": "Over - 1H",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37885958609",
+           "handicap": "3.5",
+           "american": "-180",
+           "decimal": "1.555556",
+           "fractional": "5/9"
+          }
+         },
+         {
+          "id": "2386156644",
+          "description": "Under - 1H",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37885958610",
+           "handicap": "3.5",
+           "american": "+135",
+           "decimal": "2.350",
+           "fractional": "27/20"
+          }
+         },
+         {
+          "id": "2386156646",
+          "description": "Over - 1H",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37885958613",
+           "handicap": "5.5",
+           "american": "+165",
+           "decimal": "2.650",
+           "fractional": "33/20"
+          }
+         },
+         {
+          "id": "2386156647",
+          "description": "Under - 1H",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37885958614",
+           "handicap": "5.5",
+           "american": "-220",
+           "decimal": "1.454545",
+           "fractional": "5/11"
+          }
+         },
+         {
+          "id": "2386156640",
+          "description": "Over - 1H",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37886110159",
+           "handicap": "6.5",
+           "american": "+265",
+           "decimal": "3.650",
+           "fractional": "53/20"
+          }
+         },
+         {
+          "id": "2386156641",
+          "description": "Under - 1H",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37886110160",
+           "handicap": "6.5",
+           "american": "-380",
+           "decimal": "1.263158",
+           "fractional": "5/19"
+          }
+         },
+         {
+          "id": "2386228563",
+          "description": "Over - 1H",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37886110161",
+           "handicap": "7.5",
+           "american": "+400",
+           "decimal": "5.00",
+           "fractional": "4/1"
+          }
+         },
+         {
+          "id": "2386228564",
+          "description": "Under - 1H",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37886110162",
+           "handicap": "7.5",
+           "american": "-650",
+           "decimal": "1.153846",
+           "fractional": "2/13"
+          }
+         },
+         {
+          "id": "2386228565",
+          "description": "Over - 1H",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37885915786",
+           "handicap": "8.5",
+           "american": "+625",
+           "decimal": "7.250",
+           "fractional": "25/4"
+          }
+         },
+         {
+          "id": "2386228566",
+          "description": "Under - 1H",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37885915787",
+           "handicap": "8.5",
+           "american": "-1300",
+           "decimal": "1.076923",
+           "fractional": "1/13"
+          }
+         },
+         {
+          "id": "2386228567",
+          "description": "Over - 1H",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37883458079",
+           "handicap": "9.5",
+           "american": "+900",
+           "decimal": "10.00",
+           "fractional": "9/1"
+          }
+         },
+         {
+          "id": "2386228568",
+          "description": "Under - 1H",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37883458080",
+           "handicap": "9.5",
+           "american": "-3300",
+           "decimal": "1.030",
+           "fractional": "1/33"
+          }
+         },
+         {
+          "id": "2386228805",
+          "description": "Over - 1H",
+          "status": "O",
+          "type": "O",
+          "price": {
+           "id": "37882958046",
+           "handicap": "10.5",
+           "american": "+1200",
+           "decimal": "13.00",
+           "fractional": "12/1"
+          }
+         },
+         {
+          "id": "2386228806",
+          "description": "Under - 1H",
+          "status": "O",
+          "type": "U",
+          "price": {
+           "id": "37882958047",
+           "handicap": "10.5",
+           "american": "-6600",
+           "decimal": "1.015151",
+           "fractional": "1/66"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-OU.Total Runs O/U - Atlanta Braves.11460",
+        "descriptionKey": "Total Runs O/U - Atlanta Braves",
+        "description": "Total Runs O/U - Atlanta Braves",
+        "key": "2W-OU",
+        "marketTypeId": "18",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "11460",
+         "description": "First 5 Innings",
+         "abbreviation": "1H",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2386157251",
+          "description": "Over - 1H",
+          "status": "O",
+          "type": "O",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37881614540",
+           "handicap": "1.5",
+           "american": "-115",
+           "decimal": "1.870",
+           "fractional": "20/23"
+          }
+         },
+         {
+          "id": "2386157252",
+          "description": "Under - 1H",
+          "status": "O",
+          "type": "U",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37881614541",
+           "handicap": "1.5",
+           "american": "-115",
+           "decimal": "1.870",
+           "fractional": "20/23"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-OU.Total Runs O/U - Milwaukee Brewers.11460",
+        "descriptionKey": "Total Runs O/U - Milwaukee Brewers",
+        "description": "Total Runs O/U - Milwaukee Brewers",
+        "key": "2W-OU",
+        "marketTypeId": "18",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "11460",
+         "description": "First 5 Innings",
+         "abbreviation": "1H",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2386157255",
+          "description": "Over - 1H",
+          "status": "O",
+          "type": "O",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37881597408",
+           "handicap": "2.5",
+           "american": "+110",
+           "decimal": "2.100",
+           "fractional": "11/10"
+          }
+         },
+         {
+          "id": "2386157256",
+          "description": "Under - 1H",
+          "status": "O",
+          "type": "U",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37881597409",
+           "handicap": "2.5",
+           "american": "-145",
+           "decimal": "1.690",
+           "fractional": "20/29"
+          }
+         }
+        ]
+       }
+      ],
+      "order": 2
+     },
+     {
+      "id": "100-143",
+      "description": "Pitcher Props",
+      "defaultType": false,
+      "alternateType": false,
+      "markets": [
+       {
+        "id": "G-2W-OU.Total Pitcher Strikeouts - Logan Henderson.205",
+        "descriptionKey": "Total Pitcher Strikeouts - Logan Henderson",
+        "description": "Total Strikeouts - Logan Henderson (MIL)",
+        "key": "2W-OU",
+        "marketTypeId": "121389",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "205",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2386261637",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "competitorId": "29701575-21673085",
+          "price": {
+           "id": "37885786036",
+           "handicap": "6.5",
+           "american": "-105",
+           "decimal": "1.952381",
+           "fractional": "20/21"
+          }
+         },
+         {
+          "id": "2386261638",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "competitorId": "29701575-21673085",
+          "price": {
+           "id": "37885786037",
+           "handicap": "6.5",
+           "american": "-125",
+           "decimal": "1.800",
+           "fractional": "4/5"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-OU.Total Pitcher Strikeouts - Mart\u00edn P\u00e9rez.205",
+        "descriptionKey": "Total Pitcher Strikeouts - Mart\u00edn P\u00e9rez",
+        "description": "Total Strikeouts - Mart\u00edn P\u00e9rez (ATL)",
+        "key": "2W-OU",
+        "marketTypeId": "121389",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "205",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2386263019",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "competitorId": "29701575-16690030",
+          "price": {
+           "id": "37884463492",
+           "handicap": "3.5",
+           "american": "-120",
+           "decimal": "1.833333",
+           "fractional": "5/6"
+          }
+         },
+         {
+          "id": "2386263020",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "competitorId": "29701575-16690030",
+          "price": {
+           "id": "37884463493",
+           "handicap": "3.5",
+           "american": "-110",
+           "decimal": "1.909091",
+           "fractional": "10/11"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-OU.Total Pitcher Outs - Logan Henderson.205",
+        "descriptionKey": "Total Pitcher Outs - Logan Henderson",
+        "description": "Total Pitcher Outs - Logan Henderson (MIL)",
+        "key": "2W-OU",
+        "marketTypeId": "121388",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "205",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2386310944",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "competitorId": "29701575-21673085",
+          "price": {
+           "id": "37885558263",
+           "handicap": "17.5",
+           "american": "-120",
+           "decimal": "1.833333",
+           "fractional": "5/6"
+          }
+         },
+         {
+          "id": "2386310945",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "competitorId": "29701575-21673085",
+          "price": {
+           "id": "37885558264",
+           "handicap": "17.5",
+           "american": "-120",
+           "decimal": "1.833333",
+           "fractional": "5/6"
+          }
+         }
+        ]
+       },
+       {
+        "id": "G-2W-OU.Total Pitcher Outs - Mart\u00edn P\u00e9rez.205",
+        "descriptionKey": "Total Pitcher Outs - Mart\u00edn P\u00e9rez",
+        "description": "Total Pitcher Outs - Mart\u00edn P\u00e9rez (ATL)",
+        "key": "2W-OU",
+        "marketTypeId": "121388",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "205",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2386310946",
+          "description": "Over",
+          "status": "O",
+          "type": "O",
+          "competitorId": "29701575-16690030",
+          "price": {
+           "id": "37885558265",
+           "handicap": "14.5",
+           "american": "-160",
+           "decimal": "1.625",
+           "fractional": "5/8"
+          }
+         },
+         {
+          "id": "2386310947",
+          "description": "Under",
+          "status": "O",
+          "type": "U",
+          "competitorId": "29701575-16690030",
+          "price": {
+           "id": "37885558266",
+           "handicap": "14.5",
+           "american": "+120",
+           "decimal": "2.200",
+           "fractional": "6/5"
+          }
+         }
+        ]
+       }
+      ],
+      "order": 5
+     },
+     {
+      "id": "100-141",
+      "description": "Game Props",
+      "defaultType": false,
+      "alternateType": false,
+      "markets": [
+       {
+        "id": "520935499",
+        "descriptionKey": "3-Way Moneyline",
+        "description": "3-Way Moneyline",
+        "key": "3W-1X2",
+        "marketTypeId": "120825",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "11460",
+         "description": "First 5 Innings",
+         "abbreviation": "1H",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2386227803",
+          "description": "Atlanta Braves - 1H",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37882957982",
+           "american": "+195",
+           "decimal": "2.950",
+           "fractional": "39/20"
+          }
+         },
+         {
+          "id": "2386227804",
+          "description": "Milwaukee Brewers - 1H",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37883514314",
+           "american": "-130",
+           "decimal": "1.770",
+           "fractional": "10/13"
+          }
+         },
+         {
+          "id": "2386227802",
+          "description": "Tie - 1H",
+          "status": "O",
+          "type": "D",
+          "price": {
+           "id": "37884255335",
+           "american": "+460",
+           "decimal": "5.60",
+           "fractional": "23/5"
+          }
+         }
+        ]
+       },
+       {
+        "id": "520916974",
+        "descriptionKey": "3-Way Moneyline",
+        "description": "3-Way Moneyline",
+        "key": "3W-1X2",
+        "marketTypeId": "120825",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "206",
+         "description": "1st Inning",
+         "abbreviation": "1I",
+         "live": false,
+         "main": false
+        },
+        "availableSGP": true,
+        "outcomes": [
+         {
+          "id": "2386149708",
+          "description": "Atlanta Braves - 1I",
+          "status": "O",
+          "type": "A",
+          "competitorId": "29701575-16409853",
+          "price": {
+           "id": "37883155828",
+           "american": "+360",
+           "decimal": "4.600",
+           "fractional": "18/5"
+          }
+         },
+         {
+          "id": "2386149706",
+          "description": "Milwaukee Brewers - 1I",
+          "status": "O",
+          "type": "H",
+          "competitorId": "29701575-16410113",
+          "price": {
+           "id": "37886204658",
+           "american": "+265",
+           "decimal": "3.650",
+           "fractional": "53/20"
+          }
+         },
+         {
+          "id": "2386149707",
+          "description": "Tie - 1I",
+          "status": "O",
+          "type": "D",
+          "price": {
+           "id": "37886204659",
+           "american": "-148",
+           "decimal": "1.675676",
+           "fractional": "25/37"
+          }
+         }
+        ]
+       },
+       {
+        "id": "520899540",
+        "descriptionKey": "Odd/Even Total Runs",
+        "description": "Odd/Even Total Runs",
+        "key": "2W-OE",
+        "marketTypeId": "179",
+        "status": "O",
+        "singleOnly": false,
+        "notes": "",
+        "period": {
+         "id": "205",
+         "description": "Game",
+         "abbreviation": "G",
+         "live": false,
+         "main": true
+        },
+        "availableSGP": false,
+        "outcomes": [
+         {
+          "id": "2386083507",
+          "description": "Even",
+          "status": "O",
+          "type": "EV",
+          "price": {
+           "id": "37878412967",
+           "american": "+130",
+           "decimal": "2.300",
+           "fractional": "13/10"
+          }
+         },
+         {
+          "id": "2386083508",
+          "description": "Odd",
+          "status": "O",
+          "type": "OD",
+          "price": {
+           "id": "37878412968",
+           "american": "-170",
+           "decimal": "1.588235",
+           "fractional": "10/17"
+          }
+         }
+        ]
+       }
+      ],
+      "order": 12
+     }
+    ],
+    "availableSGP": true,
+    "hasStreaming": false
+   }
+  ]
+ }
+]
