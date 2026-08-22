@@ -96,6 +96,25 @@ def _pick_search_terms(pick: dict) -> list[str]:
     return terms
 
 
+def _blockquote_lines(lines: list[str]) -> set[int]:
+    """Indexes of lines inside <blockquote>…</blockquote> regions.
+
+    Blockquotes are the capper's angle records ("35-10 off 1 loss"), never the
+    bet itself, so no placement pass — odds tag or verdict emoji — may target
+    them. Both matchers share this so they can't disagree about it.
+    """
+    bq: set[int] = set()
+    in_bq = False
+    for i, line in enumerate(lines):
+        if "<blockquote" in line:
+            in_bq = True
+        if in_bq:
+            bq.add(i)
+        if "</blockquote>" in line:
+            in_bq = False
+    return bq
+
+
 def msg_plain_text(msg: dict) -> str:
     text = msg.get("text", "")
     if isinstance(text, list):
@@ -132,15 +151,7 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
        best candidate line that looks like a pick line
     """
     # Pre-compute lines inside <blockquote> (stats/records, never picks)
-    bq_lines: set[int] = set()
-    in_bq = False
-    for i, line in enumerate(lines):
-        if "<blockquote" in line:
-            in_bq = True
-        if in_bq:
-            bq_lines.add(i)
-        if "</blockquote>" in line:
-            in_bq = False
+    bq_lines = _blockquote_lines(lines)
 
     def _available(i: int) -> bool:
         return i not in bq_lines and not any(ch in lines[i] for ch in _PICK_EMOJI.values())
@@ -242,13 +253,14 @@ def _best_content_line(lines: list[str]) -> int | None:
     AL for my coin back", tweets with flag emojis instead of team names, etc.).
 
     Skips the capper-name line (index 0), blank lines, hyperlink/attribution
-    lines (e.g. "🔗 View on X"), and lines already carrying a verdict emoji.
-    Returns None if no such line exists.
+    lines (e.g. "🔗 View on X"), blockquoted angle records, and lines already
+    carrying a verdict emoji. Returns None if no such line exists.
     """
+    bq_lines = _blockquote_lines(lines)
     best = None
     for i, line in enumerate(lines):
         stripped = line.strip()
-        if not stripped or i == 0:
+        if not stripped or i == 0 or i in bq_lines:
             continue
         if _LINK_LINE_RE.match(stripped) or "<a " in line:
             continue
@@ -366,6 +378,12 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     standalone_idxs = [i for i, p in enumerate(picks) if not p.get("is_parlay_leg")]
 
     lines = text.rstrip().split("\n")
+    # Angle records live in blockquotes and are never the bet, so no pass may
+    # tag one — a team word or bet number appearing in the record ("35-10 off
+    # 1 loss" under "Dbacks ML") must not attract the tag. _match_pick_line
+    # (the emoji matcher) has excluded these all along; without the same rule
+    # here the two paths disagree about which line is the pick.
+    bq_lines = _blockquote_lines(lines)
 
     if parlay_idxs:
         _leg_odds = [odds_by_pick.get(str(i), {}).get("odds") for i in parlay_idxs]
@@ -391,11 +409,15 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             # line instead.
             header_j = -1
             for j, line in enumerate(lines):
+                if j in bq_lines:
+                    continue
                 if re.search(r'\b(?:parlay|teaser)\b[^:\n]*:(?:\s*\[[+-]\d[^\]]*\])?\s*$', line, re.IGNORECASE):
                     header_j = j
                     break
             if header_j < 0:
                 for j, line in enumerate(lines):
+                    if j in bq_lines:
+                        continue
                     if re.search(r'\b(?:parlay|teaser)\b', line, re.IGNORECASE):
                         header_j = j
                         break
@@ -409,6 +431,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                                 leg_terms.append(w)
                 best_j, best_count = -1, 0
                 for j, line in enumerate(lines):
+                    if j in bq_lines:
+                        continue
                     ll = line.lower()
                     hits = sum(1 for t in leg_terms if t in ll)
                     if hits > best_count:
@@ -533,6 +557,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         # after the analysis blockquote that mentions the Roughriders again).
         if desc:
             for j, line in enumerate(lines):
+                if j in bq_lines:
+                    continue
                 if desc in _norm_abbr(line.lower()):
                     if _place(j, odds_tag, allow_source=moved, declined=src_declined):
                         desc_matched = True
@@ -542,6 +568,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
 
         if not desc_matched and not src_declined:
             for j, line in enumerate(lines):
+                if j in bq_lines:
+                    continue
                 if " @ " in line and not _BET_LINE_RE.search(line):
                     continue  # skip game-info headers, but keep pick lines
                 if any(term in line.lower() for term in search_terms):
@@ -571,6 +599,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             desc_stripped = " ".join(desc_stripped.split())  # collapse whitespace
             if len(desc_stripped) >= 4:
                 for j, line in enumerate(lines):
+                    if j in bq_lines:
+                        continue
                     if " @ " in line and not _BET_LINE_RE.search(line):
                         continue
                     if desc_stripped in _norm_abbr(line.lower()):
@@ -589,6 +619,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 pick_line_f = float(pick_line)
                 line_str = str(int(pick_line_f)) if pick_line_f == int(pick_line_f) else str(pick_line_f)
                 for j, row in enumerate(lines):
+                    if j in bq_lines:
+                        continue
                     if " @ " in row and not _BET_LINE_RE.search(row):
                         continue
                     if line_str in row:
@@ -597,6 +629,30 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                             break
                         if src_declined:
                             break
+
+        # Fifth fallback: the line that most looks like a bet line (odds, units,
+        # spread/total numbers, ML keywords), mirroring _match_pick_line's final
+        # pass so the odds tag and the later verdict emoji converge on the same
+        # line. Catches abbreviated picks no name/number pass resolves —
+        # "Dbacks ML" parses to "Arizona Diamondbacks", which shares no word
+        # with the message, has no line number, and leaves only "ml" once team
+        # words are stripped. Without this pass such a pick fell straight to
+        # _best_content_line, whose last-content-line rule preferred the angle
+        # record under the pick.
+        if not desc_matched and not src_declined:
+            best_j, best_score = -1, 0
+            for j, row in enumerate(lines):
+                if j in bq_lines:
+                    continue
+                stripped = row.strip()
+                if not stripped or len(stripped) < 3:
+                    continue
+                score = len(_BET_LINE_RE.findall(stripped))
+                if score > best_score:
+                    best_score = score
+                    best_j = j
+            if best_j >= 0 and _place(best_j, odds_tag, allow_source=moved, declined=src_declined):
+                desc_matched = True
 
         if not desc_matched and src_declined:
             # The pick's own line WAS found — it was declined only because the
