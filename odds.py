@@ -377,7 +377,11 @@ def should_retry_odds(stored: dict, now: datetime | None = None) -> bool:
     if not isinstance(stored, dict) or stored.get("odds") is not None:
         return False
     mt = stored.get("match_type") or ""
-    if not (mt == "no_game" or _RETRYABLE_MISS_RE.fullmatch(mt)):
+    # prop_not_found: a mapped prop stat Bovada hasn't listed yet — prop
+    # markets appear near game time, same window story as no_*_data. (An
+    # unmapped stat stores player_prop_unavailable / prop_stat_unsupported
+    # instead, which stay final.)
+    if not (mt in ("no_game", "prop_not_found") or _RETRYABLE_MISS_RE.fullmatch(mt)):
         return False
     if stored.get("_retry_n", 0) >= _ODDS_RETRY_MAX:
         return False
@@ -1448,28 +1452,57 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH,
         if bet_type == "moneyline" and not teams and pick.get("player"):
             teams = [pick["player"]]
 
-        # ── Player props: separate endpoint ───────────────────────────────────
+        # ── Player props: Bovada first (free), paid API last resort ───────────
         if bet_type == "prop":
             prop_stat   = (pick.get("prop_stat") or "").upper()
             prop_market = PROP_STAT_MARKETS.get(sport, {}).get(prop_stat)
-            if not prop_market:
+            phrases     = _bovada_prop_phrases(sport, prop_stat)
+            if not prop_market and not phrases:
                 return OddsResult(match_type=f"prop_stat_unsupported({prop_stat})", pick_line=pick.get("line"))
-            if free_only:
-                # Props are paid-API-only today (Bovada's prop groups exist but
-                # are unmapped — ~2% of picks; see docs/odds.md).
-                return OddsResult(match_type="player_prop_unavailable", pick_line=pick.get("line"))
+            player    = pick.get("player") or ""
+            direction = pick.get("direction") or "over"
+            prop_line = float(pick.get("line") or 0.5)
+
+            # Free /events binding first — costs nothing, anchors gd/commence
+            # (retry window) and the Bovada same-game guard. Prop picks often
+            # name only the player, so a missing team match is not fatal here.
             event_list = await _fetch_current_event_list_all(sport, conn)
-            event_id   = _find_event_id(event_list, teams)
+            event_id   = _find_event_id(event_list, teams) if teams else None
+            gd       = _get_event_date(event_list, event_id) if event_id else None
+            commence = _get_event_commence(event_list, event_id) if event_id else None
+            started  = _event_already_started(event_list, event_id) if event_id else False
+
+            if phrases and sport in _BOVADA_PATHS:
+                bov_bk, bov_gd = await _fetch_bovada_prop(sport, teams, player, phrases,
+                                                          allow_started=started)
+                if bov_bk and _bovada_result_acceptable(gd, bov_gd):
+                    r = _lookup_prop(bov_bk, player, _BOVADA_PROP_KEY, direction, prop_line)
+                    if r.get("adjusted_odds") is not None:
+                        return OddsResult(
+                            match_type=f"live_{r['match_type']}" if started else r["match_type"],
+                            odds=r["adjusted_odds"], bookmaker=r["bookmaker"],
+                            api_line=r["api_line"], pick_line=r["pick_line"],
+                            game_date=gd or bov_gd, commence_time=commence,
+                        )
+
+            if free_only:
+                # A mapped stat Bovada hasn't listed yet is retryable until
+                # start (prop markets appear near game time); an unmapped one
+                # can never price free — final.
+                return OddsResult(match_type="prop_not_found" if phrases else "player_prop_unavailable",
+                                  pick_line=pick.get("line"), game_date=gd, commence_time=commence)
+            if not prop_market:
+                # Bovada missed and the paid API has no market for this stat.
+                return OddsResult(match_type="prop_not_found",
+                                  pick_line=pick.get("line"), game_date=gd, commence_time=commence)
             if not event_id:
                 return OddsResult(match_type="no_game", pick_line=pick.get("line"))
-            gd     = _get_event_date(event_list, event_id)
             ev_key = _event_sport_key(event_list, event_id, sport_key)
-            if _event_already_started(event_list, event_id):
+            if started:
                 live_bk = await _fetch_current_bookmakers(ev_key, event_id, prop_market, conn, live=True)
                 pregame = await _try_pregame(sport, ev_key, event_list, event_id, pick, db_path)
                 if live_bk:
-                    r = _lookup_prop(live_bk, pick.get("player") or "", prop_market,
-                                     pick.get("direction") or "over", float(pick.get("line") or 0.5))
+                    r = _lookup_prop(live_bk, player, prop_market, direction, prop_line)
                     if r.get("adjusted_odds") is not None:
                         return OddsResult(
                             match_type=f"live_{r['match_type']}", odds=r["adjusted_odds"],
@@ -1485,8 +1518,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH,
                                       pick_line=pregame.pick_line, game_date=gd)
                 return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"), game_date=gd)
             bookmakers = await _fetch_current_bookmakers(ev_key, event_id, prop_market, conn)
-            r = _lookup_prop(bookmakers, pick.get("player") or "", prop_market,
-                             pick.get("direction") or "over", float(pick.get("line") or 0.5))
+            r = _lookup_prop(bookmakers, player, prop_market, direction, prop_line)
             return OddsResult(
                 match_type = r["match_type"],
                 odds       = r["adjusted_odds"],
@@ -1494,6 +1526,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH,
                 api_line   = r["api_line"],
                 pick_line  = r["pick_line"],
                 game_date  = gd,
+                commence_time = commence,
             )
 
         # ── Non-goals team/game totals (corners, etc.): Odds API has no market ─
@@ -1846,6 +1879,141 @@ def _bovada_bookmakers(ev: dict, sport: str) -> list[dict]:
         return []
     return [{"key": "bovada", "title": "Bovada",
              "markets": [{"key": k, "outcomes": v} for k, v in markets.items()]}]
+
+
+# ── Bovada player props ───────────────────────────────────────────────────────
+# Player O/U props live OUTSIDE _BOVADA_LINE_GROUPS, one market per player:
+# "Total Strikeouts - Logan Henderson (MIL)", "Total Points - Ariel Atkins
+# (LAS)" — the "(ABBR)" parenthetical is the structural guard that separates
+# them from team totals ("Total Points - Los Angeles Sparks" has none), and the
+# stat phrase must match EXACTLY (a "Total Points" prefix rule would also eat
+# "Total Points, Rebounds and Assists"). Alternate lines fold in by accepting
+# "Alternate <phrase>" — _lookup_prop only takes an exact line match anyway.
+# Phrases are mapped from OBSERVED payloads only (2026-08-22 captures: WNBA
+# full set, CFL yardage; MLB strikeouts from the documented Pitcher Props
+# capture; NBA/NFL share their sibling league's templates). An unmapped stat
+# just falls through to the paid path — same skip-don't-mislabel rule as
+# _BOVADA_PERIOD_TO_SUFFIX. Yes/no and scorer props (HR, anytime TD, KO/TKO)
+# have a different market shape and stay unmapped for now.
+
+_BASKETBALL_PROP_PHRASES: dict[str, tuple[str, ...]] = {
+    "PTS":         ("Total Points",),
+    "REB":         ("Total Rebounds",),
+    "AST":         ("Total Assists",),
+    "3PM":         ("Total Made 3 Points Shots",),
+    "PTS+REB":     ("Total Points and Rebounds",),
+    "PTS+AST":     ("Total Points and Assists",),
+    "REB+AST":     ("Total Rebounds and Assists",),
+    "PTS+REB+AST": ("Total Points, Rebounds and Assists",),
+}
+
+_FOOTBALL_PROP_PHRASES: dict[str, tuple[str, ...]] = {
+    "PASSING_YDS":   ("Total Passing Yards",),
+    "PASS_YDS":      ("Total Passing Yards",),
+    "RUSHING_YDS":   ("Total Rushing Yards",),
+    "RUSH_YDS":      ("Total Rushing Yards",),
+    "RECEIVING_YDS": ("Total Receiving Yards",),
+    "REC_YDS":       ("Total Receiving Yards",),
+    "PASSING_TDS":   ("Total Passing Touchdowns",),
+    "PASS_TDS":      ("Total Passing Touchdowns",),
+}
+
+_BOVADA_PROP_PHRASES: dict[str, dict[str, tuple[str, ...]]] = {
+    "MLB":  {"K": ("Total Strikeouts",), "SO": ("Total Strikeouts",),
+             "STRIKEOUTS": ("Total Strikeouts",)},
+    "WNBA": _BASKETBALL_PROP_PHRASES,
+    "NBA":  _BASKETBALL_PROP_PHRASES,   # same Bovada template family as WNBA
+    "CFL":  _FOOTBALL_PROP_PHRASES,
+    "NFL":  _FOOTBALL_PROP_PHRASES,     # same template family as CFL
+}
+
+# "Total Points - Ariel Atkins (LAS)" → (phrase, player, abbr). The " - " and
+# the trailing "(ABBR)" are both load-bearing (see the guard note above).
+_BOVADA_PROP_RE = re.compile(r"^(?P<phrase>.+?) - (?P<player>.+?) \((?P<abbr>[A-Z]{2,5})\)$")
+
+_BOVADA_PROP_KEY = "bovada_prop"   # market key the shaper and _lookup_prop agree on
+
+
+def _bovada_prop_phrases(sport: str, prop_stat: str) -> tuple[str, ...]:
+    """Accepted Bovada market phrases for a pick's prop_stat, or ()."""
+    stat = re.sub(r"[\s_]+", "_", (prop_stat or "").strip().upper())
+    return _BOVADA_PROP_PHRASES.get(sport, {}).get(stat, ())
+
+
+def _bovada_prop_markets(ev: dict, phrases: tuple[str, ...], player: str) -> list[dict]:
+    """One Bovada event → API-shaped player-prop bookmakers for _lookup_prop.
+
+    Only O/U markets (both outcomes carry a handicap) whose stripped phrase
+    matches `phrases` exactly (or "Alternate " + phrase) and whose player
+    matches the pick's. Output outcomes use the Odds API player-prop shape:
+    name=Over/Under, description=player, point, price.
+    """
+    accepted = {p.lower() for p in phrases} | {f"alternate {p.lower()}" for p in phrases}
+    outs: list[dict] = []
+    for grp in ev.get("displayGroups") or []:
+        if (grp.get("description") or "").lower() in _BOVADA_LINE_GROUPS:
+            continue
+        for mkt in grp.get("markets") or []:
+            if mkt.get("status") not in (None, "O"):
+                continue
+            if (mkt.get("period") or {}).get("abbreviation") not in (None, "G"):
+                continue
+            m = _BOVADA_PROP_RE.match(mkt.get("description") or "")
+            if not m or m.group("phrase").lower() not in accepted:
+                continue
+            mkt_player = m.group("player")
+            if player and not _team_matches(player.lower(), mkt_player.lower()):
+                continue
+            for o in mkt.get("outcomes") or []:
+                if o.get("status") not in (None, "O"):
+                    continue
+                side = o.get("description") or ""
+                if side not in ("Over", "Under"):
+                    continue
+                price = o.get("price") or {}
+                american = _bovada_american(price.get("american"))
+                if american is None or price.get("handicap") is None:
+                    continue
+                try:
+                    point = float(price["handicap"])
+                except (TypeError, ValueError):
+                    continue
+                outs.append({"name": side, "description": mkt_player,
+                             "point": point, "price": american})
+    if not outs:
+        return []
+    return [{"key": "bovada", "title": "Bovada",
+             "markets": [{"key": _BOVADA_PROP_KEY, "outcomes": outs}]}]
+
+
+async def _fetch_bovada_prop(
+    sport: str, teams: list[str], player: str, phrases: tuple[str, ...],
+    *, allow_started: bool = False, now: datetime | None = None,
+) -> tuple[list[dict], str | None]:
+    """Shaped prop bookmakers for the pick's game; ([], None) if unavailable.
+
+    With teams, the event comes from the same picker the line markets use
+    (started-refusal and all). Without teams — prop picks often name only the
+    player — every candidate event is scanned for a phrase+player match,
+    nearest start first, capped by _BOVADA_MAX_DAYS_AHEAD like any
+    API-unanchored Bovada match.
+    """
+    events = await _fetch_bovada_events(sport)
+    if teams:
+        ev, gd = _bovada_pick_event(events, teams, allow_started=allow_started, now=now)
+        return (_bovada_prop_markets(ev, phrases, player) if ev else []), gd
+    now = now or datetime.now(timezone.utc)
+    horizon = now + timedelta(days=_BOVADA_MAX_DAYS_AHEAD)
+    pairs = [(m, e) for e in events if (m := _bovada_minimal_event(e))]
+    pairs.sort(key=lambda p: p[0]["commence_time"])
+    for minimal, ev in pairs:
+        commence = datetime.strptime(minimal["commence_time"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        if commence > horizon or (commence < now and not allow_started):
+            continue
+        bk = _bovada_prop_markets(ev, phrases, player)
+        if bk:
+            return bk, _utc_to_eastern_date(minimal["commence_time"])
+    return [], None
 
 
 def _bovada_pick_event(
