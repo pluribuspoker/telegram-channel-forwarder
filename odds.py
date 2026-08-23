@@ -292,6 +292,7 @@ class OddsResult:
     pregame_match_type: str | None = None
     game_date:          str | None = None   # YYYY-MM-DD from commence_time
     betonline_sides:    dict | None = None  # {pick_odds, opp_odds, pick_label, opp_label}
+    commence_time:      str | None = None   # raw ISO from the /events match; bounds miss retries
 
     @property
     def found(self) -> bool:
@@ -353,6 +354,49 @@ class OddsResult:
         if self.odds is None:
             return None
         return f"+{self.odds}" if self.odds > 0 else str(self.odds)
+
+
+# ── Retryable misses ──────────────────────────────────────────────────────────
+# A pick is priced once at first encounter and the result stored for good — but
+# Bovada's free period markets (MLB F5, CFL quarters/halves) only appear on the
+# coupon in a pregame window the first attempt can post hours ahead of, and an
+# event posted days early may not be listed anywhere yet. The tracker re-tries
+# these misses with FREE sources only (fetch_odds_current(free_only=True)) every
+# ≥30 min until game start. Priced results, live_/pregame_ results and
+# structural misses stay final; the bound comes from commence_time when the
+# /events match provided one, else the eastern game date (a post-start attempt
+# then resolves through the started branch and stores a final verdict).
+
+_RETRYABLE_MISS_RE = re.compile(r"no_\w+_data")
+_ODDS_RETRY_SPACING_S = 30 * 60
+_ODDS_RETRY_MAX = 300           # safety valve; the 30-min spacing is the real limiter
+
+
+def should_retry_odds(stored: dict, now: datetime | None = None) -> bool:
+    """True if a stored odds_by_pick result is a miss worth re-fetching now."""
+    if not isinstance(stored, dict) or stored.get("odds") is not None:
+        return False
+    mt = stored.get("match_type") or ""
+    if not (mt == "no_game" or _RETRYABLE_MISS_RE.fullmatch(mt)):
+        return False
+    if stored.get("_retry_n", 0) >= _ODDS_RETRY_MAX:
+        return False
+    now = now or datetime.now(timezone.utc)
+    if now.timestamp() - (stored.get("_retry_ts") or 0) < _ODDS_RETRY_SPACING_S:
+        return False
+    ct = stored.get("commence_time")
+    if ct:
+        try:
+            return now < datetime.fromisoformat(str(ct).replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    gd = stored.get("game_date")
+    if gd:
+        try:
+            return now.astimezone(_ET).date().isoformat() <= str(gd)
+        except (ValueError, TypeError):
+            return False
+    return False
 
 
 # ── SQLite cache ──────────────────────────────────────────────────────────────
@@ -1216,31 +1260,38 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
         # ── All other bet types ───────────────────────────────────────────────
         bookmakers: list[dict] = []
 
-        # Odds API first (historical closing odds + alternate lines)
-        event_list = await _fetch_event_list_all(sport, game_date, conn)
-        event_id   = _find_event_id(event_list, teams, as_of=_snapshot_time(game_date))
-        if event_id:
-            ev_key     = _event_sport_key(event_list, event_id, sport_key)
-            bookmakers = await _fetch_bookmakers(ev_key, event_id, game_date, _markets_for_pick(pick, sport), conn)
-
-        r = lookup_pick_odds(sport, pick, bookmakers)
-
-        # Outright winner fallback: "to lift the trophy" / final-round advance —
-        # the game's to_qualify/h2h markets don't carry the 2-way winner price.
-        if (r.get("adjusted_odds") is None and bet_type == "moneyline"
-                and _is_advance_or_outright(pick.get("description", ""))):
-            ow = await _fetch_outright_winner(
-                sport_key, teams[0] if teams else "", conn, game_date=game_date)
-            if ow:
-                r = ow
-
-        # ESPN fallback (pre-game only — odds cleared after game completion)
-        if r.get("adjusted_odds") is None and sport in ESPN_LEAGUES:
+        # ESPN first (free; pre-game only — odds cleared after game completion).
+        # Historical API calls bill ~10x, so a free price short-circuits them.
+        # Adopted only when it actually prices: for completed games ESPN has
+        # nothing and the API tier below must still own the verdict.
+        r: dict | None = None
+        if sport in ESPN_LEAGUES:
             espn_data = await fetch_espn(sport, game_date)
             if espn_data:
                 espn_bk = espn_bookmakers_for_teams(espn_data, teams)
                 if espn_bk:
-                    r = lookup_pick_odds(sport, pick, espn_bk)
+                    r_espn = lookup_pick_odds(sport, pick, espn_bk)
+                    if r_espn.get("adjusted_odds") is not None:
+                        r = r_espn
+
+        # Odds API last resort (historical closing odds + alternate lines)
+        if r is None:
+            event_list = await _fetch_event_list_all(sport, game_date, conn)
+            event_id   = _find_event_id(event_list, teams, as_of=_snapshot_time(game_date))
+            if event_id:
+                ev_key     = _event_sport_key(event_list, event_id, sport_key)
+                bookmakers = await _fetch_bookmakers(ev_key, event_id, game_date, _markets_for_pick(pick, sport), conn)
+
+            r = lookup_pick_odds(sport, pick, bookmakers)
+
+            # Outright winner fallback: "to lift the trophy" / final-round advance —
+            # the game's to_qualify/h2h markets don't carry the 2-way winner price.
+            if (r.get("adjusted_odds") is None and bet_type == "moneyline"
+                    and _is_advance_or_outright(pick.get("description", ""))):
+                ow = await _fetch_outright_winner(
+                    sport_key, teams[0] if teams else "", conn, game_date=game_date)
+                if ow:
+                    r = ow
 
         return OddsResult(
             match_type  = r["match_type"],
@@ -1285,6 +1336,12 @@ def _get_event_date(event_list: list[dict], event_id: str) -> str | None:
     event = next((e for e in event_list if e.get("id") == event_id), None)
     ct = (event or {}).get("commence_time", "")
     return _utc_to_eastern_date(ct)
+
+
+def _get_event_commence(event_list: list[dict], event_id: str) -> str | None:
+    """Return the event's raw commence_time ISO string, or None."""
+    event = next((e for e in event_list if e.get("id") == event_id), None)
+    return (event or {}).get("commence_time") or None
 
 
 async def _try_pregame(
@@ -1359,11 +1416,18 @@ async def _try_pregame(
     )
 
 
-async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> OddsResult:
+async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH,
+                             *, free_only: bool = False) -> OddsResult:
     """
     Look up current (live pre-game) odds for a pick.
 
-    Uses the non-historical Odds API endpoint — no date parameter.
+    Source order: ESPN (free, its leagues) → Bovada (free) → Odds API (paid,
+    LAST resort — the subscription ended 2026-08-22, the key reverts to the
+    free 500-credits/month tier, so every market call must earn its place; the
+    /events match stays first because it costs nothing and anchors the Bovada
+    same-game guard). free_only=True skips every paid call — the tracker's
+    miss-retry loop uses it (see should_retry_odds).
+
     Intended to be called at pick-receive time (first tracker encounter).
     Results cached in picks.db under game_date='current' with a short TTL.
     """
@@ -1390,6 +1454,10 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
             prop_market = PROP_STAT_MARKETS.get(sport, {}).get(prop_stat)
             if not prop_market:
                 return OddsResult(match_type=f"prop_stat_unsupported({prop_stat})", pick_line=pick.get("line"))
+            if free_only:
+                # Props are paid-API-only today (Bovada's prop groups exist but
+                # are unmapped — ~2% of picks; see docs/odds.md).
+                return OddsResult(match_type="player_prop_unavailable", pick_line=pick.get("line"))
             event_list = await _fetch_current_event_list_all(sport, conn)
             event_id   = _find_event_id(event_list, teams)
             if not event_id:
@@ -1437,54 +1505,57 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
         # ── All other bet types ───────────────────────────────────────────────
         bookmakers: list[dict] = []
 
-        # Odds API first (current pre-game and live)
+        # Event binding via the API /events endpoint stays FIRST even though the
+        # API prices last: /events is free (x-requests-last: 0) and its match
+        # anchors game_date, commence_time and the Bovada same-game guard.
         event_list = await _fetch_current_event_list_all(sport, conn)
         event_id   = _find_event_id(event_list, teams)
-        gd     = _get_event_date(event_list, event_id) if event_id else None
+        gd       = _get_event_date(event_list, event_id) if event_id else None
+        commence = _get_event_commence(event_list, event_id) if event_id else None
         ev_key = _event_sport_key(event_list, event_id, sport_key) if event_id else sport_key
         if event_id:
             if _event_already_started(event_list, event_id):
-                live_bk = await _fetch_current_bookmakers(ev_key, event_id, _markets_for_pick(pick, sport), conn, live=True)
-                pregame = await _try_pregame(sport, ev_key, event_list, event_id, pick, db_path)
-                if not live_bk and sport in _BOVADA_PATHS:
-                    # Bovada live fallback: a live_ price beats none, but the
-                    # closing line stays unknown (pregame_* stay None) — Bovada
-                    # has no history to ask. Same-game guard applies: the API
-                    # matched this event, so Bovada must agree on the date.
+                # Bovada live first (free) — the paid live call only runs when
+                # Bovada can't price the pick (e.g. its near-game coupon trims
+                # period markets). Same-game guard applies: the API matched
+                # this event, so Bovada must agree on the date.
+                r_live: dict | None = None
+                if sport in _BOVADA_PATHS:
                     bov_live, bov_live_gd = await _fetch_bovada_bookmakers(sport, teams, allow_started=True)
-                    if _bovada_result_acceptable(gd, bov_live_gd):
-                        live_bk = bov_live
-                if live_bk:
-                    r = lookup_pick_odds(sport, pick, live_bk)
-                    if r.get("adjusted_odds") is not None:
-                        return OddsResult(
-                            match_type=f"live_{r['match_type']}", odds=r["adjusted_odds"],
-                            bookmaker=r["bookmaker"], api_line=r["api_line"], pick_line=r["pick_line"],
-                            pregame_odds=pregame.odds if pregame else None,
-                            pregame_bookmaker=pregame.bookmaker if pregame else None,
-                            pregame_match_type=f"pregame_{pregame.match_type}" if pregame else None,
-                            game_date=gd,
-                        )
+                    if bov_live and _bovada_result_acceptable(gd, bov_live_gd):
+                        r_try = lookup_pick_odds(sport, pick, bov_live)
+                        if r_try.get("adjusted_odds") is not None:
+                            r_live = r_try
+                if r_live is None and not free_only:
+                    live_bk = await _fetch_current_bookmakers(ev_key, event_id, _markets_for_pick(pick, sport), conn, live=True)
+                    if live_bk:
+                        r_try = lookup_pick_odds(sport, pick, live_bk)
+                        if r_try.get("adjusted_odds") is not None:
+                            r_live = r_try
+                # Closing line: the paid historical endpoint is the only source
+                # (Bovada keeps no history). Skipped on free-only retries; a
+                # no-historical-access plan just returns nothing here.
+                pregame = None if free_only else await _try_pregame(sport, ev_key, event_list, event_id, pick, db_path)
+                if r_live is not None:
+                    return OddsResult(
+                        match_type=f"live_{r_live['match_type']}", odds=r_live["adjusted_odds"],
+                        bookmaker=r_live["bookmaker"], api_line=r_live["api_line"], pick_line=r_live["pick_line"],
+                        pregame_odds=pregame.odds if pregame else None,
+                        pregame_bookmaker=pregame.bookmaker if pregame else None,
+                        pregame_match_type=f"pregame_{pregame.match_type}" if pregame else None,
+                        game_date=gd,
+                    )
                 if pregame:
                     return OddsResult(match_type=f"pregame_{pregame.match_type}", odds=pregame.odds,
                                       bookmaker=pregame.bookmaker, api_line=pregame.api_line,
                                       pick_line=pregame.pick_line, game_date=gd)
                 return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"), game_date=gd)
-            else:
-                bookmakers = await _fetch_current_bookmakers(ev_key, event_id, _markets_for_pick(pick, sport), conn)
+            # Pre-game: no immediate paid call — free sources below get the
+            # first shot, the paid market call is the last resort.
 
         r = lookup_pick_odds(sport, pick, bookmakers)
 
-        # Outright winner fallback (see fetch_odds) — pre-game only; the
-        # started-game branch above returns before reaching here.
-        if (r.get("adjusted_odds") is None and bet_type == "moneyline"
-                and _is_advance_or_outright(pick.get("description", ""))):
-            ow = await _fetch_outright_winner(
-                sport_key, teams[0] if teams else "", conn, current=True)
-            if ow:
-                r = ow
-
-        # ESPN fallback (pre-game only, skip for team_total — ESPN lacks that market)
+        # ESPN first (free; pre-game only, skip for team_total — ESPN lacks that market)
         if r.get("adjusted_odds") is None and sport in ESPN_LEAGUES and bet_type != "team_total":
             from datetime import date as _d
             espn_data = await fetch_espn(sport, _d.today().isoformat())
@@ -1492,23 +1563,46 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
                 espn_bk = espn_bookmakers_for_teams(espn_data, teams)
                 if espn_bk:
                     r = lookup_pick_odds(sport, pick, espn_bk)
+                    if r.get("adjusted_odds") is not None:
+                        bookmakers = espn_bk  # feeds the both-sides extraction below
 
-        # Bovada fallback (pre-game only — _bovada_pick_event refuses a started
-        # game here, so a live price can't be recorded as a closing one). CFL
-        # has no ESPN odds, so during an Odds API outage this is the only
-        # source; it also covers a market the API's books simply don't carry.
+        # Bovada second (free; pre-game only — _bovada_pick_event refuses a
+        # started game here, so a live price can't be recorded as a closing
+        # one). CFL has no ESPN odds; Bovada also carries period and alternate
+        # markets ESPN never lists.
         if r.get("adjusted_odds") is None and sport in _BOVADA_PATHS:
             bov_bk, bov_gd = await _fetch_bovada_bookmakers(sport, teams)
             if bov_bk and _bovada_result_acceptable(gd, bov_gd):
                 r2 = lookup_pick_odds(sport, pick, bov_bk)
-                # A Bovada miss verdict is adopted too when the API had nothing
-                # at all: "alt_line_gap_6.0pts" from a market Bovada actually
-                # served beats a blanket no_game.
+                # A Bovada miss verdict is adopted too when nothing else had the
+                # game at all: "alt_line_gap_6.0pts" from a market Bovada
+                # actually served beats a blanket no_game.
                 if r2.get("adjusted_odds") is not None or r.get("match_type") == "no_game":
                     r = r2
                     bookmakers = bov_bk  # feeds the both-sides extraction below
                     if gd is None:
                         gd = bov_gd
+
+        # Odds API LAST RESORT (paid) — only when the free sources left no
+        # price. Same adoption rule as Bovada: a price always wins; a miss
+        # verdict only replaces an uninformative no_game.
+        if r.get("adjusted_odds") is None and event_id and not free_only:
+            api_bk = await _fetch_current_bookmakers(ev_key, event_id, _markets_for_pick(pick, sport), conn)
+            if api_bk:
+                r_api = lookup_pick_odds(sport, pick, api_bk)
+                if r_api.get("adjusted_odds") is not None or r.get("match_type") == "no_game":
+                    r = r_api
+                    bookmakers = api_bk
+
+        # Outright winner fallback (see fetch_odds) — pre-game only; the
+        # started-game branch above returns before reaching here. Paid: no
+        # free source carries outright/advance prices.
+        if (r.get("adjusted_odds") is None and bet_type == "moneyline" and not free_only
+                and _is_advance_or_outright(pick.get("description", ""))):
+            ow = await _fetch_outright_winner(
+                sport_key, teams[0] if teams else "", conn, current=True)
+            if ow:
+                r = ow
 
         # Extract BetOnline odds for both sides (for dashboard liability card)
         bol = None
@@ -1533,6 +1627,7 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH) -> 
             pick_line  = r["pick_line"],
             game_date  = gd,
             betonline_sides = bol,
+            commence_time = commence,
         )
 
     finally:

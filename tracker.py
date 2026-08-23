@@ -14,6 +14,7 @@ import json
 import os
 import argparse
 import re
+import time
 
 from datetime import date as _date, timedelta
 from zoneinfo import ZoneInfo
@@ -33,7 +34,8 @@ from scores import (
     validate_sport, resolve_nickname_collision, verify_picks_on_schedule,
 )
 from odds import (fetch_odds, fetch_odds_current, quota_used as odds_quota_used,
-                  quota_exhausted as odds_quota_exhausted, OddsResult)
+                  quota_exhausted as odds_quota_exhausted, OddsResult,
+                  should_retry_odds)
 from pikkit import get_pick_splits
 from ai import (
     claude_parse,
@@ -720,22 +722,34 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     continue  # primary row carries the +N dup annotation
 
                 # ── Fetch odds at first encounter ─────────────────────────────
-                # Only fetch once — if odds_by_pick is already in the cache, reuse it.
+                # Fetched once and stored — except retryable misses (no_game /
+                # no_*_data before game start), re-fetched with FREE sources
+                # only: Bovada lists period markets (MLB F5, CFL quarters) in a
+                # pregame window the first attempt can post hours ahead of.
+                # See should_retry_odds (odds.py) for the eligibility rules.
                 # Skip odds entirely for forwarded-only channels (results only).
                 cached_entry = pending_cache.get(cache_key) if isinstance(pending_cache.get(cache_key), dict) else {}
                 odds_by_pick: dict = {} if skip_odds else cached_entry.get("odds_by_pick", {})
                 odds_were_empty = not odds_by_pick
+                retry_keys = (set() if (skip_odds or odds_were_empty) else
+                              {k for k, v in odds_by_pick.items() if should_retry_odds(v)})
+                odds_refreshed = (odds_were_empty or bool(retry_keys)) and not skip_odds
                 if odds_were_empty and not skip_odds:
                     print(f"  [odds] fetching fresh (no cache) for {cache_key}")
-                if not odds_by_pick and not skip_odds:
+                elif retry_keys:
+                    print(f"  [odds] retrying misses (free sources) for {cache_key}: picks {sorted(retry_keys)}")
+                if odds_refreshed:
                     for i, pick in enumerate(picks):
+                        is_retry = str(i) in retry_keys
+                        if not odds_were_empty and not is_retry:
+                            continue  # priced or final — keep the stored result
                         pick_sport = pick.get("sport") or sport
-                        result = await fetch_odds_current(pick_sport, pick)
+                        result = await fetch_odds_current(pick_sport, pick, free_only=is_retry)
                         # If the current-endpoint matched a game far from
                         # the message date, the real game likely already
                         # ended and we matched a future event.  Fall back
                         # to historical odds for the message date.
-                        if result.game_date and date_str:
+                        if not is_retry and result.game_date and date_str:
                             try:
                                 delta = abs((_date.fromisoformat(result.game_date) - _date.fromisoformat(date_str)).days)
                             except ValueError:
@@ -766,7 +780,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         if display_odds is None:
                             reason = warn or result.match_type
                             print(f"  [odds] miss({result.match_type}) {pick_desc[:60]}")
-                            if not result.is_structural_miss:
+                            # Retry misses are routine (the window just isn't
+                            # open yet) — the first encounter already warned.
+                            if not result.is_structural_miss and not is_retry:
                                 await audit.warn(f"⚠️ <b>odds miss</b>: {reason}\n{pick_desc} · {pick_sport} · {capper}")
                         elif warn:
                             # Odds found but soft sanity flag — log + one audit warning
@@ -780,6 +796,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             else:
                                 prefix = ""
                             await audit.warn(prefix + _fmt_odds_audit(pick, pick_sport, capper, result))
+                        prev_stored = odds_by_pick.get(str(i)) if is_retry else None
                         odds_by_pick[str(i)] = {
                             "odds":               display_odds,
                             "bookmaker":          result.bookmaker,
@@ -787,9 +804,15 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             "pregame_odds":       result.pregame_odds,
                             "pregame_bookmaker":  result.pregame_bookmaker,
                             "pregame_match_type": result.pregame_match_type,
-                            "game_date":          result.game_date,
+                            # Keep the dates a free-only retry couldn't re-derive
+                            # — losing them would end the retry window early.
+                            "game_date":          result.game_date or (prev_stored or {}).get("game_date"),
                             "betonline_sides":    result.betonline_sides,
+                            "commence_time":      result.commence_time or (prev_stored or {}).get("commence_time"),
                         }
+                        if display_odds is None:
+                            odds_by_pick[str(i)]["_retry_n"] = (prev_stored or {}).get("_retry_n", 0) + (1 if is_retry else 0)
+                            odds_by_pick[str(i)]["_retry_ts"] = time.time()
                         odds_total += 1
                         if display_odds is not None:
                             odds_found += 1
@@ -1050,10 +1073,10 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         if overall == "UNKNOWN":
                             pending_cache[cache_key] = {**cached_entry, "_unknown_notified": True}
                             _save_pending_cache(pending_cache)
-                    # If odds were freshly fetched this run, write them to the cache now
-                    # so subsequent runs don't re-fetch and re-warn. Only touch odds_by_pick
-                    # to avoid disturbing leg_verdicts (e.g. broadcasted flags).
-                    if odds_were_empty and odds_by_pick:
+                    # If odds were freshly fetched OR retried this run, write them to the
+                    # cache now so subsequent runs don't re-fetch and re-warn. Only touch
+                    # odds_by_pick to avoid disturbing leg_verdicts (e.g. broadcasted flags).
+                    if odds_refreshed and odds_by_pick:
                         existing = pending_cache.get(cache_key, {})
                         if isinstance(existing, dict):
                             pending_cache[cache_key] = {**existing, "odds_by_pick": odds_by_pick}
