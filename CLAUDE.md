@@ -110,7 +110,7 @@ Rules here are terse on purpose. Each section points to a `docs/*.md` file holdi
 ## Trent watcher — docs/trent.md
 
 - `trent-monitor.timer` (15 min): @BookitWithTrent → channel `-1004394797084`. X cookies in `.env.local` ONLY; missing/rejected cookies exit non-zero and DM the operator.
-- Build the API via `scripts/x_client.py build_api()`, never raw twscrape (two library-bug workarounds that otherwise present as "bad cookies").
+- Build the API via `scripts/x_client.py build_api()`, never raw twscrape (three library-bug workarounds that otherwise present as "bad cookies" — page migrations AND build-format changes like the 2026-08 hash-length switch; tests: `scripts/test_xclid_scripts_parse.py`).
 - **`user_tweets` yields quoted tweets as top-level items — filter on `tw.user.username`, BEFORE the date check**, and build URLs from it (x.com 307s a wrong handle to the real author). Test: `scripts/test_trent_author_filter.py`.
 - **Singles only.** Order matters: `is_pick_text` → `is_pick_image` (rescue) → `is_parlay_image` (veto, runs on every candidate with a photo). The veto describes the SHAPE of a multi-leg ticket (counting header, or 2+ selections sharing one stake/price/payout), never a book's labels; keep it default-to-pass. Test: `scripts/test_parlay_veto.py` (NOT offline, ~$0.02/run).
 - Fixture text must be byte-exact `rawContent` — never retype inputs.
