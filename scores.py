@@ -1247,6 +1247,12 @@ def try_early_grade_math(
     * **totals, final** — settles outright, including PUSH and the under side.
     * **spread / moneyline** — final only. A lead is *not* monotone; settling those
       early would call a game that can still be lost.
+    * **period bets, once the period is complete** — settle outright even while
+      the game runs: a finished F5/1H/1Q scoreline is frozen, so it is exactly
+      as final as a finished game. Before this, a live-game period bet fell to
+      Claude via build_early_context, which sampled PUSH on a +0.5 F5 tie in
+      one channel and WIN on the same numbers in its sibling — and a
+      fractional spread can never push.
 
     Grading settled bets was left entirely to Claude, and it got two wrong. A total:
     "Dallas Wings 1H under 79.5" is `bet_type=total` (the team name identifies the
@@ -1306,16 +1312,24 @@ def try_early_grade_math(
     # "post" also covers postponed/suspended/cancelled — those carry no result.
     if final and not stype.get("completed"):
         return None
+    # A completed period of a live game is as settled as a final: once the
+    # 6th inning / 3rd quarter has started, the F5/1H scoreline can never
+    # move again. `_is_period_complete` returns False for period="game" and
+    # for anything unmapped, so this only widens the settled set for period
+    # bets whose innings/quarters are all in the books.
+    settled = final or _is_period_complete(event, sport, period)
     scores = _extract_period_scores(event, sport, period)
     if scores is None:
         return None
 
     away_name, away_score, home_name, home_score = scores
     period_tag = f" {period.upper()}" if period != "game" else ""
+    when = "[final]" if final else f"[{period.upper()} complete]"
 
     if bet_type in ("spread", "moneyline"):
-        # A lead can still be lost, so these settle at final only.
-        if not final:
+        # A lead can still be lost, so these settle only once it cannot:
+        # game final, or the bet's period complete.
+        if not settled:
             return None
         team_name = teams[0] if teams else ""
         if _team_matches(team_name.lower(), away_name.lower()):
@@ -1331,9 +1345,9 @@ def try_early_grade_math(
         if margin == 0:
             # A whole-number spread landing exactly on the margin refunds, and so
             # does a tied side bet. This is the case the -1 run line got wrong.
-            return ("PUSH", f"[final] {shown}{period_tag} — exact, push")
+            return ("PUSH", f"{when} {shown}{period_tag} — exact, push")
         return ("WIN" if margin > 0 else "LOSS",
-                f"[final] {shown}{period_tag} -> {margin:+g}")
+                f"{when} {shown}{period_tag} -> {margin:+g}")
 
     if bet_type == "total":
         # A total names the GAME even when the pick text names one team, so both
@@ -1349,12 +1363,12 @@ def try_early_grade_math(
         else:
             return None
 
-    if final:
+    if settled:
         if value == line:
-            return ("PUSH", f"[final] {label} vs {line}{period_tag} — exact, push")
+            return ("PUSH", f"{when} {label} vs {line}{period_tag} — exact, push")
         hit = (value > line) if direction == "over" else (value < line)
         return ("WIN" if hit else "LOSS",
-                f"[final] {label} vs {line}{period_tag}")
+                f"{when} {label} vs {line}{period_tag}")
 
     # Mid-game: only a value already past the line is decided.
     if value > line:
@@ -1370,7 +1384,9 @@ def build_early_context(
     """For period bets where the period is complete but the game is still going,
     format scores as context for Claude grading.
 
-    Handles spread/moneyline period bets (totals are handled by try_early_grade_math).
+    Math-gradable bet types settle in try_early_grade_math before reaching
+    here; this remains for what arithmetic refuses — non-math sports (soccer
+    periods), 3-way/regulation rules, props parsed with a period.
     Returns context string or None.
     """
     if not scoreboard:
