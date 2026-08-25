@@ -884,42 +884,51 @@ def line_scores_text(summary: dict, sport: str = "") -> str:
     return "\n".join(lines) or "No line score data available"
 
 
-def box_score_text(summary: dict, player_hint: str = "") -> str:
-    """Format player stats from a game box score."""
+def box_score_text(summary: dict, player_hint: str = "",
+                   require_all_words: bool = False) -> str:
+    """Format player stats from a game box score.
+
+    Reads EVERY stat group and emits every key=value stat generically: ESPN
+    splits MLB boxes into batting/pitching, NFL into passing/rushing/…, NHL
+    into forwards/defenses/goalies — a curated single-group read leaves whole
+    position groups (all pitchers, everyone but QBs) invisible to the grader.
+    The group name is appended when a team has several, so a two-way player's
+    batting and pitching lines stay distinguishable.
+
+    require_all_words: match a player only when ALL hint words appear in the
+    name — for scanning games other than the pick's bound one, where a loose
+    surname match could bind a different player.
+    """
     lines = []
     boxscore = summary.get("boxscore", {})
 
     for team_data in boxscore.get("players", []):
         team_name = team_data.get("team", {}).get("displayName", "?")
 
-        for stat_group in team_data.get("statistics", [])[:1]:
+        groups = team_data.get("statistics", [])
+        multi_group = len(groups) > 1
+        for stat_group in groups:
             keys = stat_group.get("keys", [])
+            group_name = stat_group.get("type") or stat_group.get("name") or ""
 
             for athlete in stat_group.get("athletes", []):
                 name = athlete.get("athlete", {}).get("displayName", "?")
                 stats_raw = athlete.get("stats", [])
+                if not stats_raw:  # DNP row
+                    continue
 
                 # If filtering to a specific player, skip non-matches
                 if player_hint:
                     hint_words = [w for w in player_hint.lower().split() if len(w) > 2]
                     name_lower = name.lower()
-                    if not any(w in name_lower for w in hint_words):
+                    matcher = all if require_all_words else any
+                    if hint_words and not matcher(w in name_lower for w in hint_words):
                         continue
 
-                stats = dict(zip(keys, stats_raw))
-
-                # Basketball stat line
-                bball_map = {"points": "PTS", "rebounds": "REB", "assists": "AST",
-                             "steals": "STL", "blocks": "BLK"}
-                bball = [f"{abbr}={stats[k]}" for k, abbr in bball_map.items() if k in stats]
-
-                # Baseball stat line
-                bball2_keys = ["hits", "atBats", "runs", "RBIs", "homeRuns", "walks"]
-                baseball = [f"{k}={stats[k]}" for k in bball2_keys if k in stats]
-
-                stat_str = bball + baseball
-                if stat_str:
-                    lines.append(f"  {name} ({team_name}): {', '.join(stat_str)}")
+                pairs = [f"{k}={v}" for k, v in zip(keys, stats_raw)]
+                if pairs:
+                    label = f"{team_name}, {group_name}" if multi_group and group_name else team_name
+                    lines.append(f"  {name} ({label}): {', '.join(pairs)}")
 
     return "\n".join(lines) or "No player stats found"
 

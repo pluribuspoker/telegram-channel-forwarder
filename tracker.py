@@ -202,6 +202,29 @@ def _parse_incomplete(parsed: dict) -> bool:
     return any(not p.get("teams") for p in picks)
 
 
+def _player_team_unevidenced(parsed: dict, text: str) -> bool:
+    """True if a player-prop pick's team appears nowhere in the message text —
+    the team came purely from the model's roster memory, which goes stale when
+    a player is traded after the training cutoff ("Skubal getting 9" → Detroit
+    Tigers bound the wrong game; he'd been traded to the Dodgers). The slip's
+    team chip is the ground truth, so consult the image."""
+    picks = parsed.get("picks", []) if parsed else []
+    text_lower = text.lower()
+    for p in picks:
+        if not p.get("player"):
+            continue
+        teams = p.get("teams") or []
+        if not teams:
+            continue  # _parse_incomplete covers the no-teams case
+        evidenced = any(
+            word in text_lower
+            for t in teams for word in t.lower().split() if len(word) > 3
+        )
+        if not evidenced:
+            return True
+    return False
+
+
 async def _download_image_b64(client, msg) -> tuple[str, str] | None:
     """Download a photo message's image as (base64, media_type), or None if the
     message has no photo / download fails."""
@@ -549,14 +572,17 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     # the exact market was guessed, (b) a multi-leg parlay that
                     # was *inferred* from a vertically-listed card the text never
                     # calls a parlay — the slip says whether they're separate
-                    # straight bets or one combined ticket, or (c) an incomplete
+                    # straight bets or one combined ticket, (c) an incomplete
                     # parse (sport=Other or no teams) that can't be graded — e.g.
                     # "OVER 3.5 IN THE FIESTA BOWL" with the teams only in flag
-                    # emoji. Clean, complete text parses skip the image so they
-                    # pay no extra cost.
+                    # emoji, or (d) a player prop whose team the text never
+                    # states — model roster memory goes stale on trades; the
+                    # slip's team chip is authoritative. Clean, complete text
+                    # parses skip the image so they pay no extra cost.
                     if parsed and (_is_text_thin(text)
                                    or _parlay_structure_uncertain(parsed, text)
-                                   or _parse_incomplete(parsed)):
+                                   or _parse_incomplete(parsed)
+                                   or _player_team_unevidenced(parsed, text)):
                         _img = await _download_image_b64(client, msg)
                         if _img:
                             # The image parse occasionally returns None/no picks

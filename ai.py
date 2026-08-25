@@ -398,6 +398,12 @@ async def claude_parse(
             "/ 'Straight') — emit each as its own pick with is_parlay_leg=false. "
             "Only set is_parlay_leg=true when the slip is ONE combined ticket (a "
             "single stake and one combined payout across all legs). "
+            "PLAYER'S TEAM: the slip shows the player's CURRENT team as a "
+            "logo/abbreviation chip (e.g. 'LAD'). Players get traded after your "
+            "training data ends — when the slip's chip conflicts with your memory "
+            "of the player's team, the SLIP WINS: expand the chip to the full "
+            "team name in teams (LAD → Los Angeles Dodgers), even if you believe "
+            "the player plays elsewhere. "
             "Do NOT read odds/prices off the slip.\n\n" + prompt
         )
         content = [
@@ -726,6 +732,7 @@ async def build_context(
                     date = prev_date
 
         parts = []
+        player_found = False
         for eid in event_ids:
             cache_key = (sport, eid)
             if cache_key not in summary_cache:
@@ -734,9 +741,44 @@ async def build_context(
             if not summary:
                 continue
             if bet_type == "prop":
-                parts.append(box_score_text(summary, player))
+                # Line scores too: NRFI/period props grade off inning scores,
+                # and the final score sanity-checks the box.
+                parts.append(line_scores_text(summary, sport))
+                btext = box_score_text(summary, player)
+                if btext != "No player stats found":
+                    player_found = True
+                parts.append(btext)
             else:
                 parts.append(line_scores_text(summary, sport))
+
+        # Player absent from the bound game's box (or his parsed team had no
+        # game): the parse's team may be the model's stale roster memory — a
+        # player traded after the cutoff binds his OLD team's game (Skubal→LAD
+        # graded against the Tigers). Scan the rest of the day's completed
+        # slate for him before giving up; strict all-words name match so a
+        # shared surname can't bind a different player.
+        if bet_type == "prop" and player and not player_found:
+            bound = set(event_ids)
+            for ev in _completed_events(scoreboard):
+                eid = ev.get("id")
+                if not eid or eid in bound:
+                    continue
+                cache_key = (sport, eid)
+                if cache_key not in summary_cache:
+                    summary_cache[cache_key] = await fetch_espn_summary(sport, eid)
+                summary = summary_cache[cache_key]
+                if not summary:
+                    continue
+                btext = box_score_text(summary, player, require_all_words=True)
+                if btext != "No player stats found":
+                    print(f"  [box-rescue] {player}: not in parsed team's game; "
+                          f"found in {ev.get('name', eid)}")
+                    parts = [
+                        f"NOTE: {player} did not appear in his parsed team's game; "
+                        "his stats below are from the game he actually played:",
+                        line_scores_text(summary, sport), btext,
+                    ]
+                    return "\n\n".join(p for p in parts if p.strip()), date
 
         if parts:
             return "\n\n".join(p for p in parts if p.strip()), date
