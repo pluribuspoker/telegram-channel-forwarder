@@ -118,13 +118,37 @@ _PROP_STAT_ALIASES: dict[str, list[str]] = {
 
 
 def _prop_stat_in_line(prop_stat: str, line_lower: str) -> bool:
-    """Check if a prop_stat (or any of its aliases) appears in a line."""
-    if prop_stat in line_lower:
+    """Check if a prop_stat (or any of its aliases) appears in a line.
+
+    Terms under 4 chars (K, TB, SOG…) must match as whole words (optionally
+    pluralised): as a substring the "k" of a strikeout prop hits the k in
+    "Skubal" or "BookitWithTrent" — the latter put a verdict emoji on the
+    🔗 View on X attribution line."""
+    def _hit(term: str) -> bool:
+        if len(term) < 4:
+            return re.search(rf"\b{re.escape(term)}s?\b", line_lower) is not None
+        return term in line_lower
+
+    if _hit(prop_stat):
         return True
     for alias in _PROP_STAT_ALIASES.get(prop_stat, []):
-        if alias in line_lower:
+        if _hit(alias):
             return True
     return False
+
+
+_LINK_LINE_RE = re.compile(r'^\s*(?:<a\s|https?://)', re.IGNORECASE)
+
+
+def _is_link_line(line: str) -> bool:
+    """True for hyperlink/attribution lines ("🔗 View on X", bare URLs).
+
+    Never the bet, so no placement pass — odds tag or verdict emoji — may
+    target one. Shared by BOTH matchers (_match_pick_line/_best_content_line
+    and _insert_odds) so they can't disagree about it; URLs are also full of
+    digits and letters that substring passes love ("BookitWithTrent" contains
+    a k, a status id contains most integer lines)."""
+    return bool(_LINK_LINE_RE.match(line.strip())) or "<a " in line
 
 
 def _pick_search_terms(pick: dict) -> list[str]:
@@ -199,22 +223,30 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
     bq_lines = _blockquote_lines(lines)
 
     def _available(i: int) -> bool:
-        return i not in bq_lines and not any(ch in lines[i] for ch in _PICK_EMOJI.values())
+        return (i not in bq_lines
+                and not _is_link_line(lines[i])
+                and not any(ch in lines[i] for ch in _PICK_EMOJI.values()))
 
-    # Pass 1: team/player name
+    # Pass 1: team/player name. When the pick is a prop, prefer the line that
+    # also names the stat — that disambiguates multi-prop messages and BTTS-
+    # style team headers. For PLAYER props, fall back to the player-name line
+    # without the stat: cappers often never state it ("Snell getting 9" =
+    # over 8.5 Ks), and the player's name on a line is already a strong match.
     search_terms = _pick_search_terms(pick)
     prop_stat = (pick.get("prop_stat") or "").lower().strip()
-    for i, line in enumerate(lines):
-        if not _available(i):
-            continue
-        line_lower = line.lower()
-        if any(term in line_lower for term in search_terms):
-            # For team-level props (BTTS, clean sheet, etc.), team names
-            # may appear on a header line separate from the pick line.
-            # Only match here if the line also contains the prop_stat.
-            if prop_stat and not _prop_stat_in_line(prop_stat, line_lower):
+    stat_passes = (True, False) if pick.get("player") else (True,)
+    for require_stat in stat_passes:
+        for i, line in enumerate(lines):
+            if not _available(i):
                 continue
-            return i
+            line_lower = line.lower()
+            if any(term in line_lower for term in search_terms):
+                # For team-level props (BTTS, clean sheet, etc.), team names
+                # may appear on a header line separate from the pick line.
+                # Only match here if the line also contains the prop_stat.
+                if require_stat and prop_stat and not _prop_stat_in_line(prop_stat, line_lower):
+                    continue
+                return i
 
     # Pass 1b: team-level prop (BTTS, clean sheet, etc.) where the prop keyword
     # sits on its own pick line, separate from the team-name header (common in
@@ -289,9 +321,6 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
     return None
 
 
-_LINK_LINE_RE = re.compile(r'^\s*(?:<a\s|https?://)', re.IGNORECASE)
-
-
 def _best_content_line(lines: list[str]) -> int | None:
     """Last usable content line for placing an odds tag / verdict emoji when a
     pick matches no line by name or number (pure-slang tweets like "nuking the
@@ -307,7 +336,7 @@ def _best_content_line(lines: list[str]) -> int | None:
         stripped = line.strip()
         if not stripped or i == 0 or i in bq_lines:
             continue
-        if _LINK_LINE_RE.match(stripped) or "<a " in line:
+        if _is_link_line(line):
             continue
         if any(ch in line for ch in _PICK_EMOJI.values()):
             continue
@@ -454,14 +483,14 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             # line instead.
             header_j = -1
             for j, line in enumerate(lines):
-                if j in bq_lines:
+                if j in bq_lines or _is_link_line(line):
                     continue
                 if re.search(r'\b(?:parlay|teaser)\b[^:\n]*:(?:\s*\[[+-]\d[^\]]*\])?\s*$', line, re.IGNORECASE):
                     header_j = j
                     break
             if header_j < 0:
                 for j, line in enumerate(lines):
-                    if j in bq_lines:
+                    if j in bq_lines or _is_link_line(line):
                         continue
                     if re.search(r'\b(?:parlay|teaser)\b', line, re.IGNORECASE):
                         header_j = j
@@ -476,7 +505,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                                 leg_terms.append(w)
                 best_j, best_count = -1, 0
                 for j, line in enumerate(lines):
-                    if j in bq_lines:
+                    if j in bq_lines or _is_link_line(line):
                         continue
                     ll = line.lower()
                     hits = sum(1 for t in leg_terms if t in ll)
@@ -602,7 +631,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         # after the analysis blockquote that mentions the Roughriders again).
         if desc:
             for j, line in enumerate(lines):
-                if j in bq_lines:
+                if j in bq_lines or _is_link_line(line):
                     continue
                 if desc in _norm_abbr(line.lower()):
                     if _place(j, odds_tag, allow_source=moved, declined=src_declined):
@@ -613,7 +642,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
 
         if not desc_matched and not src_declined:
             for j, line in enumerate(lines):
-                if j in bq_lines:
+                if j in bq_lines or _is_link_line(line):
                     continue
                 if " @ " in line and not _BET_LINE_RE.search(line):
                     continue  # skip game-info headers, but keep pick lines
@@ -644,7 +673,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             desc_stripped = " ".join(desc_stripped.split())  # collapse whitespace
             if len(desc_stripped) >= 4:
                 for j, line in enumerate(lines):
-                    if j in bq_lines:
+                    if j in bq_lines or _is_link_line(line):
                         continue
                     if " @ " in line and not _BET_LINE_RE.search(line):
                         continue
@@ -664,7 +693,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 pick_line_f = float(pick_line)
                 line_str = str(int(pick_line_f)) if pick_line_f == int(pick_line_f) else str(pick_line_f)
                 for j, row in enumerate(lines):
-                    if j in bq_lines:
+                    if j in bq_lines or _is_link_line(row):
                         continue
                     if " @ " in row and not _BET_LINE_RE.search(row):
                         continue
@@ -687,7 +716,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         if not desc_matched and not src_declined:
             best_j, best_score = -1, 0
             for j, row in enumerate(lines):
-                if j in bq_lines:
+                if j in bq_lines or _is_link_line(row):
                     continue
                 stripped = row.strip()
                 if not stripped or len(stripped) < 3:
