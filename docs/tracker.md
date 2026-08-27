@@ -67,6 +67,8 @@ Pinned offline by `scripts/test_total_grade_math.py`, built on the real box scor
 
 **KBO (Korean Baseball):** Graded via `koreabaseball.com` ASMX endpoint (`fetch_kbo_context` in `scores.py`). The Odds API has KBO odds but never populates scores, so we scrape the official site instead. Picks are always sent the US evening before the game day, so the code fetches `date+1` to find the correct game. Team ID map (`KBO_TEAM_IDS`) is in `scores.py`. If a pick re-parses as `sport: "Other"` despite the message containing "kbo", the post-parse correction in `claude_parse` (`ai.py`) should catch it.
 
+**NCAAF (added 2026-08-27, first CFB pick of the season):** NCAAF was missing from the parse enum, so the pick parsed as `Other` → `sport_unsupported` → no odds, no grading; everything downstream (`SPORT_KEYS`, `ESPN_LEAGUES`, `PERIOD_MAP`, `MATH_GRADABLE_SPORTS`, Bovada `football/college-football`) was already wired. Two extra traps: (1) ESPN's college-football scoreboard defaults to **FBS-only** — FCS matchups are invisible without `SPORT_EXTRA_PARAMS["NCAAF"] = {"groups": "90"}` (all D1; FBS-vs-FCS crossover games appear on both subdivision scoreboards, so 80∪81 = 90's count). (2) Consumers resolve sport as `pick.get("sport") or sport` — an explicit pick-level `"Other"` **overrides** a repaired top level, so the post-parse net (`ai.py`, fires on `\bcfb\b`/`\bncaaf\b`/"college football") nulls pick-level `"Other"` copies, and any manual cache repair must fix both levels.
+
 
 ## Broadcast results
 
