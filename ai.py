@@ -146,7 +146,7 @@ Lines prefixed with '>' are blockquote commentary by the poster. If the main tex
 {date_context}
 Return JSON (no markdown fences):
 {{
-  "sport": "NBA|WNBA|NCAAB|MLB|NFL|NHL|UFL|CFL|Tennis|UFC|Boxing|KBO|Soccer|Lacrosse|Other",
+  "sport": "NBA|WNBA|NCAAB|NCAAF|MLB|NFL|NHL|UFL|CFL|Tennis|UFC|Boxing|KBO|Soccer|Lacrosse|Other",
   "picks": [
     {{
       "description": "concise one-line summary of the exact bet",
@@ -540,6 +540,18 @@ async def claude_parse(
                     parsed["sport"] = "Lacrosse"
                     pick["teams"] = [canonical]
                     break
+
+    # NCAAF: explicit college-football context but Claude left sport="Other".
+    # Pick-level "Other" copies are nulled so they re-inherit the corrected
+    # top-level sport (every consumer resolves pick.get("sport") or sport,
+    # and an explicit "Other" there would override the fix).
+    if parsed and parsed.get("sport") == "Other" and re.search(
+        r"\bcfb\b|\bncaaf\b|college football", text.lower()
+    ):
+        parsed["sport"] = "NCAAF"
+        for pick in parsed.get("picks", []):
+            if pick.get("sport") == "Other":
+                pick["sport"] = None
 
     if parsed:
         _fix_mlb_f5_total_bleed(parsed)

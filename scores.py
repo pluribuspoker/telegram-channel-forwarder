@@ -81,6 +81,9 @@ SOCCER_LEAGUES: list[tuple[str, str]] = [
 # Extra query params per sport (e.g. groups=50 for all D1 NCAAB games)
 SPORT_EXTRA_PARAMS: dict[str, dict] = {
     "NCAAB": {"groups": "50"},
+    # groups=90 = all Division I (FBS+FCS). The default scoreboard is FBS-only,
+    # which leaves FCS matchups (UT Martin, Central Arkansas, ...) invisible.
+    "NCAAF": {"groups": "90"},
 }
 
 # Odds API sport keys for sports not on ESPN
