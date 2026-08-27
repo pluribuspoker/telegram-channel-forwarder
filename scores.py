@@ -1148,7 +1148,10 @@ def _ufc_bout_completed(data: dict, teams: list[str], player: str = "") -> bool:
 
 # Maps (sport, period_code) → list of 1-based ESPN period indices.
 _QUARTER_PERIODS = {"1h": [1, 2], "2h": [3, 4], "1q": [1], "2q": [2], "3q": [3], "4q": [4]}
-_BASEBALL_PERIODS = {"1h": [1, 2, 3, 4, 5], "2h": [6, 7, 8, 9]}
+# "1q" in baseball is the 1st inning — the parser's closest enum for NRFI/YRFI
+# (total 0.5 on inning 1). Unmapped, an NRFI sat PENDING until the game went
+# final ~3h on, when its period was frozen 20 minutes in.
+_BASEBALL_PERIODS = {"1h": [1, 2, 3, 4, 5], "2h": [6, 7, 8, 9], "1q": [1]}
 
 # Every quarter-based sport in ESPN_LEAGUES belongs here. WNBA and Lacrosse were
 # missing, which silently disabled ALL period math for them — `_extract_period_scores`

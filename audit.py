@@ -39,9 +39,13 @@ def _clean_desc(desc: str) -> str:
 def _period_tag(pick: dict) -> str:
     """The period qualifier for a pick's label ("" for a full-game bet)."""
     period = pick.get("period") or "game"
-    # Baseball "1H" is conventionally called "F5" (first 5 innings)
-    if period == "1h" and pick.get("sport", "") in ("MLB", "KBO"):
-        return " F5"
+    # Baseball "1H" is conventionally called "F5" (first 5 innings), and "1Q"
+    # is the 1st inning (NRFI/YRFI) — a quarter tag on a baseball bet is wrong.
+    if pick.get("sport", "") in ("MLB", "KBO"):
+        if period == "1h":
+            return " F5"
+        if period == "1q":
+            return " 1st Inn"
     return f" {period.upper()}" if period and period != "game" else ""
 
 

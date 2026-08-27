@@ -84,6 +84,21 @@ MARLINS_8TH = event("Boston Red Sox", [0, 0, 0, 0, 1, 0, 0, 1],
 MARLINS_5TH = event("Boston Red Sox", [0, 0, 0, 0, 1],
                     "Miami Marlins", [0, 1, 0, 0, 0],
                     state="in", completed=False, period=5)
+# Boston at Miami, 2026-08-26 — the reported NRFI. Real ESPN linescores captured
+# in the 8th: Miami scored in the 1st, so the under-0.5 lost 20 minutes in, but
+# ("MLB","1q") was unmapped and the pick sat PENDING until the final ~3h later.
+NRFI_8TH = event("Boston Red Sox", [0, 0, 0, 0, 0, 0, 0, 0],
+                 "Miami Marlins", [1, 1, 0, 0, 0, 0, 0, 0],
+                 state="in", completed=False, period=8)
+# Detroit vs Tampa Bay the same day — the sibling NRFI that WON (both I1 = 0).
+NRFI_WIN_2ND = event("Tampa Bay Rays", [0], "Detroit Tigers", [0],
+                     state="in", completed=False, period=2)
+# Still batting in the 1st: inning not complete, an under must wait...
+NRFI_MID_1ST = event("Boston Red Sox", [0], "Miami Marlins", [0],
+                     state="in", completed=False, period=1)
+# ...but a run already in mid-1st settles the monotone side (YRFI over).
+YRFI_MID_1ST = event("Boston Red Sox", [1], "Miami Marlins", [0],
+                     state="in", completed=False, period=1)
 # Live WNBA game with the half in the books (3rd quarter underway) vs halftime
 # (period still 2 — conservatively not yet "complete").
 WNBA_Q3 = event("Golden State Valkyries", [26, 18, 30], "Dallas Wings",
@@ -203,6 +218,26 @@ CASES = [
     ("F5 total under settles once the period ends", "MLB",
      P(sport="MLB", period="1h", line=4.5, teams=["Miami Marlins"]),
      MARLINS_8TH, ("WIN", "2")),
+    # NRFI/YRFI: "1q" in baseball is the 1st inning — settled once inning 2
+    # starts. The reported pick: Marlins scored in the 1st, under 0.5 = LOSS.
+    ("NRFI with a 1st-inning run, game live = LOSS (reported)", "MLB",
+     P(sport="MLB", period="1q", line=0.5, teams=["Boston Red Sox", "Miami Marlins"]),
+     NRFI_8TH, ("LOSS", "0+1=1")),
+    ("its calc says the period, not [final]", "MLB",
+     P(sport="MLB", period="1q", line=0.5, teams=["Boston Red Sox", "Miami Marlins"]),
+     NRFI_8TH, ("LOSS", "[1Q complete]")),
+    ("YRFI on the same inning = WIN", "MLB",
+     P(sport="MLB", period="1q", line=0.5, direction="over",
+       teams=["Boston Red Sox", "Miami Marlins"]), NRFI_8TH, ("WIN", "1")),
+    ("NRFI 0-0 first inning settles WIN once the 2nd starts", "MLB",
+     P(sport="MLB", period="1q", line=0.5, teams=["Detroit Tigers", "Tampa Bay Rays"]),
+     NRFI_WIN_2ND, ("WIN", "0+0=0")),
+    ("NRFI during the 1st inning still waits", "MLB",
+     P(sport="MLB", period="1q", line=0.5, teams=["Boston Red Sox", "Miami Marlins"]),
+     NRFI_MID_1ST, None),
+    ("YRFI settles mid-1st once a run is in (monotone)", "MLB",
+     P(sport="MLB", period="1q", line=0.5, direction="over",
+       teams=["Boston Red Sox", "Miami Marlins"]), YRFI_MID_1ST, ("WIN", "1+0=1")),
     # Bottom of the 5th: F5 is NOT complete, everything above must wait.
     ("F5 spread during the 5th still waits", "MLB",
      S(bet_type="spread", line=0.5, teams=["Miami Marlins"], period="1h"),
