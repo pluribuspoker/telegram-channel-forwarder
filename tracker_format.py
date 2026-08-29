@@ -399,11 +399,18 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
         overall = _overall_verdict(parlay_verdicts)
         emoji = _PICK_EMOJI.get(overall)
         if emoji:
+            # A parlay carries exactly ONE overall emoji, and the tracker and
+            # daemon both re-edit the same message from its current text — so a
+            # target line that already holds a verdict emoji means an earlier
+            # pass placed it. Every placement below must treat that as done:
+            # falling through to append instead stacks a stray emoji on each
+            # subsequent re-edit.
             # Prefer appending to the "Parlay:" header line
             placed = False
             for i, line in enumerate(lines):
-                if "parlay" in line.lower() and not any(ch in line for ch in _PICK_EMOJI.values()):
-                    lines[i] = f"{line.rstrip()}{emoji}"
+                if "parlay" in line.lower():
+                    if not any(ch in line for ch in _PICK_EMOJI.values()):
+                        lines[i] = f"{line.rstrip()}{emoji}"
                     placed = True
                     break
 
@@ -416,9 +423,10 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
                         if any(term in line.lower() for term in search_terms):
                             last_idx = max(last_idx, i)
 
-                if last_idx >= 0 and not any(ch in lines[last_idx] for ch in _PICK_EMOJI.values()):
-                    lines[last_idx] = f"{lines[last_idx].rstrip()}{emoji}"
-                else:
+                if last_idx >= 0:
+                    if not any(ch in lines[last_idx] for ch in _PICK_EMOJI.values()):
+                        lines[last_idx] = f"{lines[last_idx].rstrip()}{emoji}"
+                elif not any(ln.strip() in _PICK_EMOJI.values() for ln in lines):
                     lines.append(emoji)
 
     return "\n".join(lines)
