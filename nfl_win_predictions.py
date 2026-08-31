@@ -387,6 +387,17 @@ def latest_predictions_for_user(
     )
 
 
+def _celebrity_display_name(user_id: str, display_name: Any) -> str:
+    name = str(display_name or "")
+    try:
+        is_celebrity = int(user_id) < 0
+    except (TypeError, ValueError):
+        is_celebrity = False
+    if is_celebrity and not name.startswith("🎤 "):
+        return f"🎤 {name}"
+    return name
+
+
 def build_latest_prediction_rows(
     predictions: list[dict[str, Any]],
     win_totals: list[dict[str, Any]],
@@ -410,9 +421,16 @@ def build_latest_prediction_rows(
         ]
         latest, counts = latest_predictions_for_user(user_rows, user_id)
         identity = user_rows[-1] if user_rows else {}
+        display_name = _celebrity_display_name(
+            user_id, identity.get("telegram_display_name", "")
+        )
         for team, abbreviation in TEAM_ABBREVIATIONS.items():
             row = latest.get(team, {})
             market = market_by_team.get(team, {})
+            row_display_name = _celebrity_display_name(
+                user_id,
+                row.get("telegram_display_name") or display_name,
+            )
             output.append(
                 {
                     "telegram_user_id": user_id,
@@ -420,10 +438,7 @@ def build_latest_prediction_rows(
                         "telegram_username",
                         identity.get("telegram_username", ""),
                     ),
-                    "telegram_display_name": row.get(
-                        "telegram_display_name",
-                        identity.get("telegram_display_name", ""),
-                    ),
+                    "telegram_display_name": row_display_name,
                     "season": row.get(
                         "season", market.get("season", "")
                     ),

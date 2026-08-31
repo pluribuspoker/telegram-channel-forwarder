@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import logging
 import os
@@ -78,6 +79,7 @@ TEAM_HISTORY_TAB = "nfl_team_history"
 WIN_PREDICTIONS_TAB = "nfl_win_predictions"
 WIN_PREDICTIONS_LATEST_TAB = "nfl_win_predictions_latest"
 _WIN_PREDICTION_WRITE_LOCK = threading.Lock()
+_CELEBRITY_REGISTRY_LOCK = threading.Lock()
 CELEBRITY_TAB = "celebrity_picks"
 # One row per (submission, celebrity name). Game context is denormalized onto
 # each row so season-long "who thinks alike on which game types" analysis pivots
@@ -104,6 +106,25 @@ CELEBRITY_HEADERS = [
 MAX_CELEBRITY_BUTTONS = 30
 MAX_CELEBRITY_NAME_LEN = 60
 MAX_CELEBRITY_NAMES = 10
+
+CELEBRITY_REGISTRY_TAB = "celebrities"
+# Single source of truth for every celebrity we track, shared by all
+# celebrity-aware features. `celebrity_id` is a STABLE, NEGATIVE synthetic
+# Telegram-style id derived from the normalized name: negative so it can never
+# collide with a real (positive) Telegram user id, which is how downstream code
+# tells a celebrity's rows apart from a real user's. Storing the id here lets a
+# celebrity's win-total guesses live in nfl_win_predictions under that id using
+# the EXISTING columns (no schema change there). Provenance — who first added a
+# celebrity — lives on the registry row, not on every guess.
+CELEBRITY_REGISTRY_HEADERS = [
+    "celebrity_id",
+    "celebrity_name",
+    "normalized_name",
+    "created_at_utc",
+    "created_at_et",
+    "created_by_user_id",
+    "created_by_username",
+]
 DEFAULT_NFL_TEAM_EMOJIS = {
     "Arizona Cardinals": "🐦",
     "Atlanta Falcons": "🦅",
@@ -792,6 +813,7 @@ def win_prediction_browser(
     predictions: list[dict[str, Any]],
     *,
     user_id: int,
+    celebrity_name: str | None = None,
 ) -> tuple[str, list[list[Button]]]:
     current_totals = _current_win_totals(totals)
     market_by_team = {str(row["team"]): row for row in current_totals}
@@ -805,8 +827,13 @@ def win_prediction_browser(
     )
     progress = len(latest)
     season = int(current_totals[0]["season"])
+    context = (
+        f"\n🎤 <b>{html.escape(celebrity_name)}</b>"
+        if celebrity_name
+        else ""
+    )
     text = (
-        f"🏈 <b>{season} NFL Win Predictions</b>\n"
+        f"🏈 <b>{season} NFL Win Predictions</b>{context}\n"
         f"Progress: {progress}/32 teams\n\n"
         "Choose a team. Unmarked teams are shown first."
     )
@@ -826,6 +853,40 @@ def win_prediction_browser(
             row = []
     if row:
         buttons.append(row)
+    if celebrity_name:
+        buttons.append(
+            [Button.inline("↩ Back to my guesses", b"celebwin:self")]
+        )
+    else:
+        buttons.append(
+            [Button.inline("🎤 Guess as a celebrity", b"celebwin:start")]
+        )
+    return text, buttons
+
+
+def win_celebrity_picker(
+    roster: list[str],
+) -> tuple[str, list[list[Button]]]:
+    text = (
+        "🎤 <b>Guess as a celebrity</b>\n\n"
+        "Choose someone below or add a new celebrity."
+    )
+    buttons: list[list[Button]] = []
+    row: list[Button] = []
+    for name in roster:
+        row.append(
+            Button.inline(
+                name,
+                f"celebwin:pick:{celebrity_user_id(name)}".encode(),
+            )
+        )
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([Button.inline("➕ New celebrity", b"celebwin:new")])
+    buttons.append([Button.inline("← Cancel", b"celebwin:cancel")])
     return text, buttons
 
 
@@ -845,6 +906,7 @@ def win_prediction_team_detail(
     *,
     user_id: int,
     abbreviation: str,
+    celebrity_name: str | None = None,
 ) -> tuple[str, list[list[Button]]]:
     team = _team_by_abbreviation(abbreviation)
     if team is None:
@@ -873,6 +935,8 @@ def win_prediction_team_detail(
         f"🏈 <b>{html.escape(team)} ({abbreviation})</b>",
         f"BetOnline total: {_number_text(float(market['win_total']))} wins",
     ]
+    if celebrity_name:
+        sections.insert(1, f"🎤 <b>{html.escape(celebrity_name)}</b>")
     previous = latest.get(team)
     if previous:
         sections.append(
@@ -980,6 +1044,8 @@ def win_prediction_confirmation(
     *,
     abbreviation: str,
     predicted_wins: int,
+    user_id: int,
+    celebrity_name: str | None = None,
 ) -> tuple[str, list[list[Button]]]:
     team = _team_by_abbreviation(abbreviation)
     if team is None:
@@ -990,7 +1056,12 @@ def win_prediction_confirmation(
     )
     total = float(market["win_total"])
     difference = predicted_wins - total
-    text = (
+    context = (
+        f"🎤 <b>{html.escape(celebrity_name)}</b>\n\n"
+        if celebrity_name
+        else ""
+    )
+    text = context + (
         f"Confirm <b>{html.escape(team)}</b>: {predicted_wins} wins?\n\n"
         f"BetOnline: {_number_text(total)}\n"
         f"Your prediction: {predicted_wins}\n"
@@ -1000,7 +1071,7 @@ def win_prediction_confirmation(
         [
             Button.inline(
                 "Save prediction",
-                f"winsave:{abbreviation}:{predicted_wins}".encode(),
+                f"winsave:{abbreviation}:{predicted_wins}:{user_id}".encode(),
             ),
             Button.inline(
                 "Change",
@@ -1021,11 +1092,19 @@ def build_win_prediction_row(
     predicted_wins: int,
     market: dict[str, Any],
     prior: dict[str, Any],
+    celebrity_id: int | None = None,
+    celebrity_name: str | None = None,
 ) -> dict[str, Any]:
     submitted_at_utc = submitted_at.astimezone(timezone.utc)
     display_name = " ".join(
         value for value in (first_name, last_name) if value
     )
+    if celebrity_id is not None:
+        if not celebrity_name:
+            raise ValueError("celebrity_name is required with celebrity_id")
+        user_id = celebrity_id
+        username = ""
+        display_name = celebrity_name
     return {
         "revision_id": str(uuid.uuid4()),
         "submitted_at_utc": submitted_at_utc.isoformat(),
@@ -1267,37 +1346,33 @@ def _celebrity_worksheet(spreadsheet: Any) -> Any:
 
 
 def load_celebrity_roster(limit: int = MAX_CELEBRITY_BUTTONS) -> list[str]:
-    """Distinct celebrity names seen so far, most-frequent first (recency breaks
-    ties), for prefilling the picker. Empty until someone is entered."""
+    """Distinct celebrity names from the shared `celebrities` registry (the
+    single source of truth for every feature), most-recently-added first, for
+    prefilling any celebrity picker. Empty until someone is entered."""
     credentials = os.environ["GOOGLE_CREDENTIALS"]
     sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
     spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
-    try:
-        worksheet = spreadsheet.worksheet(CELEBRITY_TAB)
-    except WorksheetNotFound:
-        return []
+    worksheet = _celebrity_registry_worksheet(spreadsheet)
     values = worksheet.get_all_values()
-    if len(values) < 2:
+    if len(values) < 2 or "celebrity_name" not in values[0]:
         return []
-    try:
-        name_index = values[0].index("celebrity_name")
-    except ValueError:
-        return []
-    freq: dict[str, int] = {}
-    last_seen: dict[str, int] = {}
-    display: dict[str, str] = {}
-    for order, row in enumerate(values[1:]):
+    name_index = values[0].index("celebrity_name")
+    names: list[str] = []
+    seen: set[str] = set()
+    for row in reversed(values[1:]):
         if len(row) <= name_index:
             continue
         name = str(row[name_index]).strip()
         if not name:
             continue
         key = name.casefold()
-        freq[key] = freq.get(key, 0) + 1
-        last_seen[key] = order
-        display.setdefault(key, name)
-    ranked = sorted(freq, key=lambda key: (-freq[key], -last_seen[key]))
-    return [display[key] for key in ranked[:limit]]
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+        if len(names) >= limit:
+            break
+    return names
 
 
 def append_celebrity_picks(rows: list[dict[str, Any]]) -> int:
@@ -1330,6 +1405,128 @@ def append_celebrity_picks(rows: list[dict[str, Any]]) -> int:
     return len(to_append)
 
 
+def celebrity_user_id(name: str) -> int:
+    """Stable NEGATIVE synthetic id for a celebrity, derived from the
+    case-folded normalized name. Deterministic (same name -> same id across
+    runs) and negative so it can never collide with a real, positive Telegram
+    user id."""
+    key = normalize_celebrity_name(name).casefold()
+    digest = hashlib.sha1(key.encode("utf-8")).digest()
+    return -(int.from_bytes(digest[:6], "big") + 1)
+
+
+def _seed_registry_from_game_picks(spreadsheet: Any, registry: Any) -> None:
+    """One-time backfill run when the registry tab is first created: pull the
+    distinct celebrity names already used on game picks into the registry so the
+    shared roster is not empty on day one."""
+    try:
+        picks = spreadsheet.worksheet(CELEBRITY_TAB)
+    except WorksheetNotFound:
+        return
+    values = picks.get_all_values()
+    if len(values) < 2 or "celebrity_name" not in values[0]:
+        return
+    idx = values[0].index("celebrity_name")
+    now = datetime.now(timezone.utc)
+    seen: set[str] = set()
+    rows: list[list[Any]] = []
+    for row in values[1:]:
+        if len(row) <= idx:
+            continue
+        name = normalize_celebrity_name(row[idx])
+        if not name:
+            continue
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            [
+                celebrity_user_id(name),
+                name,
+                key,
+                now.isoformat(),
+                now.astimezone(ET).isoformat(),
+                "",
+                "",
+            ]
+        )
+    if rows:
+        registry.append_rows(rows, value_input_option="RAW")
+
+
+def _celebrity_registry_worksheet(spreadsheet: Any) -> Any:
+    """Return the celebrities registry worksheet, creating it (with headers, and
+    seeded once from any names already used on game picks) the first time.
+    Refuses to touch a tab whose existing header row disagrees."""
+    try:
+        worksheet = spreadsheet.worksheet(CELEBRITY_REGISTRY_TAB)
+    except WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(
+            title=CELEBRITY_REGISTRY_TAB,
+            rows=1000,
+            cols=len(CELEBRITY_REGISTRY_HEADERS),
+        )
+        worksheet.update([CELEBRITY_REGISTRY_HEADERS])
+        _seed_registry_from_game_picks(spreadsheet, worksheet)
+        return worksheet
+    header = worksheet.row_values(1)
+    if not header:
+        worksheet.update([CELEBRITY_REGISTRY_HEADERS])
+    elif header != CELEBRITY_REGISTRY_HEADERS:
+        raise RuntimeError(
+            "celebrities registry headers do not match the finalized schema"
+        )
+    return worksheet
+
+
+def get_or_create_celebrity(
+    name: str,
+    *,
+    created_by_user_id: int | None = None,
+    created_by_username: str | None = None,
+) -> dict[str, Any]:
+    """Resolve a free-text celebrity name to a registry record, creating it if
+    new. Idempotent on the case-folded normalized name, so the same person is
+    one row (and one id) no matter how many features or users enter them.
+    Returns ``{"celebrity_id", "celebrity_name"}``."""
+    normalized = normalize_celebrity_name(name)
+    if not normalized:
+        raise ValueError("celebrity name cannot be empty")
+    key = normalized.casefold()
+    celeb_id = celebrity_user_id(normalized)
+    credentials = os.environ["GOOGLE_CREDENTIALS"]
+    sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
+    with _CELEBRITY_REGISTRY_LOCK:
+        spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
+        worksheet = _celebrity_registry_worksheet(spreadsheet)
+        norm_index = CELEBRITY_REGISTRY_HEADERS.index("normalized_name")
+        name_index = CELEBRITY_REGISTRY_HEADERS.index("celebrity_name")
+        for row in worksheet.get_all_values()[1:]:
+            if len(row) > norm_index and row[norm_index] == key:
+                existing = (
+                    row[name_index] if len(row) > name_index else normalized
+                )
+                return {
+                    "celebrity_id": celeb_id,
+                    "celebrity_name": existing or normalized,
+                }
+        now = datetime.now(timezone.utc)
+        worksheet.append_row(
+            [
+                celeb_id,
+                normalized,
+                key,
+                now.isoformat(),
+                now.astimezone(ET).isoformat(),
+                created_by_user_id if created_by_user_id is not None else "",
+                created_by_username or "",
+            ],
+            value_input_option="RAW",
+        )
+    return {"celebrity_id": celeb_id, "celebrity_name": normalized}
+
+
 async def _intake_data() -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
     return await asyncio.to_thread(load_intake_data)
 
@@ -1359,6 +1556,7 @@ async def main() -> None:
     client = TelegramClient(StringSession(session), api_id, api_hash)
     pending_suggestions: dict[int, int] = {}
     guess_states: dict[int, dict[str, Any]] = {}
+    win_guess_states: dict[int, dict[str, Any]] = {}
 
     @client.on(
         events.NewMessage(
@@ -1379,6 +1577,7 @@ async def main() -> None:
             )
         if event.raw_text.startswith("/predict_nfl_wins"):
             guess_states.pop(event.sender_id, None)
+            win_guess_states.pop(event.sender_id, None)
             totals, _, predictions = await _win_prediction_data()
             text, buttons = win_prediction_browser(
                 totals,
@@ -1388,6 +1587,7 @@ async def main() -> None:
             await event.respond(text, buttons=buttons, parse_mode="html")
             return
         guess_states.pop(event.sender_id, None)
+        win_guess_states.pop(event.sender_id, None)
         records, _, team_abbrevs = await _intake_data()
         text, buttons = game_browser(
             records,
@@ -1454,6 +1654,42 @@ async def main() -> None:
                 "✅ Suggestion saved. Thank you.",
                 buttons=command_keyboard(),
             )
+            return
+
+        win_state = win_guess_states.get(event.sender_id)
+        if (
+            win_state is not None
+            and win_state.get("win_celeb_prompt_msg_id") is not None
+            and win_state.get("win_celeb_prompt_msg_id")
+            == event.reply_to_msg_id
+        ):
+            name = normalize_celebrity_name(event.raw_text)
+            if not name:
+                await event.respond(
+                    "Celebrity name cannot be empty. Reply with a name."
+                )
+                return
+            sender = await event.get_sender()
+            celebrity = await asyncio.to_thread(
+                get_or_create_celebrity,
+                name,
+                created_by_user_id=event.sender_id,
+                created_by_username=getattr(sender, "username", None),
+            )
+            win_state.pop("win_celeb_prompt_msg_id", None)
+            win_state.pop("win_celeb_roster", None)
+            win_state["win_celeb"] = {
+                "id": celebrity["celebrity_id"],
+                "name": celebrity["celebrity_name"],
+            }
+            totals, _, predictions = await _win_prediction_data()
+            text, buttons = win_prediction_browser(
+                totals,
+                predictions,
+                user_id=celebrity["celebrity_id"],
+                celebrity_name=celebrity["celebrity_name"],
+            )
+            await event.respond(text, buttons=buttons, parse_mode="html")
             return
 
         state = guess_states.get(event.sender_id)
@@ -1598,18 +1834,112 @@ async def main() -> None:
             await event.answer("Not authorized.", alert=True)
             return
         data = event.data.decode()
+        if data.startswith("celebwin:"):
+            state = win_guess_states.setdefault(event.sender_id, {})
+            if data == "celebwin:start":
+                roster = await asyncio.to_thread(load_celebrity_roster)
+                state["win_celeb_roster"] = {
+                    str(celebrity_user_id(name)): name for name in roster
+                }
+                text, buttons = win_celebrity_picker(roster)
+                await edit_callback(event, text, buttons)
+                return
+            if data.startswith("celebwin:pick:"):
+                roster = state.get("win_celeb_roster")
+                celebrity_id = data.split(":", 2)[2]
+                if (
+                    not isinstance(roster, dict)
+                    or celebrity_id not in roster
+                ):
+                    await event.answer(
+                        "This list expired. Choose celebrity mode again.",
+                        alert=True,
+                    )
+                    return
+                sender = await event.get_sender()
+                celebrity = await asyncio.to_thread(
+                    get_or_create_celebrity,
+                    roster[celebrity_id],
+                    created_by_user_id=event.sender_id,
+                    created_by_username=getattr(sender, "username", None),
+                )
+                state["win_celeb"] = {
+                    "id": celebrity["celebrity_id"],
+                    "name": celebrity["celebrity_name"],
+                }
+                state.pop("win_celeb_roster", None)
+                totals, _, predictions = await _win_prediction_data()
+                text, buttons = win_prediction_browser(
+                    totals,
+                    predictions,
+                    user_id=celebrity["celebrity_id"],
+                    celebrity_name=celebrity["celebrity_name"],
+                )
+                await edit_callback(event, text, buttons)
+                return
+            if data == "celebwin:new":
+                prompt = await event.respond(
+                    "Type the celebrity name:",
+                    buttons=Button.force_reply(
+                        single_use=True,
+                        placeholder="e.g. LeBron James",
+                    ),
+                )
+                state["win_celeb_prompt_msg_id"] = prompt.id
+                await event.answer()
+                return
+            if data == "celebwin:self":
+                state.pop("win_celeb", None)
+            elif data != "celebwin:cancel":
+                await event.answer("Invalid selection.", alert=True)
+                return
+            state.pop("win_celeb_roster", None)
+            state.pop("win_celeb_prompt_msg_id", None)
+            active_celebrity = state.get("win_celeb")
+            effective_user_id = (
+                int(active_celebrity["id"])
+                if active_celebrity
+                else event.sender_id
+            )
+            celebrity_name = (
+                str(active_celebrity["name"])
+                if active_celebrity
+                else None
+            )
+            totals, _, predictions = await _win_prediction_data()
+            text, buttons = win_prediction_browser(
+                totals,
+                predictions,
+                user_id=effective_user_id,
+                celebrity_name=celebrity_name,
+            )
+            await edit_callback(event, text, buttons)
+            return
         if (
             data == "wins:teams"
             or data.startswith("winteam:")
             or data.startswith("winpick:")
             or data.startswith("winsave:")
         ):
+            state = win_guess_states.get(event.sender_id, {})
+            active_celebrity = state.get("win_celeb")
+            effective_user_id = (
+                int(active_celebrity["id"])
+                if active_celebrity
+                else event.sender_id
+            )
+            celebrity_name = (
+                str(active_celebrity["name"])
+                if active_celebrity
+                else None
+            )
             totals, history, predictions = await _win_prediction_data()
             if data == "wins:teams":
                 text, buttons = win_prediction_browser(
                     totals,
                     predictions,
-                    user_id=event.sender_id,
+                    user_id=effective_user_id,
+                    celebrity_name=celebrity_name,
                 )
                 await edit_callback(event, text, buttons)
                 return
@@ -1620,8 +1950,9 @@ async def main() -> None:
                         totals,
                         history,
                         predictions,
-                        user_id=event.sender_id,
+                        user_id=effective_user_id,
                         abbreviation=abbreviation,
+                        celebrity_name=celebrity_name,
                     )
                 except (KeyError, StopIteration, ValueError):
                     await event.answer(
@@ -1632,7 +1963,11 @@ async def main() -> None:
                 return
             if data.startswith("winpick:"):
                 _, abbreviation, wins_raw = data.split(":", 2)
-                predicted_wins = int(wins_raw)
+                try:
+                    predicted_wins = int(wins_raw)
+                except ValueError:
+                    await event.answer("Invalid prediction.", alert=True)
+                    return
                 if not 0 <= predicted_wins <= 17:
                     await event.answer("Invalid prediction.", alert=True)
                     return
@@ -1641,6 +1976,8 @@ async def main() -> None:
                         totals,
                         abbreviation=abbreviation,
                         predicted_wins=predicted_wins,
+                        user_id=effective_user_id,
+                        celebrity_name=celebrity_name,
                     )
                 except (StopIteration, ValueError):
                     await event.answer(
@@ -1649,8 +1986,26 @@ async def main() -> None:
                     return
                 await edit_callback(event, text, buttons)
                 return
-            _, abbreviation, wins_raw = data.split(":", 2)
-            predicted_wins = int(wins_raw)
+            parts = data.split(":")
+            if len(parts) != 4:
+                await event.answer(
+                    "This confirmation expired. Choose the team again.",
+                    alert=True,
+                )
+                return
+            _, abbreviation, wins_raw, identity_raw = parts
+            try:
+                predicted_wins = int(wins_raw)
+                confirmation_user_id = int(identity_raw)
+            except ValueError:
+                await event.answer("Invalid prediction.", alert=True)
+                return
+            if confirmation_user_id != effective_user_id:
+                await event.answer(
+                    "The active guesser changed. Choose the team again.",
+                    alert=True,
+                )
+                return
             team = _team_by_abbreviation(abbreviation)
             if team is None or not 0 <= predicted_wins <= 17:
                 await event.answer("Invalid prediction.", alert=True)
@@ -1683,6 +2038,8 @@ async def main() -> None:
                 predicted_wins=predicted_wins,
                 market=market,
                 prior=prior,
+                celebrity_id=effective_user_id if active_celebrity else None,
+                celebrity_name=celebrity_name,
             )
             appended = await asyncio.to_thread(
                 append_win_prediction, prediction_row
@@ -1690,7 +2047,7 @@ async def main() -> None:
             if appended:
                 predictions.append(prediction_row)
             latest, _ = latest_predictions_for_user(
-                predictions, event.sender_id
+                predictions, effective_user_id
             )
             unmarked = sorted(
                 (
@@ -1708,7 +2065,12 @@ async def main() -> None:
                     f"{predicted_wins} wins."
                 )
             )
-            text = f"{status}\n\nProgress: {len(latest)}/32 teams"
+            context = (
+                f"\n🎤 <b>{html.escape(celebrity_name)}</b>"
+                if celebrity_name
+                else ""
+            )
+            text = f"{status}{context}\n\nProgress: {len(latest)}/32 teams"
             buttons = []
             if unmarked:
                 next_team = unmarked[0]
@@ -1736,6 +2098,7 @@ async def main() -> None:
         records, team_emojis, team_abbrevs = await _intake_data()
         if data.startswith("games:"):
             guess_states.pop(event.sender_id, None)
+            win_guess_states.pop(event.sender_id, None)
             _, days_raw, page_raw = data.split(":", 2)
             text, buttons = game_browser(
                 records,
@@ -1759,6 +2122,7 @@ async def main() -> None:
             if game is None:
                 await event.answer("Game no longer available.", alert=True)
                 return
+            win_guess_states.pop(event.sender_id, None)
             guess_states[event.sender_id] = {
                 "game": game,
                 "days": int(days_raw),
@@ -1893,6 +2257,17 @@ async def main() -> None:
                     submission=state["celeb_submission"], names=names
                 )
                 await asyncio.to_thread(append_celebrity_picks, rows)
+                # Keep the shared registry complete: any name entered here must
+                # also become a first-class celebrity so it shows up as a roster
+                # button in every feature (single source of truth).
+                sender = await event.get_sender()
+                for name in names:
+                    await asyncio.to_thread(
+                        get_or_create_celebrity,
+                        name,
+                        created_by_user_id=event.sender_id,
+                        created_by_username=getattr(sender, "username", None),
+                    )
             guess_states.pop(event.sender_id, None)
             if names:
                 receipt = (
