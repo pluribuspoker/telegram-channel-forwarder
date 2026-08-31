@@ -2040,19 +2040,48 @@ async def validate_sport(
         alt_events = alt_sb.get("events", [])
         matched_ids = find_event_ids(alt_events, search_teams)
         if matched_ids:
-            # Fix team names from the ESPN event
-            corrected_teams = teams
-            for evt in alt_events:
-                if evt.get("id") in matched_ids:
-                    for comp in evt.get("competitions", [{}]):
-                        for c in comp.get("competitors", []):
-                            name = c.get("team", {}).get("displayName", "")
-                            if name and any(f.lower() in name.lower() for f in raw_terms):
-                                corrected_teams = [name]
-                                break
-            return alt_sport, corrected_teams
+            # A cross-sport override needs team-level evidence. The fragment
+            # match above fires on shared city words too — "San", "Los",
+            # "Angeles" from "San Francisco 49ers vs Los Angeles Rams" matched
+            # the Angels' MLB game and rebound a correctly-parsed NFL Week-1
+            # lookahead to sport=MLB / teams=["Los Angeles Angels"], which then
+            # math-graded the wrong game. Only flip the sport when a bet-text
+            # token names the club itself (nickname / short name / abbreviation);
+            # geography alone proves nothing — keep checking other sports.
+            corrected = _nickname_evidence(alt_events, matched_ids, raw_terms)
+            if corrected is not None:
+                return alt_sport, corrected
 
     return sport, teams
+
+
+def _nickname_evidence(
+    events: list[dict], matched_ids: list[str], raw_terms: list[str]
+) -> list[str] | None:
+    """Corrected team list for a fuzzy cross-sport match, or None without
+    club-level evidence.
+
+    A bet-text fragment corroborates a scoreboard team only when it names the
+    club itself — nickname ("Tigers"), short display name, or abbreviation.
+    City words ("Los", "San", "Angeles") are substrings of half the display
+    names in every league and must never rebind a pick across sports.
+    """
+    for evt in events:
+        if evt.get("id") not in matched_ids:
+            continue
+        for comp in evt.get("competitions", [{}]):
+            for c in comp.get("competitors", []):
+                team = c.get("team", {})
+                display = team.get("displayName", "")
+                if not display:
+                    continue
+                names = [n for n in (team.get("name"), team.get("shortDisplayName")) if n]
+                abbrev = (team.get("abbreviation") or "").lower()
+                for frag in raw_terms:
+                    fl = frag.lower()
+                    if (abbrev and fl == abbrev) or any(_team_matches(fl, n) for n in names):
+                        return [display]
+    return None
 
 
 # ── Free closing odds from ESPN (backfills) ───────────────────────────────────

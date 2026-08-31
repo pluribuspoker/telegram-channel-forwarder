@@ -1,0 +1,438 @@
+{
+ "events": [
+  {
+   "id": "401816737",
+   "name": "Miami Marlins at Washington Nationals",
+   "date": "2026-08-30T16:15Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Washington Nationals",
+        "name": "Nationals",
+        "shortDisplayName": "Nationals",
+        "abbreviation": "WSH",
+        "location": "Washington"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Miami Marlins",
+        "name": "Marlins",
+        "shortDisplayName": "Marlins",
+        "abbreviation": "MIA",
+        "location": "Miami"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401816732",
+   "name": "Boston Red Sox at New York Yankees",
+   "date": "2026-08-30T17:35Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "New York Yankees",
+        "name": "Yankees",
+        "shortDisplayName": "Yankees",
+        "abbreviation": "NYY",
+        "location": "New York"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Boston Red Sox",
+        "name": "Red Sox",
+        "shortDisplayName": "Red Sox",
+        "abbreviation": "BOS",
+        "location": "Boston"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401816733",
+   "name": "Colorado Rockies at Atlanta Braves",
+   "date": "2026-08-30T17:35Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Atlanta Braves",
+        "name": "Braves",
+        "shortDisplayName": "Braves",
+        "abbreviation": "ATL",
+        "location": "Atlanta"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Colorado Rockies",
+        "name": "Rockies",
+        "shortDisplayName": "Rockies",
+        "abbreviation": "COL",
+        "location": "Colorado"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401816739",
+   "name": "Seattle Mariners at Toronto Blue Jays",
+   "date": "2026-08-30T17:37Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Toronto Blue Jays",
+        "name": "Blue Jays",
+        "shortDisplayName": "Blue Jays",
+        "abbreviation": "TOR",
+        "location": "Toronto"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Seattle Mariners",
+        "name": "Mariners",
+        "shortDisplayName": "Mariners",
+        "abbreviation": "SEA",
+        "location": "Seattle"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401816735",
+   "name": "Kansas City Royals at Cleveland Guardians",
+   "date": "2026-08-30T17:40Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Cleveland Guardians",
+        "name": "Guardians",
+        "shortDisplayName": "Guardians",
+        "abbreviation": "CLE",
+        "location": "Cleveland"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Kansas City Royals",
+        "name": "Royals",
+        "shortDisplayName": "Royals",
+        "abbreviation": "KC",
+        "location": "Kansas City"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401816736",
+   "name": "Los Angeles Dodgers at Detroit Tigers",
+   "date": "2026-08-30T17:40Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Detroit Tigers",
+        "name": "Tigers",
+        "shortDisplayName": "Tigers",
+        "abbreviation": "DET",
+        "location": "Detroit"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Los Angeles Dodgers",
+        "name": "Dodgers",
+        "shortDisplayName": "Dodgers",
+        "abbreviation": "LAD",
+        "location": "Los Angeles"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401816738",
+   "name": "San Diego Padres at Tampa Bay Rays",
+   "date": "2026-08-30T17:40Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Tampa Bay Rays",
+        "name": "Rays",
+        "shortDisplayName": "Rays",
+        "abbreviation": "TB",
+        "location": "Tampa Bay"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "San Diego Padres",
+        "name": "Padres",
+        "shortDisplayName": "Padres",
+        "abbreviation": "SD",
+        "location": "San Diego"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401816740",
+   "name": "Chicago White Sox at Minnesota Twins",
+   "date": "2026-08-30T18:10Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Minnesota Twins",
+        "name": "Twins",
+        "shortDisplayName": "Twins",
+        "abbreviation": "MIN",
+        "location": "Minnesota"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Chicago White Sox",
+        "name": "White Sox",
+        "shortDisplayName": "White Sox",
+        "abbreviation": "CHW",
+        "location": "Chicago"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401816743",
+   "name": "Texas Rangers at Milwaukee Brewers",
+   "date": "2026-08-30T18:10Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Milwaukee Brewers",
+        "name": "Brewers",
+        "shortDisplayName": "Brewers",
+        "abbreviation": "MIL",
+        "location": "Milwaukee"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Texas Rangers",
+        "name": "Rangers",
+        "shortDisplayName": "Rangers",
+        "abbreviation": "TEX",
+        "location": "Texas"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401816742",
+   "name": "Pittsburgh Pirates at St. Louis Cardinals",
+   "date": "2026-08-30T18:15Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "St. Louis Cardinals",
+        "name": "Cardinals",
+        "shortDisplayName": "Cardinals",
+        "abbreviation": "STL",
+        "location": "St. Louis"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Pittsburgh Pirates",
+        "name": "Pirates",
+        "shortDisplayName": "Pirates",
+        "abbreviation": "PIT",
+        "location": "Pittsburgh"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401816734",
+   "name": "Houston Astros at New York Mets",
+   "date": "2026-08-30T19:10Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "New York Mets",
+        "name": "Mets",
+        "shortDisplayName": "Mets",
+        "abbreviation": "NYM",
+        "location": "New York"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Houston Astros",
+        "name": "Astros",
+        "shortDisplayName": "Astros",
+        "abbreviation": "HOU",
+        "location": "Houston"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401816745",
+   "name": "Baltimore Orioles at Athletics Athletics",
+   "date": "2026-08-30T20:05Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Athletics",
+        "name": "Athletics",
+        "shortDisplayName": "Athletics",
+        "abbreviation": "ATH",
+        "location": "Athletics"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Baltimore Orioles",
+        "name": "Orioles",
+        "shortDisplayName": "Orioles",
+        "abbreviation": "BAL",
+        "location": "Baltimore"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401816746",
+   "name": "Philadelphia Phillies at Los Angeles Angels",
+   "date": "2026-08-30T20:07Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Los Angeles Angels",
+        "name": "Angels",
+        "shortDisplayName": "Angels",
+        "abbreviation": "LAA",
+        "location": "Los Angeles"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Philadelphia Phillies",
+        "name": "Phillies",
+        "shortDisplayName": "Phillies",
+        "abbreviation": "PHI",
+        "location": "Philadelphia"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401816741",
+   "name": "Cincinnati Reds at Chicago Cubs",
+   "date": "2026-08-30T23:20Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Chicago Cubs",
+        "name": "Cubs",
+        "shortDisplayName": "Cubs",
+        "abbreviation": "CHC",
+        "location": "Chicago"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Cincinnati Reds",
+        "name": "Reds",
+        "shortDisplayName": "Reds",
+        "abbreviation": "CIN",
+        "location": "Cincinnati"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
