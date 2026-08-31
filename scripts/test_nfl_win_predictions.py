@@ -190,6 +190,56 @@ class WinPredictionBackendTest(unittest.TestCase):
         self.assertEqual(latest["Seattle Seahawks"]["predicted_wins"], 11)
         self.assertEqual(counts["Seattle Seahawks"], 2)
 
+    def test_latest_rows_mark_celebrity_display_names(self) -> None:
+        totals = [
+            {
+                "season": 2026,
+                "team": team,
+                "team_abbreviation": abbreviation,
+                "win_total": 8.5,
+                "captured_at_et": "2026-08-09T23:34:34-04:00",
+            }
+            for team, abbreviation in TEAM_ABBREVIATIONS.items()
+        ]
+        rows = build_latest_prediction_rows(
+            [
+                {
+                    "revision_id": "celebrity-revision",
+                    "submitted_at_utc": "2026-08-10T01:00:00+00:00",
+                    "telegram_user_id": -123,
+                    "telegram_display_name": "LeBron James",
+                    "season": 2026,
+                    "team": "Seattle Seahawks",
+                    "predicted_wins": 11,
+                }
+            ],
+            totals,
+        )
+
+        self.assertEqual(
+            {row["telegram_display_name"] for row in rows},
+            {"🎤 LeBron James"},
+        )
+
+        legacy_rows = build_latest_prediction_rows(
+            [
+                {
+                    "revision_id": "legacy-revision",
+                    "submitted_at_utc": "2026-08-10T01:00:00+00:00",
+                    "telegram_user_id": "legacy",
+                    "telegram_display_name": "Legacy User",
+                    "season": 2026,
+                    "team": "Seattle Seahawks",
+                    "predicted_wins": 11,
+                }
+            ],
+            totals,
+        )
+        self.assertEqual(
+            {row["telegram_display_name"] for row in legacy_rows},
+            {"Legacy User"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

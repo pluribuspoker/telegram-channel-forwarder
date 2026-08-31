@@ -6,7 +6,7 @@ team → wins flow proceeds attributed to that celebrity. It is **sticky** — o
 a celebrity is chosen it stays active for multiple teams until the user taps the
 button again or switches back to themselves.
 
-Branch: `feature/celebrity-win-guesses` (foundation already committed here).
+Branch: `feature/celebrity-win-guesses` (implementation completed here).
 
 ## Confirmed decisions (from the requester)
 - Stable synthetic `user_id` derived from the celebrity name **string**.
@@ -37,7 +37,7 @@ Branch: `feature/celebrity-win-guesses` (foundation already committed here).
   live-sheet schema migration (gspread `get_all_records(expected_headers=...)`
   would break if the header row changed under it).
 
-## DONE (committed on this branch, syntax-checked + id-logic unit test)
+## DONE
 In `intake_bot.py`:
 - `CELEBRITY_REGISTRY_TAB` = `"celebrities"`, `CELEBRITY_REGISTRY_HEADERS`
   (`celebrity_id, celebrity_name, normalized_name, created_at_utc,
@@ -56,52 +56,34 @@ In `intake_bot.py`:
   each saved name, so the registry stays the complete single source.
 - `scripts/test_intake_bot.py`: added
   `test_celebrity_user_id_is_stable_negative_and_distinct`.
+- The win-total UI now has the `🎤 Guess as a celebrity` entry point, a shared
+  roster picker, free-text creation, sticky celebrity context, and a switch back
+  to the sender's own guesses.
+- Win browser, team detail, confirmation, and save progress all render the
+  active `🎤` context and query progress under the effective celebrity id.
+- `build_win_prediction_row` stamps celebrity rows with the negative id, name,
+  and blank username without changing the prediction sheet schema.
+- Save callbacks carry the effective identity and reject stale confirmations if
+  the active guesser changed.
+- Picker callbacks carry the deterministic celebrity id rather than a roster
+  index, so an old button cannot select a different person after reordering.
+- Win state is isolated from game-guess state so the two callback flows cannot
+  corrupt each other.
+- First roster load creates and seeds the registry from existing game-pick
+  celebrity names.
+- `nfl_win_predictions_latest` prefixes celebrity display names with `🎤`.
+- Offline tests cover the picker, celebrity-aware views and rows, stable ids,
+  registry ordering, latest-sheet marker, and nonnumeric legacy user ids.
 
-## TODO — the win-totals celebrity UI (not yet written)
-Keep the repo's pattern: **logic in pure functions with offline unit tests**;
-handlers just call them.
+## Testing
+Completed locally with Python 3.12:
+```
+python -m pytest scripts/test_intake_bot.py scripts/test_nfl_win_predictions.py -q
+# 41 passed
+```
 
-1. **build_win_prediction_row** — add optional `celebrity_id: int | None` and
-   `celebrity_name: str | None`. When present: `user_id=celebrity_id`,
-   `username=""`, `display_name=celebrity_name` (ignore first/last). Add an
-   offline test asserting the row is stamped with the celeb id/name.
-2. **Active-celebrity state** — store on the per-user `guess_states[sender_id]`
-   dict, e.g. `state["win_celeb"] = {"id": <int>, "name": <str>}`. Sticky:
-   set on pick/new, cleared on "switch back to me" or a fresh
-   `/predict_nfl_wins`.
-3. **Pure render fns:**
-   - `win_celebrity_picker(roster: list[str]) -> (text, buttons)`: roster
-     buttons `celebwin:pick:<index>`, a `➕ New celebrity` (`celebwin:new`), and
-     a cancel/back. Header uses `🎤`.
-   - Extend `win_prediction_browser(...)` to accept an optional
-     `celebrity_name`: when set, show a `🎤 <name>` banner + a
-     `↩ Back to my guesses` button (`celebwin:self`); when unset, add a
-     `🎤 Guess as a celebrity` button (`celebwin:start`).
-   - Make sure `win_prediction_team_detail` / confirmation / progress render the
-     celeb context when active (the `🎤`).
-4. **Handlers** (in the CallbackQuery dispatcher, alongside the `wins:*` block):
-   - `celebwin:start` → `load_celebrity_roster()` → show `win_celebrity_picker`.
-   - `celebwin:pick:<i>` → `get_or_create_celebrity(roster[i], created_by=...)`
-     → set `state["win_celeb"]` → re-render browser as that celeb.
-   - `celebwin:new` → `Button.force_reply` prompt; capture the reply in
-     `capture_free_text` (guard on a stored `win_celeb_prompt_msg_id`), then
-     `get_or_create_celebrity(text, created_by=...)` → set state → render browser.
-   - `celebwin:self` → clear `state["win_celeb"]` → render browser as self.
-   - In `wins:teams` / `winteam:` / `winpick:` / `winsave:`: compute an
-     **effective identity** at the top — if `state["win_celeb"]` is set use the
-     celeb id/name (and pass `celebrity_id/celebrity_name` into
-     `build_win_prediction_row`), else the sender. Progress
-     (`latest_predictions_for_user`) must use the effective id too.
-5. **Standings / anywhere a name is shown**: prefix `🎤 ` when `user_id < 0`
-   (celeb) so celebs are visually separated. `build_latest_prediction_rows`
-   already keys per user+team, so celebs get their own rows automatically.
-6. **New button placement**: an inline `🎤 Guess as a celebrity` button in the
-   `/predict_nfl_wins` browser is the natural spot ("starts by asking for the
-   celebrity"). (Optionally also a `/predict_celeb_wins` command — not required.)
-
-## Testing (REQUIRED before deploy — could not be done from the authoring env)
-The authoring session had no `telethon`/`pytest` and no access to the live venv,
-so only `py_compile` + the pure id test were run. On the VPS as `forwarder`:
+The interactive Telegram pass is still required before deploy. On the VPS as
+`forwarder`:
 ```
 cd ~/app && ~/venv/bin/python -m pytest scripts/test_intake_bot.py -q
 # then a live test-mode pass and DM the bot to walk the flow:

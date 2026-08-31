@@ -813,6 +813,7 @@ def win_prediction_browser(
     predictions: list[dict[str, Any]],
     *,
     user_id: int,
+    celebrity_name: str | None = None,
 ) -> tuple[str, list[list[Button]]]:
     current_totals = _current_win_totals(totals)
     market_by_team = {str(row["team"]): row for row in current_totals}
@@ -826,8 +827,13 @@ def win_prediction_browser(
     )
     progress = len(latest)
     season = int(current_totals[0]["season"])
+    context = (
+        f"\n🎤 <b>{html.escape(celebrity_name)}</b>"
+        if celebrity_name
+        else ""
+    )
     text = (
-        f"🏈 <b>{season} NFL Win Predictions</b>\n"
+        f"🏈 <b>{season} NFL Win Predictions</b>{context}\n"
         f"Progress: {progress}/32 teams\n\n"
         "Choose a team. Unmarked teams are shown first."
     )
@@ -847,6 +853,40 @@ def win_prediction_browser(
             row = []
     if row:
         buttons.append(row)
+    if celebrity_name:
+        buttons.append(
+            [Button.inline("↩ Back to my guesses", b"celebwin:self")]
+        )
+    else:
+        buttons.append(
+            [Button.inline("🎤 Guess as a celebrity", b"celebwin:start")]
+        )
+    return text, buttons
+
+
+def win_celebrity_picker(
+    roster: list[str],
+) -> tuple[str, list[list[Button]]]:
+    text = (
+        "🎤 <b>Guess as a celebrity</b>\n\n"
+        "Choose someone below or add a new celebrity."
+    )
+    buttons: list[list[Button]] = []
+    row: list[Button] = []
+    for name in roster:
+        row.append(
+            Button.inline(
+                name,
+                f"celebwin:pick:{celebrity_user_id(name)}".encode(),
+            )
+        )
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([Button.inline("➕ New celebrity", b"celebwin:new")])
+    buttons.append([Button.inline("← Cancel", b"celebwin:cancel")])
     return text, buttons
 
 
@@ -866,6 +906,7 @@ def win_prediction_team_detail(
     *,
     user_id: int,
     abbreviation: str,
+    celebrity_name: str | None = None,
 ) -> tuple[str, list[list[Button]]]:
     team = _team_by_abbreviation(abbreviation)
     if team is None:
@@ -894,6 +935,8 @@ def win_prediction_team_detail(
         f"🏈 <b>{html.escape(team)} ({abbreviation})</b>",
         f"BetOnline total: {_number_text(float(market['win_total']))} wins",
     ]
+    if celebrity_name:
+        sections.insert(1, f"🎤 <b>{html.escape(celebrity_name)}</b>")
     previous = latest.get(team)
     if previous:
         sections.append(
@@ -1001,6 +1044,8 @@ def win_prediction_confirmation(
     *,
     abbreviation: str,
     predicted_wins: int,
+    user_id: int,
+    celebrity_name: str | None = None,
 ) -> tuple[str, list[list[Button]]]:
     team = _team_by_abbreviation(abbreviation)
     if team is None:
@@ -1011,7 +1056,12 @@ def win_prediction_confirmation(
     )
     total = float(market["win_total"])
     difference = predicted_wins - total
-    text = (
+    context = (
+        f"🎤 <b>{html.escape(celebrity_name)}</b>\n\n"
+        if celebrity_name
+        else ""
+    )
+    text = context + (
         f"Confirm <b>{html.escape(team)}</b>: {predicted_wins} wins?\n\n"
         f"BetOnline: {_number_text(total)}\n"
         f"Your prediction: {predicted_wins}\n"
@@ -1021,7 +1071,7 @@ def win_prediction_confirmation(
         [
             Button.inline(
                 "Save prediction",
-                f"winsave:{abbreviation}:{predicted_wins}".encode(),
+                f"winsave:{abbreviation}:{predicted_wins}:{user_id}".encode(),
             ),
             Button.inline(
                 "Change",
@@ -1042,11 +1092,19 @@ def build_win_prediction_row(
     predicted_wins: int,
     market: dict[str, Any],
     prior: dict[str, Any],
+    celebrity_id: int | None = None,
+    celebrity_name: str | None = None,
 ) -> dict[str, Any]:
     submitted_at_utc = submitted_at.astimezone(timezone.utc)
     display_name = " ".join(
         value for value in (first_name, last_name) if value
     )
+    if celebrity_id is not None:
+        if not celebrity_name:
+            raise ValueError("celebrity_name is required with celebrity_id")
+        user_id = celebrity_id
+        username = ""
+        display_name = celebrity_name
     return {
         "revision_id": str(uuid.uuid4()),
         "submitted_at_utc": submitted_at_utc.isoformat(),
@@ -1294,10 +1352,7 @@ def load_celebrity_roster(limit: int = MAX_CELEBRITY_BUTTONS) -> list[str]:
     credentials = os.environ["GOOGLE_CREDENTIALS"]
     sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
     spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
-    try:
-        worksheet = spreadsheet.worksheet(CELEBRITY_REGISTRY_TAB)
-    except WorksheetNotFound:
-        return []
+    worksheet = _celebrity_registry_worksheet(spreadsheet)
     values = worksheet.get_all_values()
     if len(values) < 2 or "celebrity_name" not in values[0]:
         return []
@@ -1501,6 +1556,7 @@ async def main() -> None:
     client = TelegramClient(StringSession(session), api_id, api_hash)
     pending_suggestions: dict[int, int] = {}
     guess_states: dict[int, dict[str, Any]] = {}
+    win_guess_states: dict[int, dict[str, Any]] = {}
 
     @client.on(
         events.NewMessage(
@@ -1521,6 +1577,7 @@ async def main() -> None:
             )
         if event.raw_text.startswith("/predict_nfl_wins"):
             guess_states.pop(event.sender_id, None)
+            win_guess_states.pop(event.sender_id, None)
             totals, _, predictions = await _win_prediction_data()
             text, buttons = win_prediction_browser(
                 totals,
@@ -1530,6 +1587,7 @@ async def main() -> None:
             await event.respond(text, buttons=buttons, parse_mode="html")
             return
         guess_states.pop(event.sender_id, None)
+        win_guess_states.pop(event.sender_id, None)
         records, _, team_abbrevs = await _intake_data()
         text, buttons = game_browser(
             records,
@@ -1596,6 +1654,42 @@ async def main() -> None:
                 "✅ Suggestion saved. Thank you.",
                 buttons=command_keyboard(),
             )
+            return
+
+        win_state = win_guess_states.get(event.sender_id)
+        if (
+            win_state is not None
+            and win_state.get("win_celeb_prompt_msg_id") is not None
+            and win_state.get("win_celeb_prompt_msg_id")
+            == event.reply_to_msg_id
+        ):
+            name = normalize_celebrity_name(event.raw_text)
+            if not name:
+                await event.respond(
+                    "Celebrity name cannot be empty. Reply with a name."
+                )
+                return
+            sender = await event.get_sender()
+            celebrity = await asyncio.to_thread(
+                get_or_create_celebrity,
+                name,
+                created_by_user_id=event.sender_id,
+                created_by_username=getattr(sender, "username", None),
+            )
+            win_state.pop("win_celeb_prompt_msg_id", None)
+            win_state.pop("win_celeb_roster", None)
+            win_state["win_celeb"] = {
+                "id": celebrity["celebrity_id"],
+                "name": celebrity["celebrity_name"],
+            }
+            totals, _, predictions = await _win_prediction_data()
+            text, buttons = win_prediction_browser(
+                totals,
+                predictions,
+                user_id=celebrity["celebrity_id"],
+                celebrity_name=celebrity["celebrity_name"],
+            )
+            await event.respond(text, buttons=buttons, parse_mode="html")
             return
 
         state = guess_states.get(event.sender_id)
@@ -1740,18 +1834,112 @@ async def main() -> None:
             await event.answer("Not authorized.", alert=True)
             return
         data = event.data.decode()
+        if data.startswith("celebwin:"):
+            state = win_guess_states.setdefault(event.sender_id, {})
+            if data == "celebwin:start":
+                roster = await asyncio.to_thread(load_celebrity_roster)
+                state["win_celeb_roster"] = {
+                    str(celebrity_user_id(name)): name for name in roster
+                }
+                text, buttons = win_celebrity_picker(roster)
+                await edit_callback(event, text, buttons)
+                return
+            if data.startswith("celebwin:pick:"):
+                roster = state.get("win_celeb_roster")
+                celebrity_id = data.split(":", 2)[2]
+                if (
+                    not isinstance(roster, dict)
+                    or celebrity_id not in roster
+                ):
+                    await event.answer(
+                        "This list expired. Choose celebrity mode again.",
+                        alert=True,
+                    )
+                    return
+                sender = await event.get_sender()
+                celebrity = await asyncio.to_thread(
+                    get_or_create_celebrity,
+                    roster[celebrity_id],
+                    created_by_user_id=event.sender_id,
+                    created_by_username=getattr(sender, "username", None),
+                )
+                state["win_celeb"] = {
+                    "id": celebrity["celebrity_id"],
+                    "name": celebrity["celebrity_name"],
+                }
+                state.pop("win_celeb_roster", None)
+                totals, _, predictions = await _win_prediction_data()
+                text, buttons = win_prediction_browser(
+                    totals,
+                    predictions,
+                    user_id=celebrity["celebrity_id"],
+                    celebrity_name=celebrity["celebrity_name"],
+                )
+                await edit_callback(event, text, buttons)
+                return
+            if data == "celebwin:new":
+                prompt = await event.respond(
+                    "Type the celebrity name:",
+                    buttons=Button.force_reply(
+                        single_use=True,
+                        placeholder="e.g. LeBron James",
+                    ),
+                )
+                state["win_celeb_prompt_msg_id"] = prompt.id
+                await event.answer()
+                return
+            if data == "celebwin:self":
+                state.pop("win_celeb", None)
+            elif data != "celebwin:cancel":
+                await event.answer("Invalid selection.", alert=True)
+                return
+            state.pop("win_celeb_roster", None)
+            state.pop("win_celeb_prompt_msg_id", None)
+            active_celebrity = state.get("win_celeb")
+            effective_user_id = (
+                int(active_celebrity["id"])
+                if active_celebrity
+                else event.sender_id
+            )
+            celebrity_name = (
+                str(active_celebrity["name"])
+                if active_celebrity
+                else None
+            )
+            totals, _, predictions = await _win_prediction_data()
+            text, buttons = win_prediction_browser(
+                totals,
+                predictions,
+                user_id=effective_user_id,
+                celebrity_name=celebrity_name,
+            )
+            await edit_callback(event, text, buttons)
+            return
         if (
             data == "wins:teams"
             or data.startswith("winteam:")
             or data.startswith("winpick:")
             or data.startswith("winsave:")
         ):
+            state = win_guess_states.get(event.sender_id, {})
+            active_celebrity = state.get("win_celeb")
+            effective_user_id = (
+                int(active_celebrity["id"])
+                if active_celebrity
+                else event.sender_id
+            )
+            celebrity_name = (
+                str(active_celebrity["name"])
+                if active_celebrity
+                else None
+            )
             totals, history, predictions = await _win_prediction_data()
             if data == "wins:teams":
                 text, buttons = win_prediction_browser(
                     totals,
                     predictions,
-                    user_id=event.sender_id,
+                    user_id=effective_user_id,
+                    celebrity_name=celebrity_name,
                 )
                 await edit_callback(event, text, buttons)
                 return
@@ -1762,8 +1950,9 @@ async def main() -> None:
                         totals,
                         history,
                         predictions,
-                        user_id=event.sender_id,
+                        user_id=effective_user_id,
                         abbreviation=abbreviation,
+                        celebrity_name=celebrity_name,
                     )
                 except (KeyError, StopIteration, ValueError):
                     await event.answer(
@@ -1774,7 +1963,11 @@ async def main() -> None:
                 return
             if data.startswith("winpick:"):
                 _, abbreviation, wins_raw = data.split(":", 2)
-                predicted_wins = int(wins_raw)
+                try:
+                    predicted_wins = int(wins_raw)
+                except ValueError:
+                    await event.answer("Invalid prediction.", alert=True)
+                    return
                 if not 0 <= predicted_wins <= 17:
                     await event.answer("Invalid prediction.", alert=True)
                     return
@@ -1783,6 +1976,8 @@ async def main() -> None:
                         totals,
                         abbreviation=abbreviation,
                         predicted_wins=predicted_wins,
+                        user_id=effective_user_id,
+                        celebrity_name=celebrity_name,
                     )
                 except (StopIteration, ValueError):
                     await event.answer(
@@ -1791,8 +1986,26 @@ async def main() -> None:
                     return
                 await edit_callback(event, text, buttons)
                 return
-            _, abbreviation, wins_raw = data.split(":", 2)
-            predicted_wins = int(wins_raw)
+            parts = data.split(":")
+            if len(parts) != 4:
+                await event.answer(
+                    "This confirmation expired. Choose the team again.",
+                    alert=True,
+                )
+                return
+            _, abbreviation, wins_raw, identity_raw = parts
+            try:
+                predicted_wins = int(wins_raw)
+                confirmation_user_id = int(identity_raw)
+            except ValueError:
+                await event.answer("Invalid prediction.", alert=True)
+                return
+            if confirmation_user_id != effective_user_id:
+                await event.answer(
+                    "The active guesser changed. Choose the team again.",
+                    alert=True,
+                )
+                return
             team = _team_by_abbreviation(abbreviation)
             if team is None or not 0 <= predicted_wins <= 17:
                 await event.answer("Invalid prediction.", alert=True)
@@ -1825,6 +2038,8 @@ async def main() -> None:
                 predicted_wins=predicted_wins,
                 market=market,
                 prior=prior,
+                celebrity_id=effective_user_id if active_celebrity else None,
+                celebrity_name=celebrity_name,
             )
             appended = await asyncio.to_thread(
                 append_win_prediction, prediction_row
@@ -1832,7 +2047,7 @@ async def main() -> None:
             if appended:
                 predictions.append(prediction_row)
             latest, _ = latest_predictions_for_user(
-                predictions, event.sender_id
+                predictions, effective_user_id
             )
             unmarked = sorted(
                 (
@@ -1850,7 +2065,12 @@ async def main() -> None:
                     f"{predicted_wins} wins."
                 )
             )
-            text = f"{status}\n\nProgress: {len(latest)}/32 teams"
+            context = (
+                f"\n🎤 <b>{html.escape(celebrity_name)}</b>"
+                if celebrity_name
+                else ""
+            )
+            text = f"{status}{context}\n\nProgress: {len(latest)}/32 teams"
             buttons = []
             if unmarked:
                 next_team = unmarked[0]
@@ -1878,6 +2098,7 @@ async def main() -> None:
         records, team_emojis, team_abbrevs = await _intake_data()
         if data.startswith("games:"):
             guess_states.pop(event.sender_id, None)
+            win_guess_states.pop(event.sender_id, None)
             _, days_raw, page_raw = data.split(":", 2)
             text, buttons = game_browser(
                 records,
@@ -1901,6 +2122,7 @@ async def main() -> None:
             if game is None:
                 await event.answer("Game no longer available.", alert=True)
                 return
+            win_guess_states.pop(event.sender_id, None)
             guess_states[event.sender_id] = {
                 "game": game,
                 "days": int(days_raw),

@@ -13,6 +13,7 @@ from telethon.errors import MessageNotModifiedError
 import intake_bot
 from intake_bot import (
     CELEBRITY_HEADERS,
+    CELEBRITY_REGISTRY_HEADERS,
     TEAM_ABBREVIATIONS as DEFAULT_WIN_TEAMS,
     SUGGESTION_HEADERS,
     append_celebrity_picks,
@@ -40,6 +41,7 @@ from intake_bot import (
     snapshot_lean_submission,
     team_emoji,
     win_prediction_browser,
+    win_celebrity_picker,
     win_prediction_confirmation,
     win_prediction_team_detail,
 )
@@ -488,7 +490,33 @@ class GameSelectionTest(unittest.TestCase):
 
         self.assertIn("Progress: 1/32 teams", text)
         self.assertEqual(labels[:3], ["ATL", "BAL", "BUF"])
-        self.assertEqual(labels[-1], "ARI · 6")
+        self.assertEqual(labels[-2], "ARI · 6")
+        self.assertEqual(labels[-1], "🎤 Guess as a celebrity")
+
+    def test_win_celebrity_picker_and_browser_show_active_context(self):
+        picker_text, picker_buttons = win_celebrity_picker(
+            ["LeBron James", "Drake", "Snoop Dogg"]
+        )
+        self.assertIn("🎤", picker_text)
+        self.assertEqual(
+            [button.data for row in picker_buttons for button in row],
+            [
+                f"celebwin:pick:{celebrity_user_id('LeBron James')}".encode(),
+                f"celebwin:pick:{celebrity_user_id('Drake')}".encode(),
+                f"celebwin:pick:{celebrity_user_id('Snoop Dogg')}".encode(),
+                b"celebwin:new",
+                b"celebwin:cancel",
+            ],
+        )
+
+        text, buttons = win_prediction_browser(
+            _win_totals(),
+            [],
+            user_id=celebrity_user_id("LeBron James"),
+            celebrity_name="LeBron James",
+        )
+        self.assertIn("🎤 <b>LeBron James</b>", text)
+        self.assertEqual(buttons[-1][0].data, b"celebwin:self")
 
     def test_seattle_win_detail_matches_approved_exchange(self):
         text, buttons = win_prediction_team_detail(
@@ -542,6 +570,7 @@ class GameSelectionTest(unittest.TestCase):
             _win_totals(),
             abbreviation="SEA",
             predicted_wins=11,
+            user_id=123,
         )
         market = next(
             row for row in _win_totals() if row["team_abbreviation"] == "SEA"
@@ -564,10 +593,55 @@ class GameSelectionTest(unittest.TestCase):
         )
 
         self.assertIn("Difference: +0.5 wins", text)
-        self.assertEqual(buttons[0][0].data, b"winsave:SEA:11")
+        self.assertEqual(buttons[0][0].data, b"winsave:SEA:11:123")
         self.assertEqual(row["telegram_display_name"], "NFL Fan")
         self.assertEqual(row["market_win_total"], 10.5)
         self.assertEqual(row["prior_division_rank"], 1)
+
+    def test_celebrity_win_views_and_row_use_celebrity_identity(self):
+        celebrity_id = celebrity_user_id("LeBron James")
+        detail, _ = win_prediction_team_detail(
+            _win_totals(),
+            _history(),
+            [],
+            user_id=celebrity_id,
+            abbreviation="SEA",
+            celebrity_name="LeBron James",
+        )
+        confirmation, _ = win_prediction_confirmation(
+            _win_totals(),
+            abbreviation="SEA",
+            predicted_wins=11,
+            user_id=celebrity_id,
+            celebrity_name="LeBron James",
+        )
+        market = next(
+            row for row in _win_totals() if row["team_abbreviation"] == "SEA"
+        )
+        prior = next(
+            row
+            for row in _history()
+            if row["season"] == 2025 and row["team_abbreviation"] == "SEA"
+        )
+        row = build_win_prediction_row(
+            submitted_at=NOW,
+            user_id=123,
+            username="guesser",
+            first_name="NFL",
+            last_name="Fan",
+            team="Seattle Seahawks",
+            predicted_wins=11,
+            market=market,
+            prior=prior,
+            celebrity_id=celebrity_id,
+            celebrity_name="LeBron James",
+        )
+
+        self.assertIn("🎤 <b>LeBron James</b>", detail)
+        self.assertIn("🎤 <b>LeBron James</b>", confirmation)
+        self.assertEqual(row["telegram_user_id"], celebrity_id)
+        self.assertEqual(row["telegram_username"], "")
+        self.assertEqual(row["telegram_display_name"], "LeBron James")
 
 
 class _FakeWorksheet:
@@ -679,21 +753,20 @@ class CelebrityPickTest(unittest.TestCase):
 
         self.assertEqual(buttons[-1][0].text, "Save — no celebrity info")
 
-    def test_roster_orders_by_frequency_then_recency(self):
+    def test_roster_uses_registry_in_most_recent_first_order(self):
         worksheet = _FakeWorksheet(
             [
-                CELEBRITY_HEADERS,
-                *[["telegram:1:1"] + [""] * 13 + ["Drake"] for _ in range(1)],
-                *[["telegram:1:2"] + [""] * 13 + ["LeBron"] for _ in range(3)],
-                ["telegram:1:3"] + [""] * 13 + ["Adele"],
+                CELEBRITY_REGISTRY_HEADERS,
+                [-1, "Drake", "drake"],
+                [-2, "LeBron", "lebron"],
+                [-3, "Adele", "adele"],
             ]
         )
         env_patch, client_patch = _patch_gspread(worksheet)
         with env_patch, client_patch:
             roster = load_celebrity_roster()
 
-        # LeBron (3) first; Drake and Adele each once, Adele more recent.
-        self.assertEqual(roster, ["LeBron", "Adele", "Drake"])
+        self.assertEqual(roster, ["Adele", "LeBron", "Drake"])
 
     def test_roster_empty_when_tab_missing(self):
         env_patch, client_patch = _patch_gspread(None)
