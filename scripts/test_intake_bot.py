@@ -21,6 +21,7 @@ from intake_bot import (
     build_suggestion_row,
     build_win_prediction_row,
     celebrity_screen,
+    celebrity_user_id,
     command_keyboard,
     edit_callback,
     game_browser,
@@ -662,6 +663,14 @@ class CelebrityPickTest(unittest.TestCase):
         self.assertEqual(toggles[1].text, "✅ Drake")
         self.assertEqual(buttons[-1][0].text, "✅ Save (1 selected)")
         self.assertEqual(buttons[-1][0].data, b"celeb:save")
+
+    def test_celebrity_user_id_is_stable_negative_and_distinct(self):
+        # Same person (any case/spacing) -> one id; negative so it can never
+        # collide with a real positive Telegram user id; different people differ.
+        a = celebrity_user_id("LeBron James")
+        self.assertEqual(a, celebrity_user_id("  lebron   JAMES "))
+        self.assertLess(a, 0)
+        self.assertNotEqual(a, celebrity_user_id("Taylor Swift"))
 
     def test_screen_save_label_when_none_selected(self):
         _, buttons = celebrity_screen(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import logging
 import os
@@ -78,6 +79,7 @@ TEAM_HISTORY_TAB = "nfl_team_history"
 WIN_PREDICTIONS_TAB = "nfl_win_predictions"
 WIN_PREDICTIONS_LATEST_TAB = "nfl_win_predictions_latest"
 _WIN_PREDICTION_WRITE_LOCK = threading.Lock()
+_CELEBRITY_REGISTRY_LOCK = threading.Lock()
 CELEBRITY_TAB = "celebrity_picks"
 # One row per (submission, celebrity name). Game context is denormalized onto
 # each row so season-long "who thinks alike on which game types" analysis pivots
@@ -104,6 +106,25 @@ CELEBRITY_HEADERS = [
 MAX_CELEBRITY_BUTTONS = 30
 MAX_CELEBRITY_NAME_LEN = 60
 MAX_CELEBRITY_NAMES = 10
+
+CELEBRITY_REGISTRY_TAB = "celebrities"
+# Single source of truth for every celebrity we track, shared by all
+# celebrity-aware features. `celebrity_id` is a STABLE, NEGATIVE synthetic
+# Telegram-style id derived from the normalized name: negative so it can never
+# collide with a real (positive) Telegram user id, which is how downstream code
+# tells a celebrity's rows apart from a real user's. Storing the id here lets a
+# celebrity's win-total guesses live in nfl_win_predictions under that id using
+# the EXISTING columns (no schema change there). Provenance — who first added a
+# celebrity — lives on the registry row, not on every guess.
+CELEBRITY_REGISTRY_HEADERS = [
+    "celebrity_id",
+    "celebrity_name",
+    "normalized_name",
+    "created_at_utc",
+    "created_at_et",
+    "created_by_user_id",
+    "created_by_username",
+]
 DEFAULT_NFL_TEAM_EMOJIS = {
     "Arizona Cardinals": "🐦",
     "Atlanta Falcons": "🦅",
@@ -1267,37 +1288,36 @@ def _celebrity_worksheet(spreadsheet: Any) -> Any:
 
 
 def load_celebrity_roster(limit: int = MAX_CELEBRITY_BUTTONS) -> list[str]:
-    """Distinct celebrity names seen so far, most-frequent first (recency breaks
-    ties), for prefilling the picker. Empty until someone is entered."""
+    """Distinct celebrity names from the shared `celebrities` registry (the
+    single source of truth for every feature), most-recently-added first, for
+    prefilling any celebrity picker. Empty until someone is entered."""
     credentials = os.environ["GOOGLE_CREDENTIALS"]
     sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
     spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
     try:
-        worksheet = spreadsheet.worksheet(CELEBRITY_TAB)
+        worksheet = spreadsheet.worksheet(CELEBRITY_REGISTRY_TAB)
     except WorksheetNotFound:
         return []
     values = worksheet.get_all_values()
-    if len(values) < 2:
+    if len(values) < 2 or "celebrity_name" not in values[0]:
         return []
-    try:
-        name_index = values[0].index("celebrity_name")
-    except ValueError:
-        return []
-    freq: dict[str, int] = {}
-    last_seen: dict[str, int] = {}
-    display: dict[str, str] = {}
-    for order, row in enumerate(values[1:]):
+    name_index = values[0].index("celebrity_name")
+    names: list[str] = []
+    seen: set[str] = set()
+    for row in reversed(values[1:]):
         if len(row) <= name_index:
             continue
         name = str(row[name_index]).strip()
         if not name:
             continue
         key = name.casefold()
-        freq[key] = freq.get(key, 0) + 1
-        last_seen[key] = order
-        display.setdefault(key, name)
-    ranked = sorted(freq, key=lambda key: (-freq[key], -last_seen[key]))
-    return [display[key] for key in ranked[:limit]]
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+        if len(names) >= limit:
+            break
+    return names
 
 
 def append_celebrity_picks(rows: list[dict[str, Any]]) -> int:
@@ -1328,6 +1348,128 @@ def append_celebrity_picks(rows: list[dict[str, Any]]) -> int:
     if to_append:
         worksheet.append_rows(to_append, value_input_option="RAW")
     return len(to_append)
+
+
+def celebrity_user_id(name: str) -> int:
+    """Stable NEGATIVE synthetic id for a celebrity, derived from the
+    case-folded normalized name. Deterministic (same name -> same id across
+    runs) and negative so it can never collide with a real, positive Telegram
+    user id."""
+    key = normalize_celebrity_name(name).casefold()
+    digest = hashlib.sha1(key.encode("utf-8")).digest()
+    return -(int.from_bytes(digest[:6], "big") + 1)
+
+
+def _seed_registry_from_game_picks(spreadsheet: Any, registry: Any) -> None:
+    """One-time backfill run when the registry tab is first created: pull the
+    distinct celebrity names already used on game picks into the registry so the
+    shared roster is not empty on day one."""
+    try:
+        picks = spreadsheet.worksheet(CELEBRITY_TAB)
+    except WorksheetNotFound:
+        return
+    values = picks.get_all_values()
+    if len(values) < 2 or "celebrity_name" not in values[0]:
+        return
+    idx = values[0].index("celebrity_name")
+    now = datetime.now(timezone.utc)
+    seen: set[str] = set()
+    rows: list[list[Any]] = []
+    for row in values[1:]:
+        if len(row) <= idx:
+            continue
+        name = normalize_celebrity_name(row[idx])
+        if not name:
+            continue
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            [
+                celebrity_user_id(name),
+                name,
+                key,
+                now.isoformat(),
+                now.astimezone(ET).isoformat(),
+                "",
+                "",
+            ]
+        )
+    if rows:
+        registry.append_rows(rows, value_input_option="RAW")
+
+
+def _celebrity_registry_worksheet(spreadsheet: Any) -> Any:
+    """Return the celebrities registry worksheet, creating it (with headers, and
+    seeded once from any names already used on game picks) the first time.
+    Refuses to touch a tab whose existing header row disagrees."""
+    try:
+        worksheet = spreadsheet.worksheet(CELEBRITY_REGISTRY_TAB)
+    except WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(
+            title=CELEBRITY_REGISTRY_TAB,
+            rows=1000,
+            cols=len(CELEBRITY_REGISTRY_HEADERS),
+        )
+        worksheet.update([CELEBRITY_REGISTRY_HEADERS])
+        _seed_registry_from_game_picks(spreadsheet, worksheet)
+        return worksheet
+    header = worksheet.row_values(1)
+    if not header:
+        worksheet.update([CELEBRITY_REGISTRY_HEADERS])
+    elif header != CELEBRITY_REGISTRY_HEADERS:
+        raise RuntimeError(
+            "celebrities registry headers do not match the finalized schema"
+        )
+    return worksheet
+
+
+def get_or_create_celebrity(
+    name: str,
+    *,
+    created_by_user_id: int | None = None,
+    created_by_username: str | None = None,
+) -> dict[str, Any]:
+    """Resolve a free-text celebrity name to a registry record, creating it if
+    new. Idempotent on the case-folded normalized name, so the same person is
+    one row (and one id) no matter how many features or users enter them.
+    Returns ``{"celebrity_id", "celebrity_name"}``."""
+    normalized = normalize_celebrity_name(name)
+    if not normalized:
+        raise ValueError("celebrity name cannot be empty")
+    key = normalized.casefold()
+    celeb_id = celebrity_user_id(normalized)
+    credentials = os.environ["GOOGLE_CREDENTIALS"]
+    sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
+    with _CELEBRITY_REGISTRY_LOCK:
+        spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
+        worksheet = _celebrity_registry_worksheet(spreadsheet)
+        norm_index = CELEBRITY_REGISTRY_HEADERS.index("normalized_name")
+        name_index = CELEBRITY_REGISTRY_HEADERS.index("celebrity_name")
+        for row in worksheet.get_all_values()[1:]:
+            if len(row) > norm_index and row[norm_index] == key:
+                existing = (
+                    row[name_index] if len(row) > name_index else normalized
+                )
+                return {
+                    "celebrity_id": celeb_id,
+                    "celebrity_name": existing or normalized,
+                }
+        now = datetime.now(timezone.utc)
+        worksheet.append_row(
+            [
+                celeb_id,
+                normalized,
+                key,
+                now.isoformat(),
+                now.astimezone(ET).isoformat(),
+                created_by_user_id if created_by_user_id is not None else "",
+                created_by_username or "",
+            ],
+            value_input_option="RAW",
+        )
+    return {"celebrity_id": celeb_id, "celebrity_name": normalized}
 
 
 async def _intake_data() -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
@@ -1893,6 +2035,17 @@ async def main() -> None:
                     submission=state["celeb_submission"], names=names
                 )
                 await asyncio.to_thread(append_celebrity_picks, rows)
+                # Keep the shared registry complete: any name entered here must
+                # also become a first-class celebrity so it shows up as a roster
+                # button in every feature (single source of truth).
+                sender = await event.get_sender()
+                for name in names:
+                    await asyncio.to_thread(
+                        get_or_create_celebrity,
+                        name,
+                        created_by_user_id=event.sender_id,
+                        created_by_username=getattr(sender, "username", None),
+                    )
             guess_states.pop(event.sender_id, None)
             if names:
                 receipt = (
