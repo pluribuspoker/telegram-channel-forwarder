@@ -29,6 +29,51 @@ def _extract_source_odds(text: str) -> int | None:
     return int(m.group(0)) if m else None
 
 
+def patch_expandable_blockquotes() -> None:
+    """Teach Telethon's HTML codec the blockquote `collapsed` flag, both ways.
+
+    Stock Telethon renders every blockquote as a plain <blockquote> and parses
+    <blockquote expandable> without the flag, so any edit round-tripped
+    through it silently expands a collapsed quote — and the flag is
+    unrecoverable from the live message afterwards. Covers both edit paths:
+    unparse feeds Bot API edits (which need `<blockquote expandable>`), parse
+    feeds Telethon edits in send_as_user channels (parse_mode="html").
+
+    Telethon is imported lazily: grade_daemon imports this module and must
+    stay Telethon-free.
+    """
+    from telethon.extensions import html as tl_html
+    from telethon.tl.types import MessageEntityBlockquote
+
+    tl_html.ENTITY_TO_FORMATTER[MessageEntityBlockquote] = lambda e, _: (
+        "<blockquote expandable>" if getattr(e, "collapsed", False)
+        else "<blockquote>",
+        "</blockquote>",
+    )
+    parser_cls = tl_html.HTMLToTelegramParser
+    if not getattr(parser_cls, "_expandable_patched", False):
+        orig_starttag = parser_cls.handle_starttag
+
+        def handle_starttag(self, tag, attrs):
+            orig_starttag(self, tag, attrs)
+            if tag == "blockquote" and any(k == "expandable" for k, _ in attrs):
+                ent = self._building_entities.get("blockquote")
+                if ent is not None:
+                    ent.collapsed = True
+
+        parser_cls.handle_starttag = handle_starttag
+        parser_cls._expandable_patched = True
+
+
+def to_bot_html(text: str, entities) -> str:
+    """Convert Telethon message text+entities to Bot API-compatible HTML."""
+    from telethon.extensions import html as tl_html
+
+    patch_expandable_blockquotes()
+    ht = tl_html.unparse(text, entities or [])
+    return ht.replace("<spoiler>", "<tg-spoiler>").replace("</spoiler>", "</tg-spoiler>")
+
+
 # Lines that look like bet lines: contain odds, units, spread/total numbers, or bet-type keywords
 _OU_RE = re.compile(r'\b(over|under)(?:\s+|(?=\d))')
 _F5_RE = re.compile(r'\bfirst\s+5\s+innings\b')
@@ -73,13 +118,37 @@ _PROP_STAT_ALIASES: dict[str, list[str]] = {
 
 
 def _prop_stat_in_line(prop_stat: str, line_lower: str) -> bool:
-    """Check if a prop_stat (or any of its aliases) appears in a line."""
-    if prop_stat in line_lower:
+    """Check if a prop_stat (or any of its aliases) appears in a line.
+
+    Terms under 4 chars (K, TB, SOG…) must match as whole words (optionally
+    pluralised): as a substring the "k" of a strikeout prop hits the k in
+    "Skubal" or "BookitWithTrent" — the latter put a verdict emoji on the
+    🔗 View on X attribution line."""
+    def _hit(term: str) -> bool:
+        if len(term) < 4:
+            return re.search(rf"\b{re.escape(term)}s?\b", line_lower) is not None
+        return term in line_lower
+
+    if _hit(prop_stat):
         return True
     for alias in _PROP_STAT_ALIASES.get(prop_stat, []):
-        if alias in line_lower:
+        if _hit(alias):
             return True
     return False
+
+
+_LINK_LINE_RE = re.compile(r'^\s*(?:<a\s|https?://)', re.IGNORECASE)
+
+
+def _is_link_line(line: str) -> bool:
+    """True for hyperlink/attribution lines ("🔗 View on X", bare URLs).
+
+    Never the bet, so no placement pass — odds tag or verdict emoji — may
+    target one. Shared by BOTH matchers (_match_pick_line/_best_content_line
+    and _insert_odds) so they can't disagree about it; URLs are also full of
+    digits and letters that substring passes love ("BookitWithTrent" contains
+    a k, a status id contains most integer lines)."""
+    return bool(_LINK_LINE_RE.match(line.strip())) or "<a " in line
 
 
 def _pick_search_terms(pick: dict) -> list[str]:
@@ -94,6 +163,25 @@ def _pick_search_terms(pick: dict) -> list[str]:
             terms.append(tl)
             terms.extend(w for w in tl.split() if len(w) > 3)
     return terms
+
+
+def _blockquote_lines(lines: list[str]) -> set[int]:
+    """Indexes of lines inside <blockquote>…</blockquote> regions.
+
+    Blockquotes are the capper's angle records ("35-10 off 1 loss"), never the
+    bet itself, so no placement pass — odds tag or verdict emoji — may target
+    them. Both matchers share this so they can't disagree about it.
+    """
+    bq: set[int] = set()
+    in_bq = False
+    for i, line in enumerate(lines):
+        if "<blockquote" in line:
+            in_bq = True
+        if in_bq:
+            bq.add(i)
+        if "</blockquote>" in line:
+            in_bq = False
+    return bq
 
 
 def msg_plain_text(msg: dict) -> str:
@@ -132,33 +220,33 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
        best candidate line that looks like a pick line
     """
     # Pre-compute lines inside <blockquote> (stats/records, never picks)
-    bq_lines: set[int] = set()
-    in_bq = False
-    for i, line in enumerate(lines):
-        if "<blockquote" in line:
-            in_bq = True
-        if in_bq:
-            bq_lines.add(i)
-        if "</blockquote>" in line:
-            in_bq = False
+    bq_lines = _blockquote_lines(lines)
 
     def _available(i: int) -> bool:
-        return i not in bq_lines and not any(ch in lines[i] for ch in _PICK_EMOJI.values())
+        return (i not in bq_lines
+                and not _is_link_line(lines[i])
+                and not any(ch in lines[i] for ch in _PICK_EMOJI.values()))
 
-    # Pass 1: team/player name
+    # Pass 1: team/player name. When the pick is a prop, prefer the line that
+    # also names the stat — that disambiguates multi-prop messages and BTTS-
+    # style team headers. For PLAYER props, fall back to the player-name line
+    # without the stat: cappers often never state it ("Snell getting 9" =
+    # over 8.5 Ks), and the player's name on a line is already a strong match.
     search_terms = _pick_search_terms(pick)
     prop_stat = (pick.get("prop_stat") or "").lower().strip()
-    for i, line in enumerate(lines):
-        if not _available(i):
-            continue
-        line_lower = line.lower()
-        if any(term in line_lower for term in search_terms):
-            # For team-level props (BTTS, clean sheet, etc.), team names
-            # may appear on a header line separate from the pick line.
-            # Only match here if the line also contains the prop_stat.
-            if prop_stat and not _prop_stat_in_line(prop_stat, line_lower):
+    stat_passes = (True, False) if pick.get("player") else (True,)
+    for require_stat in stat_passes:
+        for i, line in enumerate(lines):
+            if not _available(i):
                 continue
-            return i
+            line_lower = line.lower()
+            if any(term in line_lower for term in search_terms):
+                # For team-level props (BTTS, clean sheet, etc.), team names
+                # may appear on a header line separate from the pick line.
+                # Only match here if the line also contains the prop_stat.
+                if require_stat and prop_stat and not _prop_stat_in_line(prop_stat, line_lower):
+                    continue
+                return i
 
     # Pass 1b: team-level prop (BTTS, clean sheet, etc.) where the prop keyword
     # sits on its own pick line, separate from the team-name header (common in
@@ -233,24 +321,22 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
     return None
 
 
-_LINK_LINE_RE = re.compile(r'^\s*(?:<a\s|https?://)', re.IGNORECASE)
-
-
 def _best_content_line(lines: list[str]) -> int | None:
     """Last usable content line for placing an odds tag / verdict emoji when a
     pick matches no line by name or number (pure-slang tweets like "nuking the
     AL for my coin back", tweets with flag emojis instead of team names, etc.).
 
     Skips the capper-name line (index 0), blank lines, hyperlink/attribution
-    lines (e.g. "🔗 View on X"), and lines already carrying a verdict emoji.
-    Returns None if no such line exists.
+    lines (e.g. "🔗 View on X"), blockquoted angle records, and lines already
+    carrying a verdict emoji. Returns None if no such line exists.
     """
+    bq_lines = _blockquote_lines(lines)
     best = None
     for i, line in enumerate(lines):
         stripped = line.strip()
-        if not stripped or i == 0:
+        if not stripped or i == 0 or i in bq_lines:
             continue
-        if _LINK_LINE_RE.match(stripped) or "<a " in line:
+        if _is_link_line(line):
             continue
         if any(ch in line for ch in _PICK_EMOJI.values()):
             continue
@@ -313,11 +399,18 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
         overall = _overall_verdict(parlay_verdicts)
         emoji = _PICK_EMOJI.get(overall)
         if emoji:
+            # A parlay carries exactly ONE overall emoji, and the tracker and
+            # daemon both re-edit the same message from its current text — so a
+            # target line that already holds a verdict emoji means an earlier
+            # pass placed it. Every placement below must treat that as done:
+            # falling through to append instead stacks a stray emoji on each
+            # subsequent re-edit.
             # Prefer appending to the "Parlay:" header line
             placed = False
             for i, line in enumerate(lines):
-                if "parlay" in line.lower() and not any(ch in line for ch in _PICK_EMOJI.values()):
-                    lines[i] = f"{line.rstrip()}{emoji}"
+                if "parlay" in line.lower():
+                    if not any(ch in line for ch in _PICK_EMOJI.values()):
+                        lines[i] = f"{line.rstrip()}{emoji}"
                     placed = True
                     break
 
@@ -330,9 +423,10 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
                         if any(term in line.lower() for term in search_terms):
                             last_idx = max(last_idx, i)
 
-                if last_idx >= 0 and not any(ch in lines[last_idx] for ch in _PICK_EMOJI.values()):
-                    lines[last_idx] = f"{lines[last_idx].rstrip()}{emoji}"
-                else:
+                if last_idx >= 0:
+                    if not any(ch in lines[last_idx] for ch in _PICK_EMOJI.values()):
+                        lines[last_idx] = f"{lines[last_idx].rstrip()}{emoji}"
+                elif not any(ln.strip() in _PICK_EMOJI.values() for ln in lines):
                     lines.append(emoji)
 
     return "\n".join(lines)
@@ -366,6 +460,12 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     standalone_idxs = [i for i, p in enumerate(picks) if not p.get("is_parlay_leg")]
 
     lines = text.rstrip().split("\n")
+    # Angle records live in blockquotes and are never the bet, so no pass may
+    # tag one — a team word or bet number appearing in the record ("35-10 off
+    # 1 loss" under "Dbacks ML") must not attract the tag. _match_pick_line
+    # (the emoji matcher) has excluded these all along; without the same rule
+    # here the two paths disagree about which line is the pick.
+    bq_lines = _blockquote_lines(lines)
 
     if parlay_idxs:
         _leg_odds = [odds_by_pick.get(str(i), {}).get("odds") for i in parlay_idxs]
@@ -391,11 +491,15 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             # line instead.
             header_j = -1
             for j, line in enumerate(lines):
+                if j in bq_lines or _is_link_line(line):
+                    continue
                 if re.search(r'\b(?:parlay|teaser)\b[^:\n]*:(?:\s*\[[+-]\d[^\]]*\])?\s*$', line, re.IGNORECASE):
                     header_j = j
                     break
             if header_j < 0:
                 for j, line in enumerate(lines):
+                    if j in bq_lines or _is_link_line(line):
+                        continue
                     if re.search(r'\b(?:parlay|teaser)\b', line, re.IGNORECASE):
                         header_j = j
                         break
@@ -409,6 +513,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                                 leg_terms.append(w)
                 best_j, best_count = -1, 0
                 for j, line in enumerate(lines):
+                    if j in bq_lines or _is_link_line(line):
+                        continue
                     ll = line.lower()
                     hits = sum(1 for t in leg_terms if t in ll)
                     if hits > best_count:
@@ -533,6 +639,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         # after the analysis blockquote that mentions the Roughriders again).
         if desc:
             for j, line in enumerate(lines):
+                if j in bq_lines or _is_link_line(line):
+                    continue
                 if desc in _norm_abbr(line.lower()):
                     if _place(j, odds_tag, allow_source=moved, declined=src_declined):
                         desc_matched = True
@@ -542,6 +650,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
 
         if not desc_matched and not src_declined:
             for j, line in enumerate(lines):
+                if j in bq_lines or _is_link_line(line):
+                    continue
                 if " @ " in line and not _BET_LINE_RE.search(line):
                     continue  # skip game-info headers, but keep pick lines
                 if any(term in line.lower() for term in search_terms):
@@ -571,6 +681,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             desc_stripped = " ".join(desc_stripped.split())  # collapse whitespace
             if len(desc_stripped) >= 4:
                 for j, line in enumerate(lines):
+                    if j in bq_lines or _is_link_line(line):
+                        continue
                     if " @ " in line and not _BET_LINE_RE.search(line):
                         continue
                     if desc_stripped in _norm_abbr(line.lower()):
@@ -589,6 +701,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 pick_line_f = float(pick_line)
                 line_str = str(int(pick_line_f)) if pick_line_f == int(pick_line_f) else str(pick_line_f)
                 for j, row in enumerate(lines):
+                    if j in bq_lines or _is_link_line(row):
+                        continue
                     if " @ " in row and not _BET_LINE_RE.search(row):
                         continue
                     if line_str in row:
@@ -597,6 +711,30 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                             break
                         if src_declined:
                             break
+
+        # Fifth fallback: the line that most looks like a bet line (odds, units,
+        # spread/total numbers, ML keywords), mirroring _match_pick_line's final
+        # pass so the odds tag and the later verdict emoji converge on the same
+        # line. Catches abbreviated picks no name/number pass resolves —
+        # "Dbacks ML" parses to "Arizona Diamondbacks", which shares no word
+        # with the message, has no line number, and leaves only "ml" once team
+        # words are stripped. Without this pass such a pick fell straight to
+        # _best_content_line, whose last-content-line rule preferred the angle
+        # record under the pick.
+        if not desc_matched and not src_declined:
+            best_j, best_score = -1, 0
+            for j, row in enumerate(lines):
+                if j in bq_lines or _is_link_line(row):
+                    continue
+                stripped = row.strip()
+                if not stripped or len(stripped) < 3:
+                    continue
+                score = len(_BET_LINE_RE.findall(stripped))
+                if score > best_score:
+                    best_score = score
+                    best_j = j
+            if best_j >= 0 and _place(best_j, odds_tag, allow_source=moved, declined=src_declined):
+                desc_matched = True
 
         if not desc_matched and src_declined:
             # The pick's own line WAS found — it was declined only because the
@@ -747,6 +885,7 @@ async def _user_edit_message(
 ) -> bool:
     """Edit a message via user account (Telethon). For messages sent with send_as_user."""
     try:
+        patch_expandable_blockquotes()  # parse side: keep <blockquote expandable> collapsed
         await client.edit_message(channel_id, message_id, new_text, parse_mode="html")
         return True
     except Exception as exc:

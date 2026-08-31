@@ -146,7 +146,7 @@ Lines prefixed with '>' are blockquote commentary by the poster. If the main tex
 {date_context}
 Return JSON (no markdown fences):
 {{
-  "sport": "NBA|WNBA|NCAAB|MLB|NFL|NHL|UFL|CFL|Tennis|UFC|Boxing|KBO|Soccer|Lacrosse|Other",
+  "sport": "NBA|WNBA|NCAAB|NCAAF|MLB|NFL|NHL|UFL|CFL|Tennis|UFC|Boxing|KBO|Soccer|Lacrosse|Other",
   "picks": [
     {{
       "description": "concise one-line summary of the exact bet",
@@ -184,7 +184,7 @@ Classification rules:
 - Double chance: "X or Draw", "Draw or X", "X or Y" bets that cover two of three outcomes. Use bet_type="double_chance". Put the first-named team in "teams". line and direction should be null.
 - Draw no bet (DNB): "X draw no bet", "X DNB". Like moneyline but draw = refund. Use bet_type="draw_no_bet". Put the team in "teams". line and direction should be null.
 - Colloquial moneyline slang: phrases like "nuking/hammering/pounding/smashing/blasting/tailing/riding/loving the X", "all over the X", or "X for the win" express a MONEYLINE pick on team/side X (bet_type=moneyline), even with no explicit bet type, line, or odds stated — extract it. Ignore surrounding bankroll slang (e.g. "for my coin back", "to get well"). Still return no picks for pure commentary with no team/side named. "AL"/"NL" in an MLB All-Star context = American League All-Stars / National League All-Stars.
-- Period: 1h=first half, 2h=second half, 1q=first quarter, 1p/2p/3p=hockey periods, game=full game (default). For baseball, 1h = first 5 innings (F5).
+- Period: 1h=first half, 2h=second half, 1q=first quarter, 1p/2p/3p=hockey periods, game=full game (default). For baseball, 1h = first 5 innings (F5) and 1q = first inning: NRFI (no run first inning) = bet_type total, line 0.5, direction under, period 1q; YRFI is the same with direction over.
 - Period qualifiers are PER-LEG, never shared. In a multi-leg pick, a period written on one leg applies ONLY to that leg — every other leg is period="game" unless it carries its own qualifier. In "Dodgers F5 +1.5 & under 11.5" the F5 belongs to the spread; the total is a FULL-GAME total (period="game"). Sanity-check the line against the period before tagging it: an MLB first-5-innings total is ~3.5-7.5 runs, an NBA first-half total ~105-125, an NFL first-half total ~19-28, an NHL period total ~1.5-2.5. A line far above the period's normal range is a full-game line that was never period-scoped.
 
 Message:
@@ -398,6 +398,12 @@ async def claude_parse(
             "/ 'Straight') — emit each as its own pick with is_parlay_leg=false. "
             "Only set is_parlay_leg=true when the slip is ONE combined ticket (a "
             "single stake and one combined payout across all legs). "
+            "PLAYER'S TEAM: the slip shows the player's CURRENT team as a "
+            "logo/abbreviation chip (e.g. 'LAD'). Players get traded after your "
+            "training data ends — when the slip's chip conflicts with your memory "
+            "of the player's team, the SLIP WINS: expand the chip to the full "
+            "team name in teams (LAD → Los Angeles Dodgers), even if you believe "
+            "the player plays elsewhere. "
             "Do NOT read odds/prices off the slip.\n\n" + prompt
         )
         content = [
@@ -534,6 +540,18 @@ async def claude_parse(
                     parsed["sport"] = "Lacrosse"
                     pick["teams"] = [canonical]
                     break
+
+    # NCAAF: explicit college-football context but Claude left sport="Other".
+    # Pick-level "Other" copies are nulled so they re-inherit the corrected
+    # top-level sport (every consumer resolves pick.get("sport") or sport,
+    # and an explicit "Other" there would override the fix).
+    if parsed and parsed.get("sport") == "Other" and re.search(
+        r"\bcfb\b|\bncaaf\b|college football", text.lower()
+    ):
+        parsed["sport"] = "NCAAF"
+        for pick in parsed.get("picks", []):
+            if pick.get("sport") == "Other":
+                pick["sport"] = None
 
     if parsed:
         _fix_mlb_f5_total_bleed(parsed)
@@ -726,6 +744,7 @@ async def build_context(
                     date = prev_date
 
         parts = []
+        player_found = False
         for eid in event_ids:
             cache_key = (sport, eid)
             if cache_key not in summary_cache:
@@ -734,9 +753,44 @@ async def build_context(
             if not summary:
                 continue
             if bet_type == "prop":
-                parts.append(box_score_text(summary, player))
+                # Line scores too: NRFI/period props grade off inning scores,
+                # and the final score sanity-checks the box.
+                parts.append(line_scores_text(summary, sport))
+                btext = box_score_text(summary, player)
+                if btext != "No player stats found":
+                    player_found = True
+                parts.append(btext)
             else:
                 parts.append(line_scores_text(summary, sport))
+
+        # Player absent from the bound game's box (or his parsed team had no
+        # game): the parse's team may be the model's stale roster memory — a
+        # player traded after the cutoff binds his OLD team's game (Skubal→LAD
+        # graded against the Tigers). Scan the rest of the day's completed
+        # slate for him before giving up; strict all-words name match so a
+        # shared surname can't bind a different player.
+        if bet_type == "prop" and player and not player_found:
+            bound = set(event_ids)
+            for ev in _completed_events(scoreboard):
+                eid = ev.get("id")
+                if not eid or eid in bound:
+                    continue
+                cache_key = (sport, eid)
+                if cache_key not in summary_cache:
+                    summary_cache[cache_key] = await fetch_espn_summary(sport, eid)
+                summary = summary_cache[cache_key]
+                if not summary:
+                    continue
+                btext = box_score_text(summary, player, require_all_words=True)
+                if btext != "No player stats found":
+                    print(f"  [box-rescue] {player}: not in parsed team's game; "
+                          f"found in {ev.get('name', eid)}")
+                    parts = [
+                        f"NOTE: {player} did not appear in his parsed team's game; "
+                        "his stats below are from the game he actually played:",
+                        line_scores_text(summary, sport), btext,
+                    ]
+                    return "\n\n".join(p for p in parts if p.strip()), date
 
         if parts:
             return "\n\n".join(p for p in parts if p.strip()), date

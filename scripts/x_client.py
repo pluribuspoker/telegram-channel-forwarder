@@ -22,6 +22,21 @@ Two upstream/library quirks are worked around here so every caller gets them:
      tells the two apart so alerts name the right remedy.
      Upstream: https://github.com/vladkens/twscrape/issues/248
 
+  1b. Webpack chunk hashes grew from 7 to 16 hex chars (2026-08-24 outage).
+     twscrape reconstructs chunk URLs from two maps embedded in the page HTML
+     (`{chunk_id:"hash"}` + `{chunk_id:"name"}`, URL = `{name}.{hash}a.js`) and
+     tells the maps apart by "hash = exactly 7 lowercase hex". When X redeployed
+     with 16-hex hashes, every webpack page raised "Failed to parse scripts"
+     (and the slim x-web pages never ship the chunk), so ALL candidates failed
+     at once — a total outage with no cookie involvement. Still unfixed in
+     twscrape 0.20.0 (which instead bootstraps with account cookies and treats
+     the logged-out x-web build as a dead end). We monkeypatch
+     `get_scripts_list` with length-agnostic hash parsing (`{7,}` hex, and the
+     symmetric exclusion when building the name map — without it the 16-hex
+     values leak in as chunk NAMES and every URL doubles the hash). Stock
+     `parse_anim_idx` then finds `ondemand.s.{hash}a.js` in the URL list by
+     itself, so this patch alone also survives a stock reinstall.
+
   2. add_account_cookies() silently ignores rotated cookies.
      It's a no-op when the account already exists, so twscrape keeps using the
      cookies cached in accounts.db and pasting fresh ones into .env.local has no
@@ -30,6 +45,7 @@ Two upstream/library quirks are worked around here so every caller gets them:
 
 import logging
 import os
+import re
 
 import bs4
 from twscrape import API
@@ -42,9 +58,10 @@ _log = logging.getLogger(__name__)
 # Ordered pages to try when bootstrapping XClIdGen. X migrates its web build
 # page-by-page, so we keep the first still served by the full webpack build (the
 # one shipping the transaction-id indices chunk). `/home` is the confirmed-good
-# page as of 2026-07; the rest are app-shell routes kept as self-heal fallbacks
-# for the next migration. A page on the slim build just fails load_keys and is
-# skipped — including a dead one is harmless. Reorder so the working one is first.
+# page as of 2026-08-24 (needs the 16-hex hash patch below); the rest are
+# app-shell routes kept as self-heal fallbacks for the next migration. A page on
+# the slim build just fails load_keys and is skipped — including a dead one is
+# harmless. Reorder so the working one is first.
 _XCLID_PAGES = (
     "https://x.com/home",
     "https://x.com/explore",
@@ -65,10 +82,49 @@ class XClIdBootstrapError(Exception):
     """
 
 
+# Webpack-map parsing for the legacy build (quirk 1b). Hash values were 7 hex
+# chars for years, 16 since 2026-08 — accept any length ≥7 so the next resize
+# doesn't take us down. The name map must exclude by the SAME pattern, or hash
+# values count as chunk names and every reconstructed URL doubles the hash.
+_WEBPACK_MAP_RE = re.compile(r'(\d+):"([^"]+)"')
+_WEBPACK_HASH_RE = re.compile(r"[0-9a-f]{7,}")
+# Direct script links in the current builds: x-web (Vite) assets, mirrored from
+# twscrape's own ASSET_URL_RE so this module stays self-contained.
+_XWEB_ASSET_RE = re.compile(r"https://[\w.-]+/x-web/[\w./-]+\.js")
+
+
+def _get_scripts_list(text: str) -> list[str]:
+    """`twscrape.xclid.get_scripts_list` with length-agnostic webpack hashes."""
+    urls = list(dict.fromkeys(_XWEB_ASSET_RE.findall(text)))
+    if urls:
+        return urls
+
+    hash_map: dict[str, str] = {}
+    name_map: dict[str, str] = {}
+    for m in _WEBPACK_MAP_RE.finditer(text):
+        chunk_id, val = m.group(1), m.group(2)
+        if _WEBPACK_HASH_RE.fullmatch(val):
+            hash_map[chunk_id] = val
+        else:
+            name_map[chunk_id] = val
+
+    if not hash_map:
+        raise Exception("Failed to parse scripts")
+
+    return [
+        f"https://abs.twimg.com/responsive-web/client-web/{name_map.get(cid, cid)}.{h}a.js"
+        for cid, h in hash_map.items()
+    ]
+
+
 def patch_xclid() -> None:
     """Bootstrap XClIdGen from the first `_XCLID_PAGES` entry on the full build."""
     if getattr(_xclid.XClIdGen, "_home_patched", False):
         return
+
+    # parse_anim_idx resolves get_scripts_list from module globals at call time,
+    # so rebinding the attribute is enough.
+    _xclid.get_scripts_list = _get_scripts_list
 
     async def _create_from_candidates() -> "_xclid.XClIdGen":
         clt = _xclid._make_client()

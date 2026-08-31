@@ -14,16 +14,27 @@ Commands (only responds to ALLOWED_USER_ID):
   /ping     — responds "pong" (liveness check)
   /mem      — live RAM + swap usage + top consumers (alias /ram)
   /tmux     — capture last 50 lines of Claude's tmux pane (see what it's doing)
+  /reauth   — mint a new 1-year OAuth token (start; DMs a login URL)
+  /authcode — finish re-auth by pasting the code from that URL
+
+Re-auth lives here rather than in Claude itself for the obvious reason: it is
+needed precisely when Claude can't answer. This bot is a separate service with
+its own token, so it survives both a dead credential and the claude-channels
+restart that fixing one requires.
 
 Requires: pip install python-telegram-bot (already in venv)
 Env: WATCHDOG_BOT_TOKEN, WATCHDOG_USER_ID in .env
 """
 
 import os
+import re
 import subprocess
 import asyncio
 import logging
+import time
 from pathlib import Path
+
+from claude_auth_watchdog import AUTH_ENV, probe as auth_probe
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("watchdog")
@@ -55,6 +66,103 @@ def run(cmd: str, timeout: int = 30) -> str:
         return (r.stdout + r.stderr).strip()
     except subprocess.TimeoutExpired:
         return "(command timed out)"
+
+
+def run_argv(argv: list[str], timeout: int = 30) -> str:
+    """Run without a shell. Used wherever a Telegram-supplied string is an argument."""
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        return (r.stdout + r.stderr).strip()
+    except subprocess.TimeoutExpired:
+        return "(command timed out)"
+
+
+# --- re-auth -------------------------------------------------------------
+# `claude setup-token` is interactive: it prints a login URL, then blocks on
+# stdin for the code. Driving it from Telegram means holding that process open
+# across two messages, so it runs in a detached tmux session.
+#
+# Two properties of that session are load-bearing, both learned the hard way on
+# 2026-08-21:
+#   * a DEDICATED SOCKET (-L). On tmux's default socket the server is a child of
+#     claude-channels.service, so KillMode=control-group destroys it on any
+#     restart — including the restart re-auth itself performs at the end.
+#   * a WIDE PANE (-x 400). The CLI hard-wraps output to the pane width, and a
+#     token split across two lines gets silently truncated on capture. An 79-of-108
+#     character token looks like a token, writes cleanly, and only fails later.
+AUTH_SOCKET = "authtok"
+AUTH_SESSION = "setuptok"
+TOKEN_RE = re.compile(r"sk-ant-oat\d*-[A-Za-z0-9_-]+")
+URL_RE = re.compile(r"https://claude\.com/\S+")
+# Codes are <code>#<state>, both URL-safe base64. Anything else is not a code.
+CODE_RE = re.compile(r"^[A-Za-z0-9_\-#]{20,400}$")
+
+
+def _auth_pane() -> str:
+    return run(f"tmux -L {AUTH_SOCKET} capture-pane -t {AUTH_SESSION} -p -J -S -80")
+
+
+def start_reauth() -> str:
+    """Launch `claude setup-token` in an isolated pty; return the login URL or an error."""
+    run(f"tmux -L {AUTH_SOCKET} kill-server 2>/dev/null; true")
+    run(
+        f"setsid tmux -L {AUTH_SOCKET} new-session -d -x 400 -y 50 -s {AUTH_SESSION} "
+        f"'claude setup-token; sleep 900'"
+    )
+    for _ in range(12):
+        time.sleep(2)
+        m = URL_RE.search(_auth_pane())
+        if m:
+            return m.group(0)
+    return ""
+
+
+def finish_reauth(code: str) -> str:
+    """Feed the code in, verify the resulting token, install it, restart. Returns a report."""
+    if "no server running" in run(f"tmux -L {AUTH_SOCKET} has-session -t {AUTH_SESSION} 2>&1"):
+        return "❌ No re-auth in progress (or it expired). Send /reauth to start over."
+
+    run_argv(["tmux", "-L", AUTH_SOCKET, "send-keys", "-t", AUTH_SESSION, code, "Enter"])
+    time.sleep(3)
+    # The CLI's masked prompt sometimes swallows the first Enter.
+    run_argv(["tmux", "-L", AUTH_SOCKET, "send-keys", "-t", AUTH_SESSION, "Enter"])
+
+    token = ""
+    for _ in range(10):
+        time.sleep(2)
+        m = TOKEN_RE.search(_auth_pane())
+        if m:
+            token = m.group(0)
+            break
+    if not token:
+        pane = _auth_pane()[-400:]
+        return f"❌ No token appeared. Last output:\n\n{pane}"
+    if len(token) < 100:
+        # Truncation guard: never install a token we only partly captured.
+        return f"❌ Captured token is only {len(token)} chars — refusing to install it. Try /reauth again."
+
+    # Verify BEFORE installing. Writing an unverified token would swap a working
+    # credential for a broken one and take the session down.
+    dead, detail = auth_probe(token)
+    if dead:
+        return f"❌ New token failed its check ({detail}). Nothing was changed."
+
+    tmp = AUTH_ENV.with_suffix(".tmp")
+    tmp.write_text(f"CLAUDE_CODE_OAUTH_TOKEN={token}\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, AUTH_ENV)
+    run(f"tmux -L {AUTH_SOCKET} kill-server 2>/dev/null; true")
+
+    run(f"sudo -n systemctl restart {SERVICE}", timeout=60)
+    time.sleep(15)
+    status = run(f"systemctl is-active {SERVICE}")
+    bun = "yes" if run("pgrep -f 'bun server'") else "no"
+    return (
+        f"✅ New 1-year token installed and verified.\n\n"
+        f"Service: {status}\nBun running: {bun}\n\n"
+        f"Claude's context was reset by the restart. Send it a fresh message and "
+        f"wait for the 👀 before firing a real task."
+    )
 
 
 def mem_summary() -> str:
@@ -102,7 +210,10 @@ async def handle_message(update, context):
     if not msg or msg.from_user.id != ALLOWED_USER_ID:
         return
 
-    text = (msg.text or "").strip().lower()
+    raw = (msg.text or "").strip()
+    # Match commands case-insensitively, but keep `raw` for arguments: an auth
+    # code is case-sensitive base64 and lowercasing it silently destroys it.
+    text = raw.lower()
 
     if text == "/ping":
         await msg.reply_text("pong")
@@ -158,6 +269,43 @@ async def handle_message(update, context):
             out = out[-4000:]
         await msg.reply_text(f"```\n{out}\n```", parse_mode="Markdown")
 
+    elif text == "/reauth":
+        await msg.reply_text("Starting re-auth — minting a new 1-year token...")
+        url = await asyncio.to_thread(start_reauth)
+        if not url:
+            await msg.reply_text(
+                "❌ Couldn't get a login URL. Check `/logs` or run "
+                "`claude setup-token` over SSH."
+            )
+        else:
+            await msg.reply_text(
+                f"1. Open this link and approve:\n\n{url}\n\n"
+                f"2. Copy the code it gives you and send it back as:\n"
+                f"/authcode <code>\n\n"
+                f"(Link is good for 15 minutes.)",
+                disable_web_page_preview=True,
+            )
+
+    elif text.startswith("/authcode"):
+        parts = raw.split(None, 1)
+        if len(parts) < 2:
+            await msg.reply_text("Usage: /authcode <code from the login page>")
+        elif not CODE_RE.match(parts[1].strip()):
+            await msg.reply_text("That doesn't look like an auth code. Paste the whole string.")
+        else:
+            await msg.reply_text("Verifying and installing...")
+            result = await asyncio.to_thread(finish_reauth, parts[1].strip())
+            await msg.reply_text(result, disable_web_page_preview=True)
+
+    elif text == "/auth":
+        out = await asyncio.to_thread(
+            run,
+            "/home/forwarder/venv/bin/python "
+            "/home/forwarder/app/deploy/claude_auth_watchdog.py --report",
+            60,
+        )
+        await msg.reply_text(f"```\n{out or '(no output)'}\n```", parse_mode="Markdown")
+
     elif text == "/help":
         await msg.reply_text(
             "Emergency watchdog commands:\n"
@@ -167,7 +315,9 @@ async def handle_message(update, context):
             "/restart — restart claude-channels\n"
             "/kill — force-kill and restart\n"
             "/logs — last 20 journal lines\n"
-            "/tmux — see what Claude is doing right now"
+            "/tmux — see what Claude is doing right now\n"
+            "/auth — check whether Claude's credentials still work\n"
+            "/reauth — mint a new 1-year token (fixes \"Login expired\")"
         )
 
 

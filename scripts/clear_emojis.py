@@ -22,7 +22,7 @@ import httpx
 from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.extensions import html as tl_html
+from tracker_format import to_bot_html
 
 load_dotenv()
 load_dotenv(".env.local", override=True)
@@ -90,8 +90,7 @@ async def run(days: int, channel: int | None, dry_run: bool) -> None:
                 if not any(em in text for em in _VERDICT_EMOJIS):
                     continue
 
-                html_text = tl_html.unparse(text, msg.entities or [])
-                html_text = html_text.replace("<spoiler>", "<tg-spoiler>").replace("</spoiler>", "</tg-spoiler>")
+                html_text = to_bot_html(text, msg.entities)
                 clean = _strip_emojis(html_text)
 
                 if clean == html_text:

@@ -60,6 +60,11 @@ CASES = [
      P(bet_type="team_total", teams=["LG Twins"], line=2.5, direction="under",
        period="1h", sport="KBO"),
      "LG Twins F5 U2.5"),
+    # MLB/KBO 1Q is the 1st inning (NRFI/YRFI) — never a "quarter".
+    ("total 1q MLB -> 1st Inn (NRFI)",
+     P(bet_type="total", teams=["Boston Red Sox", "Miami Marlins"], line=0.5,
+       direction="under", period="1q", sport="MLB"),
+     "Boston Red Sox/Miami Marlins 1st Inn U0.5"),
     ("total with prop_stat keeps stat after line",
      P(bet_type="total", teams=["A", "B"], line=1.5, direction="over",
        period="1h", sport="Soccer", prop_stat="corners"),

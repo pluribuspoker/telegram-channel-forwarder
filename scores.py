@@ -81,6 +81,9 @@ SOCCER_LEAGUES: list[tuple[str, str]] = [
 # Extra query params per sport (e.g. groups=50 for all D1 NCAAB games)
 SPORT_EXTRA_PARAMS: dict[str, dict] = {
     "NCAAB": {"groups": "50"},
+    # groups=90 = all Division I (FBS+FCS). The default scoreboard is FBS-only,
+    # which leaves FCS matchups (UT Martin, Central Arkansas, ...) invisible.
+    "NCAAF": {"groups": "90"},
 }
 
 # Odds API sport keys for sports not on ESPN
@@ -884,42 +887,51 @@ def line_scores_text(summary: dict, sport: str = "") -> str:
     return "\n".join(lines) or "No line score data available"
 
 
-def box_score_text(summary: dict, player_hint: str = "") -> str:
-    """Format player stats from a game box score."""
+def box_score_text(summary: dict, player_hint: str = "",
+                   require_all_words: bool = False) -> str:
+    """Format player stats from a game box score.
+
+    Reads EVERY stat group and emits every key=value stat generically: ESPN
+    splits MLB boxes into batting/pitching, NFL into passing/rushing/…, NHL
+    into forwards/defenses/goalies — a curated single-group read leaves whole
+    position groups (all pitchers, everyone but QBs) invisible to the grader.
+    The group name is appended when a team has several, so a two-way player's
+    batting and pitching lines stay distinguishable.
+
+    require_all_words: match a player only when ALL hint words appear in the
+    name — for scanning games other than the pick's bound one, where a loose
+    surname match could bind a different player.
+    """
     lines = []
     boxscore = summary.get("boxscore", {})
 
     for team_data in boxscore.get("players", []):
         team_name = team_data.get("team", {}).get("displayName", "?")
 
-        for stat_group in team_data.get("statistics", [])[:1]:
+        groups = team_data.get("statistics", [])
+        multi_group = len(groups) > 1
+        for stat_group in groups:
             keys = stat_group.get("keys", [])
+            group_name = stat_group.get("type") or stat_group.get("name") or ""
 
             for athlete in stat_group.get("athletes", []):
                 name = athlete.get("athlete", {}).get("displayName", "?")
                 stats_raw = athlete.get("stats", [])
+                if not stats_raw:  # DNP row
+                    continue
 
                 # If filtering to a specific player, skip non-matches
                 if player_hint:
                     hint_words = [w for w in player_hint.lower().split() if len(w) > 2]
                     name_lower = name.lower()
-                    if not any(w in name_lower for w in hint_words):
+                    matcher = all if require_all_words else any
+                    if hint_words and not matcher(w in name_lower for w in hint_words):
                         continue
 
-                stats = dict(zip(keys, stats_raw))
-
-                # Basketball stat line
-                bball_map = {"points": "PTS", "rebounds": "REB", "assists": "AST",
-                             "steals": "STL", "blocks": "BLK"}
-                bball = [f"{abbr}={stats[k]}" for k, abbr in bball_map.items() if k in stats]
-
-                # Baseball stat line
-                bball2_keys = ["hits", "atBats", "runs", "RBIs", "homeRuns", "walks"]
-                baseball = [f"{k}={stats[k]}" for k in bball2_keys if k in stats]
-
-                stat_str = bball + baseball
-                if stat_str:
-                    lines.append(f"  {name} ({team_name}): {', '.join(stat_str)}")
+                pairs = [f"{k}={v}" for k, v in zip(keys, stats_raw)]
+                if pairs:
+                    label = f"{team_name}, {group_name}" if multi_group and group_name else team_name
+                    lines.append(f"  {name} ({label}): {', '.join(pairs)}")
 
     return "\n".join(lines) or "No player stats found"
 
@@ -1139,7 +1151,10 @@ def _ufc_bout_completed(data: dict, teams: list[str], player: str = "") -> bool:
 
 # Maps (sport, period_code) → list of 1-based ESPN period indices.
 _QUARTER_PERIODS = {"1h": [1, 2], "2h": [3, 4], "1q": [1], "2q": [2], "3q": [3], "4q": [4]}
-_BASEBALL_PERIODS = {"1h": [1, 2, 3, 4, 5], "2h": [6, 7, 8, 9]}
+# "1q" in baseball is the 1st inning — the parser's closest enum for NRFI/YRFI
+# (total 0.5 on inning 1). Unmapped, an NRFI sat PENDING until the game went
+# final ~3h on, when its period was frozen 20 minutes in.
+_BASEBALL_PERIODS = {"1h": [1, 2, 3, 4, 5], "2h": [6, 7, 8, 9], "1q": [1]}
 
 # Every quarter-based sport in ESPN_LEAGUES belongs here. WNBA and Lacrosse were
 # missing, which silently disabled ALL period math for them — `_extract_period_scores`
@@ -1247,6 +1262,12 @@ def try_early_grade_math(
     * **totals, final** — settles outright, including PUSH and the under side.
     * **spread / moneyline** — final only. A lead is *not* monotone; settling those
       early would call a game that can still be lost.
+    * **period bets, once the period is complete** — settle outright even while
+      the game runs: a finished F5/1H/1Q scoreline is frozen, so it is exactly
+      as final as a finished game. Before this, a live-game period bet fell to
+      Claude via build_early_context, which sampled PUSH on a +0.5 F5 tie in
+      one channel and WIN on the same numbers in its sibling — and a
+      fractional spread can never push.
 
     Grading settled bets was left entirely to Claude, and it got two wrong. A total:
     "Dallas Wings 1H under 79.5" is `bet_type=total` (the team name identifies the
@@ -1306,16 +1327,24 @@ def try_early_grade_math(
     # "post" also covers postponed/suspended/cancelled — those carry no result.
     if final and not stype.get("completed"):
         return None
+    # A completed period of a live game is as settled as a final: once the
+    # 6th inning / 3rd quarter has started, the F5/1H scoreline can never
+    # move again. `_is_period_complete` returns False for period="game" and
+    # for anything unmapped, so this only widens the settled set for period
+    # bets whose innings/quarters are all in the books.
+    settled = final or _is_period_complete(event, sport, period)
     scores = _extract_period_scores(event, sport, period)
     if scores is None:
         return None
 
     away_name, away_score, home_name, home_score = scores
     period_tag = f" {period.upper()}" if period != "game" else ""
+    when = "[final]" if final else f"[{period.upper()} complete]"
 
     if bet_type in ("spread", "moneyline"):
-        # A lead can still be lost, so these settle at final only.
-        if not final:
+        # A lead can still be lost, so these settle only once it cannot:
+        # game final, or the bet's period complete.
+        if not settled:
             return None
         team_name = teams[0] if teams else ""
         if _team_matches(team_name.lower(), away_name.lower()):
@@ -1331,9 +1360,9 @@ def try_early_grade_math(
         if margin == 0:
             # A whole-number spread landing exactly on the margin refunds, and so
             # does a tied side bet. This is the case the -1 run line got wrong.
-            return ("PUSH", f"[final] {shown}{period_tag} — exact, push")
+            return ("PUSH", f"{when} {shown}{period_tag} — exact, push")
         return ("WIN" if margin > 0 else "LOSS",
-                f"[final] {shown}{period_tag} -> {margin:+g}")
+                f"{when} {shown}{period_tag} -> {margin:+g}")
 
     if bet_type == "total":
         # A total names the GAME even when the pick text names one team, so both
@@ -1349,12 +1378,12 @@ def try_early_grade_math(
         else:
             return None
 
-    if final:
+    if settled:
         if value == line:
-            return ("PUSH", f"[final] {label} vs {line}{period_tag} — exact, push")
+            return ("PUSH", f"{when} {label} vs {line}{period_tag} — exact, push")
         hit = (value > line) if direction == "over" else (value < line)
         return ("WIN" if hit else "LOSS",
-                f"[final] {label} vs {line}{period_tag}")
+                f"{when} {label} vs {line}{period_tag}")
 
     # Mid-game: only a value already past the line is decided.
     if value > line:
@@ -1370,7 +1399,9 @@ def build_early_context(
     """For period bets where the period is complete but the game is still going,
     format scores as context for Claude grading.
 
-    Handles spread/moneyline period bets (totals are handled by try_early_grade_math).
+    Math-gradable bet types settle in try_early_grade_math before reaching
+    here; this remains for what arithmetic refuses — non-math sports (soccer
+    periods), 3-way/regulation rules, props parsed with a period.
     Returns context string or None.
     """
     if not scoreboard:
@@ -2009,19 +2040,48 @@ async def validate_sport(
         alt_events = alt_sb.get("events", [])
         matched_ids = find_event_ids(alt_events, search_teams)
         if matched_ids:
-            # Fix team names from the ESPN event
-            corrected_teams = teams
-            for evt in alt_events:
-                if evt.get("id") in matched_ids:
-                    for comp in evt.get("competitions", [{}]):
-                        for c in comp.get("competitors", []):
-                            name = c.get("team", {}).get("displayName", "")
-                            if name and any(f.lower() in name.lower() for f in raw_terms):
-                                corrected_teams = [name]
-                                break
-            return alt_sport, corrected_teams
+            # A cross-sport override needs team-level evidence. The fragment
+            # match above fires on shared city words too — "San", "Los",
+            # "Angeles" from "San Francisco 49ers vs Los Angeles Rams" matched
+            # the Angels' MLB game and rebound a correctly-parsed NFL Week-1
+            # lookahead to sport=MLB / teams=["Los Angeles Angels"], which then
+            # math-graded the wrong game. Only flip the sport when a bet-text
+            # token names the club itself (nickname / short name / abbreviation);
+            # geography alone proves nothing — keep checking other sports.
+            corrected = _nickname_evidence(alt_events, matched_ids, raw_terms)
+            if corrected is not None:
+                return alt_sport, corrected
 
     return sport, teams
+
+
+def _nickname_evidence(
+    events: list[dict], matched_ids: list[str], raw_terms: list[str]
+) -> list[str] | None:
+    """Corrected team list for a fuzzy cross-sport match, or None without
+    club-level evidence.
+
+    A bet-text fragment corroborates a scoreboard team only when it names the
+    club itself — nickname ("Tigers"), short display name, or abbreviation.
+    City words ("Los", "San", "Angeles") are substrings of half the display
+    names in every league and must never rebind a pick across sports.
+    """
+    for evt in events:
+        if evt.get("id") not in matched_ids:
+            continue
+        for comp in evt.get("competitions", [{}]):
+            for c in comp.get("competitors", []):
+                team = c.get("team", {})
+                display = team.get("displayName", "")
+                if not display:
+                    continue
+                names = [n for n in (team.get("name"), team.get("shortDisplayName")) if n]
+                abbrev = (team.get("abbreviation") or "").lower()
+                for frag in raw_terms:
+                    fl = frag.lower()
+                    if (abbrev and fl == abbrev) or any(_team_matches(fl, n) for n in names):
+                        return [display]
+    return None
 
 
 # ── Free closing odds from ESPN (backfills) ───────────────────────────────────

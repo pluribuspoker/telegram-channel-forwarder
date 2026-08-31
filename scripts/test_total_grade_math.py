@@ -30,7 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scores import try_early_grade_math, PERIOD_MAP
 
 
-def event(away_name, away_q, home_name, home_q, *, state="post", completed=True):
+def event(away_name, away_q, home_name, home_q, *, state="post", completed=True,
+          period=None):
     def competitor(name, quarters, side):
         return {
             "homeAway": side,
@@ -38,10 +39,13 @@ def event(away_name, away_q, home_name, home_q, *, state="post", completed=True)
             "score": str(sum(quarters)),
             "linescores": [{"value": float(q), "displayValue": str(q)} for q in quarters],
         }
+    status = {"type": {"state": state, "completed": completed}}
+    if period is not None:
+        status["period"] = period
     return {
         "events": [{
             "id": "401001",
-            "status": {"type": {"state": state, "completed": completed}},
+            "status": status,
             "competitions": [{
                 "competitors": [
                     competitor(away_name, away_q, "away"),
@@ -67,6 +71,40 @@ MLB54_LIVE = event("Texas Rangers", [1, 0, 2, 1, 1, 0, 0, 0, 0], "Seattle Marine
                    [0, 2, 0, 1, 0, 1, 0, 0, 0], state="in")
 # A tied side bet refunds (NFL can tie).
 TIED = event("Golden State Valkyries", [7, 7, 7, 7], "Dallas Wings", [7, 7, 7, 7])
+
+# Boston at Miami, 2026-08-24 — the reported F5 +0.5 pick. Real ESPN linescores
+# captured in the 8th inning, F5 tied 1–1. The game was live when the daemon
+# graded, the old spread gate ("final only") declined, and Claude sampled PUSH
+# in one channel and WIN in its fan-out sibling on the same numbers. A finished
+# period is frozen, so the arithmetic must settle it: +0.5 on a tie = WIN.
+MARLINS_8TH = event("Boston Red Sox", [0, 0, 0, 0, 1, 0, 0, 1],
+                    "Miami Marlins", [0, 1, 0, 0, 0, 0, 1, 0],
+                    state="in", completed=False, period=8)
+# Same game seen in the bottom of the 5th: F5 not complete, nothing settles.
+MARLINS_5TH = event("Boston Red Sox", [0, 0, 0, 0, 1],
+                    "Miami Marlins", [0, 1, 0, 0, 0],
+                    state="in", completed=False, period=5)
+# Boston at Miami, 2026-08-26 — the reported NRFI. Real ESPN linescores captured
+# in the 8th: Miami scored in the 1st, so the under-0.5 lost 20 minutes in, but
+# ("MLB","1q") was unmapped and the pick sat PENDING until the final ~3h later.
+NRFI_8TH = event("Boston Red Sox", [0, 0, 0, 0, 0, 0, 0, 0],
+                 "Miami Marlins", [1, 1, 0, 0, 0, 0, 0, 0],
+                 state="in", completed=False, period=8)
+# Detroit vs Tampa Bay the same day — the sibling NRFI that WON (both I1 = 0).
+NRFI_WIN_2ND = event("Tampa Bay Rays", [0], "Detroit Tigers", [0],
+                     state="in", completed=False, period=2)
+# Still batting in the 1st: inning not complete, an under must wait...
+NRFI_MID_1ST = event("Boston Red Sox", [0], "Miami Marlins", [0],
+                     state="in", completed=False, period=1)
+# ...but a run already in mid-1st settles the monotone side (YRFI over).
+YRFI_MID_1ST = event("Boston Red Sox", [1], "Miami Marlins", [0],
+                     state="in", completed=False, period=1)
+# Live WNBA game with the half in the books (3rd quarter underway) vs halftime
+# (period still 2 — conservatively not yet "complete").
+WNBA_Q3 = event("Golden State Valkyries", [26, 18, 30], "Dallas Wings",
+                [21, 15, 22], state="in", completed=False, period=3)
+WNBA_HALFTIME = event("Golden State Valkyries", [26, 18], "Dallas Wings",
+                      [21, 15], state="in", completed=False, period=2)
 
 
 def P(**kw):
@@ -159,6 +197,65 @@ CASES = [
      S(bet_type="spread", line=-1.5, teams=["Texas Rangers"]), MLB54_LIVE, None),
     ("moneyline mid-game never settles", "MLB",
      S(bet_type="moneyline", teams=["Texas Rangers"]), MLB54_LIVE, None),
+
+    # ── …unless the bet's PERIOD is complete: that scoreline is frozen ────────
+    # The reported pick: Marlins F5 +0.5, F5 tied 1–1, game in the 8th. A
+    # fractional spread can never push — +0.5 on a tie covers.
+    ("F5 +0.5 spread on a tied F5, game live = WIN (reported)", "MLB",
+     S(bet_type="spread", line=0.5, teams=["Miami Marlins"], period="1h"),
+     MARLINS_8TH, ("WIN", "+0.5")),
+    ("its calc says the period, not [final]", "MLB",
+     S(bet_type="spread", line=0.5, teams=["Miami Marlins"], period="1h"),
+     MARLINS_8TH, ("WIN", "[1H complete]")),
+    ("F5 -0.5 spread on the other side = LOSS", "MLB",
+     S(bet_type="spread", line=-0.5, teams=["Boston Red Sox"], period="1h"),
+     MARLINS_8TH, ("LOSS", "-0.5")),
+    # A 2-way F5 moneyline on a tie refunds — margin 0 is the PUSH branch.
+    ("F5 moneyline on a tied F5 = PUSH", "MLB",
+     S(bet_type="moneyline", teams=["Miami Marlins"], period="1h"),
+     MARLINS_8TH, ("PUSH", "push")),
+    # Totals gain the same settle: an F5 under (1+1=2) is safe once F5 ends.
+    ("F5 total under settles once the period ends", "MLB",
+     P(sport="MLB", period="1h", line=4.5, teams=["Miami Marlins"]),
+     MARLINS_8TH, ("WIN", "2")),
+    # NRFI/YRFI: "1q" in baseball is the 1st inning — settled once inning 2
+    # starts. The reported pick: Marlins scored in the 1st, under 0.5 = LOSS.
+    ("NRFI with a 1st-inning run, game live = LOSS (reported)", "MLB",
+     P(sport="MLB", period="1q", line=0.5, teams=["Boston Red Sox", "Miami Marlins"]),
+     NRFI_8TH, ("LOSS", "0+1=1")),
+    ("its calc says the period, not [final]", "MLB",
+     P(sport="MLB", period="1q", line=0.5, teams=["Boston Red Sox", "Miami Marlins"]),
+     NRFI_8TH, ("LOSS", "[1Q complete]")),
+    ("YRFI on the same inning = WIN", "MLB",
+     P(sport="MLB", period="1q", line=0.5, direction="over",
+       teams=["Boston Red Sox", "Miami Marlins"]), NRFI_8TH, ("WIN", "1")),
+    ("NRFI 0-0 first inning settles WIN once the 2nd starts", "MLB",
+     P(sport="MLB", period="1q", line=0.5, teams=["Detroit Tigers", "Tampa Bay Rays"]),
+     NRFI_WIN_2ND, ("WIN", "0+0=0")),
+    ("NRFI during the 1st inning still waits", "MLB",
+     P(sport="MLB", period="1q", line=0.5, teams=["Boston Red Sox", "Miami Marlins"]),
+     NRFI_MID_1ST, None),
+    ("YRFI settles mid-1st once a run is in (monotone)", "MLB",
+     P(sport="MLB", period="1q", line=0.5, direction="over",
+       teams=["Boston Red Sox", "Miami Marlins"]), YRFI_MID_1ST, ("WIN", "1+0=1")),
+    # Bottom of the 5th: F5 is NOT complete, everything above must wait.
+    ("F5 spread during the 5th still waits", "MLB",
+     S(bet_type="spread", line=0.5, teams=["Miami Marlins"], period="1h"),
+     MARLINS_5TH, None),
+    ("F5 under during the 5th still waits", "MLB",
+     P(sport="MLB", period="1h", line=4.5, teams=["Miami Marlins"]),
+     MARLINS_5TH, None),
+    # Quarter sports: settled once Q3 starts, not at halftime (period stays 2).
+    ("1H spread settles once the 3rd quarter starts", "WNBA",
+     S(bet_type="spread", line=-3.5, teams=["Dallas Wings"], period="1h",
+       sport="WNBA"), WNBA_Q3, ("LOSS", "[1H complete]")),
+    ("1H spread at halftime still waits", "WNBA",
+     S(bet_type="spread", line=-3.5, teams=["Dallas Wings"], period="1h",
+       sport="WNBA"), WNBA_HALFTIME, None),
+    # Whole-number period spread landing exact refunds, mid-game too.
+    ("1H +8 landing exactly on 8 = PUSH", "WNBA",
+     S(bet_type="spread", line=8.0, teams=["Dallas Wings"], period="1h",
+       sport="WNBA"), WNBA_Q3, ("PUSH", "push")),
 
     # Rules the scoreline cannot express → fall through to Claude.
     ("regulation ML (OT counts against) falls through", "NHL",
