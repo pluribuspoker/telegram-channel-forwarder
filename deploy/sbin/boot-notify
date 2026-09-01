@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Send a Telegram "back online" ping to the watchdog bot after every boot.
+set -euo pipefail
+
+ENV_FILE=/home/forwarder/app/.env
+TOKEN=$(grep -E '^WATCHDOG_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d "'\"" || true)
+CHAT=$(grep -E '^WATCHDOG_USER_ID=' "$ENV_FILE" | cut -d= -f2- | tr -d "'\"" || true)
+[ -n "$TOKEN" ] && [ -n "$CHAT" ] || exit 0
+
+sleep 25  # let services settle
+FAILED=$(systemctl --failed --no-legend --plain | awk '{print $1}' | paste -sd, -)
+if [ -n "$FAILED" ]; then
+    MSG="pickbot: back online after reboot. FAILED UNITS: ${FAILED}"
+else
+    MSG="pickbot: back online after reboot. All services running."
+fi
+
+for i in 1 2 3; do
+    curl -sf --max-time 20 "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+        -d chat_id="${CHAT}" --data-urlencode text="$MSG" >/dev/null && break
+    sleep 10
+done

@@ -45,13 +45,30 @@ echo "=== deploy/systemd ==="
 for f in "$REPO_ROOT"/deploy/systemd/*; do
   name=$(basename "$f")
   [ "$name" = "README.md" ] && continue
+  [ -d "$f" ] && continue  # drop-in dirs handled below
   check_file "$f" "/etc/systemd/system/$name" "systemd/$name"
+done
+
+# Drop-in dirs: deploy/systemd/<unit>.d/<f> -> /etc/systemd/system/<unit>.d/<f>
+for f in "$REPO_ROOT"/deploy/systemd/*.d/*; do
+  [ -e "$f" ] || continue
+  dir=$(basename "$(dirname "$f")")
+  name=$(basename "$f")
+  check_file "$f" "/etc/systemd/system/$dir/$name" "systemd/$dir/$name"
+done
+
+echo "=== deploy/sbin ==="
+for f in "$REPO_ROOT"/deploy/sbin/*; do
+  [ -e "$f" ] || continue
+  name=$(basename "$f")
+  check_file "$f" "/usr/local/sbin/$name" "sbin/$name"
 done
 
 echo "=== deploy/hooks ==="
 for f in "$REPO_ROOT"/deploy/hooks/*; do
   name=$(basename "$f")
   [ "$name" = "README.md" ] && continue
+  [ -d "$f" ] && continue  # __pycache__ etc.
   # Windows-only hooks aren't deployed on the Linux VPS — skip so they don't
   # read as phantom drift.
   case "$name" in *.win.sh) continue ;; esac

@@ -1,0 +1,11 @@
+[Unit]
+Description=Telegram back-online notification after boot
+After=network-online.target multi-user.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/boot-notify
+
+[Install]
+WantedBy=multi-user.target

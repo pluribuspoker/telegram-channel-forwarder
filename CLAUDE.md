@@ -30,6 +30,7 @@ Rules here are terse on purpose. Each section points to a `docs/*.md` file holdi
 - `angles-dashboard.service` — serves `https://fightclubpicks.cc`.
 - Watchdog timers, all silent-unless-alerting via `WATCHDOG_BOT_TOKEN` DMs: `mem-watchdog` (OOM/swap; VPS has a 2GB swapfile), `claude-spend-watchdog` (spend ledger written at the `ai.py` choke point → `logs/claude_spend.jsonl`; journald is fallback only, never summed), `odds-quota-watchdog` (alerts on state CHANGE only, ✅ on recovery; meters via the `x-requests-last` header, never by differencing `remaining`), `claude-auth-watchdog` (probes `api.anthropic.com` directly — must never shell out to `claude`; only 401/403 counts as dead).
 - `claude-watchdog-bot.service` — interactive: `/mem /status /restart /kill /logs /tmux /auth /reauth /authcode`.
+- **Ubuntu-update notifications** (`deploy/sbin/` → `/usr/local/sbin/`, watchdog chat, "pickbot:" voice): `update-notify` (ExecStartPost drop-in on `apt-daily-upgrade.service`) announces each unattended-upgrades run that changed packages — needrestart bounces affected services (incl. the Claude session, sometimes twice) in the ~6:31 AM window with no reboot; `auto-reboot.timer`→`reboot-if-required` (daily 06:00, only if `/var/run/reboot-required`) + `boot-notify.service` cover reboot-class updates. Restart pings stay bare by design — the cause arrives via this family (docs/vps.md).
 
 ### Claude Code via Telegram (full detail: docs/vps.md)
 

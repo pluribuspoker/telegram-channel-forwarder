@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Reboot the box (with Telegram notice to the watchdog bot) when required.
+# Run daily at 06:00 by auto-reboot.timer. No-op unless /var/run/reboot-required exists.
+set -euo pipefail
+
+[ -f /var/run/reboot-required ] || exit 0
+
+ENV_FILE=/home/forwarder/app/.env
+TOKEN=$(grep -E '^WATCHDOG_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d "'\"" || true)
+CHAT=$(grep -E '^WATCHDOG_USER_ID=' "$ENV_FILE" | cut -d= -f2- | tr -d "'\"" || true)
+
+PKGS=$(tr '\n' ' ' < /var/run/reboot-required.pkgs 2>/dev/null || echo kernel)
+MSG="pickbot: rebooting now to apply updates (${PKGS:-kernel}). Was up $(uptime -p | sed 's/^up //'). Back-online ping will follow."
+
+if [ -n "$TOKEN" ] && [ -n "$CHAT" ]; then
+    curl -sf --max-time 20 "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+        -d chat_id="${CHAT}" --data-urlencode text="$MSG" >/dev/null || true
+fi
+
+sleep 5
+systemctl reboot

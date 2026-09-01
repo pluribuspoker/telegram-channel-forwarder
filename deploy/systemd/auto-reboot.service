@@ -1,0 +1,6 @@
+[Unit]
+Description=Reboot (with Telegram notice) if updates require it
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/reboot-if-required

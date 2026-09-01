@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Notify the watchdog chat when a daily unattended-upgrades run changed
+# packages. Companion to reboot-if-required/boot-notify (same chat, same
+# "pickbot:" voice), covering the library-class updates that DON'T set
+# /var/run/reboot-required — needrestart bounces the affected services in
+# place (~6:31 AM window) and, before this script, nothing announced it.
+#
+# Wired as ExecStartPost on apt-daily-upgrade.service (drop-in
+# systemd/apt-daily-upgrade.service.d/update-notify.conf), so it runs exactly
+# once per daily upgrade run; most days it finds nothing and stays silent.
+#
+# Env knobs (testing): WINDOW_MIN=<minutes back to scan> (default 90),
+# DRYRUN=1 prints the message instead of sending.
+set -euo pipefail
+
+ENV_FILE=/home/forwarder/app/.env
+TOKEN=$(grep -E '^WATCHDOG_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d "'\"" || true)
+CHAT=$(grep -E '^WATCHDOG_USER_ID=' "$ENV_FILE" | cut -d= -f2- | tr -d "'\"" || true)
+[ -n "$TOKEN" ] && [ -n "$CHAT" ] || exit 0
+
+WINDOW_MIN="${WINDOW_MIN:-90}"
+LOG=/var/log/apt/history.log
+[ -f "$LOG" ] || exit 0
+
+# Unique package names from unattended-upgrade entries newer than WINDOW_MIN.
+# history.log timestamps are VPS-local time, matching time.time() here.
+PKGS=$(python3 - "$LOG" "$WINDOW_MIN" <<'EOF' || true
+import sys, time
+log, window_min = sys.argv[1], int(sys.argv[2])
+cutoff = time.time() - window_min * 60
+names, cur = [], {}
+def flush():
+    global cur
+    if cur.get("ts", 0) >= cutoff and "unattended" in cur.get("cmd", ""):
+        names.extend(cur.get("pkgs", []))
+    cur = {}
+for line in open(log, errors="replace"):
+    line = line.strip()
+    if line.startswith("Start-Date:"):
+        flush()
+        try:
+            cur["ts"] = time.mktime(
+                time.strptime(line[11:].strip(), "%Y-%m-%d %H:%M:%S"))
+        except ValueError:
+            cur["ts"] = 0
+    elif line.startswith("Commandline:"):
+        cur["cmd"] = line
+    elif line.startswith("Upgrade:"):
+        cur["pkgs"] = [p.strip().split(":")[0].split(" ")[0]
+                       for p in line[8:].split("),") if p.strip()]
+flush()
+seen = []
+for n in names:
+    if n and n not in seen:
+        seen.append(n)
+print(" ".join(seen))
+EOF
+)
+[ -n "$PKGS" ] || exit 0
+
+COUNT=$(wc -w <<<"$PKGS")
+SHORT=$(cut -d' ' -f1-6 <<<"$PKGS")
+[ "$COUNT" -gt 6 ] && SHORT="$SHORT +$((COUNT-6)) more"
+
+if [ -f /var/run/reboot-required ]; then
+    TAIL="Reboot required — will reboot at the next 6:00 AM window with its own notice."
+else
+    TAIL="Affected services were restarted in place; no reboot needed."
+fi
+
+MSG="pickbot: applied ${COUNT} package update(s) (${SHORT}). ${TAIL}"
+
+if [ "${DRYRUN:-0}" = "1" ]; then
+    echo "$MSG"
+    exit 0
+fi
+
+curl -sf --max-time 20 "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+    -d chat_id="${CHAT}" --data-urlencode text="$MSG" >/dev/null || true
