@@ -21,11 +21,11 @@ from intake_bot import (
     build_lean_row,
     build_suggestion_row,
     build_win_prediction_row,
-    celebrity_screen,
     celebrity_user_id,
     command_keyboard,
     edit_callback,
     game_browser,
+    game_celebrity_picker,
     game_detail,
     implied_score,
     implied_score_tldr,
@@ -33,7 +33,6 @@ from intake_bot import (
     market_buttons,
     market_side_summary,
     page_games,
-    parse_celebrity_names,
     period_market_summary,
     select_games,
     selected_market_context,
@@ -259,6 +258,42 @@ class GameSelectionTest(unittest.TestCase):
         self.assertIn("game:10:0:miami", callback_values)
         self.assertIn("games:30:0", callback_values)
         self.assertIn("games:365:0", callback_values)
+        self.assertIn("celebgame:start:10:0", callback_values)
+
+    def test_game_browser_shows_sticky_celebrity_context(self):
+        text, buttons = game_browser(
+            [_game("miami", 1)],
+            days=10,
+            page=0,
+            now=NOW,
+            celebrity_name="LeBron James",
+        )
+
+        self.assertIn("🎤 <b>LeBron James</b>", text)
+        self.assertEqual(
+            buttons[-1][0].data,
+            b"celebgame:self:10:0",
+        )
+
+    def test_game_celebrity_picker_uses_stable_ids_and_browser_context(self):
+        text, buttons = game_celebrity_picker(
+            ["LeBron James", "Drake"],
+            days=30,
+            page=2,
+        )
+
+        self.assertIn("🎤", text)
+        self.assertEqual(
+            [button.data for row in buttons for button in row],
+            [
+                (
+                    f"celebgame:pick:{celebrity_user_id('LeBron James')}:30:2"
+                ).encode(),
+                f"celebgame:pick:{celebrity_user_id('Drake')}:30:2".encode(),
+                b"celebgame:new:30:2",
+                b"celebgame:cancel:30:2",
+            ],
+        )
 
     def test_detail_includes_miami_and_all_periods(self):
         text, buttons = game_detail(_game("miami", 1), days=10, page=0)
@@ -298,6 +333,28 @@ class GameSelectionTest(unittest.TestCase):
         self.assertIn("MIA Miami Dolphins @ LV Las Vegas Raiders", text)
         self.assertIn("Final: MIA 18.5 · LV 22", text)
         self.assertNotIn("🐬", text)
+
+    def test_game_flow_views_show_celebrity_context(self):
+        detail, _ = game_detail(
+            _game("miami", 1),
+            days=10,
+            page=0,
+            celebrity_name="LeBron James",
+        )
+        period = period_market_summary(
+            _game("miami", 1),
+            period="game",
+            celebrity_name="LeBron James",
+        )
+        market = market_side_summary(
+            _game("miami", 1),
+            period="game",
+            market="spread",
+            celebrity_name="LeBron James",
+        )
+
+        for text in (detail, period, market):
+            self.assertIn("🎤 <b>LeBron James</b>", text)
 
     def test_missing_sheet_team_emoji_uses_football(self):
         self.assertEqual(team_emoji("Miami Dolphins", {}), "🏈")
@@ -412,10 +469,13 @@ class GameSelectionTest(unittest.TestCase):
     def test_submission_snapshot_survives_navigation_mutation(self):
         state = {
             "game": _game("miami", 1),
+            "days": 30,
+            "page": 2,
             "period": "game",
             "market": "spread",
             "side": "away",
             "prompt_msg_id": 456,
+            "celebrity": {"id": -123, "name": "LeBron James"},
         }
 
         status, submission = snapshot_lean_submission(
@@ -424,11 +484,18 @@ class GameSelectionTest(unittest.TestCase):
         )
         state.pop("period")
         state["game"]["away_team"] = "Changed Team"
+        state["celebrity"]["name"] = "Changed Celebrity"
 
         self.assertEqual(status, "ready")
         self.assertEqual(submission["period"], "game")
         self.assertEqual(
             submission["game"]["away_team"], "Miami Dolphins"
+        )
+        self.assertEqual(submission["days"], 30)
+        self.assertEqual(submission["page"], 2)
+        self.assertEqual(
+            submission["celebrity"],
+            {"id": -123, "name": "LeBron James"},
         )
 
     def test_implied_score_uses_latest_total_and_spread(self):
@@ -701,18 +768,6 @@ def _patch_gspread(worksheet):
 
 
 class CelebrityPickTest(unittest.TestCase):
-    def test_parse_names_dedupes_case_insensitively_and_keeps_first_form(self):
-        names = parse_celebrity_names("LeBron, Drake\n lebron ,  ")
-
-        self.assertEqual(names, ["LeBron", "Drake"])
-
-    def test_parse_names_caps_count_and_length(self):
-        names = parse_celebrity_names(", ".join(f"Person{i}" for i in range(20)))
-        self.assertEqual(len(names), intake_bot.MAX_CELEBRITY_NAMES)
-
-        long = parse_celebrity_names("x" * 200)[0]
-        self.assertEqual(len(long), intake_bot.MAX_CELEBRITY_NAME_LEN)
-
     def test_build_rows_one_per_name_carrying_submission_context(self):
         submission = {header: "" for header in CELEBRITY_HEADERS[:-1]}
         submission["submission_id"] = "telegram:1:2"
@@ -724,20 +779,6 @@ class CelebrityPickTest(unittest.TestCase):
         self.assertTrue(all(list(r) == CELEBRITY_HEADERS for r in rows))
         self.assertTrue(all(r["away_team"] == "Miami Dolphins" for r in rows))
 
-    def test_screen_save_label_and_selected_marks(self):
-        text, buttons = celebrity_screen(
-            saved_summary="✅ Guess saved.",
-            roster=["LeBron", "Drake"],
-            selected=["Drake"],
-        )
-
-        self.assertIn("Whose read does this reflect?", text)
-        toggles = [b for row in buttons for b in row if b.data.startswith(b"celeb:tog")]
-        self.assertEqual(toggles[0].text, "LeBron")
-        self.assertEqual(toggles[1].text, "✅ Drake")
-        self.assertEqual(buttons[-1][0].text, "✅ Save (1 selected)")
-        self.assertEqual(buttons[-1][0].data, b"celeb:save")
-
     def test_celebrity_user_id_is_stable_negative_and_distinct(self):
         # Same person (any case/spacing) -> one id; negative so it can never
         # collide with a real positive Telegram user id; different people differ.
@@ -745,13 +786,6 @@ class CelebrityPickTest(unittest.TestCase):
         self.assertEqual(a, celebrity_user_id("  lebron   JAMES "))
         self.assertLess(a, 0)
         self.assertNotEqual(a, celebrity_user_id("Taylor Swift"))
-
-    def test_screen_save_label_when_none_selected(self):
-        _, buttons = celebrity_screen(
-            saved_summary="ok", roster=["LeBron"], selected=[]
-        )
-
-        self.assertEqual(buttons[-1][0].text, "Save — no celebrity info")
 
     def test_roster_uses_registry_in_most_recent_first_order(self):
         worksheet = _FakeWorksheet(
