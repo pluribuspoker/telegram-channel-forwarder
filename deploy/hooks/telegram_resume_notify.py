@@ -69,6 +69,7 @@ def main():
     msg = (
         "▶️ Restarted. Copy this whole message back to me to resume:\n\n"
         f"Read {prev} — summarize where we left off, then continue."
+        f"{_restart_cause()}"
     )
     if os.environ.get("TG_RESUME_DRYRUN") == "1":
         print(f"[DRYRUN] chat={chat_id} prev={prev_id}\n{msg}")
@@ -84,6 +85,28 @@ def main():
         log("sent resume notify chat", chat_id, "prev", prev_id)
     except Exception as e:
         log("send failed", e)
+
+def _restart_cause():
+    """One-line cause note when the restart is explainable from system state.
+
+    unattended-upgrades applies Ubuntu updates in the ~6:30 AM window and
+    needrestart then cycles every service mapping a replaced library — the
+    session can bounce twice in one window (investigate.md lesson 41). An apt
+    history write within the last 15 min marks that window; the note rides
+    inside the copy-paste block so the next session knows why it restarted too.
+    """
+    import time
+    try:
+        p = "/var/log/apt/history.log"
+        if os.path.exists(p) and time.time() - os.path.getmtime(p) < 15 * 60:
+            return (
+                "\n\n(Cause: Ubuntu package updates just ran — needrestart "
+                "cycles services after these, roughly monthly. Expected, not "
+                "a crash; may fire twice in one window.)"
+            )
+    except Exception:
+        pass
+    return ""
 
 def _chat_id():
     try:
