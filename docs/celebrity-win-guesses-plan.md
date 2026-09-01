@@ -52,8 +52,8 @@ In `intake_bot.py`:
   idempotent on the normalized name; returns `{celebrity_id, celebrity_name}`.
 - `load_celebrity_roster()` — **now reads the registry** (unified roster across
   features), most-recently-added first.
-- Game-pick `celeb:save` handler now also calls `get_or_create_celebrity` for
-  each saved name, so the registry stays the complete single source.
+- Game-pick celebrity selection calls `get_or_create_celebrity`, so the
+  registry stays the complete single source.
 - `scripts/test_intake_bot.py`: added
   `test_celebrity_user_id_is_stable_negative_and_distinct`.
 - The win-total UI now has the `🎤 Guess as a celebrity` entry point, a shared
@@ -74,12 +74,17 @@ In `intake_bot.py`:
 - `nfl_win_predictions_latest` prefixes celebrity display names with `🎤`.
 - Offline tests cover the picker, celebrity-aware views and rows, stable ids,
   registry ordering, latest-sheet marker, and nonnumeric legacy user ids.
+- The NFL game/spread browser now uses the same beginning-of-flow celebrity
+  picker. The chosen identity is shown throughout the game flow, automatically
+  associated when the lean is saved, and remains sticky for subsequent games
+  until the user switches back or starts a fresh command. This replaces the old
+  post-save multi-celebrity picker.
 
 ## Testing
 Completed locally with Python 3.12:
 ```
 python -m pytest scripts/test_intake_bot.py scripts/test_nfl_win_predictions.py -q
-# 41 passed
+# 40 passed
 ```
 
 The interactive Telegram pass is still required before deploy. On the VPS as
