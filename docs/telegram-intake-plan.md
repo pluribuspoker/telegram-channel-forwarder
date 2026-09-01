@@ -461,6 +461,31 @@ Example away value:
 3.5,-105,165|nodata,nodata,nodata|nodata,nodata,nodata
 ```
 
+### `nfl_game_history` — completed regular-season results
+
+One row per completed NFL regular-season game, initially backfilled for
+2023–2025 from ESPN. This is separate from `nfl_games`, which remains the
+current bot-facing upcoming-lines table.
+
+The tab stores event/season/week identity, kickoff times, home and away teams
+and final scores, home result/margin, total points, each team's conference and
+division, `same_conference`, `same_division`, `matchup_type`,
+`division_meeting_number`, neutral-site and overtime flags, generated tags, and
+source provenance.
+
+`matchup_type` is mutually exclusive:
+
+- `division`
+- `conference` (same conference, different divisions)
+- `non_conference`
+
+For divisional opponents, `division_meeting_number` is assigned
+chronologically within the season and unordered team pair. Generated tags begin
+with `divisional_game_1`, `divisional_game_2`, `conference_game`, or
+`non_conference_game`, with `week_1`, `neutral_site`, and `overtime` appended
+when applicable. The structured columns are authoritative; `tags` exists for
+convenient Sheet filtering.
+
 ### `nfl_leans` — Telegram submissions
 
 This is append-only with a finalized compact 33-column schema:
