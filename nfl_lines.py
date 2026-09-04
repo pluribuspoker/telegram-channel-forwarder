@@ -16,6 +16,9 @@ import httpx
 from google.oauth2.service_account import Credentials
 
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
+ESPN_SCOREBOARD_URL = (
+    "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
+)
 BOOKMAKER_KEY = "betonlineag"
 MARKETS = "h2h,spreads,totals"
 PERIOD_MARKETS = (
@@ -27,6 +30,10 @@ NO_DATA = "nodata"
 SPORT_KEYS = {
     "regular": "americanfootball_nfl",
     "preseason": "americanfootball_nfl_preseason",
+}
+ESPN_SEASON_TYPE_VALUES = {
+    "preseason": "1",
+    "regular": "2",
 }
 SHEET_TABS = {
     "games": "nfl_games",
@@ -184,6 +191,7 @@ class GameLines:
     api_requests_used: str
     api_requests_remaining: str
     period_checked_at: str | None
+    week: int | None = None
 
     def signature(self) -> tuple[Any, ...]:
         return (
@@ -235,6 +243,110 @@ def _format_time(value: datetime) -> str:
 def _nfl_season_year(commence: datetime) -> int:
     eastern = commence.astimezone(ET)
     return eastern.year - 1 if eastern.month <= 2 else eastern.year
+
+
+def parse_espn_week_calendar(
+    payload: dict[str, Any],
+) -> dict[str, list[tuple[int, datetime, datetime]]]:
+    leagues = payload.get("leagues")
+    if not isinstance(leagues, list) or len(leagues) != 1:
+        raise ValueError("ESPN NFL calendar must contain exactly one league")
+    calendar = leagues[0].get("calendar")
+    if not isinstance(calendar, list):
+        raise ValueError("ESPN NFL response is missing its calendar")
+    result: dict[str, list[tuple[int, datetime, datetime]]] = {}
+    for season_type, type_value in ESPN_SEASON_TYPE_VALUES.items():
+        groups = [
+            group
+            for group in calendar
+            if str(group.get("value") or "") == type_value
+        ]
+        if len(groups) != 1:
+            raise ValueError(
+                f"ESPN calendar has {len(groups)} {season_type} groups"
+            )
+        entries = groups[0].get("entries")
+        if not isinstance(entries, list) or not entries:
+            raise ValueError(
+                f"ESPN calendar has no {season_type} week entries"
+            )
+        ranges = []
+        for entry in entries:
+            week = int(entry["value"])
+            start = _parse_time(str(entry["startDate"]))
+            end = _parse_time(str(entry["endDate"]))
+            if end <= start:
+                raise ValueError(
+                    f"ESPN {season_type} week {week} has an invalid range"
+                )
+            ranges.append((week, start, end))
+        result[season_type] = ranges
+    return result
+
+
+def fetch_espn_week_calendar(
+    season: int,
+    *,
+    client: httpx.Client | None = None,
+) -> dict[str, list[tuple[int, datetime, datetime]]]:
+    owns_client = client is None
+    http = client or httpx.Client(timeout=20)
+    try:
+        response = http.get(
+            ESPN_SCOREBOARD_URL,
+            params={"dates": season, "limit": 1},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    finally:
+        if owns_client:
+            http.close()
+    if not isinstance(payload, dict):
+        raise ValueError("ESPN NFL calendar response must be an object")
+    return parse_espn_week_calendar(payload)
+
+
+def week_for_game(
+    *,
+    commence_time: str,
+    season_type: str,
+    calendar: dict[str, list[tuple[int, datetime, datetime]]],
+) -> int:
+    if season_type not in calendar:
+        raise ValueError(f"Missing ESPN calendar for {season_type}")
+    commence = _parse_time(commence_time)
+    matches = [
+        week
+        for week, start, end in calendar[season_type]
+        if start <= commence < end
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"{commence_time} matched {len(matches)} ESPN {season_type} weeks"
+        )
+    return matches[0]
+
+
+def assign_espn_weeks(
+    games: list[GameLines],
+    *,
+    client: httpx.Client | None = None,
+) -> list[GameLines]:
+    calendars = {
+        season: fetch_espn_week_calendar(season, client=client)
+        for season in sorted({game.season for game in games})
+    }
+    return [
+        replace(
+            game,
+            week=week_for_game(
+                commence_time=game.commence_time_utc,
+                season_type=game.season_type,
+                calendar=calendars[game.season],
+            ),
+        )
+        for game in games
+    ]
 
 
 def _find_outcome(
@@ -708,7 +820,7 @@ def new_game_row(game: GameLines) -> dict[str, Any]:
         "event_id": game.event_id,
         "season": game.season,
         "season_type": game.season_type,
-        "week": "",
+        "week": game.week or "",
         "status": "upcoming",
         "commence_time_utc": game.commence_time_utc,
         "commence_time_et": game.commence_time_et,
@@ -788,6 +900,7 @@ def update_game_row(existing: dict[str, Any], game: GameLines) -> dict[str, Any]
         {
             "season": game.season,
             "season_type": game.season_type,
+            "week": game.week or "",
             "status": "upcoming",
             "commence_time_utc": game.commence_time_utc,
             "commence_time_et": game.commence_time_et,
@@ -906,6 +1019,14 @@ def require_headers(
 def write_to_sheets(
     games: list[GameLines], *, sheet_id: str, credentials_b64: str
 ) -> tuple[int, int]:
+    missing_weeks = [
+        game.event_id for game in games if game.week is None
+    ]
+    if missing_weeks:
+        raise ValueError(
+            "NFL games are missing authoritative ESPN weeks: "
+            + ", ".join(missing_weeks)
+        )
     spreadsheet = get_gspread_client(credentials_b64).open_by_key(sheet_id)
     games_ws = spreadsheet.worksheet(SHEET_TABS["games"])
     snapshots_ws = spreadsheet.worksheet(SHEET_TABS["snapshots"])

@@ -137,9 +137,229 @@ Adopted slate behavior:
 - After a save, the bot reports progress and links directly to the next
   unmarked team, or to the review screen after all 32 teams are complete.
 
-This slice intentionally stops before market/side selection and text capture.
-Those interactions will be implemented after the game browser is tested in the
-real dedicated bot.
+### Implemented locally — 2026-09-04: MOE foundation and schedule expert
+
+The first mixture-of-experts slice adds one independently versioned schedule
+expert. It is intentionally manual until its real outputs have been reviewed.
+
+Authoritative configuration lives under `moe/`:
+
+- `moe/experts.yaml` contains stable expert identity, expert and prompt
+  versions, mode, input profile, output schema version, and initial weight.
+- `moe/prompts/schedule/v1.md` is the immutable first prompt. Its first live
+  output inferred "Week 1" despite a null week field, so
+  `moe/prompts/schedule/v2.md` explicitly prohibits numbered or relative week
+  claims when week is unknown. A subsequent v2 attempt discussed the unavailable
+  week cohort and was correctly persisted as invalid. V3 omits missing week
+  fields and cohorts entirely and prohibits any week reference when absent. A
+  structurally valid v3 output still introduced an unsupplied stadium name, so
+  v4 explicitly prohibits external proper names and unsupported qualitative
+  claims. V5 distinguishes the allowed calendar weekday from the unavailable
+  NFL season week number, so phrases such as "day of the week" are allowed while
+  numbered or relative season-week claims still fail. A temporary blanket
+  validator for words such as "unusual" was removed because it also rejected
+  quantified comparisons; unsupported qualitative claims remain part of the
+  exact-text human review.
+- User review of the first candidate required comparative evidence rather than
+  isolated favorable splits. V6 supplies both home and road records for each
+  team, every available month, and the exact NFL-week cohort. It instructs the
+  expert to present symmetric counter-evidence, omit undefined strong/weak
+  opponent claims, remove generic historical-data boilerplate, fold overlapping
+  empty cohorts together, and treat confidence stars as expert-specific rather
+  than cross-expert calibrated.
+- V7 incorporates the completed human review format: concise plain-text bullets
+  rather than tables, separate measured support and counter-evidence, a
+  `no_signal_factors` list for empty cohorts, and a
+  `discarded_considerations` list naming interpretations that were considered
+  but rejected and why. The final opinion follows Pick / Why the pick / Why it
+  may be wrong / No signal / Discarded considerations / Conclusion.
+- V8 adds current-month venue cross-splits for both teams after review exposed
+  that the source games supported September-at-home and September-as-away
+  analysis but the input builder only supplied month and venue separately.
+- V9/output schema v2 requires an exact integer away/home final-score
+  prediction. The exact score is a representative outcome; expected margin
+  remains a separate estimate, but winner, probability, margin direction, and
+  score winner must agree.
+- V10 follows a rejected Sonnet run that invented a team-level
+  month-by-matchup-type split and treated the away team's home split as
+  matchup-aligned evidence. Every numeric claim must now map to an explicit
+  input field; only the home team's current-month home split and away team's
+  current-month away split are matchup-aligned. Potentially useful schedule
+  data that is absent from the input must be named under Discarded
+  considerations with why it could matter, creating a visible review queue for
+  future input and prompt improvements.
+- V11 follows another rejected Sonnet run that transcribed a supplied 4-7
+  record as 3-8 while retaining its 36.4% rate and claimed a best/worst result
+  across monthly venue cohorts that were not supplied. It requires W-L-T
+  arithmetic to be checked against the explicit sample fields and restricts
+  superlatives to complete cohort sets at the same aggregation level.
+- V12 follows a third rejected Sonnet run that still misranked the current
+  month and mislabeled a venue-aligned overall away split. The input builder
+  now deterministically supplies the current month's high-to-low win-rate,
+  margin, and scoring ranks plus the number of compared months. The prompt must
+  copy those ranks and explicitly distinguishes matchup-aligned overall venue
+  roles from the more specific current-month venue fields.
+- V13 follows a fourth rejected Sonnet run that inferred narrow wins/heavy
+  losses from aggregate averages, introduced unsupplied schedule labels, and
+  collapsed mixed current-month ranks into a broad strongest-month claim. It
+  prohibits distribution claims without distribution data, requires exact
+  rank language, and restricts schedule descriptions to literal supplied
+  metadata. Missing potentially useful data must be named neutrally.
+- After Sonnet v13 again inferred a win-only scoring claim from an aggregate
+  five-game average, the Schedule Expert was made Opus-only by configuration.
+  `default_model` and `allowed_models` are stored in `experts.yaml`; generation
+  fails before inference if a caller requests a different model. The
+  multi-model storage and Telegram picker remain generic for other experts.
+- Every persisted opinion records the prompt path and SHA-256, expert
+  configuration SHA-256, repository commit, model, maximum output tokens,
+  output schema version, exact input JSON, input SHA-256, raw response, whether
+  the source tree was dirty, and a SHA-256 over the generation source files
+  (including the AI transport and Sheets helpers).
+
+The schedule expert's enforced data contract is:
+
+- Historical completed NFL final scores and margins from `nfl_game_history`
+  are allowed.
+- Current-season records, results, scores, injuries, news, rosters, rankings,
+  and betting markets are prohibited.
+- The current game input contains only event/season/week identity, kickoff
+  calendar metadata, home/away teams, and derived matchup type.
+- `nfl_games` currently leaves week blank for some Odds API events. Missing week
+  metadata and exact-week historical evidence are omitted rather than guessed.
+- Historical data is reduced to auditable team, venue-role, weekday, month,
+  current-month-by-venue, week-number, head-to-head, and comparable-matchup
+  summaries.
+- The payload is built from a whitelist rather than by passing an `nfl_games`
+  row to the model. A recursive guard rejects known market and live-state keys.
+
+Every schedule opinion must provide an exact predicted winner, integer away and
+home final scores, home-win probability, expected home margin, 1–5 confidence
+stars, thesis, supporting factors, counterarguments, and a complete standalone
+opinion. Validation rejects team-name mismatches, invalid ranges, tied or
+winner-conflicting score predictions, contradictory
+winner/probability/margin combinations, empty evidence fields, theses too long
+for the paginated summary, and responses that would exceed the Google Sheets
+per-cell character limit. It also rejects numbered or relative week claims when
+the input week is null. Nothing is silently truncated.
+
+`moe_opinions` is append-only and stores both normalized fields and the complete
+input/output artifacts. `GoogleSheetsMoeOpinionStore` sits behind the
+`MoeOpinionStore` protocol so generation and bot code are not coupled to
+worksheet calls. `MOE_STORAGE_BACKEND=google_sheets` is the initial backend;
+future SQLite migration can implement the same protocol.
+
+Every model attempt is written by the generation function itself, rather than
+by a later CLI step. Valid outputs use `generation_status=valid`; malformed or
+validation-failing responses are persisted with their exact raw response,
+`generation_status=invalid`, and an explicit error before the exception is
+re-raised. Sheet appends use the existing quota/backoff helper. If Sheets still
+rejects an append, the complete row and error are atomically appended with mode
+`600` to `logs/moe_pending.jsonl`; `scripts/replay_moe_spool.py` retries those
+rows after atomically rotating the active spool. New failures continue writing
+to a fresh active file during replay, and Sheet writes are idempotent by
+`opinion_id`. Replay also holds a non-blocking OS file lock so only one recovery
+process can claim and replay a batch at a time. Spool writers hold a shared lock
+on the same file while opening and appending; replay holds it exclusively across
+rotation, reading, and cleanup, so a writer cannot append to an inode that the
+replayer is about to unlink.
+
+Structurally valid output begins with `review_status=pending`. It is excluded
+from bot views until a human reviews the exact persisted text and marks it
+`approved`; rejected output remains preserved but hidden. Review metadata
+includes UTC timestamp, reviewer, note, and the hash of the exact approved
+output, event, expert, prompt, model, source, and input identity. Bot reads
+recompute that hash and hide any row changed or reassigned after approval.
+Manual review:
+
+```bash
+python scripts/review_moe_opinion.py \
+  --opinion-id <uuid> --status approved \
+  --reviewed-by <reviewer> --note "<why it is safe to expose>"
+```
+
+The NFL game detail view now links to a paginated MOE summary. The summary shows
+the latest valid, approved persisted opinion for each expert. If an expert has
+approved opinions from multiple models, selecting that expert opens a model
+picker containing the latest approved run per exact model ID; a single-model
+expert opens directly. Expert detail is paginated to stay below Telegram's
+message-size limit and its footer shows the expert version, exact model ID, and
+prompt hash. Opinion UUIDs bind model-picker callbacks without placing long
+model names in Telegram's 64-byte callback payload. Newer pending, rejected,
+invalid, or tampered runs never hide the latest approved run for a model. The
+bot never generates an opinion during a user interaction. Event-bound views
+are validated against the active game, so stale buttons fail closed instead of
+showing another game's opinions.
+
+Manual workflow:
+
+```bash
+# Inspect the exact schedule-only input without calling Claude:
+python scripts/generate_moe_opinion.py \
+  --event-id <nfl_games event_id> --expert schedule --show-input
+
+# Generate and persist an opinion:
+python scripts/generate_moe_opinion.py \
+  --event-id <nfl_games event_id> --expert schedule
+
+# Compare the same expert using another model:
+python scripts/generate_moe_opinion.py \
+  --event-id <nfl_games event_id> --expert schedule \
+  --model claude-opus-4-6
+```
+
+There is deliberately no inference-only preview flag: every model call persists
+its complete input and output. `--show-input` is safe because it does not invoke
+the model.
+
+`emergency_migration.txt` is deliberately deferred until the MOE implementation
+and operational workflow are complete, so the runbook documents the final
+schema, services, paths, and cutover procedure rather than an obsolete design.
+
+### Implemented locally — 2026-09-04: authoritative NFL week metadata
+
+`nfl_games.week` previously remained blank because `new_game_row()` hardcoded
+an empty value and line updates never supplied one. The Odds API does not expose
+NFL season week metadata.
+
+The line collector now fetches ESPN's official NFL season calendar once per
+season represented in a fetch and assigns weeks by exact kickoff containment in
+the published start/end ranges:
+
+- Regular-season values are NFL Weeks 1–18, not calendar-year week numbers.
+- Preseason periods are resolved independently from ESPN's preseason calendar,
+  so preseason Week 1 cannot be confused with regular-season Week 1.
+- Every game must match exactly one range. Missing or ambiguous matches fail the
+  collector before any Sheet write.
+- `write_to_sheets()` rejects any `GameLines` object without an authoritative
+  week, preventing the blank-week regression from returning through another
+  caller.
+
+`scripts/backfill_nfl_game_weeks.py` validates the entire live tab before writing
+column D and then re-reads it to ensure no blank weeks remain. The 2026 backfill
+mapped all 67 existing rows: preseason weeks 1–4, regular-season Week 1
+(16 games), Week 2 (1 game), and Week 12 (1 game). A second preview reported
+zero rows requiring changes.
+
+### Implemented locally — 2026-09-04: complete 2026 NFL schedule
+
+`nfl_games` remains the odds-backed table and therefore contains only games
+currently published by BetOnline. The complete season is stored separately in
+`nfl_schedule`, preventing blank market columns from entering the bot's game
+browser.
+
+`nfl_schedule.py` fetches ESPN events from both calendar years touched by an NFL
+season, keeps regular-season type 2, and stores event ID, NFL season/week,
+status, UTC/ET kickoff, teams, neutral-site flag, and source. Validation requires:
+
+- Exactly 272 unique regular-season games.
+- Every NFL Week 1 through 18.
+- Exactly 32 teams with 17 games each.
+- A nonblank authoritative week on every row.
+
+`scripts/setup_nfl_schedule.py --season 2026 --apply` created the live tab and
+re-read all 272 rows through those invariants. The 18 regular-season games also
+present in `nfl_games` were independently matched by teams and kickoff and all
+18 week values agreed.
 
 Prototype issue log:
 

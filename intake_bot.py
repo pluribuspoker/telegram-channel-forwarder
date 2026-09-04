@@ -46,6 +46,14 @@ from nfl_win_predictions import (
     latest_predictions_for_user,
     replace_rows,
 )
+from moe import (
+    approved_opinions as approved_moe_opinions,
+    latest_model_opinions as latest_moe_model_opinions,
+    load_opinions as load_moe_opinions,
+    opinion_detail as moe_opinion_detail,
+    opinion_model_picker as moe_opinion_model_picker,
+    opinion_summary as moe_opinion_summary,
+)
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -511,6 +519,12 @@ def game_detail(
             Button.inline("Full game", b"period:game"),
             Button.inline("First half", b"period:first_half"),
             Button.inline("First quarter", b"period:first_quarter"),
+        ],
+        [
+            Button.inline(
+                "🧠 MOE opinions",
+                f"moe:view:{game['event_id']}:0".encode(),
+            )
         ],
         [Button.inline("← Back to games", f"games:{days}:{page}".encode())]
     ]
@@ -2138,6 +2152,127 @@ async def main() -> None:
             await edit_callback(event, text, buttons)
             return
         records, team_emojis, team_abbrevs = await _intake_data()
+        if (
+            data.startswith("moe:view")
+            or data.startswith("moe:expert:")
+            or data.startswith("moe:opinion:")
+        ):
+            state = guess_states.get(event.sender_id)
+            if state is None:
+                await event.answer(
+                    "This game view expired. Choose the game again.",
+                    alert=True,
+                )
+                return
+            if data.startswith("moe:view"):
+                parts = data.split(":")
+                if len(parts) != 4:
+                    await event.answer("Invalid MOE view.", alert=True)
+                    return
+                try:
+                    event_id = parts[2]
+                    page = int(parts[3])
+                except ValueError:
+                    await event.answer("Invalid MOE page.", alert=True)
+                    return
+                if str(state["game"]["event_id"]) != event_id:
+                    await event.answer(
+                        "This MOE view expired. Reopen the game.",
+                        alert=True,
+                    )
+                    return
+                opinions = await asyncio.to_thread(
+                    load_moe_opinions, event_id
+                )
+                text, buttons = moe_opinion_summary(
+                    state["game"],
+                    opinions,
+                    page=page,
+                    event_id=event_id,
+                )
+                await edit_callback(event, text, buttons)
+                return
+            if data.startswith("moe:opinion:"):
+                parts = data.split(":")
+                if len(parts) != 4:
+                    await event.answer("Invalid MOE view.", alert=True)
+                    return
+                opinion_id = parts[2]
+                try:
+                    page = int(parts[3])
+                except ValueError:
+                    await event.answer("Invalid MOE page.", alert=True)
+                    return
+                event_id = str(state["game"]["event_id"])
+                opinions = await asyncio.to_thread(
+                    load_moe_opinions, event_id
+                )
+                opinion = next(
+                    (
+                        row
+                        for row in approved_moe_opinions(opinions)
+                        if str(row.get("opinion_id")) == opinion_id
+                    ),
+                    None,
+                )
+                if opinion is None:
+                    await event.answer(
+                        "That model opinion is no longer available.",
+                        alert=True,
+                    )
+                    return
+                model_choices = latest_moe_model_opinions(
+                    opinions, str(opinion["expert_id"])
+                )
+                text, buttons = moe_opinion_detail(
+                    opinion,
+                    page=page,
+                    event_id=event_id,
+                    show_model_picker=len(model_choices) > 1,
+                )
+                await edit_callback(event, text, buttons)
+                return
+            parts = data.split(":")
+            if len(parts) != 5:
+                await event.answer("Invalid MOE view.", alert=True)
+                return
+            expert_id = parts[2]
+            event_id = parts[3]
+            try:
+                page = int(parts[4])
+            except ValueError:
+                await event.answer("Invalid MOE page.", alert=True)
+                return
+            if str(state["game"]["event_id"]) != event_id:
+                await event.answer(
+                    "This MOE view expired. Reopen the game.",
+                    alert=True,
+                )
+                return
+            opinions = await asyncio.to_thread(load_moe_opinions, event_id)
+            model_choices = latest_moe_model_opinions(
+                opinions, expert_id
+            )
+            if not model_choices:
+                await event.answer(
+                    "That expert opinion is no longer available.",
+                    alert=True,
+                )
+                return
+            if len(model_choices) > 1:
+                text, buttons = moe_opinion_model_picker(
+                    opinions,
+                    expert_id=expert_id,
+                    page=page,
+                    event_id=event_id,
+                )
+                await edit_callback(event, text, buttons)
+                return
+            text, buttons = moe_opinion_detail(
+                model_choices[0], page=page, event_id=event_id
+            )
+            await edit_callback(event, text, buttons)
+            return
         if data.startswith("celebgame:"):
             parts = data.split(":")
             action = parts[1] if len(parts) > 1 else ""

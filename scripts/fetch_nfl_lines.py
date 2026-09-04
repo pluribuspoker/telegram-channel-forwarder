@@ -23,6 +23,7 @@ _load_environment(ROOT)
 
 from nfl_lines import (
     SHEET_TABS,
+    assign_espn_weeks,
     fetch_all,
     format_summary,
     get_gspread_client,
@@ -91,6 +92,7 @@ def main() -> None:
         period_event_ids=period_event_ids,
         known_event_ids=known_event_ids,
     )
+    games = assign_espn_weeks(games)
     print(format_summary(games))
     print(f"\nFetched {len(games)} upcoming BetOnline game(s).")
 

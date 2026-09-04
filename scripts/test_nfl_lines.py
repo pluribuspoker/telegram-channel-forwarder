@@ -8,6 +8,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -19,16 +21,19 @@ from nfl_lines import (
     OPENING_HOME_COLUMN,
     OPENING_TOTALS_COLUMN,
     TOTALS_SNAPSHOT_COLUMN,
+    assign_espn_weeks,
     deduplicate_games,
     indexed_records,
     new_game_row,
     parse_game,
+    parse_espn_week_calendar,
     poll_interval_for_game,
     preserve_unchecked_periods,
     scheduled_poll_plan,
     should_append_snapshot,
     snapshot_row,
     update_game_row,
+    week_for_game,
 )
 
 
@@ -147,6 +152,47 @@ def _game(captured_at: datetime | None = None):
     )
 
 
+def _espn_calendar() -> dict:
+    return {
+        "leagues": [
+            {
+                "calendar": [
+                    {
+                        "label": "Preseason",
+                        "value": "1",
+                        "entries": [
+                            {
+                                "label": "Preseason Week 1",
+                                "value": "1",
+                                "startDate": "2026-08-06T07:00Z",
+                                "endDate": "2026-08-13T07:00Z",
+                            }
+                        ],
+                    },
+                    {
+                        "label": "Regular Season",
+                        "value": "2",
+                        "entries": [
+                            {
+                                "label": "Week 1",
+                                "value": "1",
+                                "startDate": "2026-09-06T07:00Z",
+                                "endDate": "2026-09-16T07:00Z",
+                            },
+                            {
+                                "label": "Week 2",
+                                "value": "2",
+                                "startDate": "2026-09-16T07:00Z",
+                                "endDate": "2026-09-23T07:00Z",
+                            },
+                        ],
+                    },
+                ]
+            }
+        ]
+    }
+
+
 class ParseGameTest(unittest.TestCase):
     def test_parses_all_three_markets(self):
         game = _game()
@@ -194,6 +240,57 @@ class ParseGameTest(unittest.TestCase):
         )
 
         self.assertEqual(game.season, 2026)
+
+
+class EspnWeekCalendarTest(unittest.TestCase):
+    def test_maps_nfl_season_week_not_calendar_year_week(self):
+        calendar = parse_espn_week_calendar(_espn_calendar())
+
+        week = week_for_game(
+            commence_time="2026-09-13T17:00:00Z",
+            season_type="regular",
+            calendar=calendar,
+        )
+
+        self.assertEqual(week, 1)
+
+    def test_regular_and_preseason_week_one_are_separate(self):
+        calendar = parse_espn_week_calendar(_espn_calendar())
+
+        preseason = week_for_game(
+            commence_time="2026-08-10T17:00:00Z",
+            season_type="preseason",
+            calendar=calendar,
+        )
+        regular = week_for_game(
+            commence_time="2026-09-10T17:00:00Z",
+            season_type="regular",
+            calendar=calendar,
+        )
+
+        self.assertEqual(preseason, 1)
+        self.assertEqual(regular, 1)
+
+    def test_assignment_fetches_espn_calendar_and_sets_week(self):
+        def response(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url.params["dates"], "2026")
+            return httpx.Response(200, json=_espn_calendar())
+
+        with httpx.Client(transport=httpx.MockTransport(response)) as client:
+            games = assign_espn_weeks([_game()], client=client)
+
+        self.assertEqual(games[0].week, 1)
+        self.assertEqual(new_game_row(games[0])["week"], 1)
+
+    def test_fails_closed_outside_an_espn_week_range(self):
+        calendar = parse_espn_week_calendar(_espn_calendar())
+
+        with self.assertRaisesRegex(ValueError, "matched 0"):
+            week_for_game(
+                commence_time="2026-10-01T17:00:00Z",
+                season_type="regular",
+                calendar=calendar,
+            )
 
 
 class GameRowTest(unittest.TestCase):
