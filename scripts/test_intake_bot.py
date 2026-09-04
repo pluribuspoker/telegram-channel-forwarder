@@ -30,6 +30,7 @@ from intake_bot import (
     implied_score,
     implied_score_tldr,
     load_celebrity_roster,
+    load_win_prediction_data,
     market_buttons,
     market_side_summary,
     page_games,
@@ -217,9 +218,11 @@ def _history() -> list[dict]:
 class SheetCacheTest(unittest.TestCase):
     def setUp(self) -> None:
         intake_bot._SHEET_CACHE.clear()
+        intake_bot._INTAKE_SPREADSHEET = None
 
     def tearDown(self) -> None:
         intake_bot._SHEET_CACHE.clear()
+        intake_bot._INTAKE_SPREADSHEET = None
 
     def test_reuses_value_until_ttl_expires(self) -> None:
         loader = Mock(return_value=["rows"])
@@ -248,6 +251,30 @@ class SheetCacheTest(unittest.TestCase):
 
         self.assertEqual(stale, ["rows"])
         self.assertEqual(intake_bot._SHEET_CACHE["opinions"][0], 41)
+
+    def test_win_prediction_tabs_are_cached_independently(self) -> None:
+        totals = Mock()
+        totals.get_all_records.return_value = [{"team": "Seattle Seahawks"}]
+        history = Mock()
+        history.get_all_records.return_value = [{"season": 2025}]
+        predictions = Mock()
+        predictions.get_all_records.return_value = [{"predicted_wins": 11}]
+        worksheets = {
+            intake_bot.WIN_TOTALS_TAB: totals,
+            intake_bot.TEAM_HISTORY_TAB: history,
+            intake_bot.WIN_PREDICTIONS_TAB: predictions,
+        }
+        spreadsheet = Mock()
+        spreadsheet.worksheet.side_effect = worksheets.__getitem__
+        intake_bot._INTAKE_SPREADSHEET = spreadsheet
+
+        first = load_win_prediction_data()
+        second = load_win_prediction_data()
+
+        self.assertEqual(first, second)
+        totals.get_all_records.assert_called_once()
+        history.get_all_records.assert_called_once()
+        predictions.get_all_records.assert_called_once()
 
 
 class GameSelectionTest(unittest.TestCase):
@@ -804,6 +831,14 @@ def _patch_gspread(worksheet):
 
 
 class CelebrityPickTest(unittest.TestCase):
+    def setUp(self) -> None:
+        intake_bot._SHEET_CACHE.clear()
+        intake_bot._INTAKE_SPREADSHEET = None
+
+    def tearDown(self) -> None:
+        intake_bot._SHEET_CACHE.clear()
+        intake_bot._INTAKE_SPREADSHEET = None
+
     def test_build_rows_one_per_name_carrying_submission_context(self):
         submission = {header: "" for header in CELEBRITY_HEADERS[:-1]}
         submission["submission_id"] = "telegram:1:2"

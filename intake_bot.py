@@ -93,9 +93,13 @@ _SHEET_CACHE_LOCK = threading.RLock()
 _SHEET_CACHE: dict[str, tuple[float, Any]] = {}
 _INTAKE_SPREADSHEET: Any | None = None
 _MOE_STORE: Any | None = None
-GAMES_CACHE_TTL_SECONDS = 30
+GAMES_CACHE_TTL_SECONDS = 60
 TEAM_EMOJI_CACHE_TTL_SECONDS = 600
 MOE_CACHE_TTL_SECONDS = 30
+WIN_TOTALS_CACHE_TTL_SECONDS = 3600
+TEAM_HISTORY_CACHE_TTL_SECONDS = 21600
+WIN_PREDICTIONS_CACHE_TTL_SECONDS = 30
+CELEBRITY_REGISTRY_CACHE_TTL_SECONDS = 300
 CELEBRITY_TAB = "celebrity_picks"
 # One row per (submission, celebrity name). Game context is denormalized onto
 # each row so season-long "who thinks alike on which game types" analysis pivots
@@ -1227,30 +1231,39 @@ def build_win_prediction_row(
 
 def load_win_prediction_data(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    credentials = os.environ["GOOGLE_CREDENTIALS"]
-    sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
-    spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
-    totals = spreadsheet.worksheet(WIN_TOTALS_TAB).get_all_records(
-        expected_headers=TAB_HEADERS[WIN_TOTALS_TAB]
+    spreadsheet = _intake_spreadsheet()
+    totals = _cached_sheet_value(
+        "nfl_win_totals",
+        WIN_TOTALS_CACHE_TTL_SECONDS,
+        lambda: spreadsheet.worksheet(WIN_TOTALS_TAB).get_all_records(
+            expected_headers=TAB_HEADERS[WIN_TOTALS_TAB]
+        ),
     )
-    history = spreadsheet.worksheet(TEAM_HISTORY_TAB).get_all_records(
-        expected_headers=TAB_HEADERS[TEAM_HISTORY_TAB]
+    history = _cached_sheet_value(
+        "nfl_team_history",
+        TEAM_HISTORY_CACHE_TTL_SECONDS,
+        lambda: spreadsheet.worksheet(TEAM_HISTORY_TAB).get_all_records(
+            expected_headers=TAB_HEADERS[TEAM_HISTORY_TAB]
+        ),
     )
-    predictions = spreadsheet.worksheet(
-        WIN_PREDICTIONS_TAB
-    ).get_all_records(expected_headers=PREDICTION_HEADERS)
+    predictions = _cached_sheet_value(
+        "nfl_win_predictions",
+        WIN_PREDICTIONS_CACHE_TTL_SECONDS,
+        lambda: spreadsheet.worksheet(
+            WIN_PREDICTIONS_TAB
+        ).get_all_records(expected_headers=PREDICTION_HEADERS),
+    )
     return totals, history, predictions
 
 
 def append_win_prediction(row: dict[str, Any]) -> bool:
-    credentials = os.environ["GOOGLE_CREDENTIALS"]
-    sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
     with _WIN_PREDICTION_WRITE_LOCK:
-        spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
+        spreadsheet = _intake_spreadsheet()
         predictions_worksheet = spreadsheet.worksheet(WIN_PREDICTIONS_TAB)
         predictions = predictions_worksheet.get_all_records(
             expected_headers=PREDICTION_HEADERS
         )
+        _set_sheet_cache("nfl_win_predictions", predictions)
         latest, _ = latest_predictions_for_user(
             predictions, row["telegram_user_id"]
         )
@@ -1266,8 +1279,13 @@ def append_win_prediction(row: dict[str, Any]) -> bool:
             value_input_option="RAW",
         )
         predictions.append(row)
-        totals = spreadsheet.worksheet(WIN_TOTALS_TAB).get_all_records(
-            expected_headers=TAB_HEADERS[WIN_TOTALS_TAB]
+        _set_sheet_cache("nfl_win_predictions", predictions)
+        totals = _cached_sheet_value(
+            "nfl_win_totals",
+            WIN_TOTALS_CACHE_TTL_SECONDS,
+            lambda: spreadsheet.worksheet(WIN_TOTALS_TAB).get_all_records(
+                expected_headers=TAB_HEADERS[WIN_TOTALS_TAB]
+            ),
         )
         latest_rows = build_latest_prediction_rows(predictions, totals)
         replace_rows(
@@ -1300,6 +1318,11 @@ def _cached_sheet_value(key: str, ttl: int, loader) -> Any:
             raise
         _SHEET_CACHE[key] = (now, value)
         return value
+
+
+def _set_sheet_cache(key: str, value: Any) -> None:
+    with _SHEET_CACHE_LOCK:
+        _SHEET_CACHE[key] = (time.monotonic(), value)
 
 
 def _intake_spreadsheet() -> Any:
@@ -1464,11 +1487,14 @@ def load_celebrity_roster(limit: int = MAX_CELEBRITY_BUTTONS) -> list[str]:
     """Distinct celebrity names from the shared `celebrities` registry (the
     single source of truth for every feature), most-recently-added first, for
     prefilling any celebrity picker. Empty until someone is entered."""
-    credentials = os.environ["GOOGLE_CREDENTIALS"]
-    sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
-    spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
-    worksheet = _celebrity_registry_worksheet(spreadsheet)
-    values = worksheet.get_all_values()
+    spreadsheet = _intake_spreadsheet()
+    values = _cached_sheet_value(
+        "celebrity_registry",
+        CELEBRITY_REGISTRY_CACHE_TTL_SECONDS,
+        lambda: _celebrity_registry_worksheet(
+            spreadsheet
+        ).get_all_values(),
+    )
     if len(values) < 2 or "celebrity_name" not in values[0]:
         return []
     name_index = values[0].index("celebrity_name")
@@ -1610,14 +1636,14 @@ def get_or_create_celebrity(
         raise ValueError("celebrity name cannot be empty")
     key = normalized.casefold()
     celeb_id = celebrity_user_id(normalized)
-    credentials = os.environ["GOOGLE_CREDENTIALS"]
-    sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
     with _CELEBRITY_REGISTRY_LOCK:
-        spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
+        spreadsheet = _intake_spreadsheet()
         worksheet = _celebrity_registry_worksheet(spreadsheet)
         norm_index = CELEBRITY_REGISTRY_HEADERS.index("normalized_name")
         name_index = CELEBRITY_REGISTRY_HEADERS.index("celebrity_name")
-        for row in worksheet.get_all_values()[1:]:
+        values = worksheet.get_all_values()
+        _set_sheet_cache("celebrity_registry", values)
+        for row in values[1:]:
             if len(row) > norm_index and row[norm_index] == key:
                 existing = (
                     row[name_index] if len(row) > name_index else normalized
@@ -1627,18 +1653,17 @@ def get_or_create_celebrity(
                     "celebrity_name": existing or normalized,
                 }
         now = datetime.now(timezone.utc)
-        worksheet.append_row(
-            [
-                celeb_id,
-                normalized,
-                key,
-                now.isoformat(),
-                now.astimezone(ET).isoformat(),
-                created_by_user_id if created_by_user_id is not None else "",
-                created_by_username or "",
-            ],
-            value_input_option="RAW",
-        )
+        new_row = [
+            celeb_id,
+            normalized,
+            key,
+            now.isoformat(),
+            now.astimezone(ET).isoformat(),
+            created_by_user_id if created_by_user_id is not None else "",
+            created_by_username or "",
+        ]
+        worksheet.append_row(new_row, value_input_option="RAW")
+        _set_sheet_cache("celebrity_registry", [*values, new_row])
     return {"celebrity_id": celeb_id, "celebrity_name": normalized}
 
 
