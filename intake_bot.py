@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,7 +17,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from gspread.exceptions import WorksheetNotFound
+from gspread.exceptions import APIError, WorksheetNotFound
 from telethon import Button, TelegramClient, events
 from telethon.errors import MessageNotModifiedError
 from telethon.sessions import StringSession
@@ -48,8 +49,8 @@ from nfl_win_predictions import (
 )
 from moe import (
     approved_opinions as approved_moe_opinions,
+    configured_opinion_store,
     latest_model_opinions as latest_moe_model_opinions,
-    load_opinions as load_moe_opinions,
     opinion_detail as moe_opinion_detail,
     opinion_model_picker as moe_opinion_model_picker,
     opinion_summary as moe_opinion_summary,
@@ -88,6 +89,13 @@ WIN_PREDICTIONS_TAB = "nfl_win_predictions"
 WIN_PREDICTIONS_LATEST_TAB = "nfl_win_predictions_latest"
 _WIN_PREDICTION_WRITE_LOCK = threading.Lock()
 _CELEBRITY_REGISTRY_LOCK = threading.Lock()
+_SHEET_CACHE_LOCK = threading.RLock()
+_SHEET_CACHE: dict[str, tuple[float, Any]] = {}
+_INTAKE_SPREADSHEET: Any | None = None
+_MOE_STORE: Any | None = None
+GAMES_CACHE_TTL_SECONDS = 30
+TEAM_EMOJI_CACHE_TTL_SECONDS = 600
+MOE_CACHE_TTL_SECONDS = 30
 CELEBRITY_TAB = "celebrity_picks"
 # One row per (submission, celebrity name). Game context is denormalized onto
 # each row so season-long "who thinks alike on which game types" analysis pivots
@@ -1270,13 +1278,78 @@ def append_win_prediction(row: dict[str, Any]) -> bool:
         return True
 
 
+def _cached_sheet_value(key: str, ttl: int, loader) -> Any:
+    now = time.monotonic()
+    with _SHEET_CACHE_LOCK:
+        cached = _SHEET_CACHE.get(key)
+        if cached is not None and now - cached[0] < ttl:
+            return cached[1]
+        try:
+            value = loader()
+        except APIError as exc:
+            if (
+                cached is not None
+                and getattr(exc.response, "status_code", None) == 429
+            ):
+                log.warning(
+                    "Sheets quota exceeded refreshing %s; serving stale cache",
+                    key,
+                )
+                _SHEET_CACHE[key] = (now, cached[1])
+                return cached[1]
+            raise
+        _SHEET_CACHE[key] = (now, value)
+        return value
+
+
+def _intake_spreadsheet() -> Any:
+    global _INTAKE_SPREADSHEET
+    with _SHEET_CACHE_LOCK:
+        if _INTAKE_SPREADSHEET is None:
+            _INTAKE_SPREADSHEET = get_gspread_client(
+                os.environ["GOOGLE_CREDENTIALS"]
+            ).open_by_key(os.environ["NFL_INTAKE_SHEET_ID"])
+        return _INTAKE_SPREADSHEET
+
+
+def _moe_store() -> Any:
+    global _MOE_STORE
+    with _SHEET_CACHE_LOCK:
+        if _MOE_STORE is None:
+            _MOE_STORE = configured_opinion_store()
+        return _MOE_STORE
+
+
+def load_cached_moe_opinions(
+    event_id: str | None = None,
+) -> list[dict[str, Any]]:
+    rows = _cached_sheet_value(
+        "moe_opinions",
+        MOE_CACHE_TTL_SECONDS,
+        lambda: _moe_store().list(),
+    )
+    if event_id is None:
+        return rows
+    return [
+        row
+        for row in rows
+        if str(row.get("event_id")) == str(event_id)
+    ]
+
+
 def load_intake_data() -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
-    credentials = os.environ["GOOGLE_CREDENTIALS"]
-    sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
-    spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
-    games = spreadsheet.worksheet("nfl_games").get_all_records()
-    emoji_rows = spreadsheet.worksheet(TEAM_EMOJI_TAB).get_all_records(
-        expected_headers=TEAM_EMOJI_HEADERS
+    spreadsheet = _intake_spreadsheet()
+    games = _cached_sheet_value(
+        "nfl_games",
+        GAMES_CACHE_TTL_SECONDS,
+        lambda: spreadsheet.worksheet("nfl_games").get_all_records(),
+    )
+    emoji_rows = _cached_sheet_value(
+        "team_emojis",
+        TEAM_EMOJI_CACHE_TTL_SECONDS,
+        lambda: spreadsheet.worksheet(TEAM_EMOJI_TAB).get_all_records(
+            expected_headers=TEAM_EMOJI_HEADERS
+        ),
     )
     team_emojis = {
         str(row["team_name"]).strip(): str(row["emoji"]).strip()
@@ -2151,12 +2224,14 @@ async def main() -> None:
                 )
             await edit_callback(event, text, buttons)
             return
-        records, team_emojis, team_abbrevs = await _intake_data()
-        if (
+        is_moe_callback = (
             data.startswith("moe:view")
             or data.startswith("moe:expert:")
             or data.startswith("moe:opinion:")
-        ):
+        )
+        if not is_moe_callback:
+            records, team_emojis, team_abbrevs = await _intake_data()
+        if is_moe_callback:
             state = guess_states.get(event.sender_id)
             if state is None:
                 await event.answer(
@@ -2182,7 +2257,7 @@ async def main() -> None:
                     )
                     return
                 opinions = await asyncio.to_thread(
-                    load_moe_opinions, event_id
+                    load_cached_moe_opinions, event_id
                 )
                 text, buttons = moe_opinion_summary(
                     state["game"],
@@ -2205,7 +2280,7 @@ async def main() -> None:
                     return
                 event_id = str(state["game"]["event_id"])
                 opinions = await asyncio.to_thread(
-                    load_moe_opinions, event_id
+                    load_cached_moe_opinions, event_id
                 )
                 opinion = next(
                     (
@@ -2249,7 +2324,9 @@ async def main() -> None:
                     alert=True,
                 )
                 return
-            opinions = await asyncio.to_thread(load_moe_opinions, event_id)
+            opinions = await asyncio.to_thread(
+                load_cached_moe_opinions, event_id
+            )
             model_choices = latest_moe_model_opinions(
                 opinions, expert_id
             )

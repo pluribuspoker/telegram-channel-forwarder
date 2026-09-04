@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from datetime import datetime, timedelta, timezone
 
-from gspread.exceptions import WorksheetNotFound
+from gspread.exceptions import APIError, WorksheetNotFound
 from telethon.errors import MessageNotModifiedError
 
 import intake_bot
@@ -212,6 +212,42 @@ def _history() -> list[dict]:
                 ]
             )
     return rows
+
+
+class SheetCacheTest(unittest.TestCase):
+    def setUp(self) -> None:
+        intake_bot._SHEET_CACHE.clear()
+
+    def tearDown(self) -> None:
+        intake_bot._SHEET_CACHE.clear()
+
+    def test_reuses_value_until_ttl_expires(self) -> None:
+        loader = Mock(return_value=["rows"])
+        with patch("intake_bot.time.monotonic", side_effect=[10, 20, 41]):
+            first = intake_bot._cached_sheet_value("games", 30, loader)
+            second = intake_bot._cached_sheet_value("games", 30, loader)
+            third = intake_bot._cached_sheet_value("games", 30, loader)
+
+        self.assertIs(first, second)
+        self.assertIs(first, third)
+        self.assertEqual(loader.call_count, 2)
+
+    def test_serves_stale_value_and_backs_off_on_quota_error(self) -> None:
+        response = Mock(status_code=429)
+        response.json.return_value = {
+            "error": {
+                "code": 429,
+                "message": "quota exceeded",
+                "status": "RESOURCE_EXHAUSTED",
+            }
+        }
+        loader = Mock(side_effect=[["rows"], APIError(response)])
+        with patch("intake_bot.time.monotonic", side_effect=[10, 41]):
+            intake_bot._cached_sheet_value("opinions", 30, loader)
+            stale = intake_bot._cached_sheet_value("opinions", 30, loader)
+
+        self.assertEqual(stale, ["rows"])
+        self.assertEqual(intake_bot._SHEET_CACHE["opinions"][0], 41)
 
 
 class GameSelectionTest(unittest.TestCase):

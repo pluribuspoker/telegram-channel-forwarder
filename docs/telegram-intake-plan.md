@@ -290,6 +290,17 @@ bot never generates an opinion during a user interaction. Event-bound views
 are validated against the active game, so stale buttons fail closed instead of
 showing another game's opinions.
 
+Telegram read paths use process-local, lock-protected TTL caches to avoid Sheets
+quota exhaustion during button navigation. `nfl_games` and the complete
+`moe_opinions` tab cache for 30 seconds; `team_emojis` caches for 10 minutes.
+Concurrent misses are coalesced under one refresh lock, and the authenticated
+spreadsheet/store objects are reused. MOE callbacks route before the general
+intake-data loader because the selected game is already held in Telegram state,
+so repeated overview/detail/model navigation performs no game or emoji reads.
+If a refresh receives an explicit Sheets 429 and a prior value exists, the bot
+logs a warning, serves that stale value, and waits another TTL before retrying;
+other API failures still surface.
+
 Manual workflow:
 
 ```bash

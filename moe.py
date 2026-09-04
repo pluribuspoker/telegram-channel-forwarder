@@ -11,6 +11,7 @@ import math
 import os
 import re
 import subprocess
+import threading
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
@@ -844,9 +845,16 @@ class GoogleSheetsMoeOpinionStore:
     def __init__(self, credentials: str, sheet_id: str) -> None:
         self._credentials = credentials
         self._sheet_id = sheet_id
+        self._spreadsheet_instance: Any | None = None
+        self._spreadsheet_lock = threading.Lock()
 
     def _spreadsheet(self) -> Any:
-        return get_gspread_client(self._credentials).open_by_key(self._sheet_id)
+        with self._spreadsheet_lock:
+            if self._spreadsheet_instance is None:
+                self._spreadsheet_instance = get_gspread_client(
+                    self._credentials
+                ).open_by_key(self._sheet_id)
+            return self._spreadsheet_instance
 
     def append(self, row: dict[str, Any]) -> None:
         spreadsheet = self._spreadsheet()
