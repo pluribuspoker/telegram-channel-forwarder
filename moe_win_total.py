@@ -50,6 +50,7 @@ def _result_sample(
     losses = 0
     ties = 0
     margins: list[int] = []
+    totals: list[int] = []
     for game in games:
         side = perspective(game)
         away_score = int(game["away_score"])
@@ -60,6 +61,7 @@ def _result_sample(
             else away_score - home_score
         )
         margins.append(margin)
+        totals.append(away_score + home_score)
         if margin > 0:
             wins += 1
         elif margin < 0:
@@ -76,6 +78,9 @@ def _result_sample(
         "win_rate": round(wins / total, 4) if total else None,
         "average_margin": (
             round(sum(margins) / total, 2) if total else None
+        ),
+        "average_total_points": (
+            round(sum(totals) / total, 2) if total else None
         ),
     }
 

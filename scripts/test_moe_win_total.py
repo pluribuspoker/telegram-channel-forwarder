@@ -221,6 +221,8 @@ class WinTotalInputTest(unittest.TestCase):
         )
         self.assertEqual(market_band["games"], 1)
         self.assertEqual(market_band["wins"], 1)
+        self.assertEqual(market_band["average_margin"], 7.0)
+        self.assertEqual(market_band["average_total_points"], 41.0)
 
     def test_latest_game_pick_revision_is_used(self) -> None:
         payload = build_win_total_input(
@@ -372,7 +374,7 @@ class WinTotalGenerationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(row["generation_status"], "valid")
         self.assertEqual(row["input_profile"], "win_total")
-        self.assertEqual(row["expert_version"], 3)
+        self.assertEqual(row["expert_version"], 4)
         self.assertIn("A K projects Seattle", row["full_opinion"])
         self.assertEqual(store.rows, [row])
 
@@ -403,11 +405,11 @@ class WinTotalGenerationTest(unittest.IsolatedAsyncioTestCase):
     def test_expert_configuration_is_versioned(self) -> None:
         expert = load_expert("win_total")
 
-        self.assertEqual(expert["version"], 3)
-        self.assertEqual(expert["prompt_version"], 3)
+        self.assertEqual(expert["version"], 4)
+        self.assertEqual(expert["prompt_version"], 4)
         self.assertEqual(expert["output_schema_version"], 3)
         self.assertEqual(
-            expert["prompt_path"], "moe/prompts/win_total/v3.md"
+            expert["prompt_path"], "moe/prompts/win_total/v4.md"
         )
         self.assertEqual(expert["default_model"], "claude-opus-4-8")
         self.assertEqual(expert["reasoning_effort"], "max")
