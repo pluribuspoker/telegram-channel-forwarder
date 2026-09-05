@@ -1,0 +1,578 @@
+NFL INTAKE GOOGLE SHEETS -> SQLITE EMERGENCY MIGRATION RUNBOOK
+==============================================================
+
+Status
+------
+
+This is the implementation and cutover runbook. It is not executable until the
+backend abstraction, SQLite adapter, migration scripts, and tests named below
+have been implemented and deployed with Google Sheets still primary.
+
+STOP: the repository at the time this runbook was written still reads and
+writes Sheets directly. Merely setting the proposed environment variables does
+nothing until the implementation and acceptance gates below exist. Never run
+the cutover section against the current Sheets-only code.
+
+Goal
+----
+
+Move the NFL Guesser data plane from Google Sheets to a VPS-local SQLite
+database in one controlled day without:
+
+- losing a Telegram submission, line snapshot, MOE attempt, or approval;
+- changing an approved MOE output hash;
+- allowing two primary writers at once;
+- depending on Google Sheets during normal operation after cutover; or
+- making rollback depend on memory or manual row reconstruction.
+
+Google Sheets remains an offline rollback/export target. It is not deleted.
+
+Scope
+-----
+
+Operational worksheets:
+
+- nfl_games
+- nfl_line_snapshots
+- nfl_leans
+- team_emojis
+- suggestions
+- nfl_win_totals
+- nfl_team_history
+- nfl_rank_benchmarks
+- nfl_win_predictions
+- nfl_win_predictions_latest
+- celebrities
+- celebrity_picks
+- nfl_game_history
+- moe_opinions
+- nfl_schedule
+
+Archive-only worksheets:
+
+- allowed_users: authorization now comes from untracked environment values.
+- nfl_leans_backup_20260901
+- nfl_leans_backup_20260901_pickem_repair
+
+Archive-only tabs must be exported with the cutover artifacts but do not need
+runtime SQLite tables.
+
+Indicative live size at 2026-09-04
+----------------------------------
+
+These counts are planning data, not cutover assertions. The export command must
+recompute all counts and hashes after writers are frozen.
+
+- nfl_games: 67 rows, 20 columns
+- nfl_line_snapshots: 883 rows, 12 columns
+- nfl_leans: 19 rows, 37 columns
+- team_emojis: 32 rows, 3 columns
+- suggestions: 2 rows, 8 columns
+- nfl_win_totals: 32 rows, 10 columns
+- nfl_team_history: 96 rows, 15 columns
+- nfl_rank_benchmarks: 4 rows, 12 columns
+- nfl_win_predictions: 162 rows, 17 columns
+- nfl_win_predictions_latest: 160 rows, 17 columns
+- celebrities: 3 rows, 7 columns
+- nfl_game_history: 816 rows, 26 columns
+- moe_opinions: approximately 95 rows, 59 columns and 1.4 million characters
+- nfl_schedule: 272 rows, 11 columns
+
+This is a small SQLite workload. Correctness and rollback matter more than
+storage optimization.
+
+Required implementation before cutover
+--------------------------------------
+
+1. Add one backend selector:
+
+   NFL_DATA_BACKEND=google_sheets|sqlite
+   NFL_SQLITE_PATH=/home/forwarder/data/nfl_intake.sqlite3
+   NFL_DATA_ROLE=primary|readonly
+
+   Default must remain google_sheets until the cutover step.
+   Every mutating operation must refuse to run unless NFL_DATA_ROLE=primary.
+   This prevents a local checkout from continuing to write the stale Sheet
+   after the VPS database becomes authoritative.
+
+2. Add a shared storage module used by every production reader and writer.
+   It must expose explicit operations rather than a raw SQL escape hatch:
+
+   - list_rows(table, filters=None)
+   - append_row(table, row, idempotency_key=None)
+   - append_rows(table, rows, idempotency_keys=None)
+   - replace_rows(table, rows)
+   - upsert_rows(table, rows, key_columns)
+   - update_exactly_one(table, key, changes)
+   - transaction()
+
+3. Implement GoogleSheetsNflStore and SQLiteNflStore behind the same protocol.
+   Existing behavior must remain unchanged while Sheets is primary.
+
+4. Route these code paths through the store:
+
+   - nfl_lines.write_to_sheets:
+     replace its current separate Sheet writes with one SQLite transaction that
+     upserts nfl_games and appends nfl_line_snapshots atomically.
+   - intake_bot:
+     read nfl_games/team_emojis/win-prediction data/MOE opinions;
+     append suggestions, nfl_leans, nfl_win_predictions, celebrity_picks,
+     and celebrities; replace nfl_win_predictions_latest.
+   - moe.GoogleSheetsMoeOpinionStore:
+     replace with backend-neutral opinion storage while retaining the existing
+     MoeOpinionStore protocol and approval checks.
+   - scripts/generate_moe_opinion.py:
+     read nfl_games, nfl_game_history, nfl_schedule, nfl_leans, and
+     nfl_line_snapshots through the configured store.
+   - setup/backfill scripts:
+     accept an explicit --backend and never infer a destructive destination.
+
+5. Add scripts:
+
+   - scripts/export_nfl_sheets.py
+   - scripts/import_nfl_sqlite.py
+   - scripts/verify_nfl_store.py
+   - scripts/export_nfl_sqlite_delta.py
+   - scripts/replay_nfl_delta_to_sheets.py
+   - scripts/backup_nfl_sqlite.py
+
+6. Add tests for both backends using the same behavioral contract suite.
+
+SQLite representation
+---------------------
+
+Preserve worksheet values losslessly before attempting normalization:
+
+- Every worksheet column is TEXT NOT NULL DEFAULT ''.
+- Never convert blank cells to NULL.
+- Never normalize JSON, timestamps, booleans, floats, minus signs, or whitespace
+  during import.
+- Add internal `_row_order INTEGER NOT NULL` to preserve Sheet ordering.
+- Every list operation whose Sheet equivalent is order-sensitive must use an
+  explicit ORDER BY _row_order; never rely on SQLite's implicit row order.
+- Add internal `_created_at TEXT NOT NULL` where useful for database auditing;
+  it must not enter exported worksheet rows or MOE approval hashes.
+- Keep the exact current header order in a schema_manifest table.
+
+The text-preserving rule is required because MOE approval hashes bind exact
+stored values. A blank-to-NULL conversion or JSON reserialization could hide an
+approved opinion as tampered.
+
+Database metadata tables:
+
+- schema_migrations(version, applied_at_utc, git_commit, checksum)
+- schema_manifest(table_name, ordinal, column_name)
+- import_manifest(
+    export_id, table_name, row_count, column_count, canonical_sha256,
+    imported_at_utc
+  )
+- write_journal(
+    sequence, committed_at_utc, table_name, operation, key_json,
+    before_json, after_json
+  )
+
+The write_journal is required for rollback. It records committed mutations
+after the final Sheets export, including replacements and reviews.
+
+Recommended keys and constraints:
+
+- nfl_games: PRIMARY KEY(event_id)
+- nfl_line_snapshots:
+  UNIQUE(captured_at, event_id, bookmaker)
+- nfl_leans: PRIMARY KEY(submission_id)
+- nfl_win_predictions: PRIMARY KEY(revision_id)
+- nfl_win_predictions_latest:
+  UNIQUE(telegram_user_id, season, team)
+- celebrities: PRIMARY KEY(celebrity_id), UNIQUE(normalized_name)
+- celebrity_picks: UNIQUE(submission_id, celebrity_name)
+- nfl_game_history: PRIMARY KEY(event_id)
+- nfl_schedule: PRIMARY KEY(event_id)
+- moe_opinions: PRIMARY KEY(opinion_id)
+- team_emojis: PRIMARY KEY(team_name)
+
+Reference/replacement tables may use their natural composite key plus
+_row_order. Do not invent uniqueness where the Sheet currently permits
+legitimate revisions.
+
+SQLite connection policy
+------------------------
+
+Every connection must configure:
+
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=FULL;
+PRAGMA foreign_keys=ON;
+PRAGMA busy_timeout=30000;
+
+- Use one transaction for every logical multi-table operation.
+- Use BEGIN IMMEDIATE for writes that read-before-write.
+- Never share a sqlite3 connection across threads.
+- Retry only SQLITE_BUSY/SQLITE_LOCKED with bounded jitter.
+- Surface integrity, schema, and disk errors immediately.
+- Do not silently fall back to Sheets when NFL_DATA_BACKEND=sqlite.
+
+The VPS path must be:
+
+/home/forwarder/data/nfl_intake.sqlite3
+
+Directory ownership/mode:
+
+forwarder:forwarder
+directory 0700
+database, WAL, SHM, exports, and backups 0600
+
+Pre-cutover acceptance tests
+----------------------------
+
+Do not schedule the cutover until all are true:
+
+1. The full existing test suite passes with Sheets-primary code.
+   A startup/backend probe must also prove that sqlite mode opens the configured
+   database and does not initialize a gspread client.
+2. The shared store contract passes against:
+   - a fake/in-memory Sheets implementation;
+   - a temporary SQLite database.
+3. A production Sheet export imports into a temporary local SQLite database.
+4. verify_nfl_store reports:
+   - exact table set;
+   - exact header order;
+   - exact row count per table;
+   - exact canonical SHA-256 per table;
+   - no missing or duplicate required keys.
+5. Every currently approved MOE row remains visible through
+   approved_opinions() from SQLite and has the same output/approval hashes.
+6. Re-running the import is either explicitly refused or is byte-for-byte
+   idempotent; it must never duplicate append-only rows.
+7. The SQLite intake tests prove:
+   - duplicate Telegram submission IDs do not append;
+   - win-prediction unchanged revisions do not append;
+   - derived latest predictions rebuild identically;
+   - MOE append and review update exactly one opinion;
+   - line polling updates nfl_games and appends snapshots in one transaction.
+8. The SQLite database survives process restart and passes:
+
+   PRAGMA quick_check;
+   PRAGMA integrity_check;
+   PRAGMA foreign_key_check;
+
+9. scripts/backup_nfl_sqlite.py creates a restorable backup with SQLite's
+   online backup API, not by copying a live database file.
+10. Disk-space preflight requires at least 1 GB free even though the database
+    is expected to be only a few megabytes.
+
+Canonical export format
+-----------------------
+
+The exporter creates one mode-0600 directory:
+
+/home/forwarder/data/migrations/<UTC export id>/
+
+It contains:
+
+- manifest.json
+- <worksheet>.json for every operational and archive-only worksheet
+- headers/<worksheet>.json
+- hashes/<worksheet>.sha256
+- workbook_metadata.json
+
+Each worksheet JSON contains an ordered list of ordered cell strings. Hash the
+canonical UTF-8 JSON with compact separators and no key sorting because row and
+column order are significant. Include the header row in the hash.
+
+Never use get_all_records() for the lossless export. It coerces cell values.
+Use get_all_values() so every imported value starts as the exact cell string.
+
+One-day cutover
+---------------
+
+Assign one operator and one verifier. Record every command, timestamp, export
+ID, Git commit, and result in a mode-0600 cutover log outside the repository.
+
+T-60 minutes: preflight
+~~~~~~~~~~~~~~~~~~~~~~~
+
+1. Confirm the deployed commit is the reviewed dual-backend commit.
+   Run its backend probe and refuse the cutover if the service would still
+   construct a Google Sheets store in sqlite mode.
+2. Confirm the working tree's unrelated VPS files are known and untouched.
+3. Confirm:
+
+   sudo -n systemctl is-active telegram-intake.service
+   sudo -n systemctl is-active nfl-lines-fetcher.timer
+   sudo -n systemctl list-timers nfl-lines-fetcher.timer
+   df -h /home/forwarder/data
+
+4. Record the current Sheet workbook ID without printing credentials.
+5. Run a read-only export and temporary import while services remain live.
+6. Run verify_nfl_store against that temporary database.
+7. Confirm the most recent:
+   - nfl_leans submission ID;
+   - nfl_line_snapshots captured_at/event ID;
+   - nfl_win_predictions revision ID;
+   - moe_opinions opinion ID and review status.
+   Record hashes/IDs in the private cutover log, not this runbook.
+
+T-10 minutes: announce/freeze
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+No model generation, MOE review, setup script, backfill, or manual Sheet edit
+may run during the freeze.
+
+Stop writers:
+
+sudo -n systemctl stop telegram-intake.service
+sudo -n systemctl stop nfl-lines-fetcher.timer
+sudo -n systemctl stop nfl-lines-fetcher.service
+
+The oneshot service may already be inactive; stopping it is still safe.
+
+Verify:
+
+sudo -n systemctl is-active telegram-intake.service
+sudo -n systemctl is-active nfl-lines-fetcher.timer
+sudo -n systemctl is-active nfl-lines-fetcher.service
+
+All must be inactive. Check that no matching process remains.
+
+T-8 minutes: final Sheet export
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+As forwarder from /home/forwarder/app:
+
+~/venv/bin/python scripts/export_nfl_sheets.py \
+  --output-dir /home/forwarder/data/migrations/<export-id> \
+  --include-archives
+
+Immediately run the exporter a second time into a second directory. Compare
+all operational worksheet hashes. Any difference means a writer or editor is
+still active; abort the cutover and investigate.
+
+T-5 minutes: import
+~~~~~~~~~~~~~~~~~~~
+
+Import into a new path, never over the prior database:
+
+~/venv/bin/python scripts/import_nfl_sqlite.py \
+  --input-dir /home/forwarder/data/migrations/<export-id> \
+  --output /home/forwarder/data/nfl_intake.sqlite3.new \
+  --expected-git-commit <commit>
+
+Verify:
+
+~/venv/bin/python scripts/verify_nfl_store.py \
+  --sheet-export /home/forwarder/data/migrations/<export-id> \
+  --sqlite /home/forwarder/data/nfl_intake.sqlite3.new \
+  --check-approved-moe-hashes
+
+Run SQLite integrity checks. Only after every check succeeds:
+
+1. Move any previous database to a timestamped rollback path.
+2. Atomically rename nfl_intake.sqlite3.new to nfl_intake.sqlite3.
+3. Enforce forwarder ownership and mode 0600.
+4. Set NFL_DATA_BACKEND=sqlite and NFL_SQLITE_PATH in VPS .env.local using an
+   atomic key-only update. Set NFL_DATA_ROLE=primary there. Never replace the
+   full environment file.
+5. Set NFL_DATA_ROLE=readonly in the operator's local untracked environment.
+   After cutover, local Sheet reads are for archive/rollback inspection only.
+6. Preserve `.env.guesser` unchanged. `nfl-lines-fetcher.service` loads it last
+   for its dedicated Odds API key; the data-backend cutover must not remove or
+   replace that service-specific environment file.
+
+T+0: start readers/writers
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Start the intake service first:
+
+sudo -n systemctl start telegram-intake.service
+sudo -n systemctl is-active telegram-intake.service
+sudo -n journalctl -u telegram-intake.service \
+  --since "5 minutes ago" --no-pager
+
+Then enable the line timer:
+
+sudo -n systemctl start nfl-lines-fetcher.timer
+sudo -n systemctl is-active nfl-lines-fetcher.timer
+
+Do not manually trigger a line fetch until the intake read smoke test passes.
+
+T+5 minutes: smoke tests
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Perform one controlled test for each behavior:
+
+1. Open /guess_nfl_game and confirm games, emoji, lines, and MOE navigation.
+2. Open the approved Rams-49ers AK opinion and confirm its approval hash remains
+   accepted.
+3. Submit one clearly labeled test suggestion.
+4. Submit or update one designated test NFL lean only if a safe test game/user
+   is available; otherwise exercise the append path against a temporary clone
+   before cutover and skip the live mutation.
+5. Read season-win predictions and confirm the latest view.
+6. Run one line-fetch preview, then one scheduled/write execution.
+7. Confirm nfl_games updated and exactly the expected new snapshot count was
+   appended.
+8. Generate no paid/model output merely to test storage. If a pending opinion
+   already exists, perform a read-only detail check.
+
+After every mutation run:
+
+PRAGMA quick_check;
+
+and verify the write_journal entry.
+
+T+30 minutes: backup and observation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Create the first online backup:
+
+~/venv/bin/python scripts/backup_nfl_sqlite.py \
+  --database /home/forwarder/data/nfl_intake.sqlite3 \
+  --output /home/forwarder/data/backups/nfl_intake-<UTC>.sqlite3
+
+Restore that backup to a temporary file and run integrity_check.
+
+Observe at least one natural nfl-lines-fetcher.timer execution. Confirm the
+service exits successfully and the database contains the new capture.
+
+T+2 hours: declare cutover complete
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Cutover is complete only if:
+
+- the intake bot remained active;
+- a natural line poll succeeded;
+- no SQLITE_BUSY, disk I/O, schema, or integrity errors occurred;
+- approved MOE opinions remained visible and hash-valid;
+- database and restored backup pass integrity checks; and
+- the final database row counts are at least the imported counts, with every
+  increase explained by write_journal.
+
+Post-cutover operations
+-----------------------
+
+1. Keep the final Sheet export permanently.
+2. Keep Google credentials and NFL_INTAKE_SHEET_ID in untracked configuration
+   for rollback/export, but SQLite runtime paths must not require them.
+3. Install a backup timer after the first successful day:
+   - online backup at least daily;
+   - retain 14 daily and 8 weekly backups;
+   - verify the newest backup after creation;
+   - alert through the watchdog bot only on failure.
+   Its service/timer definitions must live under deploy/systemd and pass the
+   repository deploy-sync check.
+4. Add a database-size/disk-space check to mem-watchdog or a dedicated silent
+   watchdog.
+5. Run integrity_check daily initially, then weekly after stability.
+6. Do not remove the Sheet backend until one full NFL season and one tested
+   rollback have completed.
+
+Post-cutover command location
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The authoritative SQLite file is VPS-local. After cutover:
+
+- Run `--show-input`, generation persistence, opinion review, backfills, line
+  writes, and setup/rebuild commands on the VPS as `forwarder`.
+- An agent runtime may generate raw response JSON elsewhere, but the exact
+  input must be built from the VPS database and the response must be persisted
+  and validated on the VPS.
+- Update `.claude/skills/generate-nfl-moe-opinion/SKILL.md` and its Copilot
+  wrapper before cutover so they do not instruct a local runtime to read or
+  mutate the stale Sheet.
+- A local operator may copy a mode-0600 input artifact from the VPS for model
+  execution, but must copy the raw response back and invoke the persistence
+  command on the VPS.
+- All write-capable CLIs must print the selected backend/path and refuse
+  `NFL_DATA_ROLE=readonly` before loading or calling an external model.
+
+This is a correctness boundary, not merely an operational preference. A local
+Sheet write after cutover would create a second primary and would be absent
+from SQLite's write_journal and backups.
+
+Rollback
+--------
+
+Rollback is a data migration, not only an environment-variable change.
+
+Immediate rollback before any SQLite write
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If smoke testing fails before the first SQLite mutation:
+
+1. Stop telegram-intake.service and nfl-lines-fetcher.timer.
+2. Set NFL_DATA_BACKEND=google_sheets atomically in .env.local.
+   Set NFL_DATA_ROLE=primary on the VPS only.
+3. Start telegram-intake.service and nfl-lines-fetcher.timer.
+4. Verify the last recorded Sheet IDs/hashes and normal bot operation.
+
+Rollback after SQLite writes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If SQLite accepted any mutation after import:
+
+1. Stop telegram-intake.service and nfl-lines-fetcher.timer.
+2. Back up the failed/current SQLite database with the online backup API.
+3. Export write_journal entries after the import sequence:
+
+   ~/venv/bin/python scripts/export_nfl_sqlite_delta.py \
+     --database /home/forwarder/data/nfl_intake.sqlite3 \
+     --after-sequence <import-sequence> \
+     --output /home/forwarder/data/migrations/<id>/sqlite-delta.json
+
+4. Dry-run replay against the current Sheet:
+
+   ~/venv/bin/python scripts/replay_nfl_delta_to_sheets.py \
+     --delta .../sqlite-delta.json \
+     --verify-only
+
+5. Review every update/replace operation. Append-only rows can be replayed by
+   their idempotency keys. Mutable rows require exact before-value matching.
+   If the current Sheet value differs from the journal's before_json, stop and
+   resolve the conflict; never overwrite silently.
+6. Apply the replay.
+7. Export Sheets again and verify all replayed keys and approved MOE hashes.
+8. Set NFL_DATA_BACKEND=google_sheets atomically.
+   Set NFL_DATA_ROLE=primary on the VPS only; keep local mutation disabled
+   until the replayed Sheet has been verified.
+9. Start telegram-intake.service and nfl-lines-fetcher.timer.
+10. Preserve the SQLite database, delta, logs, and both Sheet exports for the
+    incident review.
+
+Abort conditions
+----------------
+
+Abort before switching the backend if any of these occur:
+
+- Sheet hashes change during the frozen double export.
+- Header order differs from the reviewed schema manifest.
+- Import row count or canonical hash differs for any operational table.
+- Any approved MOE output/approval hash changes.
+- Required natural keys are blank or unexpectedly duplicated.
+- SQLite integrity or foreign-key checks fail.
+- The database cannot be backed up and restored.
+- Disk space is below the preflight threshold.
+- The deployed Git commit differs from the cutover-approved commit.
+
+After the backend switch, roll back if:
+
+- intake cannot read games or append a submission;
+- line polling cannot atomically update games and snapshots;
+- approved MOE rows disappear as tampered;
+- repeated lock timeouts occur;
+- database/WAL writes fail; or
+- a backup cannot be created and restored.
+
+Implementation order
+--------------------
+
+1. Add backend-neutral store protocol and SQLite connection helper.
+2. Add schema manifest and migration creation.
+3. Port MOE storage first because it already has a store protocol.
+4. Port read-only/reference tables.
+5. Port append-only intake tables.
+6. Port mutable nfl_games and derived latest predictions.
+7. Add export/import/verification and delta replay.
+8. Run backend contract tests and a production-snapshot rehearsal.
+9. Update both agent-generation skills for VPS-authoritative input/persistence.
+10. Review this runbook against the implemented command names.
+11. Schedule the one-day cutover only after a successful rehearsal.

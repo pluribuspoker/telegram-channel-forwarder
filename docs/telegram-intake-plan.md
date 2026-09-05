@@ -463,9 +463,11 @@ base WNBA positive-gap under warning. Generation and approval remain pending
 until the worksheet migration, secure `AK_TELEGRAM_USER_ID` configuration, and
 backfill report review are complete.
 
-`emergency_migration.txt` is deliberately deferred until the MOE implementation
-and operational workflow are complete, so the runbook documents the final
-schema, services, paths, and cutover procedure rather than an obsolete design.
+`emergency_migration.txt` now documents the implementation requirements,
+lossless export/import format, one-day service freeze and SQLite cutover,
+verification gates, backups, and rollback with post-cutover delta replay. It
+must be reconciled with the final script names after the backend implementation
+and rehearsed against a production export before use.
 
 ### Implemented locally — 2026-09-04: authoritative NFL week metadata
 
