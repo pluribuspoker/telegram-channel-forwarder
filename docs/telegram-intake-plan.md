@@ -389,12 +389,28 @@ python scripts/generate_moe_opinion.py \
 # Compare the same expert using another model:
 python scripts/generate_moe_opinion.py \
   --event-id <nfl_games event_id> --expert schedule \
-  --model claude-opus-4-6
+  --model claude-opus-4-8
 ```
 
 There is deliberately no inference-only preview flag: every model call persists
 its complete input and output. `--show-input` is safe because it does not invoke
 the model.
+
+Both enabled experts use `claude-opus-4-8` with Anthropic
+`output_config.effort=max`. The Divisional Expert's separate factuality request
+uses the same model and effort. New rows persist `generation_backend` and
+`generation_effort`; approval hashes bind both values when present while legacy
+approved rows without them retain their existing hashes.
+
+The project skill at `.github/skills/generate-nfl-moe-opinion/SKILL.md` provides
+an explicit alternative to API-key generation. A Copilot session can launch an
+Opus 4.8 subagent with maximum reasoning, save its raw JSON outside the
+repository, and pass it back through the normal generator with
+`--agent-response`. Schema-v4 experts require a second independently generated
+factuality response via `--agent-factuality-response`. This path uses the same
+input builder, validators, Sheet persistence, output hash, and human approval
+gate as direct API generation; it records `generation_backend=copilot_subagent`
+and never approves an opinion automatically.
 
 `emergency_migration.txt` is deliberately deferred until the MOE implementation
 and operational workflow are complete, so the runbook documents the final

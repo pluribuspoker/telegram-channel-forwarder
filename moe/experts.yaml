@@ -3,26 +3,28 @@ experts:
   schedule:
     name: Schedule Expert
     mode: agent
-    version: 21
+    version: 22
     prompt_version: 13
     prompt: prompts/schedule/v13.md
     input_profile: schedule_only
     output_schema_version: 2
-    default_model: claude-opus-4-6
+    default_model: claude-opus-4-8
+    reasoning_effort: max
     allowed_models:
-      - claude-opus-4-6
+      - claude-opus-4-8
     enabled: true
     initial_weight: 1.0
   divisional:
     name: Divisional Expert
     mode: agent
-    version: 28
+    version: 29
     prompt_version: 17
     prompt: prompts/divisional/v17.md
     input_profile: divisional
     output_schema_version: 4
-    default_model: claude-opus-4-6
+    default_model: claude-opus-4-8
+    reasoning_effort: max
     allowed_models:
-      - claude-opus-4-6
+      - claude-opus-4-8
     enabled: true
     initial_weight: 1.0

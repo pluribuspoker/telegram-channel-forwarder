@@ -440,13 +440,16 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             game=_game(),
             history=_history(),
             store=store,
-            model="claude-opus-4-6",
+            model="claude-opus-4-8",
             create_fn=create_fn,
         )
 
-        self.assertEqual(row["expert_version"], 21)
+        self.assertEqual(row["expert_version"], 22)
         self.assertEqual(row["prompt_version"], 13)
-        self.assertEqual(row["model"], "claude-opus-4-6")
+        self.assertEqual(row["model"], "claude-opus-4-8")
+        self.assertEqual(row["generation_backend"], "anthropic_api")
+        self.assertEqual(row["generation_effort"], "max")
+        self.assertEqual(captured["output_config"], {"effort": "max"})
         self.assertEqual(row["predicted_winner"], "Philadelphia Eagles")
         self.assertEqual(set(row), set(OPINION_HEADERS))
         self.assertEqual(len(row["prompt_sha256"]), 64)
@@ -533,9 +536,11 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(row["expert_id"], "divisional")
         self.assertEqual(row["input_profile"], "divisional")
-        self.assertEqual(row["expert_version"], 28)
+        self.assertEqual(row["expert_version"], 29)
         self.assertEqual(row["output_schema_version"], 4)
         self.assertIn("Divisional Expert v17", captured[0]["system"])
+        self.assertEqual(captured[0]["output_config"], {"effort": "max"})
+        self.assertEqual(captured[1]["output_config"], {"effort": "max"})
         self.assertIn("lean toward Philadelphia Eagles", row["thesis"])
         self.assertEqual(
             row["nondeterministic_factuality_status"],
@@ -582,7 +587,7 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
                 game=_game(),
                 history=_history(),
                 store=store,
-                model="claude-opus-4-6",
+                model="claude-opus-4-8",
                 create_fn=create_fn,
             )
 
@@ -1066,22 +1071,24 @@ class OpinionViewTest(unittest.TestCase):
     def test_expert_prompt_is_loaded_from_versioned_file(self) -> None:
         expert = load_expert("schedule")
 
-        self.assertEqual(expert["version"], 21)
+        self.assertEqual(expert["version"], 22)
         self.assertEqual(expert["prompt_version"], 13)
         self.assertEqual(expert["prompt_path"], "moe/prompts/schedule/v13.md")
-        self.assertEqual(expert["default_model"], "claude-opus-4-6")
-        self.assertEqual(expert["allowed_models"], ["claude-opus-4-6"])
+        self.assertEqual(expert["default_model"], "claude-opus-4-8")
+        self.assertEqual(expert["reasoning_effort"], "max")
+        self.assertEqual(expert["allowed_models"], ["claude-opus-4-8"])
         self.assertEqual(len(expert["prompt_sha256"]), 64)
 
         divisional = load_expert("divisional")
-        self.assertEqual(divisional["version"], 28)
+        self.assertEqual(divisional["version"], 29)
         self.assertEqual(divisional["prompt_version"], 17)
         self.assertEqual(divisional["output_schema_version"], 4)
         self.assertEqual(
             divisional["prompt_path"],
             "moe/prompts/divisional/v17.md",
         )
-        self.assertEqual(divisional["default_model"], "claude-opus-4-6")
+        self.assertEqual(divisional["default_model"], "claude-opus-4-8")
+        self.assertEqual(divisional["reasoning_effort"], "max")
 
 
 if __name__ == "__main__":

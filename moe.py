@@ -64,7 +64,9 @@ OPINION_HEADERS = [
     "git_commit",
     "output_schema_version",
     "model",
+    "generation_backend",
     "generation_max_tokens",
+    "generation_effort",
     "input_sha256",
     "predicted_winner",
     "home_win_probability",
@@ -1607,6 +1609,7 @@ async def _fact_check_nondeterministic_analysis(
     input_payload: dict[str, Any],
     *,
     model: str,
+    reasoning_effort: str,
     create_fn: CreateFn,
 ) -> tuple[str, str, str, str]:
     if not isinstance(claims, list) or not claims or not all(
@@ -1623,6 +1626,7 @@ async def _fact_check_nondeterministic_analysis(
     response = await create_fn(
         model=model,
         max_tokens=4000,
+        output_config={"effort": reasoning_effort},
         system=prompt,
         messages=[
             {
@@ -1918,6 +1922,7 @@ async def generate_opinion(
     store: MoeOpinionStore,
     model: str | None = None,
     create_fn: CreateFn = _claude_create_with_retry,
+    generation_backend: str = "anthropic_api",
     repair_attempts: int = 0,
     _repair_response: str = "",
     _repair_error: str = "",
@@ -1954,6 +1959,16 @@ async def generate_opinion(
         raise ValueError(
             f"Model {selected_model} is not allowed for expert {expert_id}"
         )
+    reasoning_effort = str(expert.get("reasoning_effort") or "").strip()
+    if reasoning_effort not in {"low", "medium", "high", "xhigh", "max"}:
+        raise ValueError(
+            f"Invalid reasoning effort for expert {expert_id}: "
+            f"{reasoning_effort or '<missing>'}"
+        )
+    if generation_backend not in {"anthropic_api", "copilot_subagent"}:
+        raise ValueError(
+            f"Unsupported MOE generation backend: {generation_backend}"
+        )
     max_tokens = 5000
     away = str(game["away_team"])
     home = str(game["home_team"])
@@ -1986,7 +2001,9 @@ async def generate_opinion(
         "git_commit": _git_commit(),
         "output_schema_version": expert["output_schema_version"],
         "model": selected_model,
+        "generation_backend": generation_backend,
         "generation_max_tokens": max_tokens,
+        "generation_effort": reasoning_effort,
         "input_sha256": _sha256_text(input_json),
         "predicted_winner": "",
         "home_win_probability": "",
@@ -2034,6 +2051,7 @@ async def generate_opinion(
         response = await create_fn(
             model=selected_model,
             max_tokens=max_tokens,
+            output_config={"effort": reasoning_effort},
             system=expert["prompt_text"],
             messages=[
                 {
@@ -2056,6 +2074,7 @@ async def generate_opinion(
                 opinion.get("nondeterministic_analysis"),
                 input_payload,
                 model=selected_model,
+                reasoning_effort=reasoning_effort,
                 create_fn=create_fn,
             )
             opinion = _normalize_evidence_card_opinion(
@@ -2155,6 +2174,7 @@ async def generate_opinion(
                 store=store,
                 model=selected_model,
                 create_fn=create_fn,
+                generation_backend=generation_backend,
                 repair_attempts=repair_attempts - 1,
                 _repair_response=row["raw_response"],
                 _repair_error=row["generation_error"],
@@ -2435,6 +2455,10 @@ def opinion_output_sha256(row: dict[str, Any]) -> str:
             row.get("discarded_considerations_json") or ""
         ),
     }
+    if row.get("generation_backend"):
+        payload["generation_backend"] = str(row["generation_backend"])
+    if row.get("generation_effort"):
+        payload["generation_effort"] = str(row["generation_effort"])
     if any(
         row.get(field)
         for field in (
@@ -2662,9 +2686,16 @@ def opinion_detail(
     full_opinion = str(row["full_opinion"])
     chunks = _escaped_chunks(full_opinion, TELEGRAM_DETAIL_CHARS)
     page = max(0, min(page, len(chunks) - 1))
+    effort = str(row.get("generation_effort") or "").strip()
+    backend = str(row.get("generation_backend") or "").strip()
+    execution = ""
+    if effort:
+        execution += f" · effort {html.escape(effort)}"
+    if backend:
+        execution += f" · {html.escape(backend)}"
     footer = (
         f"\n\n<i>Expert v{row['expert_version']} · "
-        f"model {html.escape(str(row['model']))} · "
+        f"model {html.escape(str(row['model']))}{execution} · "
         f"prompt {str(row['prompt_sha256'])[:8]} · "
         f"page {page + 1}/{len(chunks)}</i>"
     )
