@@ -1,0 +1,9 @@
+[Unit]
+Description=Backstop the env-backup path watcher every 30 min (inotify can miss an atomic rename)
+
+[Timer]
+OnCalendar=*:0/30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

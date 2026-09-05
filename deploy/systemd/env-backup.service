@@ -1,0 +1,11 @@
+[Unit]
+Description=Backup + validate .env / .env.local (alerts operator via Telegram on a bad write)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/deploy/env_backup.py

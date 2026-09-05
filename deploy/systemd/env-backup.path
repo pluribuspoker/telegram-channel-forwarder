@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch .env / .env.local for changes and snapshot+validate them
+
+[Path]
+PathModified=/home/forwarder/app/.env.local
+PathModified=/home/forwarder/app/.env
+Unit=env-backup.service
+
+[Install]
+WantedBy=multi-user.target

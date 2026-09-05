@@ -59,7 +59,10 @@ Still required before live use:
 - Append the four `nfl_leans` and three `moe_opinions` columns with the guarded
   migration.
 - Configure `AK_TELEGRAM_USER_ID` in untracked local and VPS `.env.local`
-  files.
+  files **with `python3 scripts/set_env_local.py AK_TELEGRAM_USER_ID=<id>`** —
+  never hand-edit `.env.local`. A hand-edit here on 2026-09-05 rewrote the whole
+  file, dropped the session/token keys, and took the pick grader down for 8h.
+  The helper updates only the one key and validates the result.
 - Review the historical parse report before applying any backfill.
 - Generate, review, and explicitly approve the first Rams-49ers opinion.
 
@@ -286,10 +289,11 @@ team-total gap = AK predicted team score - market-implied team score
 
 ### AK identity
 
-Configure AK through an untracked environment value:
+Configure AK through an untracked environment value, set with the safe helper
+(never by hand-editing `.env.local`):
 
-```text
-AK_TELEGRAM_USER_ID=<numeric Telegram user ID>
+```bash
+python3 scripts/set_env_local.py AK_TELEGRAM_USER_ID=<numeric Telegram user ID>
 ```
 
 Do not hardcode a personal Telegram identifier in source control.
