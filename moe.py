@@ -2134,9 +2134,11 @@ def validate_opinion(
     ):
         expected_bucket = str(schedule_input["game"]["matchup_type"])
         bucket_descriptions = {
-            "division": "same division",
-            "conference": "same conference, different divisions",
-            "non_conference": "different conferences",
+            "division": "the teams are in the same division",
+            "conference": (
+                "the teams are in the same conference but different divisions"
+            ),
+            "non_conference": "the teams are in different conferences",
         }
         if opinion.get("matchup_bucket") != expected_bucket:
             raise ValueError(

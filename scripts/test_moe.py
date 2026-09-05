@@ -434,7 +434,9 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
     async def test_generation_records_prompt_and_input_versions(self) -> None:
         output = {
             "matchup_bucket": "division",
-            "matchup_bucket_description": "same division",
+            "matchup_bucket_description": (
+                "the teams are in the same division"
+            ),
             "predicted_winner": "Philadelphia Eagles",
             "home_win_probability": 0.61,
             "expected_home_margin": 3.5,
@@ -449,7 +451,8 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
                 "Travel fatigue — discarded because no travel input exists."
             ],
             "full_opinion": (
-                "Matchup bucket: division - same division.\n\n"
+                "Matchup bucket: division - the teams are in the same "
+                "division.\n\n"
                 "A detailed schedule-only opinion."
             ),
         }
@@ -629,7 +632,9 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
     async def test_validation_repair_persists_invalid_attempt(self) -> None:
         valid = {
             "matchup_bucket": "division",
-            "matchup_bucket_description": "same division",
+            "matchup_bucket_description": (
+                "the teams are in the same division"
+            ),
             "predicted_winner": "Philadelphia Eagles",
             "home_win_probability": 0.61,
             "expected_home_margin": 3.5,
@@ -642,7 +647,8 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             "no_signal_factors": [],
             "discarded_considerations": [],
             "full_opinion": (
-                "Matchup bucket: division - same division.\n\n"
+                "Matchup bucket: division - the teams are in the same "
+                "division.\n\n"
                 "A repaired schedule opinion."
             ),
         }
@@ -937,7 +943,9 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             validate_opinion(
                 {
                     "matchup_bucket": "division",
-                    "matchup_bucket_description": "same division",
+                    "matchup_bucket_description": (
+                        "the teams are in the same division"
+                    ),
                     "predicted_winner": "Philadelphia Eagles",
                     "home_win_probability": 0.6,
                     "expected_home_margin": 3,
@@ -950,7 +958,8 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
                     "no_signal_factors": [],
                     "discarded_considerations": [],
                     "full_opinion": (
-                        "Matchup bucket: division - same division.\n\n"
+                        "Matchup bucket: division - the teams are in the same "
+                        "division.\n\n"
                         "This Week 1 matchup favors Philadelphia."
                     ),
                 },
@@ -961,7 +970,9 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
         validate_opinion(
             {
                 "matchup_bucket": "division",
-                "matchup_bucket_description": "same division",
+                "matchup_bucket_description": (
+                    "the teams are in the same division"
+                ),
                 "predicted_winner": "Philadelphia Eagles",
                 "home_win_probability": 0.6,
                 "expected_home_margin": 3,
@@ -974,7 +985,8 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
                 "no_signal_factors": ["No Thursday sample."],
                 "discarded_considerations": [],
                 "full_opinion": (
-                    "Matchup bucket: division - same division.\n\n"
+                    "Matchup bucket: division - the teams are in the same "
+                    "division.\n\n"
                     "Day-of-the-week evidence is unavailable."
                 ),
             },
@@ -988,7 +1000,7 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
         opinion = {
             "matchup_bucket": "conference",
             "matchup_bucket_description": (
-                "same conference, different divisions"
+                "the teams are in the same conference but different divisions"
             ),
             "predicted_winner": "Philadelphia Eagles",
             "home_win_probability": 0.6,
@@ -1002,8 +1014,8 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             "no_signal_factors": [],
             "discarded_considerations": [],
             "full_opinion": (
-                "Matchup bucket: conference - same conference, different "
-                "divisions."
+                "Matchup bucket: conference - the teams are in the same "
+                "conference but different divisions."
             ),
         }
 
