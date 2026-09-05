@@ -516,6 +516,28 @@ class GameSelectionTest(unittest.TestCase):
         self.assertEqual(row["opening_selected_line"], 40.5)
         self.assertEqual(row["opening_selected_price"], -110)
         self.assertEqual(row["lean_text"], "Over, but only at 40.5 or better.")
+        self.assertEqual(row["prediction_parse_status"], "not_applicable")
+
+    def test_ak_lean_row_stores_normalized_score(self):
+        row = build_lean_row(
+            submitted_at=NOW,
+            user_id=123,
+            username="ak",
+            first_name="AK",
+            last_name=None,
+            message_id=790,
+            game=_game("miami", 1),
+            period="game",
+            market="moneyline",
+            side="home",
+            lean_text="Raiders to win 24-20.",
+            prediction={"away_score": 20, "home_score": 24},
+        )
+
+        self.assertEqual(row["predicted_away_score"], 20)
+        self.assertEqual(row["predicted_home_score"], 24)
+        self.assertEqual(row["prediction_parse_version"], 1)
+        self.assertEqual(row["prediction_parse_status"], "parsed")
 
     def test_submission_snapshot_rejects_incomplete_matching_state(self):
         status, submission = snapshot_lean_submission(

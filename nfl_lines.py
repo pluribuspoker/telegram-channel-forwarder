@@ -147,6 +147,10 @@ LEAN_HEADERS = [
     LATEST_HOME_COLUMN,
     LATEST_TOTALS_COLUMN,
     "lean_text",
+    "predicted_away_score",
+    "predicted_home_score",
+    "prediction_parse_version",
+    "prediction_parse_status",
 ]
 
 

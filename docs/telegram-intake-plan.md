@@ -414,6 +414,52 @@ input builder, validators, Sheet persistence, output hash, and human approval
 gate as direct API generation; it records `generation_backend=agent_runtime`
 and never approves an opinion automatically.
 
+### Implemented locally — 2026-09-05: AK calibration expert
+
+The AK Expert adds a market-calibration perspective based on AK's exact
+projected score. It returns an independent full-game spread opinion and total
+opinion; either may be `PASS`.
+
+- Future AK submissions require a canonical away/home score and persist four
+  append-only normalization fields in `nfl_leans`. Other intake users are
+  unchanged.
+- `moe_ak.py` builds a whitelisted schema-v5 input from AK's latest projection,
+  the submission and current BetOnline markets, the last matching pre-kickoff
+  snapshot, and completed historical outcomes. Reviewed normalized scores are
+  authoritative; legacy prose is parsed conservatively and conflicting,
+  ambiguous, tied, or missing projections are excluded.
+- Side and total history are independently eligible. Missing spread data does
+  not erase total evidence, and missing total data does not erase side
+  evidence. Submission-line and closing-line records remain separate.
+- `moe/priors/ak_wnba_v1.json` provides the reviewed WNBA cold-start prior.
+  Side and total weights decay independently, are capped at two equivalent NFL
+  observations, and expire at eight matching resolved NFL predictions. The
+  source's provisional WNBA `±6` threshold is not copied as six NFL points:
+  NFL history uses 1/3/7-point total-gap buckets, while the WNBA prior maps by
+  gap percentage of the market total (3.5% base, 7% extreme).
+- `moe/prompts/ak/v1.md` selects exact deterministic evidence IDs. Application
+  code renders all factual cards, the combined thesis, and the complete detail
+  text. A zero-NFL-sample recommendation using WNBA evidence is capped at one
+  star; any recommendation using it is capped at two stars.
+- The expert is pinned to `claude-opus-4-8` with maximum reasoning and supports
+  both direct API and agent-runtime generation. Every attempt remains
+  append-only, hash-bound, manually reviewed, and hidden until approved.
+- `scripts/backfill_ak_predictions.py` defaults to report-only mode. Its guarded
+  migration appends four `nfl_leans` columns and three `moe_opinions` columns
+  only after exact-prefix validation. Applying historical normalized scores is
+  a separate explicit action after human review, writes only `parsed` rows,
+  skips identical prior writes, and refuses conflicting preexisting values.
+- Telegram's main MOE summary, model picker, and detail view show AK's side and
+  total separately while preserving the exact model ID.
+
+The first Rams-49ers trial input resolves AK's projection as Rams 27-23 against
+a Rams -4, total 48 submission market. That creates a zero side-margin gap and
+a +2 total gap. No resolved AK NFL calibration observations exist yet; the
+matching WNBA side prior is 4-2, and the +4.2% normalized total gap matches the
+base WNBA positive-gap under warning. Generation and approval remain pending
+until the worksheet migration, secure `AK_TELEGRAM_USER_ID` configuration, and
+backfill report review are complete.
+
 `emergency_migration.txt` is deliberately deferred until the MOE implementation
 and operational workflow are complete, so the runbook documents the final
 schema, services, paths, and cutover procedure rather than an obsolete design.

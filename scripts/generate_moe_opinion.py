@@ -25,13 +25,19 @@ from moe import (
     generate_opinion,
     load_expert,
 )
+from moe_ak import build_ak_input
 from nfl_game_history import (
     GAME_HISTORY_HEADERS,
     GAME_HISTORY_TAB,
     build_game_history,
     fetch_regular_season_events,
 )
-from nfl_lines import GAME_HEADERS, get_gspread_client
+from nfl_lines import (
+    GAME_HEADERS,
+    LEAN_HEADERS,
+    SNAPSHOT_HEADERS,
+    get_gspread_client,
+)
 from nfl_schedule import SCHEDULE_HEADERS, SCHEDULE_TAB
 
 
@@ -121,6 +127,9 @@ async def main() -> None:
         )
     schedule: list[dict] | None = None
     current_results: list[dict] | None = None
+    leans: list[dict] | None = None
+    line_snapshots: list[dict] | None = None
+    ak_user_id: str | None = None
     if expert["input_profile"] == "divisional":
         schedule = spreadsheet.worksheet(SCHEDULE_TAB).get_all_records(
             expected_headers=SCHEDULE_HEADERS
@@ -135,17 +144,34 @@ async def main() -> None:
             validate=False,
             require_complete_divisional_pairs=False,
         )
+    elif expert["input_profile"] == "ak_calibration":
+        ak_user_id = os.environ.get("AK_TELEGRAM_USER_ID", "").strip()
+        if not ak_user_id:
+            raise RuntimeError("AK_TELEGRAM_USER_ID is required")
+        leans = spreadsheet.worksheet("nfl_leans").get_all_records(
+            expected_headers=LEAN_HEADERS
+        )
+        line_snapshots = spreadsheet.worksheet(
+            "nfl_line_snapshots"
+        ).get_all_records(expected_headers=SNAPSHOT_HEADERS)
     if args.show_input:
-        input_payload = (
-            build_schedule_input(game, history)
-            if expert["input_profile"] == "schedule_only"
-            else build_divisional_input(
+        if expert["input_profile"] == "schedule_only":
+            input_payload = build_schedule_input(game, history)
+        elif expert["input_profile"] == "divisional":
+            input_payload = build_divisional_input(
                 game,
                 history,
                 schedule or [],
                 current_results,
             )
-        )
+        else:
+            input_payload = build_ak_input(
+                game,
+                history,
+                leans or [],
+                line_snapshots,
+                ak_user_id=ak_user_id or "",
+            )
         print(
             json.dumps(
                 input_payload,
@@ -183,13 +209,16 @@ async def main() -> None:
         history=history,
         schedule=schedule,
         current_season_results=current_results,
+        leans=leans,
+        line_snapshots=line_snapshots,
+        ak_user_id=ak_user_id,
         store=configured_opinion_store(),
         model=args.model,
         generation_backend=generation_backend,
         repair_attempts=(
             2
             if create_fn is None
-            and int(expert["output_schema_version"]) in {3, 4}
+            and int(expert["output_schema_version"]) in {3, 4, 5}
             else 0
         ),
         **generation_kwargs,

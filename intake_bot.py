@@ -55,6 +55,7 @@ from moe import (
     opinion_model_picker as moe_opinion_model_picker,
     opinion_summary as moe_opinion_summary,
 )
+from moe_ak import parse_ak_projection
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -737,6 +738,7 @@ def build_lean_row(
     market: str,
     side: str,
     lean_text: str,
+    prediction: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     context = selected_market_context(
         game, period=period, market=market, side=side
@@ -780,6 +782,14 @@ def build_lean_row(
         LATEST_HOME_COLUMN: game.get(LATEST_HOME_COLUMN, ""),
         LATEST_TOTALS_COLUMN: game.get(LATEST_TOTALS_COLUMN, ""),
         "lean_text": lean_text,
+        "predicted_away_score": (
+            prediction["away_score"] if prediction else ""
+        ),
+        "predicted_home_score": (
+            prediction["home_score"] if prediction else ""
+        ),
+        "prediction_parse_version": 1 if prediction else "",
+        "prediction_parse_status": "parsed" if prediction else "not_applicable",
     }
 
 
@@ -1903,6 +1913,23 @@ async def main() -> None:
                 "Your lean cannot be empty. Reply to the prompt with some text."
             )
             return
+        prediction = None
+        ak_user_id = os.getenv("AK_TELEGRAM_USER_ID", "").strip()
+        if ak_user_id and str(event.sender_id) == ak_user_id:
+            prediction = parse_ak_projection(
+                lean_text,
+                away_team=str(submission["game"]["away_team"]),
+                home_team=str(submission["game"]["home_team"]),
+            )
+            if prediction["status"] != "parsed":
+                await event.respond(
+                    "AK submissions require one exact team-labeled projected "
+                    "score. Example:\n"
+                    f"Score: {submission['game']['away_team']} 23, "
+                    f"{submission['game']['home_team']} 27\n"
+                    "Rationale: your game analysis.",
+                )
+                return
         sender = await event.get_sender()
         row = build_lean_row(
             submitted_at=datetime.now(timezone.utc),
@@ -1916,6 +1943,7 @@ async def main() -> None:
             market=submission["market"],
             side=submission["side"],
             lean_text=lean_text,
+            prediction=prediction,
         )
         appended = await asyncio.to_thread(append_lean, row)
         celebrity = submission.get("celebrity")
@@ -2714,9 +2742,21 @@ async def main() -> None:
                 selection,
                 [[Button.inline("← Back to sides", b"back:sides")]],
             )
+            ak_user_id = os.getenv("AK_TELEGRAM_USER_ID", "").strip()
+            prompt_text = (
+                "Enter one exact team-labeled projected score and your "
+                "reasoning. Example:\n"
+                f"Score: {state['game']['away_team']} 23, "
+                f"{state['game']['home_team']} 27\n"
+                "Rationale: your game analysis."
+                if ak_user_id and str(event.sender_id) == ak_user_id
+                else (
+                    "Enter your lean, reasoning, and the line or price where "
+                    "your preference changes:"
+                )
+            )
             prompt = await event.respond(
-                "Enter your lean, reasoning, and the line or price where your "
-                "preference changes:",
+                prompt_text,
                 buttons=Button.force_reply(
                     single_use=True,
                     placeholder="Type your NFL lean",

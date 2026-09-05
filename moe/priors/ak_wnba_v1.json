@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "source": {
+    "repository": "www",
+    "path": "wnba_tendencies.txt",
+    "supporting_path": "apps/wnba-poller/path210.md",
+    "review_status": "verified_against_www_sources"
+  },
+  "max_equivalent_nfl_observations": 2,
+  "expires_at_nfl_bucket_size": 8,
+  "max_confidence_star_adjustment": 1,
+  "total_gap_normalized_thresholds": {
+    "method": "wnba_gap_divided_by_market_total",
+    "positive_min_fraction": 0.035,
+    "extreme_positive_min_fraction": 0.07,
+    "negative_max_fraction": -0.035,
+    "notes": [
+      "The source says the +/-6-point WNBA threshold was provisional.",
+      "Normalized thresholds transfer the approximate 6/175 and 12/175 WNBA bands without copying WNBA points directly into NFL totals."
+    ]
+  },
+  "total_gap": {
+    "positive_6_or_more": {
+      "interpretation": "under_warning",
+      "original_under": 8,
+      "original_games": 9,
+      "fresh_under": 6,
+      "fresh_games": 8
+    },
+    "positive_12_or_more": {
+      "interpretation": "under_warning",
+      "original_under": 5,
+      "original_games": 5
+    },
+    "negative_6_or_less": {
+      "interpretation": "unstable_no_mechanical_pick",
+      "original_under": 7,
+      "original_games": 10,
+      "fresh_under": 2,
+      "fresh_games": 4
+    }
+  },
+  "side_gap": {
+    "road_favorite_laid_more": {
+      "ak_side_covered": 5,
+      "games": 6
+    },
+    "home_favorite_laid_more": {
+      "ak_side_covered": 2,
+      "games": 5
+    },
+    "within_1": {
+      "ak_side_covered": 4,
+      "games": 6
+    },
+    "laid_materially_less": {
+      "ak_side_covered": 2,
+      "games": 4
+    },
+    "favorite_flip_recent": {
+      "ak_side_covered": 0,
+      "games": 2,
+      "interpretation": "warning_only"
+    }
+  },
+  "applicability": [
+    "Always label as cross_sport_prior.",
+    "Never count WNBA games as NFL observations.",
+    "Cannot create a recommendation without a current AK projection.",
+    "Cannot override a populated contradictory NFL bucket.",
+    "Cannot be the sole reason for confidence above one star."
+  ]
+}

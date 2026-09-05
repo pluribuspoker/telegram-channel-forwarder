@@ -26,6 +26,7 @@ from gspread.exceptions import WorksheetNotFound
 from ai import _claude_create_with_retry
 from nfl_lines import _call_with_retry, get_gspread_client
 from nfl_win_predictions import ensure_worksheet
+from moe_ak import WNBA_PRIOR_PATH, build_ak_input
 
 ROOT = Path(__file__).resolve().parent
 MOE_ROOT = ROOT / "moe"
@@ -98,6 +99,9 @@ OPINION_HEADERS = [
     "nondeterministic_analysis_usable",
     "nondeterministic_factuality_status",
     "nondeterministic_factuality_json",
+    "side_pick_json",
+    "total_pick_json",
+    "calibration_summary_json",
 ]
 
 FORBIDDEN_SCHEDULE_INPUT_KEYS = {
@@ -184,6 +188,8 @@ def _source_sha256(expert: dict[str, Any]) -> str:
     ]
     if int(expert.get("output_schema_version") or 0) == 4:
         paths.append(FACTUALITY_PROMPT_PATH)
+    if expert.get("input_profile") == "ak_calibration":
+        paths.extend((ROOT / "moe_ak.py", WNBA_PRIOR_PATH))
     digest = hashlib.sha256()
     for path in paths:
         digest.update(str(path.relative_to(ROOT)).encode("utf-8"))
@@ -1604,6 +1610,216 @@ def _normalize_evidence_card_opinion(
     return normalized
 
 
+def _normalize_ak_opinion(
+    opinion: dict[str, Any],
+    input_payload: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = dict(opinion)
+    catalog = {
+        str(item["id"]): item
+        for item in input_payload["evidence_catalog"]
+    }
+
+    def normalize_pick(field: str) -> dict[str, Any]:
+        raw = opinion.get(field)
+        if not isinstance(raw, dict):
+            raise ValueError(f"{field} must be an object")
+        selection = str(raw.get("selection") or "")
+        stars = raw.get("confidence_stars")
+        if (
+            isinstance(stars, bool)
+            or not isinstance(stars, int)
+            or not 1 <= stars <= 5
+        ):
+            raise ValueError(
+                f"{field}.confidence_stars must be an integer from 1 through 5"
+            )
+        evidence_ids = raw.get("evidence_ids")
+        counter_ids = raw.get("counterargument_ids")
+        if not isinstance(evidence_ids, list) or not all(
+            isinstance(value, str) and value in catalog
+            for value in evidence_ids
+        ):
+            raise ValueError(f"{field}.evidence_ids contains an unknown ID")
+        if not isinstance(counter_ids, list) or not all(
+            isinstance(value, str) and value in catalog
+            for value in counter_ids
+        ):
+            raise ValueError(
+                f"{field}.counterargument_ids contains an unknown ID"
+            )
+        for evidence_id in evidence_ids + counter_ids:
+            if catalog[evidence_id]["scope"] not in {field, "both"}:
+                raise ValueError(
+                    f"Evidence {evidence_id} does not apply to {field}"
+                )
+        if selection == "PASS":
+            if raw.get("line") is not None or stars != 1 or evidence_ids:
+                raise ValueError(
+                    f"{field} PASS requires null line, one star, and no evidence"
+                )
+            if not counter_ids:
+                raise ValueError(f"{field} PASS requires a counterargument")
+        elif field == "side":
+            if selection not in {
+                str(input_payload["game"]["away_team"]),
+                str(input_payload["game"]["home_team"]),
+            }:
+                raise ValueError("side.selection must be a game team or PASS")
+            market = input_payload["markets"]["current_latest"]
+            expected_line = (
+                market["away_spread"]
+                if selection == input_payload["game"]["away_team"]
+                else market["home_spread"]
+            )
+            if expected_line is None or float(raw.get("line")) != float(
+                expected_line
+            ):
+                raise ValueError("side.line must equal the current supplied line")
+            if not evidence_ids or not counter_ids:
+                raise ValueError(
+                    "Non-pass side requires evidence and counterarguments"
+                )
+        else:
+            if selection not in {"Over", "Under"}:
+                raise ValueError("total.selection must be Over, Under, or PASS")
+            expected_line = input_payload["markets"]["current_latest"]["total"]
+            if expected_line is None or float(raw.get("line")) != float(
+                expected_line
+            ):
+                raise ValueError("total.line must equal the current supplied total")
+            if not evidence_ids or not counter_ids:
+                raise ValueError(
+                    "Non-pass total requires evidence and counterarguments"
+                )
+        return {
+            "selection": selection,
+            "line": raw.get("line"),
+            "confidence_stars": stars,
+            "evidence_ids": evidence_ids,
+            "counterargument_ids": counter_ids,
+            "evidence": [catalog[value]["text"] for value in evidence_ids],
+            "counterarguments": [
+                catalog[value]["text"] for value in counter_ids
+            ],
+        }
+
+    side = normalize_pick("side")
+    total = normalize_pick("total")
+    for field, pick in (("side", side), ("total", total)):
+        uses_wnba = any(
+            evidence_id.startswith("wnba_")
+            for evidence_id in pick["evidence_ids"]
+        )
+        if not uses_wnba:
+            continue
+        prior_leg = input_payload["cross_sport_prior"][field]
+        nfl_games = int(prior_leg["matching_nfl_bucket_games"])
+        expires = int(
+            input_payload["cross_sport_prior"]["expires_at_nfl_bucket_size"]
+        )
+        if nfl_games >= expires:
+            raise ValueError(
+                f"WNBA prior has expired for the {field} bucket"
+            )
+        if nfl_games == 0 and pick["confidence_stars"] > 1:
+            raise ValueError(
+                "WNBA prior cannot be the zero-NFL-sample basis for "
+                "confidence above one star"
+            )
+        if pick["confidence_stars"] > 2:
+            raise ValueError(
+                "A recommendation using the WNBA prior cannot exceed two stars"
+            )
+    projection = input_payload["ak_submission"]["projection"]
+    gaps = input_payload["market_gaps"]
+    side_label = (
+        "PASS"
+        if side["selection"] == "PASS"
+        else f"{side['selection']} {float(side['line']):+g}"
+    )
+    total_label = (
+        "PASS"
+        if total["selection"] == "PASS"
+        else f"{total['selection']} {float(total['line']):g}"
+    )
+    normalized["side"] = side
+    normalized["total"] = total
+    normalized["confidence_stars"] = max(
+        side["confidence_stars"], total["confidence_stars"]
+    )
+    normalized["pick_market"] = "side_and_total"
+    normalized["pick_side"] = f"{side_label} | {total_label}"
+    normalized["thesis"] = (
+        f"AK calibration: side {side_label} "
+        f"{'★' * side['confidence_stars']}; total {total_label} "
+        f"{'★' * total['confidence_stars']}."
+    )
+    normalized["supporting_factors"] = (
+        [f"Side: {value}" for value in side["evidence"]]
+        + [f"Total: {value}" for value in total["evidence"]]
+        or ["Both calibrated recommendations are PASS."]
+    )
+    normalized["counterarguments"] = (
+        [f"Side: {value}" for value in side["counterarguments"]]
+        + [f"Total: {value}" for value in total["counterarguments"]]
+    )
+    normalized["no_signal_factors"] = [
+        catalog[key]["text"]
+        for key in ("nfl_side_bucket", "nfl_total_bucket")
+        if "has 0 resolved" in catalog[key]["text"]
+    ]
+    discarded = opinion.get("discarded_considerations")
+    if not isinstance(discarded, list) or not all(
+        isinstance(value, str) and value.strip() for value in discarded
+    ):
+        raise ValueError(
+            "discarded_considerations must contain non-empty strings"
+        )
+    normalized["discarded_considerations"] = discarded
+
+    def bullets(values: list[str]) -> str:
+        return "\n".join(f"- {value}" for value in values) or "- None"
+
+    normalized["full_opinion"] = (
+        "AK projection\n"
+        f"- {input_payload['game']['away_team']} "
+        f"{projection['away_score']}, {input_payload['game']['home_team']} "
+        f"{projection['home_score']}\n\n"
+        "Market gaps\n"
+        f"- Side bucket: {gaps['side_gap_bucket']}; margin gap: "
+        f"{gaps['side_margin_gap']}\n"
+        f"- Total bucket: {gaps['total_gap_bucket']}; total gap: "
+        f"{gaps['total_gap']:+g}\n\n"
+        f"Side pick\n- {side_label} "
+        f"{'★' * side['confidence_stars']}\n\n"
+        f"Why the side\n{bullets(side['evidence'])}\n\n"
+        f"Why the side may be wrong\n{bullets(side['counterarguments'])}\n\n"
+        f"Total pick\n- {total_label} "
+        f"{'★' * total['confidence_stars']}\n\n"
+        f"Why the total\n{bullets(total['evidence'])}\n\n"
+        "Why the total may be wrong\n"
+        f"{bullets(total['counterarguments'])}\n\n"
+        "NFL calibration\n"
+        f"- Eligible resolved predictions: "
+        f"{input_payload['nfl_calibration']['eligible_predictions']}\n\n"
+        "WNBA cold-start prior\n"
+        f"- {catalog['wnba_prior_cap']['text']}\n"
+        f"- {catalog['wnba_side_prior']['text']}\n"
+        f"- {catalog['wnba_total_prior']['text']}\n\n"
+        f"No signal\n{bullets(normalized['no_signal_factors'])}\n\n"
+        "Discarded considerations\n"
+        f"{bullets(discarded)}\n\n"
+        f"Conclusion\n{normalized['thesis']}"
+    )
+    normalized["side_pick_json"] = _canonical_json(side)
+    normalized["total_pick_json"] = _canonical_json(total)
+    normalized["calibration_summary_json"] = _canonical_json(
+        input_payload["nfl_calibration"]
+    )
+    return normalized
+
+
 async def _fact_check_nondeterministic_analysis(
     claims: Any,
     input_payload: dict[str, Any],
@@ -1919,6 +2135,9 @@ async def generate_opinion(
     history: list[dict[str, Any]],
     schedule: list[dict[str, Any]] | None = None,
     current_season_results: list[dict[str, Any]] | None = None,
+    leans: list[dict[str, Any]] | None = None,
+    line_snapshots: list[dict[str, Any]] | None = None,
+    ak_user_id: str | None = None,
     store: MoeOpinionStore,
     model: str | None = None,
     create_fn: CreateFn = _claude_create_with_retry,
@@ -1938,6 +2157,16 @@ async def generate_opinion(
             history,
             schedule,
             current_season_results,
+        )
+    elif expert["input_profile"] == "ak_calibration":
+        if leans is None or not ak_user_id:
+            raise ValueError("AK expert requires leans and ak_user_id")
+        input_payload = build_ak_input(
+            game,
+            history,
+            leans,
+            line_snapshots,
+            ak_user_id=ak_user_id,
         )
     else:
         raise NotImplementedError(
@@ -2039,6 +2268,9 @@ async def generate_opinion(
         "nondeterministic_analysis_usable": "",
         "nondeterministic_factuality_status": "",
         "nondeterministic_factuality_json": "",
+        "side_pick_json": "",
+        "total_pick_json": "",
+        "calibration_summary_json": "",
     }
     try:
         request = (
@@ -2085,6 +2317,8 @@ async def generate_opinion(
                 opinion,
                 input_payload,
             )
+        elif int(expert["output_schema_version"]) == 5:
+            opinion = _normalize_ak_opinion(opinion, input_payload)
         validate_opinion(
             opinion,
             away_team=away,
@@ -2107,8 +2341,12 @@ async def generate_opinion(
                     opinion["predicted_home_score"]
                 ),
                 "confidence_stars": int(opinion["confidence_stars"]),
-                "pick_market": "straight_up",
-                "pick_side": opinion["predicted_winner"],
+                "pick_market": str(
+                    opinion.get("pick_market") or "straight_up"
+                ),
+                "pick_side": str(
+                    opinion.get("pick_side") or opinion["predicted_winner"]
+                ),
                 "thesis": str(opinion["thesis"]).strip(),
                 "supporting_factors_json": _canonical_json(
                     (
@@ -2150,6 +2388,15 @@ async def generate_opinion(
                     if int(expert["output_schema_version"]) == 4
                     else ""
                 ),
+                "side_pick_json": str(
+                    opinion.get("side_pick_json") or ""
+                ),
+                "total_pick_json": str(
+                    opinion.get("total_pick_json") or ""
+                ),
+                "calibration_summary_json": str(
+                    opinion.get("calibration_summary_json") or ""
+                ),
                 "generation_status": "valid",
             }
         )
@@ -2175,6 +2422,9 @@ async def generate_opinion(
                 history=history,
                 schedule=schedule,
                 current_season_results=current_season_results,
+                leans=leans,
+                line_snapshots=line_snapshots,
+                ak_user_id=ak_user_id,
                 store=store,
                 model=selected_model,
                 create_fn=create_fn,
@@ -2483,6 +2733,24 @@ def opinion_output_sha256(row: dict[str, Any]) -> str:
                 )
             }
         )
+    if any(
+        row.get(field)
+        for field in (
+            "side_pick_json",
+            "total_pick_json",
+            "calibration_summary_json",
+        )
+    ):
+        payload.update(
+            {
+                field: str(row.get(field) or "")
+                for field in (
+                    "side_pick_json",
+                    "total_pick_json",
+                    "calibration_summary_json",
+                )
+            }
+        )
     return _sha256_text(_canonical_json(payload))
 
 
@@ -2532,6 +2800,44 @@ def opinion_summary(
     if not current:
         lines.append("No expert opinions have been generated for this game.")
     for row in visible:
+        if str(row.get("expert_id")) == "ak" and row.get("side_pick_json"):
+            side = json.loads(str(row["side_pick_json"]))
+            total = json.loads(str(row["total_pick_json"]))
+            side_stars = "★" * int(side["confidence_stars"])
+            total_stars = "★" * int(total["confidence_stars"])
+            side_label = (
+                "PASS"
+                if side["selection"] == "PASS"
+                else f"{side['selection']} {float(side['line']):+g}"
+            )
+            total_label = (
+                "PASS"
+                if total["selection"] == "PASS"
+                else f"{total['selection']} {float(total['line']):g}"
+            )
+            lines.append(
+                f"<b>{html.escape(str(row['expert_name']))}</b> "
+                f"· <code>{html.escape(str(row['model']))}</code>"
+            )
+            lines.append(
+                f"Side: {html.escape(side_label)} {side_stars} · "
+                f"Total: {html.escape(total_label)} {total_stars} · "
+                f"score {int(row['predicted_away_score'])}-"
+                f"{int(row['predicted_home_score'])}"
+            )
+            lines.append(html.escape(str(row["thesis"])))
+            buttons.append(
+                [
+                    Button.inline(
+                        str(row["expert_name"]),
+                        (
+                            f"moe:expert:{row['expert_id']}:"
+                            f"{callback_event_id}:0"
+                        ).encode(),
+                    )
+                ]
+            )
+            continue
         stars = "★" * int(row["confidence_stars"])
         winner = html.escape(str(row["predicted_winner"]))
         probability = float(row["home_win_probability"])
@@ -2610,6 +2916,37 @@ def opinion_model_picker(
     buttons: list[list[Any]] = []
     for row in visible:
         model = str(row.get("model") or "unknown model")
+        if str(row.get("expert_id")) == "ak" and row.get("side_pick_json"):
+            side = json.loads(str(row["side_pick_json"]))
+            total = json.loads(str(row["total_pick_json"]))
+            side_label = (
+                "PASS"
+                if side["selection"] == "PASS"
+                else f"{side['selection']} {float(side['line']):+g}"
+            )
+            total_label = (
+                "PASS"
+                if total["selection"] == "PASS"
+                else f"{total['selection']} {float(total['line']):g}"
+            )
+            lines.append(
+                f"<b>{html.escape(model)}</b> — "
+                f"Side {html.escape(side_label)} "
+                f"{'★' * int(side['confidence_stars'])} · "
+                f"Total {html.escape(total_label)} "
+                f"{'★' * int(total['confidence_stars'])} · "
+                f"score {int(row['predicted_away_score'])}-"
+                f"{int(row['predicted_home_score'])}"
+            )
+            buttons.append(
+                [
+                    Button.inline(
+                        model,
+                        f"moe:opinion:{row['opinion_id']}:0".encode(),
+                    )
+                ]
+            )
+            continue
         home = str(row["home_team"])
         probability = float(row["home_win_probability"])
         winner_probability = (
@@ -2672,21 +3009,47 @@ def opinion_detail(
 ) -> tuple[str, list[list[Any]]]:
     from telethon import Button
 
-    stars = "★" * int(row["confidence_stars"])
     home_probability = float(row["home_win_probability"])
     margin = float(row["expected_home_margin"])
     away_score = int(row["predicted_away_score"])
     home_score = int(row["predicted_home_score"])
-    heading = (
-        f"🧠 <b>{html.escape(str(row['expert_name']))}</b>\n\n"
-        f"<b>Pick:</b> {html.escape(str(row['predicted_winner']))}\n"
-        f"<b>Predicted score:</b> "
-        f"{html.escape(str(row['away_team']))} {away_score} — "
-        f"{html.escape(str(row['home_team']))} {home_score}\n"
-        f"<b>Home win probability:</b> {home_probability:.0%}\n"
-        f"<b>Expected home margin:</b> {margin:+.1f}\n"
-        f"<b>Confidence:</b> {stars}\n\n"
-    )
+    if str(row.get("expert_id")) == "ak" and row.get("side_pick_json"):
+        side = json.loads(str(row["side_pick_json"]))
+        total = json.loads(str(row["total_pick_json"]))
+        side_label = (
+            "PASS"
+            if side["selection"] == "PASS"
+            else f"{side['selection']} {float(side['line']):+g}"
+        )
+        total_label = (
+            "PASS"
+            if total["selection"] == "PASS"
+            else f"{total['selection']} {float(total['line']):g}"
+        )
+        heading = (
+            f"🧠 <b>{html.escape(str(row['expert_name']))}</b>\n\n"
+            f"<b>Side:</b> {html.escape(side_label)} "
+            f"{'★' * int(side['confidence_stars'])}\n"
+            f"<b>Total:</b> {html.escape(total_label)} "
+            f"{'★' * int(total['confidence_stars'])}\n"
+            f"<b>Predicted score:</b> "
+            f"{html.escape(str(row['away_team']))} {away_score} — "
+            f"{html.escape(str(row['home_team']))} {home_score}\n"
+            f"<b>Home win probability:</b> {home_probability:.0%}\n"
+            f"<b>Expected home margin:</b> {margin:+.1f}\n\n"
+        )
+    else:
+        stars = "★" * int(row["confidence_stars"])
+        heading = (
+            f"🧠 <b>{html.escape(str(row['expert_name']))}</b>\n\n"
+            f"<b>Pick:</b> {html.escape(str(row['predicted_winner']))}\n"
+            f"<b>Predicted score:</b> "
+            f"{html.escape(str(row['away_team']))} {away_score} — "
+            f"{html.escape(str(row['home_team']))} {home_score}\n"
+            f"<b>Home win probability:</b> {home_probability:.0%}\n"
+            f"<b>Expected home margin:</b> {margin:+.1f}\n"
+            f"<b>Confidence:</b> {stars}\n\n"
+        )
     full_opinion = str(row["full_opinion"])
     chunks = _escaped_chunks(full_opinion, TELEGRAM_DETAIL_CHARS)
     page = max(0, min(page, len(chunks) - 1))
