@@ -25,6 +25,7 @@ from moe import (
     opinion_output_sha256,
     opinion_summary,
     validate_opinion,
+    _normalize_evidence_card_opinion,
     _persist_attempt,
 )
 
@@ -210,6 +211,27 @@ class ScheduleInputTest(unittest.TestCase):
             "same_week_number",
             payload["historical_data"]["away_team"],
         )
+
+    def test_non_conference_game_includes_team_matchup_cohorts(self) -> None:
+        history = _history()
+        for row in history:
+            row["away_conference"] = "AFC"
+            row["away_division"] = "AFC East"
+            row["same_conference"] = False
+            row["same_division"] = False
+            row["matchup_type"] = "non_conference"
+        game = {**_game(), "away_team": "Dallas Cowboys"}
+
+        payload = build_schedule_input(game, history)
+
+        self.assertEqual(payload["game"]["matchup_type"], "non_conference")
+        for side in ("away_team", "home_team"):
+            context = payload["historical_data"][side]
+            self.assertEqual(context["non_division_games"]["games"], 2)
+            self.assertEqual(context["non_conference"]["games"], 2)
+            self.assertEqual(
+                context["conference_non_division"]["games"], 0
+            )
 
 
 class DivisionalInputTest(unittest.TestCase):
@@ -411,6 +433,8 @@ class DivisionalInputTest(unittest.TestCase):
 class OpinionTest(unittest.IsolatedAsyncioTestCase):
     async def test_generation_records_prompt_and_input_versions(self) -> None:
         output = {
+            "matchup_bucket": "division",
+            "matchup_bucket_description": "same division",
             "predicted_winner": "Philadelphia Eagles",
             "home_win_probability": 0.61,
             "expected_home_margin": 3.5,
@@ -424,7 +448,10 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             "discarded_considerations": [
                 "Travel fatigue — discarded because no travel input exists."
             ],
-            "full_opinion": "A detailed schedule-only opinion.",
+            "full_opinion": (
+                "Matchup bucket: division - same division.\n\n"
+                "A detailed schedule-only opinion."
+            ),
         }
         captured = {}
 
@@ -444,8 +471,8 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             create_fn=create_fn,
         )
 
-        self.assertEqual(row["expert_version"], 22)
-        self.assertEqual(row["prompt_version"], 13)
+        self.assertEqual(row["expert_version"], 23)
+        self.assertEqual(row["prompt_version"], 14)
         self.assertEqual(row["model"], "claude-opus-4-8")
         self.assertEqual(row["generation_backend"], "anthropic_api")
         self.assertEqual(row["generation_effort"], "max")
@@ -455,7 +482,7 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(row["prompt_sha256"]), 64)
         self.assertEqual(len(row["input_sha256"]), 64)
         self.assertNotIn("bookmaker", row["input_json"])
-        self.assertIn("Schedule Expert v13", captured["system"])
+        self.assertIn("Schedule Expert v14", captured["system"])
         self.assertEqual(row["generation_status"], "valid")
         self.assertEqual(row["review_status"], "pending")
         self.assertEqual(store.rows, [row])
@@ -536,9 +563,9 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(row["expert_id"], "divisional")
         self.assertEqual(row["input_profile"], "divisional")
-        self.assertEqual(row["expert_version"], 29)
+        self.assertEqual(row["expert_version"], 30)
         self.assertEqual(row["output_schema_version"], 4)
-        self.assertIn("Divisional Expert v17", captured[0]["system"])
+        self.assertIn("Divisional Expert v18", captured[0]["system"])
         self.assertEqual(captured[0]["output_config"], {"effort": "max"})
         self.assertEqual(captured[1]["output_config"], {"effort": "max"})
         self.assertIn("lean toward Philadelphia Eagles", row["thesis"])
@@ -601,6 +628,8 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_validation_repair_persists_invalid_attempt(self) -> None:
         valid = {
+            "matchup_bucket": "division",
+            "matchup_bucket_description": "same division",
             "predicted_winner": "Philadelphia Eagles",
             "home_win_probability": 0.61,
             "expected_home_margin": 3.5,
@@ -612,7 +641,10 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             "counterarguments": ["The historical sample is small."],
             "no_signal_factors": [],
             "discarded_considerations": [],
-            "full_opinion": "A repaired schedule opinion.",
+            "full_opinion": (
+                "Matchup bucket: division - same division.\n\n"
+                "A repaired schedule opinion."
+            ),
         }
         requests = []
 
@@ -720,6 +752,144 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
                 schedule_input=schedule_input,
             )
 
+    def test_non_divisional_normalization_rejects_divisional_role_path(
+        self,
+    ) -> None:
+        sample = {
+            "games": 2,
+            "wins": 1,
+            "losses": 1,
+            "ties": 0,
+            "win_rate": 0.5,
+            "average_margin": 0.0,
+        }
+        winning = {**sample, "wins": 2, "losses": 0, "win_rate": 1.0,
+                   "average_margin": 4.0}
+        losing = {**sample, "wins": 0, "losses": 2, "win_rate": 0.0,
+                  "average_margin": -4.0}
+        schedule_input = {
+            "input_profile": "divisional",
+            "game": {
+                "away_team": "New England Patriots",
+                "home_team": "Seattle Seahawks",
+                "matchup_type": "non_conference",
+                "division_meeting_number": None,
+            },
+            "historical_data": {
+                "away_team": {
+                    "division_games": losing,
+                    "division_as_home": winning,
+                    "non_division_games": losing,
+                    "non_conference": losing,
+                },
+                "home_team": {
+                    "division_games": losing,
+                    "non_division_games": winning,
+                    "non_conference": winning,
+                },
+                "divisional_home_side_meeting_cohorts": None,
+            },
+            "current_season_prior_meeting": None,
+        }
+        opinion = {
+            "predicted_winner": "Seattle Seahawks",
+            "predicted_away_score": 20,
+            "predicted_home_score": 24,
+            "home_win_probability": 0.62,
+            "expected_home_margin": 3.5,
+            "confidence_stars": 3,
+            "evidence_paths": [
+                "historical_data.away_team.division_games",
+                "historical_data.away_team.division_as_home",
+                "historical_data.away_team.non_division_games",
+                "historical_data.away_team.non_conference",
+                "historical_data.home_team.division_games",
+                "historical_data.home_team.non_division_games",
+                "historical_data.home_team.non_conference",
+            ],
+            "no_signal_evidence_paths": ["current_season_prior_meeting"],
+            "nondeterministic_analysis": [],
+            "discarded_considerations": [],
+        }
+
+        with self.assertRaisesRegex(ValueError, "not relevant"):
+            _normalize_evidence_card_opinion(opinion, schedule_input)
+
+    def test_non_conference_cards_label_divisional_baseline(self) -> None:
+        winning = {
+            "games": 2,
+            "wins": 2,
+            "losses": 0,
+            "ties": 0,
+            "win_rate": 1.0,
+            "average_margin": 4.0,
+        }
+        losing = {
+            "games": 2,
+            "wins": 0,
+            "losses": 2,
+            "ties": 0,
+            "win_rate": 0.0,
+            "average_margin": -4.0,
+        }
+        schedule_input = {
+            "input_profile": "divisional",
+            "game": {
+                "away_team": "New England Patriots",
+                "home_team": "Seattle Seahawks",
+                "matchup_type": "non_conference",
+                "division_meeting_number": None,
+            },
+            "historical_data": {
+                "away_team": {
+                    "division_games": losing,
+                    "non_division_games": losing,
+                    "non_conference": losing,
+                },
+                "home_team": {
+                    "division_games": losing,
+                    "non_division_games": winning,
+                    "non_conference": winning,
+                },
+                "divisional_home_side_meeting_cohorts": None,
+            },
+            "current_season_prior_meeting": None,
+        }
+        opinion = {
+            "predicted_winner": "Seattle Seahawks",
+            "predicted_away_score": 20,
+            "predicted_home_score": 24,
+            "home_win_probability": 0.62,
+            "expected_home_margin": 3.5,
+            "confidence_stars": 3,
+            "evidence_paths": [
+                "historical_data.away_team.division_games",
+                "historical_data.away_team.non_division_games",
+                "historical_data.away_team.non_conference",
+                "historical_data.home_team.division_games",
+                "historical_data.home_team.non_division_games",
+                "historical_data.home_team.non_conference",
+            ],
+            "no_signal_evidence_paths": ["current_season_prior_meeting"],
+            "nondeterministic_analysis": [],
+            "discarded_considerations": [],
+        }
+
+        normalized = _normalize_evidence_card_opinion(
+            opinion, schedule_input
+        )
+
+        self.assertIn("non-conference matchup-structure", normalized["thesis"])
+        self.assertIn(
+            "divisional baseline (comparison only; current game is "
+            "non-conference)",
+            normalized["full_opinion"],
+        )
+        self.assertIn(
+            "non-conference games (current matchup type)",
+            normalized["full_opinion"],
+        )
+
     def test_requires_exact_score_consistent_with_winner(self) -> None:
         base = {
             "predicted_winner": "Philadelphia Eagles",
@@ -766,6 +936,8 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "week context"):
             validate_opinion(
                 {
+                    "matchup_bucket": "division",
+                    "matchup_bucket_description": "same division",
                     "predicted_winner": "Philadelphia Eagles",
                     "home_win_probability": 0.6,
                     "expected_home_margin": 3,
@@ -777,7 +949,10 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
                     "counterarguments": ["Two."],
                     "no_signal_factors": [],
                     "discarded_considerations": [],
-                    "full_opinion": "This Week 1 matchup favors Philadelphia.",
+                    "full_opinion": (
+                        "Matchup bucket: division - same division.\n\n"
+                        "This Week 1 matchup favors Philadelphia."
+                    ),
                 },
                 away_team="Dallas Cowboys",
                 home_team="Philadelphia Eagles",
@@ -785,6 +960,8 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             )
         validate_opinion(
             {
+                "matchup_bucket": "division",
+                "matchup_bucket_description": "same division",
                 "predicted_winner": "Philadelphia Eagles",
                 "home_win_probability": 0.6,
                 "expected_home_margin": 3,
@@ -796,12 +973,47 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
                 "counterarguments": ["The weekday sample is empty."],
                 "no_signal_factors": ["No Thursday sample."],
                 "discarded_considerations": [],
-                "full_opinion": "Day-of-the-week evidence is unavailable.",
+                "full_opinion": (
+                    "Matchup bucket: division - same division.\n\n"
+                    "Day-of-the-week evidence is unavailable."
+                ),
             },
             away_team="Dallas Cowboys",
             home_team="Philadelphia Eagles",
             schedule_input=schedule_input,
         )
+
+    def test_schedule_opinion_requires_exact_matchup_bucket(self) -> None:
+        schedule_input = build_schedule_input(_game(), _history())
+        opinion = {
+            "matchup_bucket": "conference",
+            "matchup_bucket_description": (
+                "same conference, different divisions"
+            ),
+            "predicted_winner": "Philadelphia Eagles",
+            "home_win_probability": 0.6,
+            "expected_home_margin": 3,
+            "predicted_away_score": 20,
+            "predicted_home_score": 24,
+            "confidence_stars": 3,
+            "thesis": "The schedule profile favors Philadelphia.",
+            "supporting_factors": ["One."],
+            "counterarguments": ["Two."],
+            "no_signal_factors": [],
+            "discarded_considerations": [],
+            "full_opinion": (
+                "Matchup bucket: conference - same conference, different "
+                "divisions."
+            ),
+        }
+
+        with self.assertRaisesRegex(ValueError, "exactly match"):
+            validate_opinion(
+                opinion,
+                away_team="Dallas Cowboys",
+                home_team="Philadelphia Eagles",
+                schedule_input=schedule_input,
+            )
 
     def test_rejects_empty_evidence_and_oversized_thesis(self) -> None:
         base = {
@@ -1085,21 +1297,22 @@ class OpinionViewTest(unittest.TestCase):
     def test_expert_prompt_is_loaded_from_versioned_file(self) -> None:
         expert = load_expert("schedule")
 
-        self.assertEqual(expert["version"], 22)
-        self.assertEqual(expert["prompt_version"], 13)
-        self.assertEqual(expert["prompt_path"], "moe/prompts/schedule/v13.md")
+        self.assertEqual(expert["version"], 23)
+        self.assertEqual(expert["prompt_version"], 14)
+        self.assertEqual(expert["prompt_path"], "moe/prompts/schedule/v14.md")
+        self.assertEqual(expert["output_schema_version"], 6)
         self.assertEqual(expert["default_model"], "claude-opus-4-8")
         self.assertEqual(expert["reasoning_effort"], "max")
         self.assertEqual(expert["allowed_models"], ["claude-opus-4-8"])
         self.assertEqual(len(expert["prompt_sha256"]), 64)
 
         divisional = load_expert("divisional")
-        self.assertEqual(divisional["version"], 29)
-        self.assertEqual(divisional["prompt_version"], 17)
+        self.assertEqual(divisional["version"], 30)
+        self.assertEqual(divisional["prompt_version"], 18)
         self.assertEqual(divisional["output_schema_version"], 4)
         self.assertEqual(
             divisional["prompt_path"],
-            "moe/prompts/divisional/v17.md",
+            "moe/prompts/divisional/v18.md",
         )
         self.assertEqual(divisional["default_model"], "claude-opus-4-8")
         self.assertEqual(divisional["reasoning_effort"], "max")

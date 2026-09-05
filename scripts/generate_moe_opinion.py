@@ -218,7 +218,7 @@ async def main() -> None:
         repair_attempts=(
             2
             if create_fn is None
-            and int(expert["output_schema_version"]) in {3, 4, 5}
+            and int(expert["output_schema_version"]) in {3, 4, 5, 6}
             else 0
         ),
         **generation_kwargs,

@@ -277,6 +277,14 @@ Authoritative configuration lives under `moe/`:
   and whitelists the exact first meeting's score, deterministic winner, and
   signed home margin. No other current-season score or record enters the expert
   input.
+- Non-divisional expert inputs use the existing `nfl_game_history`
+  `matchup_type` classification; no schedule-sheet migration is required.
+  The Divisional Expert treats `division_games` only as an explicitly labeled
+  comparison baseline and rejects divisional venue/meeting paths for
+  non-divisional games. The Schedule Expert must first state the exact
+  `division`, `conference`, or `non_conference` bucket, then receives both
+  teams' `non_division_games` plus the exact `conference_non_division` or
+  `non_conference` cohort for that matchup.
 - Every persisted opinion records the prompt path and SHA-256, expert
   configuration SHA-256, repository commit, model, maximum output tokens,
   output schema version, exact input JSON, input SHA-256, raw response, whether

@@ -436,6 +436,30 @@ def build_schedule_input(
         }
         context = {
             "all_games": _team_sample(team_rows, team),
+            "non_division_games": _team_sample(
+                [
+                    row
+                    for row in team_rows
+                    if str(row["matchup_type"]) != "division"
+                ],
+                team,
+            ),
+            "conference_non_division": _team_sample(
+                [
+                    row
+                    for row in team_rows
+                    if str(row["matchup_type"]) == "conference"
+                ],
+                team,
+            ),
+            "non_conference": _team_sample(
+                [
+                    row
+                    for row in team_rows
+                    if str(row["matchup_type"]) == "non_conference"
+                ],
+                team,
+            ),
             "as_home": _team_sample(
                 [
                     row
@@ -1389,8 +1413,27 @@ def _evidence_card(
         team = ""
         key = ""
     if key in _TEAM_EVIDENCE_LABELS and len(parts) == 3:
+        label = _TEAM_EVIDENCE_LABELS[key]
+        matchup_type = str(input_payload["game"].get("matchup_type") or "")
+        if matchup_type != "division":
+            matchup_key = (
+                "conference_non_division"
+                if matchup_type == "conference"
+                else matchup_type
+            )
+            if key == "division_games":
+                label = (
+                    "divisional baseline (comparison only; current game is "
+                    f"{matchup_type.replace('_', '-')})"
+                )
+            elif key == "non_division_games":
+                label = "non-divisional games (current matchup structure)"
+            elif key == matchup_key:
+                label = (
+                    f"{label} (current matchup type)"
+                )
         return _sample_card(
-            f"{team} — {_TEAM_EVIDENCE_LABELS[key]}",
+            f"{team} — {label}",
             value,
         )
     if (
@@ -1502,10 +1545,18 @@ def _normalize_evidence_card_opinion(
     }.get(int(opinion.get("confidence_stars") or 0))
     if confidence_label is None:
         raise ValueError("confidence_stars must be an integer from 1 through 5")
+    matchup_type = str(input_payload["game"].get("matchup_type") or "")
+    evidence_lens = (
+        "divisional evidence"
+        if matchup_type == "division"
+        else (
+            f"{matchup_type.replace('_', '-')} matchup-structure evidence"
+        )
+    )
     thesis = (
-        f"The selected divisional evidence yields a {confidence_label} lean "
-        f"toward {opinion.get('predicted_winner')}, with conflicting evidence "
-        "retained as counterarguments."
+        f"The selected {evidence_lens} yields a {confidence_label} lean toward "
+        f"{opinion.get('predicted_winner')}, with conflicting evidence retained "
+        "as counterarguments."
     )
     normalized["thesis"] = thesis
     normalized["thesis_citation"] = {
@@ -1577,6 +1628,49 @@ def _normalize_evidence_card_opinion(
             }
         )
     normalized["no_signal_factors"] = cards
+    if matchup_type in {"conference", "non_conference"}:
+        matchup_key = (
+            "conference_non_division"
+            if matchup_type == "conference"
+            else "non_conference"
+        )
+        allowed_team_keys = {
+            "all_games",
+            "division_games",
+            "non_division_games",
+            matchup_key,
+            "against_current_opponent",
+            "against_current_opponent_as_home",
+            "against_current_opponent_as_away",
+        }
+        for path in selected:
+            parts = path.split(".")
+            if (
+                len(parts) >= 3
+                and parts[0] == "historical_data"
+                and parts[1] in {"away_team", "home_team"}
+                and parts[2] not in allowed_team_keys
+            ):
+                raise ValueError(
+                    f"Evidence path is not relevant to a {matchup_type} game: "
+                    f"{path}"
+                )
+        required = {
+            f"historical_data.{side}.{key}"
+            for side in ("away_team", "home_team")
+            for key in (
+                "division_games",
+                "non_division_games",
+                matchup_key,
+            )
+        }
+        missing = required - selected
+        if missing:
+            raise ValueError(
+                "Non-divisional opinions must compare the divisional baseline, "
+                "non-divisional record, and current matchup type for both "
+                f"teams; missing paths: {sorted(missing)}"
+            )
     cohorts = input_payload["historical_data"].get(
         "divisional_home_side_meeting_cohorts"
     )
@@ -2034,6 +2128,34 @@ def validate_opinion(
         and schedule_input.get("input_profile") == "divisional"
         and isinstance(opinion.get("thesis_citation"), dict)
     )
+    if (
+        schedule_input is not None
+        and schedule_input.get("input_profile") == "schedule_only"
+    ):
+        expected_bucket = str(schedule_input["game"]["matchup_type"])
+        bucket_descriptions = {
+            "division": "same division",
+            "conference": "same conference, different divisions",
+            "non_conference": "different conferences",
+        }
+        if opinion.get("matchup_bucket") != expected_bucket:
+            raise ValueError(
+                "matchup_bucket must exactly match game.matchup_type"
+            )
+        expected_description = bucket_descriptions[expected_bucket]
+        if opinion.get("matchup_bucket_description") != expected_description:
+            raise ValueError(
+                "matchup_bucket_description must exactly describe the "
+                "supplied matchup bucket"
+            )
+        bucket_line = (
+            f"Matchup bucket: {expected_bucket} - "
+            f"{expected_description}."
+        )
+        if bucket_line not in str(opinion.get("full_opinion") or ""):
+            raise ValueError(
+                f"full_opinion must include exact bucket line: {bucket_line}"
+            )
     winner = str(opinion.get("predicted_winner") or "")
     if winner not in {away_team, home_team}:
         raise ValueError("predicted_winner must exactly match one game team")
