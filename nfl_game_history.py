@@ -81,7 +81,7 @@ def fetch_regular_season_events(
     season: int,
     *,
     client: httpx.Client | None = None,
-    expected_games: int = EXPECTED_GAMES_PER_SEASON,
+    expected_games: int | None = EXPECTED_GAMES_PER_SEASON,
 ) -> list[dict[str, Any]]:
     owns_client = client is None
     http = client or httpx.Client(timeout=30)
@@ -109,7 +109,7 @@ def fetch_regular_season_events(
             str(event.get("id") or ""),
         ),
     )
-    if len(result) != expected_games:
+    if expected_games is not None and len(result) != expected_games:
         raise ValueError(
             f"ESPN returned {len(result)} completed regular-season games "
             f"for {season}, expected {expected_games}"
@@ -252,6 +252,7 @@ def build_game_history(
     standings_by_season: dict[int, list[dict[str, Any]]],
     *,
     validate: bool = True,
+    require_complete_divisional_pairs: bool = True,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for season in sorted(events_by_season):
@@ -276,7 +277,7 @@ def build_game_history(
                     str(row["event_id"]),
                 )
             )
-            if len(meetings) != 2:
+            if require_complete_divisional_pairs and len(meetings) != 2:
                 raise ValueError(
                     f"{season} divisional pair {pair} has "
                     f"{len(meetings)} meetings, expected 2"

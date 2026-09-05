@@ -210,6 +210,73 @@ Authoritative configuration lives under `moe/`:
   `default_model` and `allowed_models` are stored in `experts.yaml`; generation
   fails before inference if a caller requests a different model. The
   multi-model storage and Telegram picker remain generic for other experts.
+- `moe/prompts/divisional/v1.md` defines the Opus-only Divisional Expert. It
+  produces an opinion for every game. Divisional matchups compare each team's
+  divisional baseline, divisional home/away roles, the recurring opponent pair,
+  first/second meeting splits, sweep/split counts, and historical rematch
+  performance conditioned on the first result. It also compares home-team
+  results in first and second annual pair meetings at three levels: NFL-wide,
+  within the current division, and for the exact opponent pair. These cohorts
+  are explicitly labeled as historical home-side results, not the current home
+  team's record. Opus may place each cohort separately under supporting or
+  counterevidence according to its measured direction; it is not required to
+  force conflicting cohort results into one conclusion. Generation validation
+  requires the exact applicable record after the labels `NFL-wide home-side`,
+  `<division> home-side`, and `Opponent-pair home-side`, so no level can be
+  omitted. Validation also rejects unsupported ranking and significance labels
+  such as "elite", "dominant", "outstanding", or "significant" because the
+  input supplies no league rankings or statistical tests. Measured comparative
+  terms such as "stronger" or "superior" are accepted only when the opinion
+  includes the underlying records and numeric game samples. Non-divisional
+  games compare
+  non-divisional, conference, and non-conference performance against each
+  team's divisional baseline.
+- Divisional Expert output schema v3 replaces free-form reasoning strings with
+  claim objects containing exact input evidence paths. Generation resolves and
+  stores evidence snapshots, validates numeric claims and attribution, and
+  renders `full_opinion` deterministically. Opus no longer writes a duplicate
+  free-form opinion that can drift from its cited claims. Validation also
+  rejects treating first pair meeting as early-season, all best/worst
+  superlatives (while allowing the non-ranking idiom "at best"), and
+  unsupported preparation/readiness narratives. Numeric
+  validation normalizes Unicode minus/dash characters before comparing claims
+  with cited values, accepts both leading-zero and leading-decimal rates, and
+  tolerates floating-point noise at an otherwise valid rounding boundary.
+- Discarded considerations are restricted to non-numeric unavailable concepts;
+  supplied numeric evidence must use a cited claim object instead of bypassing
+  validation through a free-form discarded string.
+- Schema-v3 and schema-v4 generation allow up to two bounded validation-repair attempts.
+  Each failed response is first persisted as its own invalid audit row; the
+  next attempt receives the exact failed JSON and validator error. Validators
+  remain unchanged, and every repair receives a new opinion ID.
+- Missing-record validation errors include matching candidate input paths so a
+  repair can add the exact omitted citation rather than guessing.
+- A uniquely matching record path may be attached deterministically when the
+  claim names the corresponding team or exact home-side cohort. Ambiguous
+  records still fail and require repair.
+- Divisional Expert output schema v4 removes factual prose from inference.
+  Opus selects one ranked usable-evidence path list plus no-signal paths.
+  Application code resolves those paths, classifies each usable card as support
+  or counterevidence relative to the predicted side, and renders every team
+  name, record, rate, margin, sample size, and cohort label deterministically.
+  The model supplies only the pick values and path ranking. The overview thesis
+  and conclusion are also rendered deterministically from the winner,
+  confidence, and existence of retained counterevidence.
+- The same main inference may return freeform `nondeterministic_analysis`
+  claims. A separate versioned factuality prompt classifies each exact claim as
+  supported, reasonable inference, or unsupported against the same controlled
+  input. Only supported claims and `Interpretation:`-prefixed reasonable
+  inferences are appended to Telegram; unsupported claims remain audit-only.
+  If the checker labels a claim usable but its cited paths fail deterministic
+  validation, code downgrades that claim to unsupported rather than invalidating
+  the deterministic opinion. Numeric discarded text is likewise excluded from
+  rendered output while remaining preserved in the raw response.
+- The current ESPN schedule determines whether divisional opponents are in
+  meeting one or two and the days between their two scheduled games. For a
+  second meeting only, generation fetches completed current-season ESPN games
+  and whitelists the exact first meeting's score, deterministic winner, and
+  signed home margin. No other current-season score or record enters the expert
+  input.
 - Every persisted opinion records the prompt path and SHA-256, expert
   configuration SHA-256, repository commit, model, maximum output tokens,
   output schema version, exact input JSON, input SHA-256, raw response, whether
@@ -283,7 +350,8 @@ approved opinions from multiple models, selecting that expert opens a model
 picker containing the latest approved run per exact model ID; a single-model
 expert opens directly. Expert detail is paginated to stay below Telegram's
 message-size limit and its footer shows the expert version, exact model ID, and
-prompt hash. Opinion UUIDs bind model-picker callbacks without placing long
+prompt hash. The main MOE summary also shows the exact model ID beside each
+expert name. Opinion UUIDs bind model-picker callbacks without placing long
 model names in Telegram's 64-byte callback payload. Newer pending, rejected,
 invalid, or tampered runs never hide the latest approved run for a model. The
 bot never generates an opinion during a user interaction. Event-bound views

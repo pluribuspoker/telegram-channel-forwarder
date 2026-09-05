@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from moe import (
     OPINION_HEADERS,
+    build_divisional_input,
     build_schedule_input,
     generate_opinion,
     latest_opinions,
@@ -77,6 +78,7 @@ def _history_row(
     home_score: int,
     kickoff: str,
     same_division: bool = True,
+    meeting_number: int | str = 1,
 ) -> dict:
     return {
         "event_id": event_id,
@@ -100,7 +102,7 @@ def _history_row(
         "same_conference": True,
         "same_division": same_division,
         "matchup_type": "division" if same_division else "conference",
-        "division_meeting_number": 1 if same_division else "",
+        "division_meeting_number": meeting_number if same_division else "",
         "neutral_site": False,
         "overtime": False,
         "tags": "divisional_game_1" if same_division else "conference_game",
@@ -210,6 +212,202 @@ class ScheduleInputTest(unittest.TestCase):
         )
 
 
+class DivisionalInputTest(unittest.TestCase):
+    def _division_history(self) -> list[dict]:
+        return [
+            _history_row(
+                "2024-first",
+                season=2024,
+                week=3,
+                away_team="Dallas Cowboys",
+                home_team="Philadelphia Eagles",
+                away_score=17,
+                home_score=24,
+                kickoff="2024-09-20T00:00:00+00:00",
+                meeting_number=1,
+            ),
+            _history_row(
+                "2024-second",
+                season=2024,
+                week=12,
+                away_team="Philadelphia Eagles",
+                home_team="Dallas Cowboys",
+                away_score=20,
+                home_score=27,
+                kickoff="2024-11-20T00:00:00+00:00",
+                meeting_number=2,
+            ),
+            _history_row(
+                "2025-first",
+                season=2025,
+                week=5,
+                away_team="Philadelphia Eagles",
+                home_team="Dallas Cowboys",
+                away_score=28,
+                home_score=21,
+                kickoff="2025-10-05T00:00:00+00:00",
+                meeting_number=1,
+            ),
+            _history_row(
+                "2025-second",
+                season=2025,
+                week=17,
+                away_team="Dallas Cowboys",
+                home_team="Philadelphia Eagles",
+                away_score=14,
+                home_score=31,
+                kickoff="2025-12-28T00:00:00+00:00",
+                meeting_number=2,
+            ),
+        ]
+
+    def test_second_division_meeting_includes_only_prior_current_result(
+        self,
+    ) -> None:
+        game = {
+            **_game(),
+            "event_id": "2026-second",
+            "week": 15,
+            "commence_time_utc": "2026-12-13T18:00:00+00:00",
+        }
+        schedule = [
+            {
+                "event_id": "espn-2026-first",
+                "season": 2026,
+                "week": 4,
+                "kickoff_utc": "2026-09-27T18:00:00+00:00",
+                "away_team": "Philadelphia Eagles",
+                "home_team": "Dallas Cowboys",
+            },
+            {
+                "event_id": "espn-2026-second",
+                "season": 2026,
+                "week": 15,
+                "kickoff_utc": "2026-12-13T18:00:00+00:00",
+                "away_team": "Dallas Cowboys",
+                "home_team": "Philadelphia Eagles",
+            },
+        ]
+        current_results = [
+            _history_row(
+                "espn-2026-first",
+                season=2026,
+                week=4,
+                away_team="Philadelphia Eagles",
+                home_team="Dallas Cowboys",
+                away_score=27,
+                home_score=20,
+                kickoff="2026-09-27T18:00:00+00:00",
+                meeting_number=1,
+            ),
+            _history_row(
+                "unrelated",
+                season=2026,
+                week=5,
+                away_team="Other Away",
+                home_team="Other Home",
+                away_score=99,
+                home_score=0,
+                kickoff="2026-10-04T18:00:00+00:00",
+                same_division=False,
+            ),
+        ]
+
+        payload = build_divisional_input(
+            game,
+            self._division_history(),
+            schedule,
+            current_results,
+        )
+        serialized = json.dumps(payload)
+
+        self.assertTrue(payload["game"]["is_divisional"])
+        self.assertEqual(
+            payload["game"]["schedule_event_id"], "espn-2026-second"
+        )
+        self.assertEqual(payload["game"]["division_meeting_number"], 2)
+        self.assertEqual(payload["game"]["scheduled_pair_meetings"], 2)
+        self.assertEqual(
+            payload["current_season_prior_meeting"]["away_score"], 27
+        )
+        self.assertEqual(
+            payload["current_season_prior_meeting"]["winner"],
+            "Philadelphia Eagles",
+        )
+        self.assertEqual(
+            payload["current_season_prior_meeting"]["home_margin"], -7
+        )
+        self.assertEqual(
+            payload["historical_data"]["home_team"][
+                "against_current_opponent"
+            ]["games"],
+            4,
+        )
+        self.assertEqual(
+            payload["historical_data"]["away_team"][
+                "current_opponent_series"
+            ]["complete_two_game_seasons"],
+            2,
+        )
+        cohorts = payload["historical_data"][
+            "divisional_home_side_meeting_cohorts"
+        ]
+        self.assertIn("not the current home team", cohorts["perspective"])
+        self.assertEqual(cohorts["nfl"]["meeting_1"]["games"], 2)
+        self.assertEqual(cohorts["nfl"]["meeting_1"]["wins"], 1)
+        self.assertEqual(cohorts["division"]["name"], "NFC East")
+        self.assertEqual(cohorts["division"]["meeting_2"]["wins"], 2)
+        self.assertEqual(
+            cohorts["opponent_pair"]["meeting_1"]["average_margin"], 0.0
+        )
+        self.assertNotIn("99", serialized)
+        self.assertNotIn("Other Away", serialized)
+
+    def test_non_divisional_game_uses_one_scheduled_meeting(self) -> None:
+        history = [
+            *self._division_history(),
+            _history_row(
+                "conference-game",
+                season=2025,
+                week=18,
+                away_team="Minnesota Vikings",
+                home_team="Philadelphia Eagles",
+                away_score=21,
+                home_score=24,
+                kickoff="2025-10-26T18:00:00+00:00",
+                same_division=False,
+            ),
+        ]
+        game = {
+            **_game(),
+            "event_id": "2026-conference",
+            "away_team": "Minnesota Vikings",
+        }
+        schedule = [
+            {
+                "event_id": "espn-2026-conference",
+                "season": 2026,
+                "week": 1,
+                "kickoff_utc": game["commence_time_utc"],
+                "away_team": "Minnesota Vikings",
+                "home_team": "Philadelphia Eagles",
+            }
+        ]
+
+        payload = build_divisional_input(game, history, schedule)
+
+        self.assertFalse(payload["game"]["is_divisional"])
+        self.assertEqual(payload["game"]["matchup_type"], "conference")
+        self.assertIsNone(payload["game"]["division_meeting_number"])
+        self.assertEqual(payload["game"]["scheduled_pair_meetings"], 1)
+        self.assertIsNone(payload["current_season_prior_meeting"])
+        self.assertIsNone(
+            payload["historical_data"][
+                "divisional_home_side_meeting_cohorts"
+            ]
+        )
+
+
 class OpinionTest(unittest.IsolatedAsyncioTestCase):
     async def test_generation_records_prompt_and_input_versions(self) -> None:
         output = {
@@ -259,6 +457,108 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["review_status"], "pending")
         self.assertEqual(store.rows, [row])
 
+    async def test_divisional_expert_uses_divisional_input(self) -> None:
+        output = {
+            "predicted_winner": "Philadelphia Eagles",
+            "home_win_probability": 0.58,
+            "expected_home_margin": 2.5,
+            "predicted_away_score": 20,
+            "predicted_home_score": 23,
+            "confidence_stars": 2,
+            "evidence_paths": [
+                "historical_data.home_team.division_games",
+                "historical_data.divisional_home_side_meeting_cohorts.nfl.meeting_1",
+                "historical_data.divisional_home_side_meeting_cohorts.division.meeting_1",
+                "historical_data.divisional_home_side_meeting_cohorts.opponent_pair.meeting_1",
+                "historical_data.away_team.division_games",
+            ],
+            "no_signal_evidence_paths": [
+                "current_season_prior_meeting",
+            ],
+            "nondeterministic_analysis": [
+                "Philadelphia appears better positioned for this matchup."
+            ],
+            "discarded_considerations": [],
+        }
+        captured = []
+
+        async def create_fn(**kwargs):
+            captured.append(kwargs)
+            response = (
+                output
+                if len(captured) == 1
+                else {
+                    "claims": [
+                        {
+                            "index": 0,
+                            "classification": "reasonable_inference",
+                            "evidence_paths": [
+                                "historical_data.home_team.division_games"
+                            ],
+                            "reason": "Grounded interpretation.",
+                        }
+                    ]
+                }
+            )
+            return SimpleNamespace(
+                content=[SimpleNamespace(text=json.dumps(response))]
+            )
+
+        store = MemoryStore()
+        row = await generate_opinion(
+            expert_id="divisional",
+            game=_game(),
+            history=_history(),
+            schedule=[
+                {
+                    "event_id": "401772510",
+                    "season": 2026,
+                    "week": 1,
+                    "kickoff_utc": _game()["commence_time_utc"],
+                    "away_team": "Dallas Cowboys",
+                    "home_team": "Philadelphia Eagles",
+                },
+                {
+                    "event_id": "rematch",
+                    "season": 2026,
+                    "week": 12,
+                    "kickoff_utc": "2026-11-26T18:00:00+00:00",
+                    "away_team": "Philadelphia Eagles",
+                    "home_team": "Dallas Cowboys",
+                },
+            ],
+            store=store,
+            create_fn=create_fn,
+        )
+
+        self.assertEqual(row["expert_id"], "divisional")
+        self.assertEqual(row["input_profile"], "divisional")
+        self.assertEqual(row["expert_version"], 28)
+        self.assertEqual(row["output_schema_version"], 4)
+        self.assertIn("Divisional Expert v17", captured[0]["system"])
+        self.assertIn("lean toward Philadelphia Eagles", row["thesis"])
+        self.assertEqual(
+            row["nondeterministic_factuality_status"],
+            "verified",
+        )
+        self.assertIn(
+            "Interpretation:",
+            row["nondeterministic_analysis_usable"],
+        )
+        self.assertIn('"input_profile":"divisional"', row["input_json"])
+        self.assertIn("Pick\n", row["full_opinion"])
+        stored_support = json.loads(row["supporting_factors_json"])
+        self.assertEqual(stored_support["thesis"]["evidence"], [])
+        self.assertEqual(
+            stored_support["items"][0]["evidence"][0]["path"],
+            "historical_data.home_team.division_games",
+        )
+        self.assertEqual(len(stored_support["items"]), 2)
+        self.assertEqual(
+            len(json.loads(row["counterarguments_json"])),
+            3,
+        )
+
     async def test_schedule_expert_rejects_non_opus_model(self) -> None:
         with self.assertRaisesRegex(ValueError, "not allowed"):
             await generate_opinion(
@@ -293,6 +593,46 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             store.rows[0]["raw_response"], '{"not": "an opinion"}'
         )
+
+    async def test_validation_repair_persists_invalid_attempt(self) -> None:
+        valid = {
+            "predicted_winner": "Philadelphia Eagles",
+            "home_win_probability": 0.61,
+            "expected_home_margin": 3.5,
+            "predicted_away_score": 20,
+            "predicted_home_score": 24,
+            "confidence_stars": 3,
+            "thesis": "The schedule profile favors Philadelphia.",
+            "supporting_factors": ["Philadelphia was 2-0 in the sample."],
+            "counterarguments": ["The historical sample is small."],
+            "no_signal_factors": [],
+            "discarded_considerations": [],
+            "full_opinion": "A repaired schedule opinion.",
+        }
+        requests = []
+
+        async def create_fn(**kwargs):
+            requests.append(kwargs["messages"][0]["content"])
+            output = {"not": "an opinion"} if len(requests) == 1 else valid
+            return SimpleNamespace(
+                content=[SimpleNamespace(text=json.dumps(output))]
+            )
+
+        store = MemoryStore()
+        row = await generate_opinion(
+            expert_id="schedule",
+            game=_game(),
+            history=_history(),
+            store=store,
+            create_fn=create_fn,
+            repair_attempts=1,
+        )
+
+        self.assertEqual(row["generation_status"], "valid")
+        self.assertEqual(len(store.rows), 2)
+        self.assertEqual(store.rows[0]["generation_status"], "invalid")
+        self.assertIn("Validation error:", requests[1])
+        self.assertIn('{"not": "an opinion"}', requests[1])
 
     def test_failed_sheet_append_is_spooled(self) -> None:
         row = {"opinion_id": "pending-1", "raw_response": "complete"}
@@ -329,6 +669,50 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
                 },
                 away_team="Dallas Cowboys",
                 home_team="Philadelphia Eagles",
+            )
+
+    def test_divisional_opinion_rejects_unsupported_qualitative_labels(
+        self,
+    ) -> None:
+        schedule_input = {
+            "input_profile": "divisional",
+            "game": {"division_meeting_number": 1, "week": 1},
+            "historical_data": {
+                "divisional_home_side_meeting_cohorts": {
+                    "nfl": {"meeting_1": {"wins": 70, "losses": 74, "ties": 0}},
+                    "division": {
+                        "name": "NFC West",
+                        "meeting_1": {"wins": 8, "losses": 10, "ties": 0},
+                    },
+                    "opponent_pair": {
+                        "meeting_1": {"wins": 1, "losses": 2, "ties": 0}
+                    },
+                }
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "unsupported qualitative"):
+            validate_opinion(
+                {
+                    "predicted_winner": "Los Angeles Rams",
+                    "home_win_probability": 0.56,
+                    "expected_home_margin": 2.5,
+                    "predicted_away_score": 21,
+                    "predicted_home_score": 24,
+                    "confidence_stars": 2,
+                    "thesis": "An elite divisional record favors the Rams.",
+                    "supporting_factors": ["One."],
+                    "counterarguments": ["Two."],
+                    "no_signal_factors": [],
+                    "discarded_considerations": [],
+                    "full_opinion": (
+                        "NFL-wide home-side: 70-74.\n"
+                        "NFC West home-side: 8-10.\n"
+                        "Opponent-pair home-side: 1-2."
+                    ),
+                },
+                away_team="San Francisco 49ers",
+                home_team="Los Angeles Rams",
+                schedule_input=schedule_input,
             )
 
     def test_requires_exact_score_consistent_with_winner(self) -> None:
@@ -628,6 +1012,7 @@ class OpinionViewTest(unittest.TestCase):
 
         self.assertIn("Page 2 of 2", summary)
         self.assertIn("Expert-5", summary)
+        self.assertIn("claude-sonnet-4-6", summary)
         self.assertLess(len(detail), 4096)
         self.assertIn("model claude-sonnet-4-6", detail)
         self.assertIn("page 2/3", detail)
@@ -687,6 +1072,16 @@ class OpinionViewTest(unittest.TestCase):
         self.assertEqual(expert["default_model"], "claude-opus-4-6")
         self.assertEqual(expert["allowed_models"], ["claude-opus-4-6"])
         self.assertEqual(len(expert["prompt_sha256"]), 64)
+
+        divisional = load_expert("divisional")
+        self.assertEqual(divisional["version"], 28)
+        self.assertEqual(divisional["prompt_version"], 17)
+        self.assertEqual(divisional["output_schema_version"], 4)
+        self.assertEqual(
+            divisional["prompt_path"],
+            "moe/prompts/divisional/v17.md",
+        )
+        self.assertEqual(divisional["default_model"], "claude-opus-4-6")
 
 
 if __name__ == "__main__":

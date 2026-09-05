@@ -30,6 +30,7 @@ from nfl_win_predictions import ensure_worksheet
 ROOT = Path(__file__).resolve().parent
 MOE_ROOT = ROOT / "moe"
 EXPERTS_PATH = MOE_ROOT / "experts.yaml"
+FACTUALITY_PROMPT_PATH = MOE_ROOT / "prompts" / "factuality" / "v2.md"
 MOE_PENDING_PATH = ROOT / "logs" / "moe_pending.jsonl"
 MOE_PENDING_LOCK_PATH = ROOT / "logs" / "moe_pending.lock"
 ET = ZoneInfo("America/New_York")
@@ -91,6 +92,10 @@ OPINION_HEADERS = [
     "discarded_considerations_json",
     "predicted_away_score",
     "predicted_home_score",
+    "nondeterministic_analysis_raw",
+    "nondeterministic_analysis_usable",
+    "nondeterministic_factuality_status",
+    "nondeterministic_factuality_json",
 ]
 
 FORBIDDEN_SCHEDULE_INPUT_KEYS = {
@@ -175,6 +180,8 @@ def _source_sha256(expert: dict[str, Any]) -> str:
         EXPERTS_PATH,
         ROOT / str(expert["prompt_path"]),
     ]
+    if int(expert.get("output_schema_version") or 0) == 4:
+        paths.append(FACTUALITY_PROMPT_PATH)
     digest = hashlib.sha256()
     for path in paths:
         digest.update(str(path.relative_to(ROOT)).encode("utf-8"))
@@ -553,6 +560,371 @@ def _home_side_sample(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _home_team_full_sample(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    games = len(rows)
+    wins = sum(int(row["home_score"]) > int(row["away_score"]) for row in rows)
+    losses = sum(int(row["home_score"]) < int(row["away_score"]) for row in rows)
+    ties = games - wins - losses
+    points_for = [int(row["home_score"]) for row in rows]
+    points_against = [int(row["away_score"]) for row in rows]
+    margins = [
+        home_score - away_score
+        for home_score, away_score in zip(points_for, points_against)
+    ]
+    return {
+        "games": games,
+        "wins": wins,
+        "losses": losses,
+        "ties": ties,
+        "win_rate": round(wins / games, 4) if games else None,
+        "average_points_for": (
+            round(sum(points_for) / games, 2) if games else None
+        ),
+        "average_points_against": (
+            round(sum(points_against) / games, 2) if games else None
+        ),
+        "average_margin": round(sum(margins) / games, 2) if games else None,
+    }
+
+
+def _home_team_meeting_cohort(
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        f"meeting_{meeting_number}": _home_team_full_sample(
+            [
+                row
+                for row in rows
+                if int(row.get("division_meeting_number") or 0)
+                == meeting_number
+            ]
+        )
+        for meeting_number in (1, 2)
+    }
+
+
+def _pair_series_summary(
+    rows: list[dict[str, Any]], team: str
+) -> dict[str, Any]:
+    by_season: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_season.setdefault(int(row["season"]), []).append(row)
+    sweeps = 0
+    swept = 0
+    splits = 0
+    second_after_first: dict[str, list[dict[str, Any]]] = {
+        "win": [],
+        "loss": [],
+        "tie": [],
+    }
+    complete_seasons = 0
+    for season_rows in by_season.values():
+        ordered = sorted(
+            season_rows,
+            key=lambda row: (
+                int(row.get("division_meeting_number") or 99),
+                str(row["kickoff_utc"]),
+            ),
+        )
+        if len(ordered) != 2:
+            continue
+        complete_seasons += 1
+        results = [_historical_result(row, team) for row in ordered]
+        if results == ["W", "W"]:
+            sweeps += 1
+        elif results == ["L", "L"]:
+            swept += 1
+        else:
+            splits += 1
+        first_key = {"W": "win", "L": "loss", "T": "tie"}[results[0]]
+        second_after_first[first_key].append(ordered[1])
+    return {
+        "complete_two_game_seasons": complete_seasons,
+        "team_sweeps": sweeps,
+        "team_swept": swept,
+        "season_splits_or_ties": splits,
+        "second_meeting_after_first_win": _team_sample(
+            second_after_first["win"], team
+        ),
+        "second_meeting_after_first_loss": _team_sample(
+            second_after_first["loss"], team
+        ),
+        "second_meeting_after_first_tie": _team_sample(
+            second_after_first["tie"], team
+        ),
+    }
+
+
+def build_divisional_input(
+    game: dict[str, Any],
+    history: list[dict[str, Any]],
+    schedule: list[dict[str, Any]],
+    current_season_results: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build the whitelisted input for the divisional-matchup expert."""
+    kickoff_utc = _parse_time(game["commence_time_utc"]).astimezone(timezone.utc)
+    kickoff_et = kickoff_utc.astimezone(ET)
+    away = str(game["away_team"])
+    home = str(game["home_team"])
+    season = int(game["season"])
+    historical = [row for row in history if int(row["season"]) < season]
+    matchup_type = _matchup_type(historical, away, home)
+    is_divisional = matchup_type == "division"
+    pair = {away, home}
+    historical_division_rows = [
+        row for row in historical if str(row["matchup_type"]) == "division"
+    ]
+    current_division = None
+    if is_divisional:
+        latest_alignment_row = max(
+            (
+                row
+                for row in historical
+                if home in {str(row["away_team"]), str(row["home_team"])}
+            ),
+            key=lambda row: (
+                int(row["season"]),
+                int(row["week"]),
+                str(row["kickoff_utc"]),
+            ),
+        )
+        current_division = (
+            str(latest_alignment_row["home_division"])
+            if str(latest_alignment_row["home_team"]) == home
+            else str(latest_alignment_row["away_division"])
+        )
+    pair_schedule = sorted(
+        [
+            row
+            for row in schedule
+            if int(row["season"]) == season
+            and {str(row["away_team"]), str(row["home_team"])} == pair
+        ],
+        key=lambda row: (
+            str(row.get("kickoff_utc") or row.get("commence_time_utc") or ""),
+            str(row["event_id"]),
+        ),
+    )
+    schedule_matches = [
+        (index, row)
+        for index, row in enumerate(pair_schedule)
+        if (
+            str(row["event_id"]) == str(game["event_id"])
+            or (
+                str(row["away_team"]) == away
+                and str(row["home_team"]) == home
+                and _parse_time(row["kickoff_utc"]) == kickoff_utc
+            )
+        )
+    ]
+    if len(schedule_matches) != 1:
+        raise ValueError(
+            "Current game must match exactly one authoritative schedule row"
+        )
+    current_index, current_schedule_row = schedule_matches[0]
+    if is_divisional and len(pair_schedule) != 2:
+        raise ValueError(
+            "Divisional opponents must have exactly two scheduled meetings"
+        )
+    meeting_number = current_index + 1 if is_divisional else None
+    days_between_meetings = None
+    if is_divisional:
+        first_kickoff = _parse_time(pair_schedule[0]["kickoff_utc"])
+        second_kickoff = _parse_time(pair_schedule[1]["kickoff_utc"])
+        days_between_meetings = (second_kickoff - first_kickoff).days
+
+    def team_context(team: str) -> dict[str, Any]:
+        team_rows = [
+            row
+            for row in historical
+            if team in {str(row["away_team"]), str(row["home_team"])}
+        ]
+        division_rows = [
+            row for row in team_rows if str(row["matchup_type"]) == "division"
+        ]
+        non_division_rows = [
+            row for row in team_rows if str(row["matchup_type"]) != "division"
+        ]
+        opponent_rows = [
+            row
+            for row in team_rows
+            if {str(row["away_team"]), str(row["home_team"])} == pair
+        ]
+        return {
+            "all_games": _team_sample(team_rows, team),
+            "division_games": _team_sample(division_rows, team),
+            "non_division_games": _team_sample(non_division_rows, team),
+            "division_as_home": _team_sample(
+                [
+                    row
+                    for row in division_rows
+                    if str(row["home_team"]) == team
+                ],
+                team,
+            ),
+            "division_as_away": _team_sample(
+                [
+                    row
+                    for row in division_rows
+                    if str(row["away_team"]) == team
+                ],
+                team,
+            ),
+            "conference_non_division": _team_sample(
+                [
+                    row
+                    for row in team_rows
+                    if str(row["matchup_type"]) == "conference"
+                ],
+                team,
+            ),
+            "non_conference": _team_sample(
+                [
+                    row
+                    for row in team_rows
+                    if str(row["matchup_type"]) == "non_conference"
+                ],
+                team,
+            ),
+            "against_current_opponent": _team_sample(opponent_rows, team),
+            "against_current_opponent_as_home": _team_sample(
+                [
+                    row
+                    for row in opponent_rows
+                    if str(row["home_team"]) == team
+                ],
+                team,
+            ),
+            "against_current_opponent_as_away": _team_sample(
+                [
+                    row
+                    for row in opponent_rows
+                    if str(row["away_team"]) == team
+                ],
+                team,
+            ),
+            "division_meeting_1": _team_sample(
+                [
+                    row
+                    for row in division_rows
+                    if int(row.get("division_meeting_number") or 0) == 1
+                ],
+                team,
+            ),
+            "division_meeting_2": _team_sample(
+                [
+                    row
+                    for row in division_rows
+                    if int(row.get("division_meeting_number") or 0) == 2
+                ],
+                team,
+            ),
+            "current_opponent_series": _pair_series_summary(
+                opponent_rows, team
+            ),
+        }
+
+    prior_meeting: dict[str, Any] | None = None
+    if is_divisional and meeting_number == 2:
+        prior_schedule = pair_schedule[0]
+        prior_result = next(
+            (
+                row
+                for row in current_season_results or []
+                if str(row["event_id"]) == str(prior_schedule["event_id"])
+            ),
+            None,
+        )
+        if prior_result is not None:
+            away_score = int(prior_result["away_score"])
+            home_score = int(prior_result["home_score"])
+            winner = (
+                str(prior_result["home_team"])
+                if home_score > away_score
+                else (
+                    str(prior_result["away_team"])
+                    if away_score > home_score
+                    else "tie"
+                )
+            )
+            prior_meeting = {
+                "event_id": str(prior_result["event_id"]),
+                "week": int(prior_result["week"]),
+                "kickoff_utc": str(prior_result["kickoff_utc"]),
+                "away_team": str(prior_result["away_team"]),
+                "home_team": str(prior_result["home_team"]),
+                "away_score": away_score,
+                "home_score": home_score,
+                "winner": winner,
+                "home_margin": home_score - away_score,
+            }
+
+    payload = {
+        "input_profile": "divisional",
+        "game": {
+            "event_id": str(game["event_id"]),
+            "schedule_event_id": str(current_schedule_row["event_id"]),
+            "season": season,
+            "week": int(game["week"]),
+            "commence_time_utc": kickoff_utc.isoformat(),
+            "commence_time_et": kickoff_et.isoformat(),
+            "away_team": away,
+            "home_team": home,
+            "matchup_type": matchup_type,
+            "is_divisional": is_divisional,
+            "division_meeting_number": meeting_number,
+            "scheduled_pair_meetings": len(pair_schedule),
+            "days_between_pair_meetings": days_between_meetings,
+        },
+        "historical_data": {
+            "seasons": sorted({int(row["season"]) for row in historical}),
+            "away_team": team_context(away),
+            "home_team": team_context(home),
+            "divisional_home_side_meeting_cohorts": (
+                {
+                    "perspective": (
+                        "historical home side in each game, not the current "
+                        "home team"
+                    ),
+                    "nfl": _home_team_meeting_cohort(
+                        historical_division_rows
+                    ),
+                    "division": {
+                        "name": current_division,
+                        **_home_team_meeting_cohort(
+                            [
+                                row
+                                for row in historical_division_rows
+                                if str(row["home_division"])
+                                == current_division
+                            ]
+                        ),
+                    },
+                    "opponent_pair": {
+                        "teams": sorted(pair),
+                        **_home_team_meeting_cohort(
+                            [
+                                row
+                                for row in historical_division_rows
+                                if {
+                                    str(row["away_team"]),
+                                    str(row["home_team"]),
+                                }
+                                == pair
+                            ]
+                        ),
+                    },
+                }
+                if is_divisional
+                else None
+            ),
+        },
+        "current_season_prior_meeting": prior_meeting,
+    }
+    _assert_schedule_input_safe(payload)
+    return payload
+
+
 def _assert_schedule_input_safe(payload: Any) -> None:
     if isinstance(payload, dict):
         forbidden = FORBIDDEN_SCHEDULE_INPUT_KEYS.intersection(payload)
@@ -581,6 +953,809 @@ def _parse_response(raw: str) -> dict[str, Any]:
     return parsed
 
 
+def _resolve_evidence_path(
+    input_payload: dict[str, Any],
+    path: str,
+) -> Any:
+    if not re.fullmatch(r"[a-z0-9_]+(?:\.[a-z0-9_]+)*", path):
+        raise ValueError(f"Invalid evidence path: {path}")
+    value: Any = input_payload
+    for segment in path.split("."):
+        if not isinstance(value, dict) or segment not in value:
+            raise ValueError(f"Evidence path does not exist: {path}")
+        value = value[segment]
+    return value
+
+
+def _numeric_evidence_values(value: Any) -> list[float]:
+    if isinstance(value, bool):
+        return []
+    if isinstance(value, (int, float)):
+        return [float(value)]
+    if isinstance(value, dict):
+        values: list[float] = []
+        for child in value.values():
+            values.extend(_numeric_evidence_values(child))
+        return values
+    if isinstance(value, list):
+        values = []
+        for child in value:
+            values.extend(_numeric_evidence_values(child))
+        return values
+    return []
+
+
+def _matching_record_paths(
+    value: Any,
+    record: tuple[int, ...],
+    *,
+    prefix: str = "",
+) -> list[str]:
+    matches: list[str] = []
+    if isinstance(value, dict):
+        candidate = (
+            int(value.get("wins", -1)),
+            int(value.get("losses", -1)),
+            *(
+                (int(value.get("ties", -1)),)
+                if len(record) == 3
+                else ()
+            ),
+        )
+        if candidate == record and prefix:
+            matches.append(prefix)
+        for key, child in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            matches.extend(
+                _matching_record_paths(child, record, prefix=path)
+            )
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            path = f"{prefix}.{index}" if prefix else str(index)
+            matches.extend(
+                _matching_record_paths(child, record, prefix=path)
+            )
+    return matches
+
+
+def _validate_claim_numbers(
+    claim: str,
+    paths: list[str],
+    evidence: list[Any],
+    input_payload: dict[str, Any],
+) -> None:
+    normalized_claim = claim.replace("−", "-").replace("–", "-")
+    remaining = normalized_claim
+    for match in list(
+        re.finditer(r"\b(\d+)-(\d+)(?:-(\d+))?\b", normalized_claim)
+    ):
+        record = tuple(
+            int(group) for group in match.groups() if group is not None
+        )
+        if not any(
+            isinstance(value, dict)
+            and (
+                int(value.get("wins", -1)),
+                int(value.get("losses", -1)),
+                *(
+                    (int(value.get("ties", -1)),)
+                    if len(record) == 3
+                    else ()
+                ),
+            )
+            == record
+            for value in evidence
+        ):
+            candidates = _matching_record_paths(input_payload, record)
+            raise ValueError(
+                f"Claim record {match.group(0)} is absent from cited evidence; "
+                f"candidate paths: {candidates[:8]}"
+            )
+        remaining = remaining.replace(match.group(0), " ", 1)
+    numeric_values = [
+        number for value in evidence for number in _numeric_evidence_values(value)
+    ]
+    path_numbers = [
+        float(number)
+        for path in paths
+        for number in re.findall(r"\d+", path)
+    ]
+    for token in re.findall(
+        r"(?<![\w])[-+]?(?:\d+(?:\.\d+)?|\.\d+)%?(?![\w])",
+        remaining,
+    ):
+        is_percent = token.endswith("%")
+        claimed = float(token.rstrip("%"))
+        candidates = (
+            [number * 100 for number in numeric_values if 0 <= number <= 1]
+            if is_percent
+            else [*numeric_values, *path_numbers]
+        )
+        decimals = len(token.rstrip("%").partition(".")[2])
+        tolerance = 0.5 * (10 ** -decimals) if decimals else 0.5
+        if not any(
+            abs(candidate - claimed) <= tolerance + 1e-9
+            for candidate in candidates
+        ):
+            raise ValueError(
+                f"Claim number {token} is absent from cited evidence"
+            )
+
+
+def _complete_unique_record_paths(
+    claim: str,
+    paths: list[str],
+    input_payload: dict[str, Any],
+) -> list[str]:
+    completed = list(paths)
+    normalized_claim = claim.replace("−", "-").replace("–", "-")
+    away = str(input_payload["game"]["away_team"])
+    home = str(input_payload["game"]["home_team"])
+    claim_lower = claim.lower()
+
+    def mentions(team: str) -> bool:
+        aliases = {team.lower(), team.rsplit(" ", 1)[-1].lower()}
+        return any(alias in claim_lower for alias in aliases)
+
+    for match in re.finditer(
+        r"\b(\d+)-(\d+)(?:-(\d+))?\b",
+        normalized_claim,
+    ):
+        record = tuple(
+            int(group) for group in match.groups() if group is not None
+        )
+        candidates = _matching_record_paths(input_payload, record)
+        if len(candidates) != 1 or candidates[0] in completed:
+            continue
+        candidate = candidates[0]
+        is_matching_team = (
+            ".away_team." in candidate
+            and mentions(away)
+            and not mentions(home)
+        ) or (
+            ".home_team." in candidate
+            and mentions(home)
+            and not mentions(away)
+        )
+        is_matching_cohort = (
+            ".divisional_home_side_meeting_cohorts.nfl." in candidate
+            and "nfl-wide home-side" in claim_lower
+        ) or (
+            ".divisional_home_side_meeting_cohorts.division." in candidate
+            and f"{input_payload['historical_data']['divisional_home_side_meeting_cohorts']['division']['name'].lower()} home-side"
+            in claim_lower
+        ) or (
+            ".divisional_home_side_meeting_cohorts.opponent_pair." in candidate
+            and "opponent-pair home-side" in claim_lower
+        )
+        if is_matching_team or is_matching_cohort:
+            completed.append(candidate)
+    return completed
+
+
+def _normalize_cited_claim(
+    value: Any,
+    input_payload: dict[str, Any],
+    *,
+    role: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{role} must be a cited claim object")
+    claim = str(value.get("claim") or "").strip()
+    paths = value.get("evidence_paths")
+    if not claim:
+        raise ValueError(f"{role}.claim is required")
+    if not isinstance(paths, list) or not paths or not all(
+        isinstance(path, str) and path.strip() for path in paths
+    ):
+        raise ValueError(f"{role}.evidence_paths must be non-empty")
+    cleaned_paths = [
+        re.split(r"\s+\(", path.strip(), maxsplit=1)[0]
+        for path in paths
+    ]
+    normalized_paths = _complete_unique_record_paths(
+        claim,
+        cleaned_paths,
+        input_payload,
+    )
+    resolved = [
+        _resolve_evidence_path(input_payload, path)
+        for path in normalized_paths
+    ]
+    _validate_claim_numbers(
+        claim,
+        normalized_paths,
+        resolved,
+        input_payload,
+    )
+    if re.search(
+        r"\b(?:early[- ]season|season opener|opening week)\b",
+        claim,
+        re.IGNORECASE,
+    ):
+        raise ValueError(
+            f"{role} treats pair meeting number as season timing"
+        )
+    superlative_claim = re.sub(
+        r"\bat best\b",
+        "",
+        claim,
+        flags=re.IGNORECASE,
+    )
+    if re.search(
+        r"\b(?:best|worst|strongest|weakest)\b",
+        superlative_claim,
+        re.IGNORECASE,
+    ):
+        raise ValueError(
+            f"{role} uses an unnecessary superlative"
+        )
+    if re.search(
+        r"\b(?:preparation|preparedness|readiness)\b",
+        claim,
+        re.IGNORECASE,
+    ):
+        raise ValueError(
+            f"{role} infers an unsupported team process"
+        )
+    team_names = {
+        str(input_payload["game"]["away_team"]),
+        str(input_payload["game"]["home_team"]),
+    }
+    if any(team.lower() in claim.lower() for team in team_names) and all(
+        path.startswith(
+            "historical_data.divisional_home_side_meeting_cohorts."
+        )
+        for path in normalized_paths
+    ):
+        raise ValueError(
+            f"{role} attributes home-side cohort evidence to a named team"
+        )
+    if re.search(
+        r"\b(?:overall team|overall quality|better team|stronger team)\b",
+        claim,
+        re.IGNORECASE,
+    ) and not any(path.endswith(".all_games") for path in normalized_paths):
+        raise ValueError(f"{role} makes an overall-team claim without all_games")
+    if role.startswith("no_signal") and not all(
+        value is None
+        or (
+            isinstance(value, dict)
+            and int(value.get("games", -1)) == 0
+        )
+        for value in resolved
+    ):
+        raise ValueError(f"{role} cites evidence with a nonzero sample")
+    return {
+        "claim": claim,
+        "evidence": [
+            {"path": path, "value": resolved_value}
+            for path, resolved_value in zip(normalized_paths, resolved)
+        ],
+    }
+
+
+def _render_cited_opinion(
+    opinion: dict[str, Any],
+    *,
+    away_team: str,
+    home_team: str,
+) -> str:
+    home_probability = float(opinion["home_win_probability"])
+    stars = "★" * int(opinion["confidence_stars"])
+
+    def section(title: str, claims: list[dict[str, Any]]) -> list[str]:
+        return [
+            title,
+            *(
+                [f"- {item['claim']}" for item in claims]
+                if claims
+                else ["- None."]
+            ),
+        ]
+
+    lines = [
+        "Pick",
+        (
+            f"- {opinion['predicted_winner']} over "
+            f"{home_team if opinion['predicted_winner'] == away_team else away_team}, "
+            f"{away_team} {opinion['predicted_away_score']}, "
+            f"{home_team} {opinion['predicted_home_score']}, "
+            f"{home_probability:.0%} home win probability, "
+            f"expected home margin {float(opinion['expected_home_margin']):+.1f}, "
+            f"{stars}"
+        ),
+        "",
+        *section("Why the pick", opinion["supporting_factors"]),
+        "",
+        *section("Why it may be wrong", opinion["counterarguments"]),
+        "",
+        *section("No signal", opinion["no_signal_factors"]),
+        "",
+        "Discarded considerations",
+        *[
+            f"- {item}"
+            for item in opinion["discarded_considerations"]
+        ],
+        "",
+        "Conclusion",
+        opinion["thesis"],
+    ]
+    return "\n".join(lines)
+
+
+def _normalize_cited_opinion(
+    opinion: dict[str, Any],
+    input_payload: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = dict(opinion)
+    thesis = _normalize_cited_claim(
+        opinion.get("thesis"),
+        input_payload,
+        role="thesis",
+    )
+    normalized["thesis"] = thesis["claim"]
+    normalized["thesis_citation"] = thesis
+    for field in (
+        "supporting_factors",
+        "counterarguments",
+        "no_signal_factors",
+    ):
+        values = opinion.get(field)
+        if not isinstance(values, list):
+            raise ValueError(f"{field} must be a list")
+        normalized[field] = [
+            _normalize_cited_claim(
+                value,
+                input_payload,
+                role=f"{field}[{index}]",
+            )
+            for index, value in enumerate(values)
+        ]
+    discarded = opinion.get("discarded_considerations")
+    if not isinstance(discarded, list) or not all(
+        isinstance(value, str) and value.strip() for value in discarded
+    ):
+        raise ValueError(
+            "discarded_considerations must contain non-empty strings"
+        )
+    if any(re.search(r"\d", value) for value in discarded):
+        raise ValueError(
+            "discarded_considerations cannot contain uncited numeric claims"
+        )
+    normalized["full_opinion"] = _render_cited_opinion(
+        normalized,
+        away_team=str(input_payload["game"]["away_team"]),
+        home_team=str(input_payload["game"]["home_team"]),
+    )
+    return normalized
+
+
+_TEAM_EVIDENCE_LABELS = {
+    "all_games": "all games",
+    "division_games": "divisional games",
+    "non_division_games": "non-divisional games",
+    "division_as_home": "divisional home games",
+    "division_as_away": "divisional away games",
+    "conference_non_division": "conference non-divisional games",
+    "non_conference": "non-conference games",
+    "against_current_opponent": "games against the current opponent",
+    "against_current_opponent_as_home": (
+        "home games against the current opponent"
+    ),
+    "against_current_opponent_as_away": (
+        "away games against the current opponent"
+    ),
+    "division_meeting_1": "first annual divisional meetings",
+    "division_meeting_2": "second annual divisional meetings",
+}
+
+
+def _sample_card(label: str, value: dict[str, Any]) -> str:
+    games = int(value["games"])
+    if not games:
+        return f"{label}: no sample (0 games)"
+    record = f"{value['wins']}-{value['losses']}"
+    if int(value["ties"]):
+        record += f"-{value['ties']}"
+    return (
+        f"{label}: {record}, {float(value['win_rate']):.1%} win rate, "
+        f"{float(value['average_margin']):+.2f} average margin "
+        f"({games} games)"
+    )
+
+
+def _evidence_card(
+    path: str,
+    value: Any,
+    input_payload: dict[str, Any],
+) -> str:
+    parts = path.split(".")
+    if len(parts) >= 3 and parts[:2] == ["historical_data", "away_team"]:
+        team = str(input_payload["game"]["away_team"])
+        key = parts[2]
+    elif len(parts) >= 3 and parts[:2] == ["historical_data", "home_team"]:
+        team = str(input_payload["game"]["home_team"])
+        key = parts[2]
+    else:
+        team = ""
+        key = ""
+    if key in _TEAM_EVIDENCE_LABELS and len(parts) == 3:
+        return _sample_card(
+            f"{team} — {_TEAM_EVIDENCE_LABELS[key]}",
+            value,
+        )
+    if (
+        key == "current_opponent_series"
+        and len(parts) == 4
+        and parts[3].startswith("second_meeting_after_first_")
+    ):
+        result = parts[3].removeprefix("second_meeting_after_first_")
+        return _sample_card(
+            f"{team} — second meetings after a first-meeting {result}",
+            value,
+        )
+    if key == "current_opponent_series" and len(parts) == 3:
+        return (
+            f"{team} — completed opponent-pair seasons: "
+            f"{value['complete_two_game_seasons']}; sweeps "
+            f"{value['team_sweeps']}; times swept {value['team_swept']}; "
+            f"splits or ties {value['season_splits_or_ties']}"
+        )
+    cohort_prefix = (
+        "historical_data.divisional_home_side_meeting_cohorts."
+    )
+    if path.startswith(cohort_prefix):
+        meeting = parts[-1].removeprefix("meeting_")
+        if ".nfl." in path:
+            label = f"NFL-wide home-side meeting {meeting}"
+        elif ".division." in path:
+            division = input_payload["historical_data"][
+                "divisional_home_side_meeting_cohorts"
+            ]["division"]["name"]
+            label = f"{division} home-side meeting {meeting}"
+        else:
+            label = f"Opponent-pair home-side meeting {meeting}"
+        return _sample_card(label, value)
+    if path == "current_season_prior_meeting":
+        if value is None:
+            return "Current-season prior meeting: none"
+        return (
+            f"Current-season prior meeting: {value['away_team']} "
+            f"{value['away_score']}, {value['home_team']} "
+            f"{value['home_score']}"
+        )
+    raise ValueError(f"Evidence path is not selectable: {path}")
+
+
+def _evidence_favored_side(
+    path: str,
+    value: Any,
+    input_payload: dict[str, Any],
+) -> str | None:
+    if path == "current_season_prior_meeting" and value is not None:
+        winner = str(value["winner"])
+        if winner == str(input_payload["game"]["home_team"]):
+            return "home"
+        if winner == str(input_payload["game"]["away_team"]):
+            return "away"
+        return None
+    if not isinstance(value, dict):
+        return None
+    if "games" in value:
+        if not int(value["games"]):
+            return None
+        win_rate = float(value["win_rate"])
+        margin = float(value["average_margin"])
+        if win_rate > 0.5 and margin > 0:
+            evidence_side = "sample"
+        elif win_rate < 0.5 and margin < 0:
+            evidence_side = "opponent"
+        else:
+            return None
+        if ".divisional_home_side_meeting_cohorts." in path:
+            sample_side = "home"
+        elif path.startswith("historical_data.away_team."):
+            sample_side = "away"
+        elif path.startswith("historical_data.home_team."):
+            sample_side = "home"
+        else:
+            return None
+        if evidence_side == "sample":
+            return sample_side
+        return "away" if sample_side == "home" else "home"
+    if path.endswith(".current_opponent_series"):
+        sweeps = int(value["team_sweeps"])
+        swept = int(value["team_swept"])
+        if sweeps == swept:
+            return None
+        sample_side = (
+            "away"
+            if path.startswith("historical_data.away_team.")
+            else "home"
+        )
+        if sweeps > swept:
+            return sample_side
+        return "away" if sample_side == "home" else "home"
+    return None
+
+
+def _normalize_evidence_card_opinion(
+    opinion: dict[str, Any],
+    input_payload: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = dict(opinion)
+    confidence_label = {
+        1: "very low-confidence",
+        2: "low-confidence",
+        3: "moderate-confidence",
+        4: "high-confidence",
+        5: "very high-confidence",
+    }.get(int(opinion.get("confidence_stars") or 0))
+    if confidence_label is None:
+        raise ValueError("confidence_stars must be an integer from 1 through 5")
+    thesis = (
+        f"The selected divisional evidence yields a {confidence_label} lean "
+        f"toward {opinion.get('predicted_winner')}, with conflicting evidence "
+        "retained as counterarguments."
+    )
+    normalized["thesis"] = thesis
+    normalized["thesis_citation"] = {
+        "claim": thesis,
+        "evidence": [],
+    }
+    selected: set[str] = set()
+    supporting: list[dict[str, Any]] = []
+    counterarguments: list[dict[str, Any]] = []
+    predicted_side = (
+        "home"
+        if str(opinion.get("predicted_winner"))
+        == str(input_payload["game"]["home_team"])
+        else "away"
+    )
+    paths = opinion.get("evidence_paths")
+    if not isinstance(paths, list) or not paths or not all(
+        isinstance(path, str) and path.strip() for path in paths
+    ):
+        raise ValueError("evidence_paths must be a non-empty list")
+    for path in paths:
+        path = path.strip()
+        if path in selected:
+            raise ValueError(f"Evidence path selected more than once: {path}")
+        selected.add(path)
+        value = _resolve_evidence_path(input_payload, path)
+        is_no_signal = value is None or (
+            isinstance(value, dict) and int(value.get("games", -1)) == 0
+        )
+        if is_no_signal:
+            raise ValueError(f"evidence_paths contains no-signal path: {path}")
+        card = {
+            "claim": _evidence_card(path, value, input_payload),
+            "evidence": [{"path": path, "value": value}],
+        }
+        favored_side = _evidence_favored_side(path, value, input_payload)
+        if favored_side == predicted_side:
+            supporting.append(card)
+        else:
+            counterarguments.append(card)
+    if not supporting or not counterarguments:
+        raise ValueError(
+            "Selected evidence must produce support and counterarguments"
+        )
+    normalized["supporting_factors"] = supporting
+    normalized["counterarguments"] = counterarguments
+
+    paths = opinion.get("no_signal_evidence_paths")
+    if not isinstance(paths, list) or not all(
+        isinstance(path, str) and path.strip() for path in paths
+    ):
+        raise ValueError("no_signal_evidence_paths must be a list")
+    cards = []
+    for path in paths:
+        path = path.strip()
+        if path in selected:
+            raise ValueError(f"Evidence path selected more than once: {path}")
+        selected.add(path)
+        value = _resolve_evidence_path(input_payload, path)
+        is_no_signal = value is None or (
+            isinstance(value, dict) and int(value.get("games", -1)) == 0
+        )
+        if not is_no_signal:
+            raise ValueError(f"No-signal path has usable evidence: {path}")
+        cards.append(
+            {
+                "claim": _evidence_card(path, value, input_payload),
+                "evidence": [{"path": path, "value": value}],
+            }
+        )
+    normalized["no_signal_factors"] = cards
+    cohorts = input_payload["historical_data"].get(
+        "divisional_home_side_meeting_cohorts"
+    )
+    meeting = input_payload["game"].get("division_meeting_number")
+    if cohorts and meeting in {1, 2}:
+        required = {
+            f"historical_data.divisional_home_side_meeting_cohorts."
+            f"{scope}.meeting_{meeting}"
+            for scope in ("nfl", "division", "opponent_pair")
+        }
+        missing = required - selected
+        if missing:
+            raise ValueError(
+                f"Missing required home-side cohort paths: {sorted(missing)}"
+            )
+    discarded = opinion.get("discarded_considerations")
+    if not isinstance(discarded, list) or not all(
+        isinstance(value, str) and value.strip() for value in discarded
+    ):
+        raise ValueError(
+            "discarded_considerations must contain non-empty strings"
+        )
+    normalized["discarded_considerations"] = [
+        value for value in discarded if not re.search(r"\d", value)
+    ]
+    normalized["full_opinion"] = _render_cited_opinion(
+        normalized,
+        away_team=str(input_payload["game"]["away_team"]),
+        home_team=str(input_payload["game"]["home_team"]),
+    )
+    return normalized
+
+
+async def _fact_check_nondeterministic_analysis(
+    claims: Any,
+    input_payload: dict[str, Any],
+    *,
+    model: str,
+    create_fn: CreateFn,
+) -> tuple[str, str, str, str]:
+    if not isinstance(claims, list) or not claims or not all(
+        isinstance(claim, str) and claim.strip() for claim in claims
+    ):
+        raise ValueError(
+            "nondeterministic_analysis must be a non-empty string list"
+        )
+    normalized_claims = [claim.strip() for claim in claims]
+    raw_analysis = "\n".join(normalized_claims)
+    if len(raw_analysis) >= MAX_SHEET_CELL_CHARS:
+        raise ValueError("nondeterministic analysis exceeds the Sheet limit")
+    prompt = FACTUALITY_PROMPT_PATH.read_text(encoding="utf-8")
+    response = await create_fn(
+        model=model,
+        max_tokens=4000,
+        system=prompt,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "Classify these exact claims against the supplied input.\n"
+                    f"Input:\n{_canonical_json(input_payload)}\n"
+                    f"Claims:\n{_canonical_json(normalized_claims)}"
+                ),
+            }
+        ],
+    )
+    raw_response = str(response.content[0].text).strip()
+    report = _parse_response(raw_response)
+    results = report.get("claims")
+    if not isinstance(results, list) or len(results) != len(normalized_claims):
+        raise ValueError("Factuality report must classify every claim once")
+    usable: list[str] = []
+    normalized_results: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for result in results:
+        if not isinstance(result, dict):
+            raise ValueError("Factuality claim result must be an object")
+        index = result.get("index")
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise ValueError("Factuality claim index must be an integer")
+        if index < 0 or index >= len(normalized_claims) or index in seen:
+            raise ValueError("Factuality claim index is invalid or duplicated")
+        seen.add(index)
+        classification = str(result.get("classification") or "")
+        if classification not in {
+            "supported",
+            "reasonable_inference",
+            "unsupported",
+        }:
+            raise ValueError("Invalid factuality classification")
+        evidence: list[dict[str, Any]] = []
+        if classification != "unsupported":
+            try:
+                cited = _normalize_cited_claim(
+                    {
+                        "claim": normalized_claims[index],
+                        "evidence_paths": result.get("evidence_paths"),
+                    },
+                    input_payload,
+                    role=f"factuality.claims[{index}]",
+                )
+            except ValueError as exc:
+                classification = "unsupported"
+                result["reason"] = (
+                    f"{str(result.get('reason') or '').strip()} "
+                    f"Validator rejected citations: {exc}"
+                ).strip()
+            else:
+                evidence = cited["evidence"]
+                prefix = (
+                    ""
+                    if classification == "supported"
+                    else "Interpretation: "
+                )
+                usable.append(f"{prefix}{normalized_claims[index]}")
+        normalized_results.append(
+            {
+                "index": index,
+                "text": normalized_claims[index],
+                "classification": classification,
+                "evidence": evidence,
+                "reason": str(result.get("reason") or "").strip(),
+            }
+        )
+    normalized_results.sort(key=lambda item: item["index"])
+    unsupported_count = sum(
+        item["classification"] == "unsupported"
+        for item in normalized_results
+    )
+    status = (
+        "rejected"
+        if not usable
+        else "partially_verified"
+        if unsupported_count
+        else "verified"
+    )
+    usable_text = "\n".join(f"- {claim}" for claim in usable)
+    factuality_json = _canonical_json(
+        {
+            "analysis_sha256": _sha256_text(raw_analysis),
+            "model": model,
+            "prompt_path": str(FACTUALITY_PROMPT_PATH.relative_to(ROOT)),
+            "prompt_sha256": _sha256_text(prompt),
+            "raw_response": raw_response,
+            "claims": normalized_results,
+        }
+    )
+    return raw_analysis, usable_text, status, factuality_json
+
+
+def _validate_divisional_cohort_coverage(
+    opinion: dict[str, Any],
+    input_payload: dict[str, Any],
+) -> None:
+    cohorts = input_payload["historical_data"].get(
+        "divisional_home_side_meeting_cohorts"
+    )
+    meeting_number = input_payload["game"].get("division_meeting_number")
+    if not cohorts or meeting_number not in {1, 2}:
+        return
+    meeting_key = f"meeting_{meeting_number}"
+    required = (
+        ("NFL-wide home-side", cohorts["nfl"][meeting_key]),
+        (
+            f"{cohorts['division']['name']} home-side",
+            cohorts["division"][meeting_key],
+        ),
+        (
+            "Opponent-pair home-side",
+            cohorts["opponent_pair"][meeting_key],
+        ),
+    )
+    full_opinion = str(opinion.get("full_opinion") or "")
+    for label, sample in required:
+        record = f"{sample['wins']}-{sample['losses']}"
+        if int(sample["ties"]):
+            record += f"-{sample['ties']}"
+        if not re.search(
+            rf"{re.escape(label)}[^\n]{{0,160}}\b{re.escape(record)}\b",
+            full_opinion,
+            re.IGNORECASE,
+        ):
+            raise ValueError(
+                f"full_opinion must include {label} record {record}"
+            )
+
+
 def validate_opinion(
     opinion: dict[str, Any],
     *,
@@ -588,6 +1763,11 @@ def validate_opinion(
     home_team: str,
     schedule_input: dict[str, Any] | None = None,
 ) -> None:
+    cited_schema = bool(
+        schedule_input is not None
+        and schedule_input.get("input_profile") == "divisional"
+        and isinstance(opinion.get("thesis_citation"), dict)
+    )
     winner = str(opinion.get("predicted_winner") or "")
     if winner not in {away_team, home_team}:
         raise ValueError("predicted_winner must exactly match one game team")
@@ -641,18 +1821,71 @@ def validate_opinion(
         )
     for field in ("supporting_factors", "counterarguments"):
         value = opinion.get(field)
-        if not isinstance(value, list) or not value or not all(
-            isinstance(item, str) and item.strip() for item in value
-        ):
+        valid_items = (
+            all(
+                isinstance(item, dict)
+                and str(item.get("claim") or "").strip()
+                and isinstance(item.get("evidence"), list)
+                and item["evidence"]
+                for item in value
+            )
+            if cited_schema and isinstance(value, list)
+            else all(
+                isinstance(item, str) and item.strip()
+                for item in value or []
+            )
+        )
+        if not isinstance(value, list) or not value or not valid_items:
             raise ValueError(
                 f"{field} must be a non-empty list of non-empty strings"
             )
     for field in ("no_signal_factors", "discarded_considerations"):
         value = opinion.get(field)
-        if not isinstance(value, list) or not all(
-            isinstance(item, str) and item.strip() for item in value
-        ):
+        if field == "no_signal_factors" and cited_schema:
+            valid_items = isinstance(value, list) and all(
+                isinstance(item, dict)
+                and str(item.get("claim") or "").strip()
+                and isinstance(item.get("evidence"), list)
+                and item["evidence"]
+                for item in value
+            )
+        else:
+            valid_items = isinstance(value, list) and all(
+                isinstance(item, str) and item.strip() for item in value
+            )
+        if not valid_items:
             raise ValueError(f"{field} must be a list of non-empty strings")
+    if (
+        schedule_input is not None
+        and schedule_input.get("input_profile") == "divisional"
+    ):
+        _validate_divisional_cohort_coverage(opinion, schedule_input)
+        unsupported_labels = re.search(
+            r"\b(?:elite|dominant|dominance|dominating|commanding|"
+            r"statistically significant|significant(?:ly)?|"
+            r"outstanding)\b",
+            _canonical_json(opinion),
+            re.IGNORECASE,
+        )
+        if unsupported_labels:
+            raise ValueError(
+                "Opinion uses unsupported qualitative label: "
+                f"{unsupported_labels.group(0)}"
+            )
+        full_opinion = str(opinion["full_opinion"])
+        measured_label = re.search(
+            r"\b(?:markedly|strong(?:er|est)?|superior(?:ity)?)\b",
+            full_opinion,
+            re.IGNORECASE,
+        )
+        if measured_label and not (
+            len(re.findall(r"\b\d+-\d+(?:-\d+)?\b", full_opinion)) >= 2
+            and re.search(r"\b\d+\s+games?\b", full_opinion, re.IGNORECASE)
+        ):
+            raise ValueError(
+                "Measured comparison lacks records and sample sizes: "
+                f"{measured_label.group(0)}"
+            )
     if (
         schedule_input is not None
         and schedule_input["game"].get("week") is None
@@ -680,16 +1913,31 @@ async def generate_opinion(
     expert_id: str,
     game: dict[str, Any],
     history: list[dict[str, Any]],
+    schedule: list[dict[str, Any]] | None = None,
+    current_season_results: list[dict[str, Any]] | None = None,
     store: MoeOpinionStore,
     model: str | None = None,
     create_fn: CreateFn = _claude_create_with_retry,
+    repair_attempts: int = 0,
+    _repair_response: str = "",
+    _repair_error: str = "",
 ) -> dict[str, Any]:
     expert = load_expert(expert_id)
-    if expert["input_profile"] != "schedule_only":
+    if expert["input_profile"] == "schedule_only":
+        input_payload = build_schedule_input(game, history)
+    elif expert["input_profile"] == "divisional":
+        if schedule is None:
+            raise ValueError("Divisional expert requires the current schedule")
+        input_payload = build_divisional_input(
+            game,
+            history,
+            schedule,
+            current_season_results,
+        )
+    else:
         raise NotImplementedError(
             f"Unsupported input profile: {expert['input_profile']}"
         )
-    input_payload = build_schedule_input(game, history)
     input_json = _canonical_json(input_payload)
     if len(input_json) >= MAX_SHEET_CELL_CHARS:
         raise ValueError("MOE input exceeds the Google Sheets cell limit")
@@ -766,8 +2014,23 @@ async def generate_opinion(
         "discarded_considerations_json": "",
         "predicted_away_score": "",
         "predicted_home_score": "",
+        "nondeterministic_analysis_raw": "",
+        "nondeterministic_analysis_usable": "",
+        "nondeterministic_factuality_status": "",
+        "nondeterministic_factuality_json": "",
     }
     try:
+        request = (
+            f"Generate the {expert['name']} opinion from this exact input:\n"
+            f"{input_json}"
+        )
+        if _repair_response:
+            request += (
+                "\n\nYour previous JSON response failed validation. Correct "
+                "only the response so it satisfies the same prompt and input."
+                f"\nValidation error: {_repair_error}"
+                f"\nPrevious response:\n{_repair_response}"
+            )
         response = await create_fn(
             model=selected_model,
             max_tokens=max_tokens,
@@ -775,10 +2038,7 @@ async def generate_opinion(
             messages=[
                 {
                     "role": "user",
-                    "content": (
-                        "Generate the schedule opinion from this exact input:\n"
-                        f"{input_json}"
-                    ),
+                    "content": request,
                 }
             ],
         )
@@ -789,6 +2049,19 @@ async def generate_opinion(
                 "MOE response exceeds the Google Sheets cell limit"
             )
         opinion = _parse_response(raw_response)
+        if int(expert["output_schema_version"]) == 3:
+            opinion = _normalize_cited_opinion(opinion, input_payload)
+        elif int(expert["output_schema_version"]) == 4:
+            nondeterministic = await _fact_check_nondeterministic_analysis(
+                opinion.get("nondeterministic_analysis"),
+                input_payload,
+                model=selected_model,
+                create_fn=create_fn,
+            )
+            opinion = _normalize_evidence_card_opinion(
+                opinion,
+                input_payload,
+            )
         validate_opinion(
             opinion,
             away_team=away,
@@ -815,7 +2088,14 @@ async def generate_opinion(
                 "pick_side": opinion["predicted_winner"],
                 "thesis": str(opinion["thesis"]).strip(),
                 "supporting_factors_json": _canonical_json(
-                    opinion["supporting_factors"]
+                    (
+                        {
+                            "thesis": opinion["thesis_citation"],
+                            "items": opinion["supporting_factors"],
+                        }
+                        if int(expert["output_schema_version"]) in {3, 4}
+                        else opinion["supporting_factors"]
+                    )
                 ),
                 "counterarguments_json": _canonical_json(
                     opinion["counterarguments"]
@@ -827,15 +2107,58 @@ async def generate_opinion(
                 "discarded_considerations_json": _canonical_json(
                     opinion["discarded_considerations"]
                 ),
+                "nondeterministic_analysis_raw": (
+                    nondeterministic[0]
+                    if int(expert["output_schema_version"]) == 4
+                    else ""
+                ),
+                "nondeterministic_analysis_usable": (
+                    nondeterministic[1]
+                    if int(expert["output_schema_version"]) == 4
+                    else ""
+                ),
+                "nondeterministic_factuality_status": (
+                    nondeterministic[2]
+                    if int(expert["output_schema_version"]) == 4
+                    else ""
+                ),
+                "nondeterministic_factuality_json": (
+                    nondeterministic[3]
+                    if int(expert["output_schema_version"]) == 4
+                    else ""
+                ),
                 "generation_status": "valid",
             }
         )
+        if row["nondeterministic_analysis_usable"]:
+            row["full_opinion"] += (
+                "\n\nNon-deterministic perspective\n"
+                f"{row['nondeterministic_analysis_usable']}"
+            )
         row["output_sha256"] = opinion_output_sha256(row)
     except Exception as exc:
         row["generation_status"] = "invalid"
         row["generation_error"] = f"{type(exc).__name__}: {exc}"
         row["review_status"] = "not_applicable"
         _persist_attempt(store, row)
+        if (
+            repair_attempts > 0
+            and row["raw_response"]
+            and isinstance(exc, ValueError)
+        ):
+            return await generate_opinion(
+                expert_id=expert_id,
+                game=game,
+                history=history,
+                schedule=schedule,
+                current_season_results=current_season_results,
+                store=store,
+                model=selected_model,
+                create_fn=create_fn,
+                repair_attempts=repair_attempts - 1,
+                _repair_response=row["raw_response"],
+                _repair_error=row["generation_error"],
+            )
         raise
     _persist_attempt(store, row)
     return row
@@ -1112,6 +2435,26 @@ def opinion_output_sha256(row: dict[str, Any]) -> str:
             row.get("discarded_considerations_json") or ""
         ),
     }
+    if any(
+        row.get(field)
+        for field in (
+            "nondeterministic_analysis_raw",
+            "nondeterministic_analysis_usable",
+            "nondeterministic_factuality_status",
+            "nondeterministic_factuality_json",
+        )
+    ):
+        payload.update(
+            {
+                field: str(row.get(field) or "")
+                for field in (
+                    "nondeterministic_analysis_raw",
+                    "nondeterministic_analysis_usable",
+                    "nondeterministic_factuality_status",
+                    "nondeterministic_factuality_json",
+                )
+            }
+        )
     return _sha256_text(_canonical_json(payload))
 
 
@@ -1170,7 +2513,8 @@ def opinion_summary(
             else 1 - probability
         )
         lines.append(
-            f"<b>{html.escape(str(row['expert_name']))}</b>: {winner} "
+            f"<b>{html.escape(str(row['expert_name']))}</b> "
+            f"· <code>{html.escape(str(row['model']))}</code>: {winner} "
             f"{winner_probability:.0%} {stars} · "
             f"score {int(row['predicted_away_score'])}-"
             f"{int(row['predicted_home_score'])}"

@@ -161,6 +161,28 @@ class GameHistoryTest(unittest.TestCase):
         self.assertEqual(summary["week_1_division_games"], 4)
         self.assertEqual(summary["week_1_division_home_record"], "2-1-1")
 
+    def test_current_partial_season_allows_first_division_meeting(self) -> None:
+        standings = _standings()
+        rows = build_game_history(
+            {
+                2026: [
+                    _event(
+                        20,
+                        season=2026,
+                        week=3,
+                        away="AFC-1-1",
+                        home="AFC-1-2",
+                    )
+                ]
+            },
+            {2026: standings},
+            validate=False,
+            require_complete_divisional_pairs=False,
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["division_meeting_number"], 1)
+
     def test_fetches_two_calendar_years_and_filters_season(self) -> None:
         def response(request: httpx.Request) -> httpx.Response:
             year = int(request.url.params["dates"])

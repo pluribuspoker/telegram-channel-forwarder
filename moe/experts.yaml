@@ -13,3 +13,16 @@ experts:
       - claude-opus-4-6
     enabled: true
     initial_weight: 1.0
+  divisional:
+    name: Divisional Expert
+    mode: agent
+    version: 28
+    prompt_version: 17
+    prompt: prompts/divisional/v17.md
+    input_profile: divisional
+    output_schema_version: 4
+    default_model: claude-opus-4-6
+    allowed_models:
+      - claude-opus-4-6
+    enabled: true
+    initial_weight: 1.0
