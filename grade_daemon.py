@@ -76,8 +76,9 @@ ESPN_CACHE_TTL = 30  # seconds — don't re-fetch same sport/date faster than th
 CYCLE_TIMEOUT = int(os.getenv("GRADE_DAEMON_CYCLE_TIMEOUT", "300"))
 # How many results on the same game must land in one cycle before they are merged
 # into a single broadcast. 2 = merge as soon as there is anything to merge; raise it
-# to keep the per-capper look until the spam is worse. 0/1 would "group" lone picks,
-# so the floor is 2.
+# to keep the per-capper look until the spam is worse. The floor stays 2 because this
+# knob is about *merging* — a lone result still renders in the same score-header
+# format whenever its final score resolved (see _flush_broadcasts).
 GROUP_MIN = max(2, int(os.getenv("GRADE_DAEMON_GROUP_MIN", "2")))
 # An entry only settles once EVERY leg has a verdict, so one leg that can never
 # resolve (a garbled parse with no findable game — it context-skips for free and
@@ -447,9 +448,13 @@ async def _flush_broadcasts(
 
     Results that land in the same cycle on the same game go out as ONE message
     instead of one per capper — three cappers on Cubs ML used to fire three
-    near-identical messages and three notifications. Anything without a resolvable
-    game key, plus parlays and multi-pick messages, falls through to the unchanged
-    per-message path, as does a game with fewer than GROUP_MIN results.
+    near-identical messages and three notifications. A lone result also renders
+    through the group format once its final score is in hand, so every scored
+    single carries the "⚾️ Marlins 1–6 Cubs" header; the score is the whole point
+    of that header, so a lone result *without* one (mid-game settle, non-ESPN
+    sport, no event match) keeps the compact per-pick line. Anything without a
+    resolvable game key, plus parlays and multi-pick messages, always falls
+    through to the unchanged per-message path.
 
     Ordering matches the pre-grouping code: mark broadcasted and persist BEFORE
     sending, so a crash mid-flush drops a result rather than double-posting one
@@ -484,7 +489,15 @@ async def _flush_broadcasts(
             _mark_broadcasted(cache, item)
         _save_pending_cache(cache)
 
-        if key[0] == "game" and len(group) >= GROUP_MIN:
+        # A lone result takes the same header format only when the final score is
+        # known — a "Team vs Team" header over a single line adds nothing, so the
+        # degraded-header fallbacks stay reserved for actual merges.
+        single_with_score = (
+            len(group) == 1
+            and group[0].get("event") is not None
+            and _final_score_text(group[0]["event"]) is not None
+        )
+        if key[0] == "game" and (len(group) >= GROUP_MIN or single_with_score):
             await audit.broadcast_group(
                 target_channel=key[1],
                 header=_group_header(group),
@@ -496,9 +509,12 @@ async def _flush_broadcasts(
                 reply_to_id=next((it["reply_to_id"] for it in group if it["reply_to_id"]), None),
             )
             ident = key[2][2]
-            print(f"  ⊞ merged {len(group)} results on {key[2][0]} "
-                  f"{'/'.join(ident) if isinstance(ident, tuple) else ident} "
-                  f"into one broadcast")
+            ident_s = "/".join(ident) if isinstance(ident, tuple) else ident
+            if len(group) > 1:
+                print(f"  ⊞ merged {len(group)} results on {key[2][0]} {ident_s} "
+                      f"into one broadcast")
+            else:
+                print(f"  ⊞ broadcast with final-score header on {key[2][0]} {ident_s}")
         else:
             for it in group:
                 await audit.broadcast_results(

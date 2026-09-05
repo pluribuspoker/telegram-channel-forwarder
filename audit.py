@@ -561,6 +561,12 @@ class AuditLog:
     ) -> None:
         """Post ONE result message covering several cappers' picks on the same game.
 
+        Also the renderer for a LONE pick whose final score resolved: the daemon
+        routes those here so every scored result shares the score-header format
+        ("⚾️ Marlins 1–6 Cubs" + pick line with the capper after the dash), and
+        `broadcast_results` stays the compact fallback for the rest (parlays,
+        mid-game settles, sports ESPN doesn't carry).
+
         Each item is {channel_id, message_id, capper, pick, verdict, odds}. Bets that
         are identical — same verdict, same description, same price — collapse onto a
         single line naming every capper, so three cappers on Cubs ML read as one line
