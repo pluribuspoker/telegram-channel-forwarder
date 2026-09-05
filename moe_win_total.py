@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import statistics
 from collections import Counter
 from typing import Any, Callable
@@ -117,6 +118,9 @@ def _historical_analogs(
     game: dict[str, Any],
     game_history: list[dict[str, Any]],
     team_history: list[dict[str, Any]],
+    *,
+    away_market_total: float,
+    home_market_total: float,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     season = int(game["season"])
     away_team = str(game["away_team"])
@@ -138,29 +142,6 @@ def _historical_analogs(
             "wins": home_prior,
         },
     }
-    if away_prior is None or home_prior is None:
-        return team_context, {
-            "method": "prior_season_wins_only",
-            "limitation": (
-                "Historical preseason bookmaker win totals are unavailable."
-            ),
-            "exact_prior_win_pair": _result_sample(
-                [],
-                lambda _: "home",
-                description="No prior-season record is available.",
-            ),
-            "matching_prior_win_gap": _result_sample(
-                [],
-                lambda _: "home",
-                description="No prior-season record is available.",
-            ),
-            "matching_prior_win_level": _result_sample(
-                [],
-                lambda _: "home",
-                description="No prior-season record is available.",
-            ),
-        }
-
     annotated = []
     for row in game_history:
         row_season = int(row["season"])
@@ -181,6 +162,70 @@ def _historical_analogs(
                 "home_prior_wins": historical_home_wins,
             }
         )
+
+    away_market_band = list(
+        range(
+            max(0, math.ceil(away_market_total - 2)),
+            min(17, math.floor(away_market_total + 2)) + 1,
+        )
+    )
+    home_market_band = list(
+        range(
+            max(0, math.ceil(home_market_total - 2)),
+            min(17, math.floor(home_market_total + 2)) + 1,
+        )
+    )
+    market_band_games = [
+        row
+        for row in annotated
+        if int(row["away_prior_wins"]) in away_market_band
+        and int(row["home_prior_wins"]) in home_market_band
+    ]
+    market_band_sample = _result_sample(
+        market_band_games,
+        lambda _row: "home",
+        description=(
+            "Historical home-side results when the away team's prior-season "
+            f"wins were in {away_market_band} around {away_market_total} and "
+            f"the home team's prior-season wins were in {home_market_band} "
+            f"around {home_market_total}."
+        ),
+    ) | {
+        "away_bookmaker_projection": away_market_total,
+        "away_allowed_prior_wins": away_market_band,
+        "home_bookmaker_projection": home_market_total,
+        "home_allowed_prior_wins": home_market_band,
+        "integer_band_rule": (
+            "ceil(projection - 2) through floor(projection + 2), inclusive"
+        ),
+        "seasons": sorted(
+            {int(row["season"]) for row in market_band_games}
+        ),
+    }
+
+    if away_prior is None or home_prior is None:
+        return team_context, {
+            "method": "prior_season_wins_only",
+            "limitation": (
+                "Historical preseason bookmaker win totals are unavailable."
+            ),
+            "bookmaker_projection_band_matchup": market_band_sample,
+            "exact_prior_win_pair": _result_sample(
+                [],
+                lambda _: "home",
+                description="No prior-season record is available.",
+            ),
+            "matching_prior_win_gap": _result_sample(
+                [],
+                lambda _: "home",
+                description="No prior-season record is available.",
+            ),
+            "matching_prior_win_level": _result_sample(
+                [],
+                lambda _: "home",
+                description="No prior-season record is available.",
+            ),
+        }
 
     exact = [
         row
@@ -245,6 +290,7 @@ def _historical_analogs(
             "Historical preseason bookmaker win totals are unavailable, so "
             "these analogs use only records entering the season."
         ),
+        "bookmaker_projection_band_matchup": market_band_sample,
         "exact_prior_win_pair": _result_sample(
             exact,
             lambda _row: "home",
@@ -481,6 +527,8 @@ def build_win_total_input(
         game,
         game_history,
         team_history,
+        away_market_total=away_market,
+        home_market_total=home_market,
     )
     return {
         "input_profile": "win_total",

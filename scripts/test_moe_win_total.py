@@ -106,6 +106,8 @@ def _team_history() -> list[dict]:
         {"season": 2025, "team": "Seattle Seahawks", "wins": 14},
         {"season": 2024, "team": "Historical Away", "wins": 14},
         {"season": 2024, "team": "Historical Home", "wins": 14},
+        {"season": 2024, "team": "Band Away", "wins": 9},
+        {"season": 2024, "team": "Band Home", "wins": 11},
     ]
 
 
@@ -117,6 +119,13 @@ def _game_history() -> list[dict]:
             "home_team": "Historical Home",
             "away_score": 24,
             "home_score": 20,
+        },
+        {
+            "season": 2025,
+            "away_team": "Band Away",
+            "home_team": "Band Home",
+            "away_score": 17,
+            "home_score": 24,
         }
     ]
 
@@ -201,6 +210,17 @@ class WinTotalInputTest(unittest.TestCase):
             payload["historical_analogs"]["method"],
             "prior_season_wins_only",
         )
+        market_band = payload["historical_analogs"][
+            "bookmaker_projection_band_matchup"
+        ]
+        self.assertEqual(
+            market_band["away_allowed_prior_wins"], [8, 9, 10, 11]
+        )
+        self.assertEqual(
+            market_band["home_allowed_prior_wins"], [9, 10, 11, 12]
+        )
+        self.assertEqual(market_band["games"], 1)
+        self.assertEqual(market_band["wins"], 1)
 
     def test_latest_game_pick_revision_is_used(self) -> None:
         payload = build_win_total_input(
@@ -279,6 +299,15 @@ class WinTotalGenerationTest(unittest.IsolatedAsyncioTestCase):
                 },
                 {
                     "claim": (
+                        "The bookmaker-band prior-season sample was 1-0 for "
+                        "home sides across 1 game."
+                    ),
+                    "evidence_paths": [
+                        "historical_analogs.bookmaker_projection_band_matchup"
+                    ],
+                },
+                {
+                    "claim": (
                         "The exact prior-season role sample was 0-1 for "
                         "historical home sides across 1 game."
                     ),
@@ -343,7 +372,7 @@ class WinTotalGenerationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(row["generation_status"], "valid")
         self.assertEqual(row["input_profile"], "win_total")
-        self.assertEqual(row["expert_version"], 2)
+        self.assertEqual(row["expert_version"], 3)
         self.assertIn("A K projects Seattle", row["full_opinion"])
         self.assertEqual(store.rows, [row])
 
@@ -374,11 +403,11 @@ class WinTotalGenerationTest(unittest.IsolatedAsyncioTestCase):
     def test_expert_configuration_is_versioned(self) -> None:
         expert = load_expert("win_total")
 
-        self.assertEqual(expert["version"], 2)
-        self.assertEqual(expert["prompt_version"], 2)
+        self.assertEqual(expert["version"], 3)
+        self.assertEqual(expert["prompt_version"], 3)
         self.assertEqual(expert["output_schema_version"], 3)
         self.assertEqual(
-            expert["prompt_path"], "moe/prompts/win_total/v2.md"
+            expert["prompt_path"], "moe/prompts/win_total/v3.md"
         )
         self.assertEqual(expert["default_model"], "claude-opus-4-8")
         self.assertEqual(expert["reasoning_effort"], "max")

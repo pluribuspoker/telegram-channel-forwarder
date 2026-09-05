@@ -2190,6 +2190,7 @@ def validate_opinion(
             "consensus",
             "team_context",
             "historical_analogs",
+            "historical_analogs.bookmaker_projection_band_matchup",
             "historical_analogs.exact_prior_win_pair",
             "historical_analogs.matching_prior_win_gap",
             "historical_analogs.matching_prior_win_level",
