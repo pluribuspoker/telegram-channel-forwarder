@@ -172,7 +172,7 @@ async def main() -> None:
             )
 
         create_fn = agent_create_fn
-        generation_backend = "copilot_subagent"
+        generation_backend = "agent_runtime"
 
     generation_kwargs = {}
     if create_fn is not None:

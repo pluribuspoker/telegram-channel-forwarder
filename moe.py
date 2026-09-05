@@ -1965,7 +1965,11 @@ async def generate_opinion(
             f"Invalid reasoning effort for expert {expert_id}: "
             f"{reasoning_effort or '<missing>'}"
         )
-    if generation_backend not in {"anthropic_api", "copilot_subagent"}:
+    if generation_backend not in {
+        "anthropic_api",
+        "agent_runtime",
+        "copilot_subagent",
+    }:
         raise ValueError(
             f"Unsupported MOE generation backend: {generation_backend}"
         )

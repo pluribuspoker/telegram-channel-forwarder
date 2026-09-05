@@ -402,14 +402,16 @@ uses the same model and effort. New rows persist `generation_backend` and
 `generation_effort`; approval hashes bind both values when present while legacy
 approved rows without them retain their existing hashes.
 
-The project skill at `.github/skills/generate-nfl-moe-opinion/SKILL.md` provides
-an explicit alternative to API-key generation. A Copilot session can launch an
-Opus 4.8 subagent with maximum reasoning, save its raw JSON outside the
-repository, and pass it back through the normal generator with
+The runtime-neutral canonical project skill at
+`.claude/skills/generate-nfl-moe-opinion/SKILL.md` provides an explicit
+alternative to API-key generation. GitHub Copilot discovers a wrapper under
+`.github/skills/generate-nfl-moe-opinion/SKILL.md` that loads the same
+workflow. A compatible agent runtime uses Opus 4.8 with maximum reasoning,
+saves its raw JSON outside the repository, and passes it through the normal generator with
 `--agent-response`. Schema-v4 experts require a second independently generated
 factuality response via `--agent-factuality-response`. This path uses the same
 input builder, validators, Sheet persistence, output hash, and human approval
-gate as direct API generation; it records `generation_backend=copilot_subagent`
+gate as direct API generation; it records `generation_backend=agent_runtime`
 and never approves an opinion automatically.
 
 `emergency_migration.txt` is deliberately deferred until the MOE implementation
