@@ -179,11 +179,11 @@ class AkProjectionTest(unittest.TestCase):
         self.assertEqual(payload["market_gaps"]["total_gap"], 4.5)
         self.assertEqual(
             payload["market_gaps"]["total_gap_bucket"],
-            "plus_3_to_7",
+            "plus_3_to_9",
         )
         self.assertEqual(
-            payload["cross_sport_prior"]["total"]["normalized_matching_band"],
-            "extreme_positive",
+            payload["cross_sport_prior"]["total"]["wnba_mapping_band"],
+            "wnba_6_to_12",
         )
         self.assertEqual(
             payload["cross_sport_prior"][
@@ -202,17 +202,45 @@ class AkProjectionTest(unittest.TestCase):
             payload["ak_submission"],
         )
 
-    def test_uses_nfl_total_buckets_and_normalized_wnba_thresholds(self) -> None:
-        self.assertEqual(_total_gap_bucket(2), "plus_1_to_3")
-        band, _summary, fraction = _wnba_total_prior(
+    def test_uses_reviewed_nfl_to_wnba_total_bands(self) -> None:
+        self.assertEqual(_total_gap_bucket(2), "plus_0_to_3")
+        self.assertEqual(_total_gap_bucket(3.5), "plus_3_to_9")
+        self.assertEqual(_total_gap_bucket(9), "plus_9_to_12")
+        self.assertEqual(_total_gap_bucket(12), "plus_12_or_more")
+        band, summary = _wnba_total_prior(
             2,
-            48,
             load_wnba_prior(),
         )
 
-        self.assertEqual(band, "positive")
-        self.assertAlmostEqual(fraction, 2 / 48)
-        self.assertIn("14 of 17", _summary)
+        self.assertEqual(band, "wnba_0_to_6")
+        self.assertIn("3 of 4", summary)
+
+    def test_unavailable_wnba_band_cannot_support_a_pick(self) -> None:
+        lean = {
+            **_lean(),
+            "prediction_parse_status": "parsed",
+            "predicted_away_score": 30,
+            "predicted_home_score": 30,
+        }
+        lean["predicted_home_score"] = 31
+        payload = build_ak_input(
+            _game(),
+            [],
+            [lean],
+            ak_user_id="123",
+        )
+        total_prior = next(
+            item
+            for item in payload["evidence_catalog"]
+            if item["id"] == "wnba_total_prior"
+        )
+
+        self.assertEqual(
+            payload["cross_sport_prior"]["total"]["interpretation"],
+            "no_direction",
+        )
+        self.assertFalse(total_prior["supporting_allowed"])
+        self.assertNotIn("total_gap", payload["cross_sport_prior"])
 
     def test_separates_pickem_and_missing_spread(self) -> None:
         favorite, magnitude, state = _favorite(
@@ -385,11 +413,7 @@ class AkGenerationTest(unittest.IsolatedAsyncioTestCase):
             row["full_opinion"],
         )
         self.assertIn(
-            "or 49 with whole-number team scores",
-            row["full_opinion"],
-        )
-        self.assertIn(
-            "7-0 Under across the full reviewed sample",
+            "NFL 3 to <9 -> WNBA 6 to <12",
             row["full_opinion"],
         )
 

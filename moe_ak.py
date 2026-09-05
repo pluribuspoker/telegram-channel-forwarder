@@ -226,57 +226,51 @@ def _total_gap_bucket(gap: float) -> str:
         return "minus_7_or_less"
     if gap <= -3:
         return "minus_7_to_3"
-    if gap <= -1:
-        return "minus_3_to_1"
-    if gap < 1:
-        return "within_1"
+    if gap < 0:
+        return "minus_3_to_0"
     if gap < 3:
-        return "plus_1_to_3"
-    if gap < 7:
-        return "plus_3_to_7"
-    return "plus_7_or_more"
+        return "plus_0_to_3"
+    if gap < 9:
+        return "plus_3_to_9"
+    if gap < 12:
+        return "plus_9_to_12"
+    return "plus_12_or_more"
 
 
 def _wnba_total_prior(
     total_gap: float,
-    market_total: float,
     prior: dict[str, Any],
-) -> tuple[str, str, float]:
-    gap_fraction = total_gap / market_total
-    thresholds = prior["total_gap_normalized_thresholds"]
-    extreme_positive = float(thresholds["extreme_positive_min_fraction"])
-    positive = float(thresholds["positive_min_fraction"])
-    negative = float(thresholds["negative_max_fraction"])
-    if gap_fraction >= extreme_positive:
+) -> tuple[str, str]:
+    if total_gap < 0:
         return (
-            "extreme_positive",
-            "WNBA cross-sport prior: a proportionally equivalent extreme "
-            "positive gap finished under in 7 of 7 WNBA games across the "
-            "full reviewed sample.",
-            gap_fraction,
+            "negative_unmapped",
+            "WNBA cross-sport prior: the revised NFL-to-WNBA mapping does "
+            "not assign negative total gaps to a directional band.",
         )
-    if gap_fraction >= positive:
+    if total_gap < 3:
         return (
-            "positive",
-            "WNBA cross-sport prior: a proportionally equivalent positive "
-            "gap finished under in 14 of 17 WNBA games (82.4%) across the "
-            "full reviewed sample.",
-            gap_fraction,
+            "wnba_0_to_6",
+            "WNBA cross-sport prior: the NFL 0 to <3 band maps to WNBA 0 to "
+            "<6; the available fresh WNBA sample finished under in 3 of 4 "
+            "games.",
         )
-    if gap_fraction <= negative:
+    if total_gap < 9:
         return (
-            "negative",
-            "WNBA cross-sport prior: proportionally equivalent negative gaps "
-            "were unstable (unders 7 of 10 originally and 2 of 4 fresh), so "
-            "this supplies no mechanical total direction.",
-            gap_fraction,
+            "wnba_6_to_12",
+            "WNBA cross-sport prior: the NFL 3 to <9 band maps to WNBA 6 to "
+            "<12; the full WNBA sample finished under in 7 of 10 games.",
+        )
+    if total_gap < 12:
+        return (
+            "wnba_12_to_16",
+            "WNBA cross-sport prior: the NFL 9 to <12 band maps to WNBA 12 "
+            "to <16; the fresh WNBA sample finished under in 2 of 2 games, "
+            "while the earlier 12+ sample is not separable from 16+.",
         )
     return (
-        "no_direct_match",
-        "WNBA cross-sport prior: no reviewed normalized total-gap band "
-        f"directly matches the current {total_gap:+.1f}-point gap "
-        f"({gap_fraction:+.1%} of the market total).",
-        gap_fraction,
+        "wnba_16_or_more",
+        "WNBA cross-sport prior: the NFL 12+ band maps to WNBA 16+; no "
+        "isolated WNBA 16+ record is available.",
     )
 
 
@@ -597,11 +591,16 @@ def build_ak_input(
 
     side_prior_weight = prior_weight(side_nfl_games)
     total_prior_weight = prior_weight(total_nfl_games)
-    total_prior_band, total_prior, total_gap_fraction = _wnba_total_prior(
+    total_prior_band, total_prior = _wnba_total_prior(
         total_gap,
-        float(market_total),
         prior,
     )
+    total_prior_supported = total_prior_band in {
+        "wnba_0_to_6",
+        "wnba_6_to_12",
+        "wnba_12_to_16",
+    }
+    total_gap_fraction = total_gap / float(market_total)
 
     home_spread = submission_market.get("home_spread")
     implied = {"away": None, "home": None}
@@ -747,6 +746,7 @@ def build_ak_input(
             "id": "wnba_total_prior",
             "scope": "total",
             "text": total_prior,
+            "supporting_allowed": total_prior_supported,
         },
     ]
     return {
@@ -777,7 +777,20 @@ def build_ak_input(
         "market_gaps": market_gaps,
         "nfl_calibration": calibration,
         "cross_sport_prior": {
-            **prior,
+            "schema_version": prior["schema_version"],
+            "source": prior["source"],
+            "max_equivalent_nfl_observations": prior[
+                "max_equivalent_nfl_observations"
+            ],
+            "expires_at_nfl_bucket_size": prior[
+                "expires_at_nfl_bucket_size"
+            ],
+            "max_confidence_star_adjustment": prior[
+                "max_confidence_star_adjustment"
+            ],
+            "applicability": prior["applicability"],
+            "side_gap": prior["side_gap"],
+            "nfl_total_gap_mapping": prior["nfl_total_gap_mapping"],
             "label": "cross_sport_prior",
             "side": {
                 "matching_nfl_bucket_games": side_nfl_games,
@@ -786,8 +799,12 @@ def build_ak_input(
             "total": {
                 "matching_nfl_bucket_games": total_nfl_games,
                 "effective_equivalent_nfl_observations": total_prior_weight,
-                "normalized_matching_band": total_prior_band,
-                "current_gap_fraction": round(total_gap_fraction, 4),
+                "wnba_mapping_band": total_prior_band,
+                "interpretation": (
+                    "under_warning"
+                    if total_prior_supported
+                    else "no_direction"
+                ),
             },
         },
         "evidence_catalog": evidence_catalog,

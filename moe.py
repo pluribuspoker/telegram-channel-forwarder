@@ -1653,6 +1653,11 @@ def _normalize_ak_opinion(
                 raise ValueError(
                     f"Evidence {evidence_id} does not apply to {field}"
                 )
+        for evidence_id in evidence_ids:
+            if catalog[evidence_id].get("supporting_allowed") is False:
+                raise ValueError(
+                    f"Evidence {evidence_id} cannot support a recommendation"
+                )
         if selection == "PASS":
             if raw.get("line") is not None or stars != 1 or evidence_ids:
                 raise ValueError(
@@ -1781,17 +1786,15 @@ def _normalize_ak_opinion(
     def bullets(values: list[str]) -> str:
         return "\n".join(f"- {value}" for value in values) or "- None"
 
-    market_total = float(gaps["market_total"])
     total_gap = float(gaps["total_gap"])
-    total_gap_fraction = float(gaps["total_gap_fraction"])
-    thresholds = input_payload["cross_sport_prior"][
-        "total_gap_normalized_thresholds"
-    ]
-    positive_fraction = float(thresholds["positive_min_fraction"])
-    extreme_fraction = float(thresholds["extreme_positive_min_fraction"])
-    positive_gap = market_total * positive_fraction
-    extreme_gap = market_total * extreme_fraction
-    extreme_projected_total = math.ceil(market_total + extreme_gap)
+    total_prior = input_payload["cross_sport_prior"]["total"]
+    total_interpretation = (
+        "WNBA-only total interpretation: this is an Under warning, not "
+        "an automatic NFL Under pick."
+        if total_prior["interpretation"] == "under_warning"
+        else "WNBA-only total interpretation: this mapped band supplies no "
+        "directional pick."
+    )
     wnba_lines = [
         (
             f"Spread mapping: AK margin {gaps['ak_predicted_margin']:g} "
@@ -1806,27 +1809,23 @@ def _normalize_ak_opinion(
             "rather than an automatic NFL pick."
         ),
         (
-            f"Total mapping: AK is {total_gap:+g} versus {market_total:g}, "
-            f"or {total_gap_fraction:+.1%}; the normalized WNBA positive "
-            f"band begins at {positive_fraction:.1%}, about "
-            f"{positive_gap:+.1f} NFL points at this total."
+            f"Total mapping: AK is {total_gap:+g} versus "
+            f"{float(gaps['market_total']):g}; NFL bucket "
+            f"{gaps['total_gap_bucket']} maps to "
+            f"{total_prior['wnba_mapping_band']}."
         ),
         catalog["wnba_total_prior"]["text"],
+        total_interpretation,
         (
-            "WNBA-only total interpretation: this is an Under warning, not "
-            "an automatic NFL Under pick."
+            "Configured positive mapping: NFL 0 to <3 -> WNBA 0 to <6; "
+            "NFL 3 to <9 -> WNBA 6 to <12; NFL 9 to <12 -> WNBA 12 to "
+            "<16; NFL 12+ -> WNBA 16+."
         ),
         (
-            f"Extreme positive band: {extreme_fraction:.1%}, about "
-            f"{extreme_gap:+.1f} points versus an NFL total of "
-            f"{market_total:g}; that requires a projected total of at least "
-            f"{market_total + extreme_gap:.1f}, or {extreme_projected_total} "
-            "with whole-number team scores. The WNBA extreme band was "
-            "7-0 Under across the full reviewed sample."
-        ),
-        (
-            "Comparison caveat: the WNBA study used closing totals; this "
-            "pregame NFL mapping currently uses AK's submission total."
+            "Comparison caveat: the WNBA study used closing totals, while "
+            "this pregame NFL mapping currently uses AK's submission total. "
+            "The 12-to-16 and 16+ WNBA records require further raw-history "
+            "separation."
         ),
         catalog["wnba_prior_cap"]["text"],
     ]

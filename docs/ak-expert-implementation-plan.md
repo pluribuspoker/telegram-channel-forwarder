@@ -46,8 +46,8 @@ Implemented locally:
   side/total grading.
 - Independent NFL calibration samples for submission and closing lines.
 - A versioned WNBA cold-start prior with separate side/total decay.
-- NFL total-history buckets use football-native 1/3/7-point boundaries; WNBA
-  prior bands transfer by gap percentage rather than raw basketball points.
+- Positive NFL total gaps map explicitly to reviewed WNBA ranges:
+  0–<3 → 0–<6, 3–<9 → 6–<12, 9–<12 → 12–<16, and 12+ → 16+.
 - Output schema v5 with independently selectable spread and total opinions.
 - Opus 4.8 with maximum reasoning through either the Anthropic API or the
   shared agent-runtime skill.
@@ -218,10 +218,9 @@ Use the reviewed WNBA calibration tendencies as a small, explicitly labeled,
 strictly capped cross-sport prior.
 
 NFL observations must supersede the WNBA prior as AK's NFL history grows.
-The source's `+6` WNBA threshold was explicitly provisional. NFL calibration
-therefore uses football-native absolute buckets, while the cross-sport prior
-normalizes the WNBA gaps by market total: approximately 3.5% for the reviewed
-positive band and 7% for the extreme band.
+The source's `+6` WNBA threshold was explicitly provisional. The reviewed
+mapping now uses explicit NFL and WNBA absolute bands rather than copying one
+threshold or scaling solely by percentage.
 
 
 ## Definitions
@@ -584,10 +583,16 @@ When the projected total materially exceeded the market:
 The repeated direction is that a large positive projection-market total gap is
 more useful as an under warning than an over endorsement.
 
-The historical and fresh audits are non-overlapping, so the decision-facing
-record uses the full reviewed sample: under 14/17 (82.4%) for the positive band
-and under 7/7 for the comparable extreme band. Component counts remain stored
-for auditability.
+The decision-facing mappings are:
+
+- NFL 0–<3 → WNBA 0–<6: under 3/4 in the available fresh sample.
+- NFL 3–<9 → WNBA 6–<12: under 3/4 earlier and 4/6 fresh, or 7/10 combined.
+- NFL 9–<12 → WNBA 12–<16: under 2/2 fresh; the earlier 12+ sample cannot yet
+  be separated from 16+.
+- NFL 12+ → WNBA 16+: no isolated reviewed record is available.
+
+The cumulative original and fresh counts remain stored for auditability but
+must not be presented as a narrower band than the source supports.
 
 ### Total underestimation
 

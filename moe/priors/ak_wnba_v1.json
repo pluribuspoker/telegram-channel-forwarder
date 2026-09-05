@@ -9,15 +9,32 @@
   "max_equivalent_nfl_observations": 2,
   "expires_at_nfl_bucket_size": 8,
   "max_confidence_star_adjustment": 1,
-  "total_gap_normalized_thresholds": {
-    "method": "wnba_gap_divided_by_market_total",
-    "positive_min_fraction": 0.035,
-    "extreme_positive_min_fraction": 0.07,
-    "negative_max_fraction": -0.035,
-    "notes": [
-      "The source says the +/-6-point WNBA threshold was provisional.",
-      "Normalized thresholds transfer the approximate 6/175 and 12/175 WNBA bands without copying WNBA points directly into NFL totals."
-    ]
+  "nfl_total_gap_mapping": {
+    "plus_0_to_3": {
+      "wnba_band": "0_to_6",
+      "under": 3,
+      "games": 4,
+      "sample": "fresh"
+    },
+    "plus_3_to_9": {
+      "wnba_band": "6_to_12",
+      "under": 7,
+      "games": 10,
+      "sample": "full"
+    },
+    "plus_9_to_12": {
+      "wnba_band": "12_to_16",
+      "under": 2,
+      "games": 2,
+      "sample": "fresh",
+      "limitation": "The earlier 12+ sample cannot yet be separated into 12-16 and 16+."
+    },
+    "plus_12_or_more": {
+      "wnba_band": "16_or_more",
+      "under": null,
+      "games": 0,
+      "sample": "unavailable"
+    }
   },
   "total_gap": {
     "positive_6_or_more": {

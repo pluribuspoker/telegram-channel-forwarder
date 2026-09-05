@@ -435,11 +435,10 @@ opinion; either may be `PASS`.
   Side and total weights decay independently, are capped at two equivalent NFL
   observations, and expire at eight matching resolved NFL predictions. The
   source's provisional WNBA `±6` threshold is not copied as six NFL points:
-  NFL history uses 1/3/7-point total-gap buckets, while the WNBA prior maps by
-  gap percentage of the market total (3.5% base, 7% extreme). The displayed
-  prior uses the full non-overlapping reviewed samples: Under 14/17 in the
-  positive band and 7/7 in the comparable extreme band; component counts
-  remain in the versioned prior for audit.
+  positive NFL gaps map as 0–<3 → WNBA 0–<6, 3–<9 → WNBA 6–<12,
+  9–<12 → WNBA 12–<16, and 12+ → WNBA 16+. The supported records are
+  Under 3/4 for the first band, 7/10 for the second, and 2/2 fresh for the
+  third; the last band has no isolated reviewed sample.
 - `moe/prompts/ak/v1.md` selects exact deterministic evidence IDs. Application
   code renders all factual cards, the combined thesis, and the complete detail
   text. A zero-NFL-sample recommendation using WNBA evidence is capped at one
@@ -458,10 +457,8 @@ opinion; either may be `PASS`.
 The first Rams-49ers trial input resolves AK's projection as Rams 27-23 against
 a Rams -4, total 48 submission market. That creates a zero side-margin gap and
 a +2 total gap. No resolved AK NFL calibration observations exist yet; the
-matching WNBA side prior is 4-2, and the +4.2% normalized total gap matches the
-base WNBA positive-gap under warning. Generation and approval remain pending
-until the worksheet migration, secure `AK_TELEGRAM_USER_ID` configuration, and
-backfill report review are complete.
+matching WNBA side prior is 4-2, while the total maps to the WNBA 0–<6 band
+that finished Under in 3/4 fresh games.
 
 `emergency_migration.txt` now documents the implementation requirements,
 lossless export/import format, one-day service freeze and SQLite cutover,
