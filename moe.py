@@ -1822,7 +1822,7 @@ def _normalize_ak_opinion(
             f"{market_total:g}; that requires a projected total of at least "
             f"{market_total + extreme_gap:.1f}, or {extreme_projected_total} "
             "with whole-number team scores. The WNBA extreme band was "
-            "5-0 Under."
+            "7-0 Under across the full reviewed sample."
         ),
         (
             "Comparison caveat: the WNBA study used closing totals; this "

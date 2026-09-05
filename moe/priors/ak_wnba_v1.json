@@ -25,12 +25,18 @@
       "original_under": 8,
       "original_games": 9,
       "fresh_under": 6,
-      "fresh_games": 8
+      "fresh_games": 8,
+      "combined_under": 14,
+      "combined_games": 17
     },
     "positive_12_or_more": {
       "interpretation": "under_warning",
       "original_under": 5,
-      "original_games": 5
+      "original_games": 5,
+      "fresh_under": 2,
+      "fresh_games": 2,
+      "combined_under": 7,
+      "combined_games": 7
     },
     "negative_6_or_less": {
       "interpretation": "unstable_no_mechanical_pick",

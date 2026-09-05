@@ -251,15 +251,16 @@ def _wnba_total_prior(
         return (
             "extreme_positive",
             "WNBA cross-sport prior: a proportionally equivalent extreme "
-            "positive gap finished under in 5 of 5 WNBA games.",
+            "positive gap finished under in 7 of 7 WNBA games across the "
+            "full reviewed sample.",
             gap_fraction,
         )
     if gap_fraction >= positive:
         return (
             "positive",
             "WNBA cross-sport prior: a proportionally equivalent positive "
-            "gap finished under in 8 of 9 original-study games and 6 of 8 "
-            "fresh-sample games.",
+            "gap finished under in 14 of 17 WNBA games (82.4%) across the "
+            "full reviewed sample.",
             gap_fraction,
         )
     if gap_fraction <= negative:

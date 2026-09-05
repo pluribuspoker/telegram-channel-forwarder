@@ -436,7 +436,10 @@ opinion; either may be `PASS`.
   observations, and expire at eight matching resolved NFL predictions. The
   source's provisional WNBA `±6` threshold is not copied as six NFL points:
   NFL history uses 1/3/7-point total-gap buckets, while the WNBA prior maps by
-  gap percentage of the market total (3.5% base, 7% extreme).
+  gap percentage of the market total (3.5% base, 7% extreme). The displayed
+  prior uses the full non-overlapping reviewed samples: Under 14/17 in the
+  positive band and 7/7 in the comparable extreme band; component counts
+  remain in the versioned prior for audit.
 - `moe/prompts/ak/v1.md` selects exact deterministic evidence IDs. Application
   code renders all factual cards, the combined thesis, and the complete detail
   text. A zero-NFL-sample recommendation using WNBA evidence is capped at one

@@ -212,6 +212,7 @@ class AkProjectionTest(unittest.TestCase):
 
         self.assertEqual(band, "positive")
         self.assertAlmostEqual(fraction, 2 / 48)
+        self.assertIn("14 of 17", _summary)
 
     def test_separates_pickem_and_missing_spread(self) -> None:
         favorite, magnitude, state = _favorite(
@@ -385,6 +386,10 @@ class AkGenerationTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn(
             "or 49 with whole-number team scores",
+            row["full_opinion"],
+        )
+        self.assertIn(
+            "7-0 Under across the full reviewed sample",
             row["full_opinion"],
         )
 

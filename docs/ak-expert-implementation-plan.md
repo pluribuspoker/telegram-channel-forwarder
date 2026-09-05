@@ -584,6 +584,11 @@ When the projected total materially exceeded the market:
 The repeated direction is that a large positive projection-market total gap is
 more useful as an under warning than an over endorsement.
 
+The historical and fresh audits are non-overlapping, so the decision-facing
+record uses the full reviewed sample: under 14/17 (82.4%) for the positive band
+and under 7/7 for the comparable extreme band. Component counts remain stored
+for auditability.
+
 ### Total underestimation
 
 The result is less stable:
