@@ -2799,7 +2799,9 @@ def opinion_summary(
     buttons: list[list[Any]] = []
     if not current:
         lines.append("No expert opinions have been generated for this game.")
-    for row in visible:
+    for index, row in enumerate(visible):
+        if index:
+            lines.append("")
         if str(row.get("expert_id")) == "ak" and row.get("side_pick_json"):
             side = json.loads(str(row["side_pick_json"]))
             total = json.loads(str(row["total_pick_json"]))

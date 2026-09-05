@@ -1023,6 +1023,20 @@ class OpinionViewTest(unittest.TestCase):
         self.assertIn("page 2/3", detail)
         self.assertTrue(detail_buttons)
 
+    def test_summary_separates_expert_opinions_with_blank_line(self) -> None:
+        summary, _buttons = opinion_summary(
+            _game(),
+            [
+                self._row("schedule", "2026-09-01T00:00:00+00:00"),
+                self._row("schedule-2", "2026-09-02T00:00:00+00:00"),
+            ],
+        )
+
+        self.assertIn(
+            "Schedule advantage.\n\n<b>Schedule-2</b>",
+            summary,
+        )
+
     def test_model_picker_lists_latest_opinion_for_each_model(self) -> None:
         rows = [
             self._row(

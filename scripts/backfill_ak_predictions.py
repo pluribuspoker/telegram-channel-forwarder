@@ -35,6 +35,42 @@ AK_OPINION_HEADERS = [
 ]
 
 
+def apply_reviewed_override(
+    item: dict,
+    override: dict,
+) -> dict:
+    away_score = override.get("away_score")
+    home_score = override.get("home_score")
+    if (
+        isinstance(away_score, bool)
+        or not isinstance(away_score, int)
+        or isinstance(home_score, bool)
+        or not isinstance(home_score, int)
+        or away_score < 0
+        or home_score < 0
+        or away_score == home_score
+    ):
+        raise ValueError(
+            f"Invalid reviewed override for event {item['event_id']}"
+        )
+    winner = (
+        item["away_team"] if away_score > home_score else item["home_team"]
+    )
+    return {
+        **item,
+        "away_score": away_score,
+        "home_score": home_score,
+        "winner": winner,
+        "loser": (
+            item["home_team"] if winner == item["away_team"]
+            else item["away_team"]
+        ),
+        "status": "parsed",
+        "parse_version": "human_v1",
+        "reason": "Human-reviewed score ownership override",
+    }
+
+
 def append_headers(worksheet, expected: list[str], appended: list[str]) -> None:
     current = worksheet.row_values(1)
     old = expected[: -len(appended)]
@@ -59,7 +95,19 @@ def main() -> None:
     parser.add_argument("--migrate", action="store_true")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--report", type=Path)
+    parser.add_argument(
+        "--overrides",
+        type=Path,
+        help="Reviewed event-id to away/home score JSON overrides",
+    )
     args = parser.parse_args()
+    overrides = (
+        json.loads(args.overrides.read_text(encoding="utf-8"))
+        if args.overrides
+        else {}
+    )
+    if not isinstance(overrides, dict):
+        raise ValueError("--overrides must contain a JSON object")
 
     ak_user_id = os.environ.get("AK_TELEGRAM_USER_ID", "").strip()
     if not ak_user_id:
@@ -96,16 +144,26 @@ def main() -> None:
             away_team=str(row.get("away_team") or ""),
             home_team=str(row.get("home_team") or ""),
         )
-        report.append(
-            {
-                "row_number": row_number,
-                "submission_id": row.get("submission_id", ""),
-                "event_id": row.get("event_id", ""),
-                "away_team": row.get("away_team", ""),
-                "home_team": row.get("home_team", ""),
-                "lean_text": row.get("lean_text", ""),
-                **parsed,
-            }
+        item = {
+            "row_number": row_number,
+            "submission_id": row.get("submission_id", ""),
+            "event_id": row.get("event_id", ""),
+            "away_team": row.get("away_team", ""),
+            "home_team": row.get("home_team", ""),
+            "lean_text": row.get("lean_text", ""),
+            "parse_version": 1 if parsed["status"] == "parsed" else "",
+            **parsed,
+        }
+        event_id = str(item["event_id"])
+        if event_id in overrides:
+            item = apply_reviewed_override(item, overrides[event_id])
+        report.append(item)
+    unused_overrides = set(overrides) - {
+        str(item["event_id"]) for item in report
+    }
+    if unused_overrides:
+        raise ValueError(
+            f"Overrides do not match an AK submission: {sorted(unused_overrides)}"
         )
     if args.report:
         args.report.write_text(
@@ -130,7 +188,7 @@ def main() -> None:
         desired = [
             str(item["away_score"]),
             str(item["home_score"]),
-            "1",
+            str(item["parse_version"]),
             "parsed",
         ]
         if [str(value) for value in normalized_existing] == desired:

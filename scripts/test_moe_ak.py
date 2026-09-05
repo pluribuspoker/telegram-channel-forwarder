@@ -18,6 +18,7 @@ from moe_ak import (
     load_wnba_prior,
     parse_ak_projection,
 )
+from scripts.backfill_ak_predictions import apply_reviewed_override
 from nfl_lines import (
     AWAY_SNAPSHOT_COLUMN,
     HOME_SNAPSHOT_COLUMN,
@@ -84,6 +85,23 @@ class MemoryStore:
 
 
 class AkProjectionTest(unittest.TestCase):
+    def test_applies_reviewed_score_ownership_override(self) -> None:
+        item = {
+            "event_id": "browns-jaguars",
+            "away_team": "Cleveland Browns",
+            "home_team": "Jacksonville Jaguars",
+            "status": "ambiguous",
+        }
+
+        corrected = apply_reviewed_override(
+            item,
+            {"away_score": 18, "home_score": 24},
+        )
+
+        self.assertEqual(corrected["status"], "parsed")
+        self.assertEqual(corrected["parse_version"], "human_v1")
+        self.assertEqual(corrected["winner"], "Jacksonville Jaguars")
+
     def test_parses_explicit_winner_score(self) -> None:
         parsed = parse_ak_projection(
             _lean()["lean_text"],
