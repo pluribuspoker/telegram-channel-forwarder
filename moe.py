@@ -1781,6 +1781,56 @@ def _normalize_ak_opinion(
     def bullets(values: list[str]) -> str:
         return "\n".join(f"- {value}" for value in values) or "- None"
 
+    market_total = float(gaps["market_total"])
+    total_gap = float(gaps["total_gap"])
+    total_gap_fraction = float(gaps["total_gap_fraction"])
+    thresholds = input_payload["cross_sport_prior"][
+        "total_gap_normalized_thresholds"
+    ]
+    positive_fraction = float(thresholds["positive_min_fraction"])
+    extreme_fraction = float(thresholds["extreme_positive_min_fraction"])
+    positive_gap = market_total * positive_fraction
+    extreme_gap = market_total * extreme_fraction
+    extreme_projected_total = math.ceil(market_total + extreme_gap)
+    wnba_lines = [
+        (
+            f"Spread mapping: AK margin {gaps['ak_predicted_margin']:g} "
+            f"versus market {float(gaps['market_spread_magnitude']):g}; "
+            f"{float(gaps['side_margin_gap']):+g}-point gap maps to "
+            f"{gaps['side_gap_bucket']}."
+        ),
+        catalog["wnba_side_prior"]["text"],
+        (
+            "WNBA-only spread interpretation: the historical record leans "
+            "toward AK's projected side, but it is a cross-sport warning "
+            "rather than an automatic NFL pick."
+        ),
+        (
+            f"Total mapping: AK is {total_gap:+g} versus {market_total:g}, "
+            f"or {total_gap_fraction:+.1%}; the normalized WNBA positive "
+            f"band begins at {positive_fraction:.1%}, about "
+            f"{positive_gap:+.1f} NFL points at this total."
+        ),
+        catalog["wnba_total_prior"]["text"],
+        (
+            "WNBA-only total interpretation: this is an Under warning, not "
+            "an automatic NFL Under pick."
+        ),
+        (
+            f"Extreme positive band: {extreme_fraction:.1%}, about "
+            f"{extreme_gap:+.1f} points versus an NFL total of "
+            f"{market_total:g}; that requires a projected total of at least "
+            f"{market_total + extreme_gap:.1f}, or {extreme_projected_total} "
+            "with whole-number team scores. The WNBA extreme band was "
+            "5-0 Under."
+        ),
+        (
+            "Comparison caveat: the WNBA study used closing totals; this "
+            "pregame NFL mapping currently uses AK's submission total."
+        ),
+        catalog["wnba_prior_cap"]["text"],
+    ]
+
     normalized["full_opinion"] = (
         "AK projection\n"
         f"- {input_payload['game']['away_team']} "
@@ -1803,10 +1853,7 @@ def _normalize_ak_opinion(
         "NFL calibration\n"
         f"- Eligible resolved predictions: "
         f"{input_payload['nfl_calibration']['eligible_predictions']}\n\n"
-        "WNBA cold-start prior\n"
-        f"- {catalog['wnba_prior_cap']['text']}\n"
-        f"- {catalog['wnba_side_prior']['text']}\n"
-        f"- {catalog['wnba_total_prior']['text']}\n\n"
+        f"WNBA cold-start prior\n{bullets(wnba_lines)}\n\n"
         f"No signal\n{bullets(normalized['no_signal_factors'])}\n\n"
         "Discarded considerations\n"
         f"{bullets(discarded)}\n\n"

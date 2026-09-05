@@ -379,6 +379,14 @@ class AkGenerationTest(unittest.IsolatedAsyncioTestCase):
             json.loads(row["total_pick_json"])["selection"],
             "PASS",
         )
+        self.assertIn(
+            "WNBA-only total interpretation: this is an Under warning",
+            row["full_opinion"],
+        )
+        self.assertIn(
+            "or 49 with whole-number team scores",
+            row["full_opinion"],
+        )
 
 
 if __name__ == "__main__":
