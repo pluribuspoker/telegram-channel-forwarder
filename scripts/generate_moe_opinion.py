@@ -26,6 +26,7 @@ from moe import (
     load_expert,
 )
 from moe_ak import build_ak_input
+from moe_win_total import build_win_total_input
 from nfl_game_history import (
     GAME_HISTORY_HEADERS,
     GAME_HISTORY_TAB,
@@ -39,6 +40,11 @@ from nfl_lines import (
     get_gspread_client,
 )
 from nfl_schedule import SCHEDULE_HEADERS, SCHEDULE_TAB
+from nfl_win_predictions import (
+    PREDICTION_HEADERS,
+    TEAM_HISTORY_HEADERS,
+    WIN_TOTAL_HEADERS,
+)
 
 
 def _latest_alignment(history: list[dict]) -> list[dict]:
@@ -130,6 +136,9 @@ async def main() -> None:
     leans: list[dict] | None = None
     line_snapshots: list[dict] | None = None
     ak_user_id: str | None = None
+    win_totals: list[dict] | None = None
+    win_predictions: list[dict] | None = None
+    team_history: list[dict] | None = None
     if expert["input_profile"] == "divisional":
         schedule = spreadsheet.worksheet(SCHEDULE_TAB).get_all_records(
             expected_headers=SCHEDULE_HEADERS
@@ -154,6 +163,19 @@ async def main() -> None:
         line_snapshots = spreadsheet.worksheet(
             "nfl_line_snapshots"
         ).get_all_records(expected_headers=SNAPSHOT_HEADERS)
+    elif expert["input_profile"] == "win_total":
+        win_totals = spreadsheet.worksheet(
+            "nfl_win_totals"
+        ).get_all_records(expected_headers=WIN_TOTAL_HEADERS)
+        win_predictions = spreadsheet.worksheet(
+            "nfl_win_predictions"
+        ).get_all_records(expected_headers=PREDICTION_HEADERS)
+        team_history = spreadsheet.worksheet(
+            "nfl_team_history"
+        ).get_all_records(expected_headers=TEAM_HISTORY_HEADERS)
+        leans = spreadsheet.worksheet("nfl_leans").get_all_records(
+            expected_headers=LEAN_HEADERS
+        )
     if args.show_input:
         if expert["input_profile"] == "schedule_only":
             input_payload = build_schedule_input(game, history)
@@ -164,13 +186,26 @@ async def main() -> None:
                 schedule or [],
                 current_results,
             )
-        else:
+        elif expert["input_profile"] == "ak_calibration":
             input_payload = build_ak_input(
                 game,
                 history,
                 leans or [],
                 line_snapshots,
                 ak_user_id=ak_user_id or "",
+            )
+        elif expert["input_profile"] == "win_total":
+            input_payload = build_win_total_input(
+                game,
+                history,
+                win_totals or [],
+                win_predictions or [],
+                team_history or [],
+                leans or [],
+            )
+        else:
+            raise NotImplementedError(
+                f"Unsupported input profile: {expert['input_profile']}"
             )
         print(
             json.dumps(
@@ -212,6 +247,9 @@ async def main() -> None:
         leans=leans,
         line_snapshots=line_snapshots,
         ak_user_id=ak_user_id,
+        win_totals=win_totals,
+        win_predictions=win_predictions,
+        team_history=team_history,
         store=configured_opinion_store(),
         model=args.model,
         generation_backend=generation_backend,

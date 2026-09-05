@@ -290,6 +290,18 @@ Authoritative configuration lives under `moe/`:
   output schema version, exact input JSON, input SHA-256, raw response, whether
   the source tree was dirty, and a SHA-256 over the generation source files
   (including the AI transport and Sheets helpers).
+- `moe/prompts/win_total/v1.md` defines the Opus-only Win Total Expert. Its
+  whitelisted input compares the two current BetOnline season totals, every
+  forecaster's latest season-win predictions with equal weighting, and each
+  person's latest saved game pick against their own season ordering. Each
+  forecaster is cited separately, so an inconsistent game pick cannot be
+  hidden inside consensus. Historical analogs use prior-season wins only:
+  exact away/home prior-win pairs, matching win-gap cohorts, and matching
+  prior-win level buckets. They are explicitly not presented as historical
+  bookmaker totals, because those are not stored. The expert reuses existing
+  `nfl_win_totals`, `nfl_win_predictions`, `nfl_team_history`,
+  `nfl_game_history`, and `nfl_leans` data, so no worksheet migration is
+  required.
 
 The schedule expert's enforced data contract is:
 

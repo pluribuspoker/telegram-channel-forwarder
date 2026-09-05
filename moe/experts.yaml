@@ -28,6 +28,20 @@ experts:
       - claude-opus-4-8
     enabled: true
     initial_weight: 1.0
+  win_total:
+    name: Win Total Expert
+    mode: agent
+    version: 1
+    prompt_version: 1
+    prompt: prompts/win_total/v1.md
+    input_profile: win_total
+    output_schema_version: 3
+    default_model: claude-opus-4-8
+    reasoning_effort: max
+    allowed_models:
+      - claude-opus-4-8
+    enabled: true
+    initial_weight: 1.0
   ak:
     name: AK Expert
     mode: human_calibration

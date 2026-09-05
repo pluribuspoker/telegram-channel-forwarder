@@ -27,6 +27,7 @@ from ai import _claude_create_with_retry
 from nfl_lines import _call_with_retry, get_gspread_client
 from nfl_win_predictions import ensure_worksheet
 from moe_ak import WNBA_PRIOR_PATH, build_ak_input
+from moe_win_total import build_win_total_input
 
 ROOT = Path(__file__).resolve().parent
 MOE_ROOT = ROOT / "moe"
@@ -190,6 +191,8 @@ def _source_sha256(expert: dict[str, Any]) -> str:
         paths.append(FACTUALITY_PROMPT_PATH)
     if expert.get("input_profile") == "ak_calibration":
         paths.extend((ROOT / "moe_ak.py", WNBA_PRIOR_PATH))
+    if expert.get("input_profile") == "win_total":
+        paths.append(ROOT / "moe_win_total.py")
     digest = hashlib.sha256()
     for path in paths:
         digest.update(str(path.relative_to(ROOT)).encode("utf-8"))
@@ -2125,7 +2128,7 @@ def validate_opinion(
 ) -> None:
     cited_schema = bool(
         schedule_input is not None
-        and schedule_input.get("input_profile") == "divisional"
+        and schedule_input.get("input_profile") in {"divisional", "win_total"}
         and isinstance(opinion.get("thesis_citation"), dict)
     )
     if (
@@ -2157,6 +2160,131 @@ def validate_opinion(
         if bucket_line not in str(opinion.get("full_opinion") or ""):
             raise ValueError(
                 f"full_opinion must include exact bucket line: {bucket_line}"
+            )
+    if (
+        schedule_input is not None
+        and schedule_input.get("input_profile") == "win_total"
+    ):
+        factor_claims = [
+            *opinion.get("supporting_factors", []),
+            *opinion.get("counterarguments", []),
+            *opinion.get("no_signal_factors", []),
+        ]
+        cited_paths = {
+            str(evidence["path"])
+            for field in (
+                "thesis_citation",
+                "supporting_factors",
+                "counterarguments",
+                "no_signal_factors",
+            )
+            for claim in (
+                [opinion[field]]
+                if field == "thesis_citation"
+                else opinion.get(field, [])
+            )
+            for evidence in claim.get("evidence", [])
+        }
+        required_paths = {
+            "market",
+            "consensus",
+            "team_context",
+            "historical_analogs",
+            "historical_analogs.exact_prior_win_pair",
+            "historical_analogs.matching_prior_win_gap",
+            "historical_analogs.matching_prior_win_level",
+            *{
+                f"forecasters.{key}"
+                for key in schedule_input["forecasters"]
+            },
+        }
+        missing = required_paths - cited_paths
+        if missing:
+            raise ValueError(
+                "Win Total opinion must cite the market, consensus, every "
+                "forecaster, team context, and historical analogs; missing "
+                f"paths: {sorted(missing)}"
+            )
+        for key, forecaster in schedule_input["forecasters"].items():
+            path = f"forecasters.{key}"
+            matching_claims = [
+                claim
+                for claim in factor_claims
+                if any(
+                    str(evidence["path"]) == path
+                    for evidence in claim.get("evidence", [])
+                )
+            ]
+            if not matching_claims:
+                raise ValueError(
+                    f"Win Total opinion must discuss {path} separately"
+                )
+            rendered = " ".join(
+                str(claim.get("claim") or "") for claim in matching_claims
+            )
+            if str(forecaster["display_name"]).casefold() not in (
+                rendered.casefold()
+            ):
+                raise ValueError(
+                    f"Win Total claim must name {forecaster['display_name']}"
+                )
+            for field in ("away_predicted_wins", "home_predicted_wins"):
+                value = forecaster.get(field)
+                if value is not None and not re.search(
+                    rf"(?<!\d){re.escape(str(value))}(?!\d)",
+                    rendered,
+                ):
+                    raise ValueError(
+                        f"Win Total claim for {forecaster['display_name']} "
+                        f"must include {field}={value}"
+                    )
+            game_pick = forecaster["latest_game_pick"]
+            if not game_pick["available"]:
+                if not re.search(
+                    r"\b(?:no game pick|cannot be evaluated)\b",
+                    rendered,
+                    re.IGNORECASE,
+                ):
+                    raise ValueError(
+                        f"Win Total claim for {forecaster['display_name']} "
+                        "must state that no game pick is available"
+                    )
+            else:
+                consistency = str(
+                    game_pick["consistency_with_season_picks"]
+                )
+                if not re.search(
+                    rf"\b{re.escape(consistency)}\b",
+                    rendered,
+                    re.IGNORECASE,
+                ):
+                    raise ValueError(
+                        f"Win Total claim for {forecaster['display_name']} "
+                        f"must state consistency={consistency}"
+                    )
+        historical_claims = [
+            claim
+            for claim in factor_claims
+            if any(
+                str(evidence["path"]).startswith("historical_analogs")
+                for evidence in claim.get("evidence", [])
+            )
+        ]
+        historical_text = " ".join(
+            str(claim.get("claim") or "") for claim in historical_claims
+        )
+        if not re.search(
+            r"historical preseason bookmaker (?:win )?totals.{0,80}unavailable",
+            historical_text,
+            re.IGNORECASE,
+        ):
+            raise ValueError(
+                "Win Total opinion must disclose that historical preseason "
+                "bookmaker totals are unavailable"
+            )
+        if "prior-season" not in historical_text.casefold():
+            raise ValueError(
+                "Win Total historical claims must identify prior-season wins"
             )
     winner = str(opinion.get("predicted_winner") or "")
     if winner not in {away_team, home_team}:
@@ -2308,6 +2436,9 @@ async def generate_opinion(
     leans: list[dict[str, Any]] | None = None,
     line_snapshots: list[dict[str, Any]] | None = None,
     ak_user_id: str | None = None,
+    win_totals: list[dict[str, Any]] | None = None,
+    win_predictions: list[dict[str, Any]] | None = None,
+    team_history: list[dict[str, Any]] | None = None,
     store: MoeOpinionStore,
     model: str | None = None,
     create_fn: CreateFn = _claude_create_with_retry,
@@ -2337,6 +2468,25 @@ async def generate_opinion(
             leans,
             line_snapshots,
             ak_user_id=ak_user_id,
+        )
+    elif expert["input_profile"] == "win_total":
+        if (
+            win_totals is None
+            or win_predictions is None
+            or team_history is None
+            or leans is None
+        ):
+            raise ValueError(
+                "Win Total expert requires totals, predictions, team history, "
+                "and game leans"
+            )
+        input_payload = build_win_total_input(
+            game,
+            history,
+            win_totals,
+            win_predictions,
+            team_history,
+            leans,
         )
     else:
         raise NotImplementedError(
@@ -2595,6 +2745,9 @@ async def generate_opinion(
                 leans=leans,
                 line_snapshots=line_snapshots,
                 ak_user_id=ak_user_id,
+                win_totals=win_totals,
+                win_predictions=win_predictions,
+                team_history=team_history,
                 store=store,
                 model=selected_model,
                 create_fn=create_fn,
