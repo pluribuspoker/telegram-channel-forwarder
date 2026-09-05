@@ -343,7 +343,7 @@ class WinTotalGenerationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(row["generation_status"], "valid")
         self.assertEqual(row["input_profile"], "win_total")
-        self.assertEqual(row["expert_version"], 1)
+        self.assertEqual(row["expert_version"], 2)
         self.assertIn("A K projects Seattle", row["full_opinion"])
         self.assertEqual(store.rows, [row])
 
@@ -374,11 +374,11 @@ class WinTotalGenerationTest(unittest.IsolatedAsyncioTestCase):
     def test_expert_configuration_is_versioned(self) -> None:
         expert = load_expert("win_total")
 
-        self.assertEqual(expert["version"], 1)
-        self.assertEqual(expert["prompt_version"], 1)
+        self.assertEqual(expert["version"], 2)
+        self.assertEqual(expert["prompt_version"], 2)
         self.assertEqual(expert["output_schema_version"], 3)
         self.assertEqual(
-            expert["prompt_path"], "moe/prompts/win_total/v1.md"
+            expert["prompt_path"], "moe/prompts/win_total/v2.md"
         )
         self.assertEqual(expert["default_model"], "claude-opus-4-8")
         self.assertEqual(expert["reasoning_effort"], "max")

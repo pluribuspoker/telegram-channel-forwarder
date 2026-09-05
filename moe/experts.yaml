@@ -31,9 +31,9 @@ experts:
   win_total:
     name: Win Total Expert
     mode: agent
-    version: 1
-    prompt_version: 1
-    prompt: prompts/win_total/v1.md
+    version: 2
+    prompt_version: 2
+    prompt: prompts/win_total/v2.md
     input_profile: win_total
     output_schema_version: 3
     default_model: claude-opus-4-8

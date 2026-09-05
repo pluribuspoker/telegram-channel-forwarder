@@ -252,12 +252,17 @@ def _historical_analogs(
                 "Historical home-side results with the exact current "
                 f"away/home prior-win pair ({away_prior}, {home_prior})."
             ),
-        ),
+        )
+        | {
+            "away_prior_wins": away_prior,
+            "home_prior_wins": home_prior,
+        },
         "matching_prior_win_gap": _result_sample(
             matching_gap,
             gap_perspective,
             description=gap_description,
-        ),
+        )
+        | {"current_prior_win_gap": current_gap},
         "matching_prior_win_level": _result_sample(
             matching_level,
             lambda _row: "home",
@@ -265,7 +270,27 @@ def _historical_analogs(
                 "Historical home-side results with the current prior-win "
                 f"level pair ({away_bucket}, {home_bucket})."
             ),
-        ),
+        )
+        | {
+            "away_prior_win_bucket_minimum": (
+                12
+                if away_bucket == "12_plus"
+                else 9
+                if away_bucket == "9_to_11"
+                else 6
+                if away_bucket == "6_to_8"
+                else 0
+            ),
+            "home_prior_win_bucket_minimum": (
+                12
+                if home_bucket == "12_plus"
+                else 9
+                if home_bucket == "9_to_11"
+                else 6
+                if home_bucket == "6_to_8"
+                else 0
+            ),
+        },
     }
 
 
