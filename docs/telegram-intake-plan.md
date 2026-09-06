@@ -422,6 +422,10 @@ New rows persist `generation_backend` and `generation_effort`; approval hashes
 bind both values when present while legacy approved rows without them retain
 their existing hashes.
 
+The Schedule Expert also permits `claude-fable-5` as an explicitly selected
+comparison model while retaining Opus 4.8 as its default. The selected model is
+recorded in the opinion row and approval hash.
+
 Agent-session generation is the preferred interactive workflow for every
 registered expert. Direct application API generation remains available only
 through the explicit `--api` flag.

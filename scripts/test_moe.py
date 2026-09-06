@@ -470,14 +470,15 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             game=_game(),
             history=_history(),
             store=store,
-            model="claude-opus-4-8",
+            model="claude-fable-5",
             create_fn=create_fn,
+            generation_backend="agent_runtime",
         )
 
-        self.assertEqual(row["expert_version"], 23)
+        self.assertEqual(row["expert_version"], 24)
         self.assertEqual(row["prompt_version"], 14)
-        self.assertEqual(row["model"], "claude-opus-4-8")
-        self.assertEqual(row["generation_backend"], "anthropic_api")
+        self.assertEqual(row["model"], "claude-fable-5")
+        self.assertEqual(row["generation_backend"], "agent_runtime")
         self.assertEqual(row["generation_effort"], "max")
         self.assertEqual(captured["output_config"], {"effort": "max"})
         self.assertEqual(row["predicted_winner"], "Philadelphia Eagles")
@@ -1309,13 +1310,16 @@ class OpinionViewTest(unittest.TestCase):
     def test_expert_prompt_is_loaded_from_versioned_file(self) -> None:
         expert = load_expert("schedule")
 
-        self.assertEqual(expert["version"], 23)
+        self.assertEqual(expert["version"], 24)
         self.assertEqual(expert["prompt_version"], 14)
         self.assertEqual(expert["prompt_path"], "moe/prompts/schedule/v14.md")
         self.assertEqual(expert["output_schema_version"], 6)
         self.assertEqual(expert["default_model"], "claude-opus-4-8")
         self.assertEqual(expert["reasoning_effort"], "max")
-        self.assertEqual(expert["allowed_models"], ["claude-opus-4-8"])
+        self.assertEqual(
+            expert["allowed_models"],
+            ["claude-opus-4-8", "claude-fable-5"],
+        )
         self.assertEqual(len(expert["prompt_sha256"]), 64)
 
         divisional = load_expert("divisional")
