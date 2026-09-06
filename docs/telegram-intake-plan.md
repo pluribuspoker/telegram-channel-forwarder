@@ -402,25 +402,29 @@ Manual workflow:
 python scripts/generate_moe_opinion.py \
   --event-id <nfl_games event_id> --expert schedule --show-input
 
-# Generate and persist an opinion:
+# Explicit direct-API fallback:
 python scripts/generate_moe_opinion.py \
-  --event-id <nfl_games event_id> --expert schedule
+  --event-id <nfl_games event_id> --expert schedule --api
 
-# Compare the same expert using another model:
+# Compare the same expert using another model through the API fallback:
 python scripts/generate_moe_opinion.py \
   --event-id <nfl_games event_id> --expert schedule \
-  --model claude-opus-4-8
+  --model claude-opus-4-8 --api
 ```
 
 There is deliberately no inference-only preview flag: every model call persists
 its complete input and output. `--show-input` is safe because it does not invoke
 the model.
 
-Both enabled experts use `claude-opus-4-8` with Anthropic
-`output_config.effort=max`. The Divisional Expert's separate factuality request
-uses the same model and effort. New rows persist `generation_backend` and
-`generation_effort`; approval hashes bind both values when present while legacy
-approved rows without them retain their existing hashes.
+All enabled experts use `claude-opus-4-8` with maximum reasoning effort. The
+Divisional Expert's separate factuality request uses the same model and effort.
+New rows persist `generation_backend` and `generation_effort`; approval hashes
+bind both values when present while legacy approved rows without them retain
+their existing hashes.
+
+Agent-session generation is the preferred interactive workflow for every
+registered expert. Direct application API generation remains available only
+through the explicit `--api` flag.
 
 The runtime-neutral canonical project skill at
 `.claude/skills/generate-nfl-moe-opinion/SKILL.md` provides an explicit

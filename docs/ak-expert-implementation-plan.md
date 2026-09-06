@@ -178,7 +178,7 @@ python scripts/generate_moe_opinion.py \
   --event-id <event_id> --expert schedule --show-input
 
 python scripts/generate_moe_opinion.py \
-  --event-id <event_id> --expert schedule
+  --event-id <event_id> --expert schedule --api
 ```
 
 The bot only reads approved persisted opinions. It does not invoke a model
@@ -982,11 +982,11 @@ python scripts/generate_moe_opinion.py \
   --event-id <event_id> --expert ak --show-input
 ```
 
-Manual generation:
+Direct application API fallback:
 
 ```bash
 python scripts/generate_moe_opinion.py \
-  --event-id <event_id> --expert ak
+  --event-id <event_id> --expert ak --api
 ```
 
 Every model call must continue to persist its complete attempt. Do not add an

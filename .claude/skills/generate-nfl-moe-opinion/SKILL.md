@@ -5,9 +5,11 @@ description: Generate an NFL MOE opinion with an Opus 4.8 agent runtime, includi
 
 # Generate an NFL MOE opinion with an agent
 
-Use this skill when the user asks an agent to generate a Schedule or Divisional
-Expert opinion without invoking the application's `ANTHROPIC_API_KEY` path.
-The active agent runtime has its own authentication, limits, and billing.
+Use this skill when the user asks an agent to generate any registered NFL MOE
+opinion without invoking the application's `ANTHROPIC_API_KEY` path. It is the
+preferred interactive generation workflow for the Schedule, Divisional, Win
+Total, and AK Experts. The active agent runtime has its own authentication,
+limits, and billing.
 
 ## Invariants
 
@@ -36,7 +38,7 @@ The active agent runtime has its own authentication, limits, and billing.
 
    ```bash
    python scripts/generate_moe_opinion.py \
-     --event-id <event-id> --expert <schedule|divisional> \
+     --event-id <event-id> --expert <schedule|divisional|win_total|ak> \
      --show-input > <temporary-input.json>
    ```
 
@@ -64,9 +66,9 @@ The active agent runtime has its own authentication, limits, and billing.
 6. Persist through the normal pipeline:
 
    ```bash
-   # Schedule Expert
+   # Schedule, Win Total, or AK Expert
    python scripts/generate_moe_opinion.py \
-     --event-id <event-id> --expert schedule \
+     --event-id <event-id> --expert <schedule|win_total|ak> \
      --model claude-opus-4-8 \
      --agent-response <temporary-opinion.json>
 
@@ -92,11 +94,10 @@ The active agent runtime has its own authentication, limits, and billing.
 ### Claude Code CLI
 
 Start Claude Code with Opus 4.8 and maximum effort, or select those settings
-before invoking the skill. The current Claude agent may perform the isolated
-inference itself, provided it uses only the registered prompt and generated
-input and writes the exact raw JSON to the temporary path. Do not call
-`scripts/generate_moe_opinion.py` without `--agent-response`, because that would
-use the application's API-key path.
+before invoking the skill. The current Claude agent may perform the isolated inference itself, provided it
+uses only the registered prompt and generated input and writes the exact raw
+JSON to the temporary path. Direct application API generation requires the
+explicit `--api` fallback flag.
 
 ### GitHub Copilot CLI
 
