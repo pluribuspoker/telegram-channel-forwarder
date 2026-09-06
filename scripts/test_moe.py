@@ -482,8 +482,8 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["prompt_version"], 15)
         self.assertEqual(row["model"], "claude-fable-5")
         self.assertEqual(row["generation_backend"], "agent_runtime")
-        self.assertEqual(row["generation_effort"], "high")
-        self.assertEqual(captured["output_config"], {"effort": "high"})
+        self.assertEqual(row["generation_effort"], "medium")
+        self.assertEqual(captured["output_config"], {"effort": "medium"})
         self.assertEqual(row["predicted_winner"], "Philadelphia Eagles")
         self.assertEqual(set(row), set(OPINION_HEADERS))
         self.assertEqual(len(row["prompt_sha256"]), 64)
@@ -577,8 +577,8 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["model"], "claude-fable-5")
         self.assertEqual(row["generation_backend"], "agent_runtime")
         self.assertIn("Divisional Expert v18", captured[0]["system"])
-        self.assertEqual(captured[0]["output_config"], {"effort": "high"})
-        self.assertEqual(captured[1]["output_config"], {"effort": "high"})
+        self.assertEqual(captured[0]["output_config"], {"effort": "medium"})
+        self.assertEqual(captured[1]["output_config"], {"effort": "medium"})
         self.assertIn("lean toward Philadelphia Eagles", row["thesis"])
         self.assertEqual(
             row["nondeterministic_factuality_status"],
@@ -1362,7 +1362,7 @@ class OpinionViewTest(unittest.TestCase):
         self.assertEqual(expert["reasoning_effort"], "max")
         self.assertEqual(
             expert["model_reasoning_effort"],
-            {"claude-fable-5": "high"},
+            {"claude-fable-5": "medium"},
         )
         self.assertEqual(
             expert["allowed_models"],
@@ -1382,7 +1382,7 @@ class OpinionViewTest(unittest.TestCase):
         self.assertEqual(divisional["reasoning_effort"], "max")
         self.assertEqual(
             divisional["model_reasoning_effort"],
-            {"claude-fable-5": "high"},
+            {"claude-fable-5": "medium"},
         )
         self.assertEqual(
             divisional["allowed_models"],

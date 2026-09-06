@@ -11,7 +11,7 @@ experts:
     default_model: claude-opus-4-8
     reasoning_effort: max
     model_reasoning_effort:
-      claude-fable-5: high
+      claude-fable-5: medium
     allowed_models:
       - claude-opus-4-8
       - claude-fable-5
@@ -28,7 +28,7 @@ experts:
     default_model: claude-opus-4-8
     reasoning_effort: max
     model_reasoning_effort:
-      claude-fable-5: high
+      claude-fable-5: medium
     allowed_models:
       - claude-opus-4-8
       - claude-fable-5

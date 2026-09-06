@@ -437,7 +437,7 @@ selected comparison model while retaining Opus 4.8 as its default. Its
 independent factuality pass must use the same selected model and configured
 effort.
 
-Schedule and Divisional Fable comparisons use model-specific `high` reasoning
+Schedule and Divisional Fable comparisons use model-specific `medium` reasoning
 effort, while their default Opus 4.8 generation remains at `max`. Persisted
 `generation_effort` records the effective selected-model value.
 
