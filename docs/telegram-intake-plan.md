@@ -1160,7 +1160,9 @@ permissions, and lifecycle should remain independent.
 - `suggestions` — append-only freeform feedback with Telegram identity and
   submission timestamps.
 - `allowed_users` — reference table containing each authorized user's current
-  Telegram display name, numeric user ID, and username when available. Runtime
+  Telegram display name, numeric user ID, username when available, and optional
+  comma-separated `moe_expert_ids`. Human MOE expert roles resolve from this
+  table and fail closed on missing or duplicate assignments. Runtime intake
   enforcement remains the untracked `INTAKE_ALLOWED_USER_IDS` environment key.
 
 There is no separate schedule-only tab. The Odds API event response supplies the

@@ -26,6 +26,9 @@ from moe import (
     load_expert,
 )
 from moe_ak import build_ak_input
+from moe_identity import (
+    resolve_moe_expert_user_id_from_spreadsheet,
+)
 from moe_win_total import build_win_total_input
 from nfl_game_history import (
     GAME_HISTORY_HEADERS,
@@ -154,9 +157,10 @@ async def main() -> None:
             require_complete_divisional_pairs=False,
         )
     elif expert["input_profile"] == "ak_calibration":
-        ak_user_id = os.environ.get("AK_TELEGRAM_USER_ID", "").strip()
-        if not ak_user_id:
-            raise RuntimeError("AK_TELEGRAM_USER_ID is required")
+        ak_user_id = resolve_moe_expert_user_id_from_spreadsheet(
+            spreadsheet,
+            "ak",
+        )
         leans = spreadsheet.worksheet("nfl_leans").get_all_records(
             expected_headers=LEAN_HEADERS
         )

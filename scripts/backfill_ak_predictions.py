@@ -18,6 +18,9 @@ load_dotenv(ROOT / ".env.local")
 load_dotenv(ROOT / ".env")
 
 from moe_ak import parse_ak_projection
+from moe_identity import (
+    resolve_moe_expert_user_id_from_spreadsheet,
+)
 from moe import OPINION_HEADERS, OPINIONS_TAB
 from nfl_lines import LEAN_HEADERS, get_gspread_client
 
@@ -109,12 +112,13 @@ def main() -> None:
     if not isinstance(overrides, dict):
         raise ValueError("--overrides must contain a JSON object")
 
-    ak_user_id = os.environ.get("AK_TELEGRAM_USER_ID", "").strip()
-    if not ak_user_id:
-        raise RuntimeError("AK_TELEGRAM_USER_ID is required")
     spreadsheet = get_gspread_client(
         os.environ["GOOGLE_CREDENTIALS"]
     ).open_by_key(os.environ["NFL_INTAKE_SHEET_ID"])
+    ak_user_id = resolve_moe_expert_user_id_from_spreadsheet(
+        spreadsheet,
+        "ak",
+    )
     worksheet = spreadsheet.worksheet("nfl_leans")
     values = worksheet.get_all_values()
     headers = values[0] if values else []

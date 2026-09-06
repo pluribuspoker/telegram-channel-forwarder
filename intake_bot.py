@@ -56,6 +56,9 @@ from moe import (
     opinion_summary as moe_opinion_summary,
 )
 from moe_ak import parse_ak_projection
+from moe_identity import (
+    resolve_moe_expert_user_id_from_spreadsheet,
+)
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -1702,6 +1705,10 @@ async def main() -> None:
     allowed = allowed_user_ids()
     if not allowed:
         raise RuntimeError("INTAKE_ALLOWED_USER_IDS is empty")
+    ak_user_id = resolve_moe_expert_user_id_from_spreadsheet(
+        _intake_spreadsheet(),
+        "ak",
+    )
 
     client = TelegramClient(StringSession(session), api_id, api_hash)
     pending_suggestions: dict[int, int] = {}
@@ -1914,8 +1921,7 @@ async def main() -> None:
             )
             return
         prediction = None
-        ak_user_id = os.getenv("AK_TELEGRAM_USER_ID", "").strip()
-        if ak_user_id and str(event.sender_id) == ak_user_id:
+        if str(event.sender_id) == ak_user_id:
             prediction = parse_ak_projection(
                 lean_text,
                 away_team=str(submission["game"]["away_team"]),
@@ -2742,14 +2748,13 @@ async def main() -> None:
                 selection,
                 [[Button.inline("← Back to sides", b"back:sides")]],
             )
-            ak_user_id = os.getenv("AK_TELEGRAM_USER_ID", "").strip()
             prompt_text = (
                 "Enter one exact team-labeled projected score and your "
                 "reasoning. Example:\n"
                 f"Score: {state['game']['away_team']} 23, "
                 f"{state['game']['home_team']} 27\n"
                 "Rationale: your game analysis."
-                if ak_user_id and str(event.sender_id) == ak_user_id
+                if str(event.sender_id) == ak_user_id
                 else (
                     "Enter your lean, reasoning, and the line or price where "
                     "your preference changes:"

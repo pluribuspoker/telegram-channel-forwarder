@@ -38,7 +38,7 @@ and fail-closed Telegram display behavior.
 
 ## Implementation status
 
-Implemented locally:
+Implemented and live:
 
 - AK-only exact-score capture and normalized score columns.
 - Conservative historical score parsing plus a report-first backfill command.
@@ -53,18 +53,8 @@ Implemented locally:
   shared agent-runtime skill.
 - Append-only persistence, approval-hash compatibility, and AK-specific
   Telegram summary, model-picker, and detail rendering.
-
-Still required before live use:
-
-- Append the four `nfl_leans` and three `moe_opinions` columns with the guarded
-  migration.
-- Configure `AK_TELEGRAM_USER_ID` in untracked local and VPS `.env.local`
-  files **with `python3 scripts/set_env_local.py AK_TELEGRAM_USER_ID=<id>`** —
-  never hand-edit `.env.local`. A hand-edit here on 2026-09-05 rewrote the whole
-  file, dropped the session/token keys, and took the pick grader down for 8h.
-  The helper updates only the one key and validates the result.
-- Review the historical parse report before applying any backfill.
-- Generate, review, and explicitly approve the first Rams-49ers opinion.
+- Sheet-backed human expert identity through `allowed_users.moe_expert_ids`,
+  with a unique positive numeric Telegram ID required for the `ak` role.
 
 
 ## Product background
@@ -289,14 +279,16 @@ team-total gap = AK predicted team score - market-implied team score
 
 ### AK identity
 
-Configure AK through an untracked environment value, set with the safe helper
-(never by hand-editing `.env.local`):
+Configure AK through the existing `allowed_users` worksheet:
 
-```bash
-python3 scripts/set_env_local.py AK_TELEGRAM_USER_ID=<numeric Telegram user ID>
-```
+| display_name | telegram_id | telegram_username | moe_expert_ids |
+|---|---:|---|---|
+| A K | existing numeric ID | existing username | `ak` |
 
-Do not hardcode a personal Telegram identifier in source control.
+The resolver matches the stable `ak` role rather than mutable display names or
+usernames. It fails closed when the role is missing, duplicated, or assigned an
+invalid Telegram ID. Do not hardcode a personal Telegram identifier in source
+control.
 
 ### Required score format
 
@@ -365,7 +357,8 @@ Create a deterministic parser for existing AK `lean_text`.
 
 ### Backfill rules
 
-1. Filter rows by `AK_TELEGRAM_USER_ID`.
+1. Resolve the unique `ak` role from `allowed_users` and filter rows by that
+   numeric Telegram ID.
 2. Match the row's exact away and home team names and known abbreviations.
 3. Extract only explicit integer score pairs.
 4. Require a provable team-to-score mapping.
@@ -980,7 +973,7 @@ For `ak_calibration`, also load:
 - `nfl_leans`
 - `nfl_line_snapshots`
 
-Pass `AK_TELEGRAM_USER_ID` explicitly into the builder.
+Pass the Sheet-resolved AK Telegram user ID explicitly into the builder.
 
 Manual input inspection:
 
