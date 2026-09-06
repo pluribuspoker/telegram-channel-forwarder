@@ -434,6 +434,10 @@ The Schedule Expert also permits `claude-fable-5` as an explicitly selected
 comparison model while retaining Opus 4.8 as its default. The selected model is
 recorded in the opinion row and approval hash.
 
+Schedule Expert v26 also permits explicit `claude-sonnet-4-6` and
+`claude-haiku-4-5` comparison runs at maximum reasoning effort. Opus 4.8
+remains the default production model.
+
 Schedule prompt v15 makes `game.matchup_type` label-only routing metadata. The
 expert must state the exact bucket first for transparency, but its input omits
 all division/conference performance cohorts, opponent-specific history, and

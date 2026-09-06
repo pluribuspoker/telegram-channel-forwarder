@@ -478,7 +478,7 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             generation_backend="agent_runtime",
         )
 
-        self.assertEqual(row["expert_version"], 25)
+        self.assertEqual(row["expert_version"], 26)
         self.assertEqual(row["prompt_version"], 15)
         self.assertEqual(row["model"], "claude-fable-5")
         self.assertEqual(row["generation_backend"], "agent_runtime")
@@ -1498,7 +1498,7 @@ class OpinionViewTest(unittest.TestCase):
     def test_expert_prompt_is_loaded_from_versioned_file(self) -> None:
         expert = load_expert("schedule")
 
-        self.assertEqual(expert["version"], 25)
+        self.assertEqual(expert["version"], 26)
         self.assertEqual(expert["prompt_version"], 15)
         self.assertEqual(expert["prompt_path"], "moe/prompts/schedule/v15.md")
         self.assertEqual(expert["output_schema_version"], 6)
@@ -1506,11 +1506,20 @@ class OpinionViewTest(unittest.TestCase):
         self.assertEqual(expert["reasoning_effort"], "max")
         self.assertEqual(
             expert["model_reasoning_effort"],
-            {"claude-fable-5": "medium"},
+            {
+                "claude-fable-5": "medium",
+                "claude-sonnet-4-6": "max",
+                "claude-haiku-4-5": "max",
+            },
         )
         self.assertEqual(
             expert["allowed_models"],
-            ["claude-opus-4-8", "claude-fable-5"],
+            [
+                "claude-opus-4-8",
+                "claude-fable-5",
+                "claude-sonnet-4-6",
+                "claude-haiku-4-5",
+            ],
         )
         self.assertEqual(len(expert["prompt_sha256"]), 64)
 

@@ -3,7 +3,7 @@ experts:
   schedule:
     name: Schedule Expert
     mode: agent
-    version: 25
+    version: 26
     prompt_version: 15
     prompt: prompts/schedule/v15.md
     input_profile: schedule_only
@@ -12,9 +12,13 @@ experts:
     reasoning_effort: max
     model_reasoning_effort:
       claude-fable-5: medium
+      claude-sonnet-4-6: max
+      claude-haiku-4-5: max
     allowed_models:
       - claude-opus-4-8
       - claude-fable-5
+      - claude-sonnet-4-6
+      - claude-haiku-4-5
     enabled: true
     initial_weight: 1.0
   divisional:
