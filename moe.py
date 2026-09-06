@@ -3091,9 +3091,52 @@ def _latest_by_key(
     return list(latest.values())
 
 
+_SUMMARY_MODEL_PRIORITY = (
+    "claude-fable-5",
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+)
+
+
 def latest_opinions(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    latest = _latest_by_key(rows, lambda row: str(row.get("expert_id") or ""))
-    return sorted(latest, key=lambda row: str(row["expert_name"]))
+    latest_by_model = _latest_by_key(
+        rows,
+        lambda row: (
+            str(row.get("expert_id") or ""),
+            str(row.get("model") or ""),
+        ),
+    )
+    by_expert: dict[str, list[dict[str, Any]]] = {}
+    for row in latest_by_model:
+        expert_id = str(row.get("expert_id") or "")
+        if expert_id:
+            by_expert.setdefault(expert_id, []).append(row)
+
+    selected: list[dict[str, Any]] = []
+    for choices in by_expert.values():
+        by_model = {
+            str(row.get("model") or ""): row
+            for row in choices
+        }
+        choice = next(
+            (
+                by_model[model]
+                for model in _SUMMARY_MODEL_PRIORITY
+                if model in by_model
+            ),
+            None,
+        )
+        if choice is None:
+            choice = max(
+                choices,
+                key=lambda row: (
+                    str(row.get("generated_at_utc") or ""),
+                    str(row.get("opinion_id") or ""),
+                ),
+            )
+        selected.append(choice)
+    return sorted(selected, key=lambda row: str(row["expert_name"]))
 
 
 def latest_model_opinions(
@@ -3109,10 +3152,19 @@ def latest_model_opinions(
     choices = [
         row for row in latest if str(row.get("expert_id") or "") == expert_id
     ]
-    choices.sort(key=lambda row: str(row.get("model") or ""))
     choices.sort(
         key=lambda row: str(row.get("generated_at_utc") or ""),
         reverse=True,
+    )
+    priority = {
+        model: index
+        for index, model in enumerate(_SUMMARY_MODEL_PRIORITY)
+    }
+    choices.sort(
+        key=lambda row: priority.get(
+            str(row.get("model") or ""),
+            len(priority),
+        )
     )
     return choices
 

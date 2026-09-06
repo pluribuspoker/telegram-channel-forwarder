@@ -1823,14 +1823,74 @@ class OpinionViewTest(unittest.TestCase):
         overview = latest_opinions(rows)
         choices = latest_model_opinions(rows, "schedule")
 
-        self.assertEqual(overview[0]["model"], "gpt-5.6")
+        self.assertEqual(overview[0]["model"], "claude-sonnet-4-6")
         self.assertEqual(
             [(row["model"], row["generated_at_utc"]) for row in choices],
             [
-                ("gpt-5.6", "2026-09-03T00:00:00+00:00"),
                 ("claude-sonnet-4-6", "2026-09-02T00:00:00+00:00"),
+                ("gpt-5.6", "2026-09-03T00:00:00+00:00"),
             ],
         )
+
+    def test_summary_prefers_fable_then_opus_sonnet_and_haiku(self) -> None:
+        rows = [
+            self._row(
+                "schedule",
+                "2026-09-04T00:00:00+00:00",
+                model="claude-haiku-4-5",
+            ),
+            self._row(
+                "schedule",
+                "2026-09-03T00:00:00+00:00",
+                model="claude-sonnet-4-6",
+            ),
+            self._row(
+                "schedule",
+                "2026-09-02T00:00:00+00:00",
+                model="claude-opus-4-8",
+            ),
+            self._row(
+                "schedule",
+                "2026-09-01T00:00:00+00:00",
+                model="claude-fable-5",
+            ),
+        ]
+        expected = (
+            "claude-fable-5",
+            "claude-opus-4-8",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5",
+        )
+
+        for index, model in enumerate(expected):
+            with self.subTest(model=model):
+                summary = latest_opinions(rows[: len(rows) - index])
+                self.assertEqual(summary[0]["model"], model)
+        self.assertEqual(
+            [
+                row["model"]
+                for row in latest_model_opinions(rows, "schedule")
+            ],
+            list(expected),
+        )
+
+    def test_summary_uses_latest_unknown_model_without_preferred_model(
+        self,
+    ) -> None:
+        rows = [
+            self._row(
+                "schedule",
+                "2026-09-01T00:00:00+00:00",
+                model="gpt-5.5",
+            ),
+            self._row(
+                "schedule",
+                "2026-09-02T00:00:00+00:00",
+                model="gpt-5.6",
+            ),
+        ]
+
+        self.assertEqual(latest_opinions(rows)[0]["model"], "gpt-5.6")
 
     def test_invalid_newer_run_does_not_hide_approved_model_run(self) -> None:
         approved = self._row(

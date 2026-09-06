@@ -393,11 +393,14 @@ python scripts/review_moe_opinion.py \
   --reviewed-by <reviewer> --note "<why it is safe to expose>"
 ```
 
-The NFL game detail view now links to a paginated MOE summary. The summary shows
-the latest valid, approved persisted opinion for each expert. If an expert has
-approved opinions from multiple models, selecting that expert opens a model
-picker containing the latest approved run per exact model ID; a single-model
-expert opens directly. Expert detail is paginated to stay below Telegram's
+The NFL game detail view now links to a paginated MOE summary. For each expert,
+the summary selects the latest valid, approved opinion for the first available
+model in this order: Fable, Opus, Sonnet, then Haiku. If none of those models
+is available, it falls back to the latest approved model. Selecting an expert
+with approved opinions from multiple models opens a model picker containing
+the latest approved run per exact model ID in the same Fable, Opus, Sonnet,
+Haiku order, followed by any other models by recency; a single-model expert
+opens directly. Expert detail is paginated to stay below Telegram's
 message-size limit and its footer shows the expert version, exact model ID, and
 prompt hash. The main MOE summary also shows the exact model ID beside each
 expert name. Opinion UUIDs bind model-picker callbacks without placing long
