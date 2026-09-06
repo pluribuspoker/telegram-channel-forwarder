@@ -128,6 +128,34 @@ CASES = [
     ("total, period absent",
      {"bet_type": "total", "teams": ["Dallas Wings"], "line": 79.5,
       "direction": "under", "sport": "WNBA"}, "Dallas Wings U79.5"),
+
+    # ── BTTS parsed as a line-less total (reported: broadcast read "Angers") ──
+    # The parse prompt has no BTTS rule, so the model sometimes returns
+    # bet_type=total with line=null instead of prop+prop_stat=BTTS. Both shapes
+    # must render identically; the old fallback ran _clean_desc, whose
+    # vs-stripper truncated the label to the first team name.
+    ("btts as line-less total (reported)",
+     P(bet_type="total", teams=["Angers", "Rennes"], direction="over",
+       period="game", sport="Soccer",
+       description="Angers vs Rennes Both Teams To Score (BTTS) -160 live"),
+     "Angers vs Rennes BTTS Yes"),
+    ("btts as line-less total, No side",
+     P(bet_type="total", teams=["Angers", "Rennes"], direction="under",
+       period="game", sport="Soccer",
+       description="Angers vs Rennes BTTS No"),
+     "Angers vs Rennes BTTS No"),
+    # The vs-stripper must still trim a trailing opponent when the bet content
+    # sits before the "vs" (its original purpose, spread-shaped fallbacks).
+    ("fallback spread keeps vs-strip",
+     P(bet_type="spread", teams=[], sport="NCAAF",
+       description="Alabama -7.5 vs Arkansas"),
+     "Alabama -7.5"),
+    # Matchup-first fallback with no structured fields must keep the market
+    # instead of truncating to the first team.
+    ("fallback matchup-first keeps market",
+     P(bet_type="total", teams=[], sport="Soccer",
+       description="Angers vs Rennes over 2.5 goals"),
+     "Angers vs Rennes over 2.5 goals"),
 ]
 
 

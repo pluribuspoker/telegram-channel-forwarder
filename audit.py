@@ -27,12 +27,23 @@ import httpx
 from common import VERDICT_EMOJI, is_regulation_ml, parlay_combined_odds
 
 
+# BTTS in any phrasing ("BTTS", "Both Teams To Score") — used to catch the
+# line-less-total parse shape in _format_pick_body.
+_BTTS_RE = re.compile(r'\bBTTS\b|\bboth\s+teams\s+to\s+score\b', re.IGNORECASE)
+
+
 def _clean_desc(desc: str) -> str:
     """Fallback: strip odds and normalize wording from a raw description string."""
     desc = re.sub(r'\s*\([+-]?\d+\)', '', desc)          # (-125), (+110)
     desc = re.sub(r'\s+[+-]\d{3,4}$', '', desc)           # trailing +113 / -138
     desc = re.sub(r'\bMoneyline\b', 'ML', desc, re.IGNORECASE)
-    desc = re.sub(r'\s+vs\s+\S.*$', '', desc)             # " vs Arkansas" on spread lines
+    # " vs Arkansas" on spread lines — but only when the bet lives BEFORE the
+    # "vs" ("Alabama -7.5 vs Arkansas"). In matchup-first wording ("Angers vs
+    # Rennes BTTS") the market follows the matchup, and stripping it would
+    # leave a bare team name with no bet at all.
+    head = re.sub(r'\s+vs\s+\S.*$', '', desc)
+    if re.search(r'\d|\bML\b', head):
+        desc = head
     return desc.strip()
 
 
@@ -75,6 +86,14 @@ def _format_pick_body(pick: dict) -> str:
     direction = pick.get("direction") or ""
     player    = pick.get("player") or ""
     prop_stat = pick.get("prop_stat") or ""
+
+    # BTTS sometimes parses as a line-less total instead of a team-level prop
+    # ("Angers vs Rennes BTTS" → bet_type=total, line=null, prop_stat=null).
+    # Recover the stat so both shapes render through the team-prop branch —
+    # the description fallback would leave a bare team name.
+    if (bet_type == "total" and line is None and not prop_stat and not player
+            and _BTTS_RE.search(pick.get("description", ""))):
+        bet_type, prop_stat = "prop", "BTTS"
 
     period_tag = _period_tag(pick)
     team = teams[0] if teams else ""
