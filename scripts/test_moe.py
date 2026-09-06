@@ -212,7 +212,7 @@ class ScheduleInputTest(unittest.TestCase):
             payload["historical_data"]["away_team"],
         )
 
-    def test_non_conference_game_includes_team_matchup_cohorts(self) -> None:
+    def test_matchup_bucket_does_not_add_performance_cohorts(self) -> None:
         history = _history()
         for row in history:
             row["away_conference"] = "AFC"
@@ -227,11 +227,14 @@ class ScheduleInputTest(unittest.TestCase):
         self.assertEqual(payload["game"]["matchup_type"], "non_conference")
         for side in ("away_team", "home_team"):
             context = payload["historical_data"][side]
-            self.assertEqual(context["non_division_games"]["games"], 2)
-            self.assertEqual(context["non_conference"]["games"], 2)
-            self.assertEqual(
-                context["conference_non_division"]["games"], 0
-            )
+            self.assertNotIn("non_division_games", context)
+            self.assertNotIn("non_conference", context)
+            self.assertNotIn("conference_non_division", context)
+        self.assertNotIn("head_to_head", payload["historical_data"])
+        self.assertNotIn(
+            "same_weekday_and_month_matchup_type",
+            payload["historical_data"],
+        )
 
 
 class DivisionalInputTest(unittest.TestCase):
@@ -475,8 +478,8 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             generation_backend="agent_runtime",
         )
 
-        self.assertEqual(row["expert_version"], 24)
-        self.assertEqual(row["prompt_version"], 14)
+        self.assertEqual(row["expert_version"], 25)
+        self.assertEqual(row["prompt_version"], 15)
         self.assertEqual(row["model"], "claude-fable-5")
         self.assertEqual(row["generation_backend"], "agent_runtime")
         self.assertEqual(row["generation_effort"], "max")
@@ -486,7 +489,7 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(row["prompt_sha256"]), 64)
         self.assertEqual(len(row["input_sha256"]), 64)
         self.assertNotIn("bookmaker", row["input_json"])
-        self.assertIn("Schedule Expert v14", captured["system"])
+        self.assertIn("Schedule Expert v15", captured["system"])
         self.assertEqual(row["generation_status"], "valid")
         self.assertEqual(row["review_status"], "pending")
         self.assertEqual(store.rows, [row])
@@ -1032,6 +1035,43 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
                 schedule_input=schedule_input,
             )
 
+    def test_schedule_opinion_rejects_matchup_performance_reasoning(self) -> None:
+        schedule_input = build_schedule_input(_game(), _history())
+        opinion = {
+            "matchup_bucket": "division",
+            "matchup_bucket_description": (
+                "the teams are in the same division"
+            ),
+            "predicted_winner": "Philadelphia Eagles",
+            "home_win_probability": 0.6,
+            "expected_home_margin": 3,
+            "predicted_away_score": 20,
+            "predicted_home_score": 24,
+            "confidence_stars": 3,
+            "thesis": "The schedule profile favors Philadelphia.",
+            "supporting_factors": [
+                "Philadelphia has the better divisional record."
+            ],
+            "counterarguments": ["The week sample is small."],
+            "no_signal_factors": [],
+            "discarded_considerations": [],
+            "full_opinion": (
+                "Matchup bucket: division - the teams are in the same "
+                "division.\n\nThe divisional record favors Philadelphia."
+            ),
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "must not use matchup-type performance evidence",
+        ):
+            validate_opinion(
+                opinion,
+                away_team="Dallas Cowboys",
+                home_team="Philadelphia Eagles",
+                schedule_input=schedule_input,
+            )
+
     def test_rejects_empty_evidence_and_oversized_thesis(self) -> None:
         base = {
             "predicted_winner": "Philadelphia Eagles",
@@ -1314,9 +1354,9 @@ class OpinionViewTest(unittest.TestCase):
     def test_expert_prompt_is_loaded_from_versioned_file(self) -> None:
         expert = load_expert("schedule")
 
-        self.assertEqual(expert["version"], 24)
-        self.assertEqual(expert["prompt_version"], 14)
-        self.assertEqual(expert["prompt_path"], "moe/prompts/schedule/v14.md")
+        self.assertEqual(expert["version"], 25)
+        self.assertEqual(expert["prompt_version"], 15)
+        self.assertEqual(expert["prompt_path"], "moe/prompts/schedule/v15.md")
         self.assertEqual(expert["output_schema_version"], 6)
         self.assertEqual(expert["default_model"], "claude-opus-4-8")
         self.assertEqual(expert["reasoning_effort"], "max")

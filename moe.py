@@ -439,30 +439,6 @@ def build_schedule_input(
         }
         context = {
             "all_games": _team_sample(team_rows, team),
-            "non_division_games": _team_sample(
-                [
-                    row
-                    for row in team_rows
-                    if str(row["matchup_type"]) != "division"
-                ],
-                team,
-            ),
-            "conference_non_division": _team_sample(
-                [
-                    row
-                    for row in team_rows
-                    if str(row["matchup_type"]) == "conference"
-                ],
-                team,
-            ),
-            "non_conference": _team_sample(
-                [
-                    row
-                    for row in team_rows
-                    if str(row["matchup_type"]) == "non_conference"
-                ],
-                team,
-            ),
             "as_home": _team_sample(
                 [
                     row
@@ -529,18 +505,7 @@ def build_schedule_input(
             )
         return context
 
-    head_to_head = [
-        row
-        for row in historical
-        if {str(row["away_team"]), str(row["home_team"])} == {away, home}
-    ]
     matchup_type = _matchup_type(historical, away, home)
-    comparable = [
-        row
-        for row in historical
-        if str(row.get("matchup_type") or "") == matchup_type
-        and _calendar_match(row, weekday=weekday, month=month)
-    ]
     payload = {
         "input_profile": "schedule_only",
         "game": {
@@ -559,16 +524,6 @@ def build_schedule_input(
             "seasons": sorted({int(row["season"]) for row in historical}),
             "away_team": team_context(away),
             "home_team": team_context(home),
-            "head_to_head": {
-                "games": len(head_to_head),
-                "away_team_record": _team_sample(head_to_head, away),
-                "home_team_record": _team_sample(head_to_head, home),
-            },
-            "same_weekday_and_month_matchup_type": {
-                "matchup_type": matchup_type,
-                "games": len(comparable),
-                "home_record": _home_side_sample(comparable),
-            },
         },
     }
     if week is not None:
@@ -2157,9 +2112,38 @@ def validate_opinion(
             f"Matchup bucket: {expected_bucket} - "
             f"{expected_description}."
         )
-        if bucket_line not in str(opinion.get("full_opinion") or ""):
+        full_opinion = str(opinion.get("full_opinion") or "")
+        if not full_opinion.startswith(bucket_line):
             raise ValueError(
-                f"full_opinion must include exact bucket line: {bucket_line}"
+                f"full_opinion must start with exact bucket line: {bucket_line}"
+            )
+        schedule_analysis = "\n".join(
+            [
+                str(opinion.get("thesis") or ""),
+                *[
+                    str(item)
+                    for field in (
+                        "supporting_factors",
+                        "counterarguments",
+                        "no_signal_factors",
+                        "discarded_considerations",
+                    )
+                    for item in opinion.get(field, [])
+                ],
+                full_opinion[len(bucket_line) :],
+            ]
+        )
+        if re.search(
+            r"\b(?:non[- ]?)?divisional\b|"
+            r"\b(?:non[- ]?)?conference\b|"
+            r"\bhead[- ]to[- ]head\b|"
+            r"\bmatchup[- ]type\b",
+            schedule_analysis,
+            re.IGNORECASE,
+        ):
+            raise ValueError(
+                "Schedule opinion must not use matchup-type performance "
+                "evidence outside the required bucket label"
             )
     if (
         schedule_input is not None
