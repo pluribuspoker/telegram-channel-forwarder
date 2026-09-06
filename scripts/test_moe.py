@@ -621,7 +621,7 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(row["expert_id"], "divisional")
         self.assertEqual(row["input_profile"], "divisional")
-        self.assertEqual(row["expert_version"], 32)
+        self.assertEqual(row["expert_version"], 33)
         self.assertEqual(row["output_schema_version"], 4)
         self.assertEqual(row["model"], "claude-fable-5")
         self.assertEqual(row["generation_backend"], "agent_runtime")
@@ -1515,7 +1515,7 @@ class OpinionViewTest(unittest.TestCase):
         self.assertEqual(len(expert["prompt_sha256"]), 64)
 
         divisional = load_expert("divisional")
-        self.assertEqual(divisional["version"], 32)
+        self.assertEqual(divisional["version"], 33)
         self.assertEqual(divisional["prompt_version"], 19)
         self.assertEqual(divisional["output_schema_version"], 4)
         self.assertEqual(
@@ -1526,11 +1526,20 @@ class OpinionViewTest(unittest.TestCase):
         self.assertEqual(divisional["reasoning_effort"], "max")
         self.assertEqual(
             divisional["model_reasoning_effort"],
-            {"claude-fable-5": "medium"},
+            {
+                "claude-fable-5": "medium",
+                "claude-sonnet-4-6": "max",
+                "claude-haiku-4-5": "max",
+            },
         )
         self.assertEqual(
             divisional["allowed_models"],
-            ["claude-opus-4-8", "claude-fable-5"],
+            [
+                "claude-opus-4-8",
+                "claude-fable-5",
+                "claude-sonnet-4-6",
+                "claude-haiku-4-5",
+            ],
         )
 
 
