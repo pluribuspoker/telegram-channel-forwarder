@@ -25,6 +25,7 @@ from moe import (
     opinion_output_sha256,
     opinion_summary,
     validate_opinion,
+    _normalize_cited_opinion,
     _normalize_evidence_card_opinion,
     _persist_attempt,
 )
@@ -286,6 +287,99 @@ class DivisionalInputTest(unittest.TestCase):
             ),
         ]
 
+    def test_team_context_separates_current_opponent_from_rest_of_division(
+        self,
+    ) -> None:
+        history = [
+            *self._division_history(),
+            _history_row(
+                "eagles-giants",
+                season=2025,
+                week=8,
+                away_team="New York Giants",
+                home_team="Philadelphia Eagles",
+                away_score=14,
+                home_score=28,
+                kickoff="2025-10-26T18:00:00+00:00",
+            ),
+            _history_row(
+                "cowboys-commanders",
+                season=2025,
+                week=9,
+                away_team="Dallas Cowboys",
+                home_team="Washington Commanders",
+                away_score=24,
+                home_score=20,
+                kickoff="2025-11-02T18:00:00+00:00",
+            ),
+            _history_row(
+                "eagles-vikings",
+                season=2025,
+                week=10,
+                away_team="Minnesota Vikings",
+                home_team="Philadelphia Eagles",
+                away_score=21,
+                home_score=24,
+                kickoff="2025-11-09T18:00:00+00:00",
+                same_division=False,
+            ),
+            _history_row(
+                "cowboys-packers",
+                season=2025,
+                week=11,
+                away_team="Green Bay Packers",
+                home_team="Dallas Cowboys",
+                away_score=27,
+                home_score=20,
+                kickoff="2025-11-16T18:00:00+00:00",
+                same_division=False,
+            ),
+        ]
+        payload = build_divisional_input(
+            _game(),
+            history,
+            [
+                {
+                    "event_id": _game()["event_id"],
+                    "season": 2026,
+                    "week": 1,
+                    "kickoff_utc": _game()["commence_time_utc"],
+                    "away_team": "Dallas Cowboys",
+                    "home_team": "Philadelphia Eagles",
+                },
+                {
+                    "event_id": "2026-rematch",
+                    "season": 2026,
+                    "week": 12,
+                    "kickoff_utc": "2026-11-26T18:00:00+00:00",
+                    "away_team": "Philadelphia Eagles",
+                    "home_team": "Dallas Cowboys",
+                },
+            ],
+        )
+
+        for side in ("away_team", "home_team"):
+            context = payload["historical_data"][side]
+            self.assertEqual(context["against_current_opponent"]["games"], 4)
+            self.assertEqual(
+                context["division_games_excluding_current_opponent"]["games"],
+                1,
+            )
+            self.assertEqual(context["non_division_games"]["games"], 1)
+            self.assertEqual(
+                context["non_division_games_excluding_current_opponent"][
+                    "games"
+                ],
+                1,
+            )
+            self.assertEqual(
+                context["division_games"]["games"],
+                context["against_current_opponent"]["games"]
+                + context["division_games_excluding_current_opponent"][
+                    "games"
+                ],
+            )
+
     def test_second_division_meeting_includes_only_prior_current_result(
         self,
     ) -> None:
@@ -478,7 +572,7 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             generation_backend="agent_runtime",
         )
 
-        self.assertEqual(row["expert_version"], 26)
+        self.assertEqual(row["expert_version"], 27)
         self.assertEqual(row["prompt_version"], 15)
         self.assertEqual(row["model"], "claude-fable-5")
         self.assertEqual(row["generation_backend"], "agent_runtime")
@@ -543,6 +637,78 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["generation_effort"], "max")
         self.assertEqual(captured["output_config"], {"effort": "max"})
 
+    async def test_haiku_schedule_uses_its_cited_prompt_and_provenance(
+        self,
+    ) -> None:
+        output = {
+            "matchup_bucket": "division",
+            "matchup_bucket_description": (
+                "the teams are in the same division"
+            ),
+            "predicted_winner": "Philadelphia Eagles",
+            "home_win_probability": 0.61,
+            "expected_home_margin": 3.5,
+            "predicted_away_score": 20,
+            "predicted_home_score": 24,
+            "confidence_stars": 3,
+            "thesis": {
+                "claim": "Philadelphia has the stronger schedule profile.",
+                "evidence_paths": [
+                    "historical_data.home_team.all_games"
+                ],
+            },
+            "supporting_factors": [
+                {
+                    "claim": "Philadelphia's home-role sample supports the pick.",
+                    "evidence_paths": [
+                        "historical_data.home_team.as_home"
+                    ],
+                }
+            ],
+            "counterarguments": [
+                {
+                    "claim": "Dallas retains contrary road-role evidence.",
+                    "evidence_paths": [
+                        "historical_data.away_team.as_away"
+                    ],
+                }
+            ],
+            "no_signal_factors": [],
+            "discarded_considerations": [],
+        }
+        captured = []
+
+        async def create_fn(**kwargs):
+            captured.append(kwargs)
+            return SimpleNamespace(
+                content=[SimpleNamespace(text=json.dumps(output))]
+            )
+
+        row = await generate_opinion(
+            expert_id="schedule",
+            game=_game(),
+            history=_history(),
+            store=MemoryStore(),
+            model="claude-haiku-4-5",
+            create_fn=create_fn,
+            generation_backend="agent_runtime",
+        )
+
+        self.assertEqual(len(captured), 1)
+        self.assertIn("Schedule Haiku Expert v1", captured[0]["system"])
+        self.assertEqual(row["prompt_version"], 1)
+        self.assertEqual(
+            row["prompt_path"],
+            "moe/prompts/schedule_haiku/v1.md",
+        )
+        self.assertEqual(row["output_schema_version"], 3)
+        self.assertTrue(
+            row["full_opinion"].startswith(
+                "Matchup bucket: division - "
+                "the teams are in the same division."
+            )
+        )
+
     async def test_divisional_expert_uses_divisional_input(self) -> None:
         output = {
             "predicted_winner": "Philadelphia Eagles",
@@ -553,13 +719,19 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             "confidence_stars": 2,
             "evidence_paths": [
                 "historical_data.home_team.division_games",
+                "historical_data.home_team.against_current_opponent",
                 "historical_data.divisional_home_side_meeting_cohorts.nfl.meeting_1",
                 "historical_data.divisional_home_side_meeting_cohorts.division.meeting_1",
                 "historical_data.divisional_home_side_meeting_cohorts.opponent_pair.meeting_1",
                 "historical_data.away_team.division_games",
+                "historical_data.away_team.against_current_opponent",
             ],
             "no_signal_evidence_paths": [
                 "current_season_prior_meeting",
+                "historical_data.home_team.division_games_excluding_current_opponent",
+                "historical_data.home_team.non_division_games",
+                "historical_data.away_team.division_games_excluding_current_opponent",
+                "historical_data.away_team.non_division_games",
             ],
             "nondeterministic_analysis": [
                 "Philadelphia appears better positioned for this matchup."
@@ -621,11 +793,11 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(row["expert_id"], "divisional")
         self.assertEqual(row["input_profile"], "divisional")
-        self.assertEqual(row["expert_version"], 33)
+        self.assertEqual(row["expert_version"], 34)
         self.assertEqual(row["output_schema_version"], 4)
         self.assertEqual(row["model"], "claude-fable-5")
         self.assertEqual(row["generation_backend"], "agent_runtime")
-        self.assertIn("Divisional Expert v19", captured[0]["system"])
+        self.assertIn("Divisional Expert v20", captured[0]["system"])
         self.assertEqual(captured[0]["output_config"], {"effort": "medium"})
         self.assertEqual(captured[1]["output_config"], {"effort": "medium"})
         self.assertIn("lean toward Philadelphia Eagles", row["thesis"])
@@ -645,7 +817,7 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             stored_support["items"][0]["evidence"][0]["path"],
             "historical_data.home_team.division_games",
         )
-        self.assertEqual(len(stored_support["items"]), 2)
+        self.assertEqual(len(stored_support["items"]), 4)
         self.assertEqual(
             len(json.loads(row["counterarguments_json"])),
             3,
@@ -715,14 +887,137 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(calls), 1)
 
-    async def test_schedule_expert_rejects_non_opus_model(self) -> None:
+    async def test_haiku_divisional_uses_path_only_prompt_without_fact_check(
+        self,
+    ) -> None:
+        output = {
+            "predicted_winner": "Philadelphia Eagles",
+            "home_win_probability": 0.58,
+            "expected_home_margin": 2.5,
+            "predicted_away_score": 20,
+            "predicted_home_score": 23,
+            "confidence_stars": 2,
+            "evidence_paths": [
+                "historical_data.home_team.division_games",
+                "historical_data.home_team.against_current_opponent",
+                "historical_data.divisional_home_side_meeting_cohorts.nfl.meeting_1",
+                "historical_data.divisional_home_side_meeting_cohorts.division.meeting_1",
+                "historical_data.divisional_home_side_meeting_cohorts.opponent_pair.meeting_1",
+                "historical_data.away_team.division_games",
+                "historical_data.away_team.against_current_opponent",
+            ],
+            "no_signal_evidence_paths": [
+                "current_season_prior_meeting",
+                "historical_data.home_team.division_games_excluding_current_opponent",
+                "historical_data.home_team.non_division_games",
+                "historical_data.away_team.division_games_excluding_current_opponent",
+                "historical_data.away_team.non_division_games",
+            ],
+            "discarded_considerations": [],
+        }
+        captured = []
+
+        async def create_fn(**kwargs):
+            captured.append(kwargs)
+            return SimpleNamespace(
+                content=[SimpleNamespace(text=json.dumps(output))]
+            )
+
+        row = await generate_opinion(
+            expert_id="divisional",
+            game=_game(),
+            history=_history(),
+            schedule=[
+                {
+                    "event_id": "401772510",
+                    "season": 2026,
+                    "week": 1,
+                    "kickoff_utc": _game()["commence_time_utc"],
+                    "away_team": "Dallas Cowboys",
+                    "home_team": "Philadelphia Eagles",
+                },
+                {
+                    "event_id": "rematch",
+                    "season": 2026,
+                    "week": 12,
+                    "kickoff_utc": "2026-11-26T18:00:00+00:00",
+                    "away_team": "Philadelphia Eagles",
+                    "home_team": "Dallas Cowboys",
+                },
+            ],
+            store=MemoryStore(),
+            model="claude-haiku-4-5",
+            create_fn=create_fn,
+            generation_backend="agent_runtime",
+        )
+
+        self.assertEqual(len(captured), 1)
+        self.assertIn("Divisional Haiku Expert v1", captured[0]["system"])
+        self.assertEqual(row["prompt_version"], 1)
+        self.assertEqual(
+            row["prompt_path"],
+            "moe/prompts/divisional_haiku/v1.md",
+        )
+        self.assertEqual(row["output_schema_version"], 7)
+        self.assertEqual(row["nondeterministic_factuality_status"], "")
+
+    def test_divisional_requires_non_overlapping_comparison_paths(self) -> None:
+        payload = build_divisional_input(
+            _game(),
+            _history(),
+            [
+                {
+                    "event_id": "401772510",
+                    "season": 2026,
+                    "week": 1,
+                    "kickoff_utc": _game()["commence_time_utc"],
+                    "away_team": "Dallas Cowboys",
+                    "home_team": "Philadelphia Eagles",
+                },
+                {
+                    "event_id": "rematch",
+                    "season": 2026,
+                    "week": 12,
+                    "kickoff_utc": "2026-11-26T18:00:00+00:00",
+                    "away_team": "Philadelphia Eagles",
+                    "home_team": "Dallas Cowboys",
+                },
+            ],
+        )
+        opinion = {
+            "predicted_winner": "Philadelphia Eagles",
+            "home_win_probability": 0.58,
+            "expected_home_margin": 2.5,
+            "predicted_away_score": 20,
+            "predicted_home_score": 23,
+            "confidence_stars": 2,
+            "evidence_paths": [
+                "historical_data.home_team.division_games",
+                "historical_data.divisional_home_side_meeting_cohorts.nfl.meeting_1",
+                "historical_data.divisional_home_side_meeting_cohorts.division.meeting_1",
+                "historical_data.divisional_home_side_meeting_cohorts.opponent_pair.meeting_1",
+                "historical_data.away_team.division_games",
+            ],
+            "no_signal_evidence_paths": [
+                "current_season_prior_meeting",
+            ],
+            "discarded_considerations": [],
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "current opponent, the rest of the division",
+        ):
+            _normalize_evidence_card_opinion(opinion, payload)
+
+    async def test_schedule_expert_rejects_unregistered_model(self) -> None:
         with self.assertRaisesRegex(ValueError, "not allowed"):
             await generate_opinion(
                 expert_id="schedule",
                 game=_game(),
                 history=_history(),
                 store=MemoryStore(),
-                model="claude-sonnet-4-6",
+                model="claude-haiku-4-6",
             )
 
     async def test_invalid_model_output_is_persisted_before_error(self) -> None:
@@ -1216,6 +1511,95 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
                 schedule_input=schedule_input,
             )
 
+    def test_cited_claim_rejects_inverted_numeric_comparison(self) -> None:
+        schedule_input = build_schedule_input(_game(), _history())
+        opinion = {
+            "matchup_bucket": "division",
+            "matchup_bucket_description": (
+                "the teams are in the same division"
+            ),
+            "predicted_winner": "Philadelphia Eagles",
+            "predicted_away_score": 20,
+            "predicted_home_score": 24,
+            "home_win_probability": 0.6,
+            "expected_home_margin": 3.0,
+            "confidence_stars": 3,
+            "thesis": {
+                "claim": "Philadelphia has the schedule lean.",
+                "evidence_paths": [
+                    "historical_data.home_team.same_month"
+                ],
+            },
+            "supporting_factors": [
+                {
+                    "claim": "0% exceeds 100%.",
+                    "evidence_paths": [
+                        "historical_data.home_team.same_month",
+                        "historical_data.away_team.same_month",
+                    ],
+                }
+            ],
+            "counterarguments": [
+                {
+                    "claim": "Dallas has road evidence.",
+                    "evidence_paths": [
+                        "historical_data.away_team.as_away"
+                    ],
+                }
+            ],
+            "no_signal_factors": [],
+            "discarded_considerations": [],
+        }
+
+        with self.assertRaisesRegex(ValueError, "inverted numeric comparison"):
+            _normalize_cited_opinion(opinion, schedule_input)
+
+    def test_cited_claim_rejects_overall_rank_for_venue_month(self) -> None:
+        schedule_input = build_schedule_input(_game(), _history())
+        opinion = {
+            "matchup_bucket": "division",
+            "matchup_bucket_description": (
+                "the teams are in the same division"
+            ),
+            "predicted_winner": "Philadelphia Eagles",
+            "predicted_away_score": 20,
+            "predicted_home_score": 24,
+            "home_win_probability": 0.6,
+            "expected_home_margin": 3.0,
+            "confidence_stars": 3,
+            "thesis": {
+                "claim": "Philadelphia has the schedule lean.",
+                "evidence_paths": [
+                    "historical_data.home_team.same_month"
+                ],
+            },
+            "supporting_factors": [
+                {
+                    "claim": "Philadelphia's home September ranks 1.",
+                    "evidence_paths": [
+                        "historical_data.home_team.same_month_as_home",
+                        "historical_data.home_team.same_month_rankings",
+                    ],
+                }
+            ],
+            "counterarguments": [
+                {
+                    "claim": "Dallas has road evidence.",
+                    "evidence_paths": [
+                        "historical_data.away_team.as_away"
+                    ],
+                }
+            ],
+            "no_signal_factors": [],
+            "discarded_considerations": [],
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "mixes overall month rankings",
+        ):
+            _normalize_cited_opinion(opinion, schedule_input)
+
     def test_rejects_empty_evidence_and_oversized_thesis(self) -> None:
         base = {
             "predicted_winner": "Philadelphia Eagles",
@@ -1498,7 +1882,7 @@ class OpinionViewTest(unittest.TestCase):
     def test_expert_prompt_is_loaded_from_versioned_file(self) -> None:
         expert = load_expert("schedule")
 
-        self.assertEqual(expert["version"], 26)
+        self.assertEqual(expert["version"], 27)
         self.assertEqual(expert["prompt_version"], 15)
         self.assertEqual(expert["prompt_path"], "moe/prompts/schedule/v15.md")
         self.assertEqual(expert["output_schema_version"], 6)
@@ -1524,12 +1908,12 @@ class OpinionViewTest(unittest.TestCase):
         self.assertEqual(len(expert["prompt_sha256"]), 64)
 
         divisional = load_expert("divisional")
-        self.assertEqual(divisional["version"], 33)
-        self.assertEqual(divisional["prompt_version"], 19)
+        self.assertEqual(divisional["version"], 34)
+        self.assertEqual(divisional["prompt_version"], 20)
         self.assertEqual(divisional["output_schema_version"], 4)
         self.assertEqual(
             divisional["prompt_path"],
-            "moe/prompts/divisional/v19.md",
+            "moe/prompts/divisional/v20.md",
         )
         self.assertEqual(divisional["default_model"], "claude-opus-4-8")
         self.assertEqual(divisional["reasoning_effort"], "max")
@@ -1549,6 +1933,36 @@ class OpinionViewTest(unittest.TestCase):
                 "claude-sonnet-4-6",
                 "claude-haiku-4-5",
             ],
+        )
+
+        haiku_schedule = load_expert(
+            "schedule",
+            model="claude-haiku-4-5",
+        )
+        self.assertEqual(haiku_schedule["prompt_version"], 1)
+        self.assertEqual(haiku_schedule["output_schema_version"], 3)
+        self.assertEqual(
+            haiku_schedule["prompt_path"],
+            "moe/prompts/schedule_haiku/v1.md",
+        )
+        self.assertNotEqual(
+            haiku_schedule["prompt_sha256"],
+            expert["prompt_sha256"],
+        )
+
+        haiku_divisional = load_expert(
+            "divisional",
+            model="claude-haiku-4-5",
+        )
+        self.assertEqual(haiku_divisional["prompt_version"], 1)
+        self.assertEqual(haiku_divisional["output_schema_version"], 7)
+        self.assertEqual(
+            haiku_divisional["prompt_path"],
+            "moe/prompts/divisional_haiku/v1.md",
+        )
+        self.assertNotEqual(
+            haiku_divisional["prompt_sha256"],
+            divisional["prompt_sha256"],
         )
 
 

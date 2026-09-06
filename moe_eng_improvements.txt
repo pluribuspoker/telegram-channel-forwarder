@@ -62,5 +62,8 @@ MOE engineering improvements
 - Require a structured field-by-field result for numeric claims, records,
   percentages, rankings, subset labels, factual characterizations, and expert
   scope restrictions.
+- Run deterministic arithmetic and cohort-scope checks before the model
+  verifier. Explicit comparison inversions and applying aggregate rankings to
+  a narrower venue split must fail without relying on a sampled verifier.
 - Do not accept a general statement that an opinion looks correct.
 - Approval remains hash-bound and occurs only after all required checks pass.

@@ -262,11 +262,17 @@ Authoritative configuration lives under `moe/`:
   The model supplies only the pick values and path ranking. The overview thesis
   and conclusion are also rendered deterministically from the winner,
   confidence, and existence of retained counterevidence.
-- Divisional prompt v19 requires complete selectable evidence-card or null
+- Divisional prompt v20 requires complete selectable evidence-card or null
   paths and explicitly rejects parent containers and scalar children in the
-  opinion path lists. Deterministic path normalization now runs before the
-  separate factuality inference, so a malformed opinion is audited and repaired
-  without spending a factuality call.
+  opinion path lists. For a divisional game, each team now has three
+  deterministic, non-overlapping comparison cohorts: the current opponent,
+  the rest of the division excluding that opponent, and non-divisional
+  opponents. All six paths must be selected or explicitly marked no-signal.
+  The broader `division_games` aggregate is optional context because it
+  overlaps the first two cohorts and must not be counted as independent
+  corroboration. Deterministic path normalization runs before the separate
+  factuality inference, so a malformed opinion is audited and repaired without
+  spending a factuality call.
 - The same main inference may return freeform `nondeterministic_analysis`
   claims. A separate versioned factuality prompt classifies each exact claim as
   supported, reasonable inference, or unsupported against the same controlled
@@ -279,6 +285,21 @@ Authoritative configuration lives under `moe/`:
 - Factuality prompt v3 states that overall-team interpretations require the
   applicable parent path ending in `.all_games`; citing only scalar children
   does not satisfy that deterministic invariant.
+- Expert registry entries may define exact-model `model_prompts` overrides.
+  Prompt path, prompt version, output schema, prompt hash, and source hash are
+  resolved after selecting the model, so persisted provenance always describes
+  the instructions actually used. Models without an override continue to use
+  the expert's shared prompt.
+- Haiku 4.5 uses dedicated prompts rather than runtime edits to shared prompts.
+  Divisional Haiku output schema v7 returns only forecast values and exact
+  evidence-card paths; application code classifies and renders the cards and no
+  freeform factuality pass is needed. Schedule Haiku output schema v3 returns
+  concise cited claim objects and lets application code render the final
+  opinion. Deterministic validation rejects explicit inverted comparisons and
+  claims that mix overall month rankings with venue-specific month cohorts.
+- Every model gets one initial inference and at most one fresh targeted repair.
+  Failed attempts remain append-only audit rows; there is no retry-until-pass
+  mode.
 - The current ESPN schedule determines whether divisional opponents are in
   meeting one or two and the days between their two scheduled games. For a
   second meeting only, generation fetches completed current-season ESPN games

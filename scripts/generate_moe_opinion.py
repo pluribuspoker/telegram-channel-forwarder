@@ -139,7 +139,14 @@ async def main() -> None:
     )
     if game is None:
         raise ValueError(f"Unknown nfl_games event_id: {args.event_id}")
-    expert = load_expert(args.expert)
+    base_expert = load_expert(args.expert)
+    selected_model = (
+        args.model
+        or str(base_expert.get("default_model") or "")
+        or os.getenv("MOE_MODEL")
+        or "claude-sonnet-4-6"
+    )
+    expert = load_expert(args.expert, model=selected_model)
     if args.agent_factuality_response and not args.agent_response:
         parser.error(
             "--agent-factuality-response requires --agent-response"

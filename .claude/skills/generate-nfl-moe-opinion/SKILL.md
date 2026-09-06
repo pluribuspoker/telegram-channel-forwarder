@@ -13,7 +13,7 @@ limits, and billing.
 
 ## Invariants
 
-- Use the exact registered expert prompt and deterministic input.
+- Use the exact prompt resolved for the selected model and deterministic input.
 - Use the user-requested model only when it appears in the expert's
   `allowed_models`; otherwise use the expert's `default_model`.
 - Perform inference at the selected model's configured reasoning effort,
@@ -35,8 +35,10 @@ limits, and billing.
 
 ## Procedure
 
-1. Read `moe/experts.yaml`, the registered expert prompt, and the relevant
-   sections of `docs/telegram-intake-plan.md`.
+1. Read `moe/experts.yaml`, resolve any exact-model entry under
+   `model_prompts`, then read that prompt and the relevant sections of
+   `docs/telegram-intake-plan.md`. The selected prompt path, prompt version,
+   output schema, and prompt hash must be the values persisted for the run.
 2. Produce the exact deterministic input without inference:
 
    ```bash
@@ -58,10 +60,10 @@ limits, and billing.
 4. Save the agent's exact response as `<temporary-opinion.json>`. Do not correct
    its claims before persistence; validator failures are audit records.
 
-5. For an output-schema-v4 expert, validate and persist the deterministic
-   response structure before spending a separate factuality inference. If path
-   validation fails, retain the invalid audit row and allow at most one fresh
-   schema-repair inference using the exact error and original response.
+5. Validate the deterministic response structure before any optional
+   factuality inference. If validation fails, retain the invalid audit row and
+   allow at most one fresh targeted repair using the exact error and original
+   response. Never retry until a response happens to pass.
 
 6. For an output-schema-v4 expert whose deterministic structure passed, run a
    second isolated inference with the
@@ -72,7 +74,8 @@ limits, and billing.
 
    Save its exact raw JSON as `<temporary-factuality.json>`.
 
-7. Persist through the normal pipeline:
+7. Persist through the normal pipeline. Only output-schema-v4 responses use a
+   separate factuality response; path-only schema v7 does not:
 
    ```bash
    # Schedule, Win Total, or AK Expert
@@ -82,13 +85,20 @@ limits, and billing.
      --generation-effort <actual-agent-effort> \
      --agent-response <temporary-opinion.json>
 
-   # Divisional Expert
+   # Divisional Expert using output schema v4
    python scripts/generate_moe_opinion.py \
      --event-id <event-id> --expert divisional \
      --model <selected-model> \
      --generation-effort <actual-agent-effort> \
      --agent-response <temporary-opinion.json> \
      --agent-factuality-response <temporary-factuality.json>
+
+   # Divisional Expert using path-only output schema v7
+   python scripts/generate_moe_opinion.py \
+     --event-id <event-id> --expert divisional \
+     --model <selected-model> \
+     --generation-effort <actual-agent-effort> \
+     --agent-response <temporary-opinion.json>
    ```
 
 8. Confirm the persisted row records:

@@ -241,7 +241,11 @@ def _persist_attempt(store: MoeOpinionStore, row: dict[str, Any]) -> None:
         ) from exc
 
 
-def load_expert(expert_id: str) -> dict[str, Any]:
+def load_expert(
+    expert_id: str,
+    *,
+    model: str | None = None,
+) -> dict[str, Any]:
     raw = EXPERTS_PATH.read_text(encoding="utf-8")
     config = yaml.safe_load(raw)
     experts = config.get("experts") if isinstance(config, dict) else None
@@ -250,11 +254,24 @@ def load_expert(expert_id: str) -> dict[str, Any]:
     expert = experts[expert_id]
     if not isinstance(expert, dict) or not expert.get("enabled"):
         raise ValueError(f"MOE expert is disabled: {expert_id}")
-    prompt_path = MOE_ROOT / str(expert["prompt"])
+    resolved = dict(expert)
+    model_prompts = expert.get("model_prompts") or {}
+    if not isinstance(model_prompts, dict):
+        raise ValueError(f"Invalid model prompt map for expert {expert_id}")
+    if model and model in model_prompts:
+        override = model_prompts[model]
+        if not isinstance(override, dict):
+            raise ValueError(
+                f"Invalid model prompt override for {expert_id}: {model}"
+            )
+        for key in ("prompt", "prompt_version", "output_schema_version"):
+            if key in override:
+                resolved[key] = override[key]
+    prompt_path = MOE_ROOT / str(resolved["prompt"])
     prompt = prompt_path.read_text(encoding="utf-8")
     return {
         "id": expert_id,
-        **expert,
+        **resolved,
         "prompt_text": prompt,
         "prompt_path": str(prompt_path.relative_to(ROOT)),
         "prompt_sha256": _sha256_text(prompt),
@@ -740,10 +757,28 @@ def build_divisional_input(
             for row in team_rows
             if {str(row["away_team"]), str(row["home_team"])} == pair
         ]
+        division_other_opponent_rows = [
+            row
+            for row in division_rows
+            if {str(row["away_team"]), str(row["home_team"])} != pair
+        ]
+        non_division_other_opponent_rows = [
+            row
+            for row in non_division_rows
+            if {str(row["away_team"]), str(row["home_team"])} != pair
+        ]
         return {
             "all_games": _team_sample(team_rows, team),
             "division_games": _team_sample(division_rows, team),
+            "division_games_excluding_current_opponent": _team_sample(
+                division_other_opponent_rows,
+                team,
+            ),
             "non_division_games": _team_sample(non_division_rows, team),
+            "non_division_games_excluding_current_opponent": _team_sample(
+                non_division_other_opponent_rows,
+                team,
+            ),
             "division_as_home": _team_sample(
                 [
                     row
@@ -1072,6 +1107,33 @@ def _validate_claim_numbers(
             )
 
 
+def _validate_explicit_numeric_comparisons(claim: str) -> None:
+    normalized = claim.replace("−", "-").replace("–", "-")
+    pattern = re.compile(
+        r"(?P<left>-?\d+(?:\.\d+)?)\s*(?:%|percent)?\s+"
+        r"(?P<operator>exceeds|trails|is higher than|is lower than|"
+        r"is greater than|is less than|is above|is below)\s+"
+        r"(?P<right>-?\d+(?:\.\d+)?)\s*(?:%|percent)?",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(normalized):
+        left = float(match.group("left"))
+        right = float(match.group("right"))
+        operator = match.group("operator").lower()
+        expects_greater = operator in {
+            "exceeds",
+            "is higher than",
+            "is greater than",
+            "is above",
+        }
+        valid = left > right if expects_greater else left < right
+        if not valid:
+            raise ValueError(
+                "Claim contains an inverted numeric comparison: "
+                f"{match.group(0)}"
+            )
+
+
 def _complete_unique_record_paths(
     claim: str,
     paths: list[str],
@@ -1158,6 +1220,22 @@ def _normalize_cited_claim(
         resolved,
         input_payload,
     )
+    _validate_explicit_numeric_comparisons(claim)
+    if (
+        re.search(r"\brank(?:s|ed|ing)?\b", claim, re.IGNORECASE)
+        and any(
+            path.endswith((".same_month_as_home", ".same_month_as_away"))
+            for path in normalized_paths
+        )
+        and any(
+            path.endswith(".same_month_rankings")
+            for path in normalized_paths
+        )
+    ):
+        raise ValueError(
+            f"{role} mixes overall month rankings with a venue-specific month "
+            "cohort"
+        )
     if re.search(
         r"\b(?:early[- ]season|season opener|opening week)\b",
         claim,
@@ -1318,13 +1396,28 @@ def _normalize_cited_opinion(
         away_team=str(input_payload["game"]["away_team"]),
         home_team=str(input_payload["game"]["home_team"]),
     )
+    if input_payload.get("input_profile") == "schedule_only":
+        bucket_description = str(
+            opinion.get("matchup_bucket_description") or ""
+        ).strip().removesuffix(".").rstrip()
+        normalized["full_opinion"] = (
+            f"Matchup bucket: {opinion.get('matchup_bucket')} - "
+            f"{bucket_description}.\n\n"
+            f"{normalized['full_opinion']}"
+        )
     return normalized
 
 
 _TEAM_EVIDENCE_LABELS = {
     "all_games": "all games",
     "division_games": "divisional games",
+    "division_games_excluding_current_opponent": (
+        "divisional games excluding the current opponent"
+    ),
     "non_division_games": "non-divisional games",
+    "non_division_games_excluding_current_opponent": (
+        "non-divisional games excluding the current opponent"
+    ),
     "division_as_home": "divisional home games",
     "division_as_away": "divisional away games",
     "conference_non_division": "conference non-divisional games",
@@ -1595,7 +1688,9 @@ def _normalize_evidence_card_opinion(
         allowed_team_keys = {
             "all_games",
             "division_games",
+            "division_games_excluding_current_opponent",
             "non_division_games",
+            "non_division_games_excluding_current_opponent",
             matchup_key,
             "against_current_opponent",
             "against_current_opponent_as_home",
@@ -1627,6 +1722,23 @@ def _normalize_evidence_card_opinion(
             raise ValueError(
                 "Non-divisional opinions must compare the divisional baseline, "
                 "non-divisional record, and current matchup type for both "
+                f"teams; missing paths: {sorted(missing)}"
+            )
+    elif matchup_type == "division":
+        required = {
+            f"historical_data.{side}.{key}"
+            for side in ("away_team", "home_team")
+            for key in (
+                "against_current_opponent",
+                "division_games_excluding_current_opponent",
+                "non_division_games",
+            )
+        }
+        missing = required - selected
+        if missing:
+            raise ValueError(
+                "Divisional opinions must compare the current opponent, the "
+                "rest of the division, and non-divisional opponents for both "
                 f"teams; missing paths: {sorted(missing)}"
             )
     cohorts = input_payload["historical_data"].get(
@@ -2083,7 +2195,8 @@ def validate_opinion(
 ) -> None:
     cited_schema = bool(
         schedule_input is not None
-        and schedule_input.get("input_profile") in {"divisional", "win_total"}
+        and schedule_input.get("input_profile")
+        in {"schedule_only", "divisional", "win_total"}
         and isinstance(opinion.get("thesis_citation"), dict)
     )
     if (
@@ -2149,6 +2262,7 @@ def validate_opinion(
                 "Schedule opinion must not use matchup-type performance "
                 "evidence outside the required bucket label"
             )
+    _validate_explicit_numeric_comparisons(_canonical_json(opinion))
     if (
         schedule_input is not None
         and schedule_input.get("input_profile") == "win_total"
@@ -2498,6 +2612,7 @@ async def generate_opinion(
         raise ValueError(
             f"Model {selected_model} is not allowed for expert {expert_id}"
         )
+    expert = load_expert(expert_id, model=selected_model)
     model_reasoning_effort = expert.get("model_reasoning_effort") or {}
     if not isinstance(model_reasoning_effort, dict):
         raise ValueError(
@@ -2629,18 +2744,19 @@ async def generate_opinion(
         opinion = _parse_response(raw_response)
         if int(expert["output_schema_version"]) == 3:
             opinion = _normalize_cited_opinion(opinion, input_payload)
-        elif int(expert["output_schema_version"]) == 4:
+        elif int(expert["output_schema_version"]) in {4, 7}:
             opinion = _normalize_evidence_card_opinion(
                 opinion,
                 input_payload,
             )
-            nondeterministic = await _fact_check_nondeterministic_analysis(
-                opinion.get("nondeterministic_analysis"),
-                input_payload,
-                model=selected_model,
-                reasoning_effort=reasoning_effort,
-                create_fn=create_fn,
-            )
+            if int(expert["output_schema_version"]) == 4:
+                nondeterministic = await _fact_check_nondeterministic_analysis(
+                    opinion.get("nondeterministic_analysis"),
+                    input_payload,
+                    model=selected_model,
+                    reasoning_effort=reasoning_effort,
+                    create_fn=create_fn,
+                )
         elif int(expert["output_schema_version"]) == 5:
             opinion = _normalize_ak_opinion(opinion, input_payload)
         validate_opinion(

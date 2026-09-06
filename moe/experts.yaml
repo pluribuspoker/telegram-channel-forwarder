@@ -3,7 +3,7 @@ experts:
   schedule:
     name: Schedule Expert
     mode: agent
-    version: 26
+    version: 27
     prompt_version: 15
     prompt: prompts/schedule/v15.md
     input_profile: schedule_only
@@ -14,6 +14,11 @@ experts:
       claude-fable-5: medium
       claude-sonnet-4-6: max
       claude-haiku-4-5: max
+    model_prompts:
+      claude-haiku-4-5:
+        prompt_version: 1
+        prompt: prompts/schedule_haiku/v1.md
+        output_schema_version: 3
     allowed_models:
       - claude-opus-4-8
       - claude-fable-5
@@ -24,9 +29,9 @@ experts:
   divisional:
     name: Divisional Expert
     mode: agent
-    version: 33
-    prompt_version: 19
-    prompt: prompts/divisional/v19.md
+    version: 34
+    prompt_version: 20
+    prompt: prompts/divisional/v20.md
     input_profile: divisional
     output_schema_version: 4
     default_model: claude-opus-4-8
@@ -35,6 +40,11 @@ experts:
       claude-fable-5: medium
       claude-sonnet-4-6: max
       claude-haiku-4-5: max
+    model_prompts:
+      claude-haiku-4-5:
+        prompt_version: 1
+        prompt: prompts/divisional_haiku/v1.md
+        output_schema_version: 7
     allowed_models:
       - claude-opus-4-8
       - claude-fable-5
