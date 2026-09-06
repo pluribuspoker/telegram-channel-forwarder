@@ -104,7 +104,17 @@ async def main() -> None:
             "--agent-response for output schema v4."
         ),
     )
+    parser.add_argument(
+        "--generation-effort",
+        choices=("low", "medium", "high", "xhigh", "max"),
+        help=(
+            "Actual agent-session reasoning effort. Overrides the registered "
+            "model effort only with --agent-response."
+        ),
+    )
     args = parser.parse_args()
+    if args.generation_effort and not args.agent_response:
+        parser.error("--generation-effort requires --agent-response")
 
     credentials = os.environ.get("GOOGLE_CREDENTIALS", "")
     sheet_id = os.environ.get("NFL_INTAKE_SHEET_ID", "")
@@ -266,6 +276,7 @@ async def main() -> None:
         store=configured_opinion_store(),
         model=args.model,
         generation_backend=generation_backend,
+        generation_effort=args.generation_effort,
         repair_attempts=(
             2
             if create_fn is None

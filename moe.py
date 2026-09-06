@@ -2428,6 +2428,7 @@ async def generate_opinion(
     model: str | None = None,
     create_fn: CreateFn = _claude_create_with_retry,
     generation_backend: str = "anthropic_api",
+    generation_effort: str | None = None,
     repair_attempts: int = 0,
     _repair_response: str = "",
     _repair_error: str = "",
@@ -2498,8 +2499,13 @@ async def generate_opinion(
         raise ValueError(
             f"Invalid model reasoning effort map for expert {expert_id}"
         )
+    if generation_effort and generation_backend != "agent_runtime":
+        raise ValueError(
+            "Generation effort override requires the agent_runtime backend"
+        )
     reasoning_effort = str(
-        model_reasoning_effort.get(selected_model)
+        generation_effort
+        or model_reasoning_effort.get(selected_model)
         or expert.get("reasoning_effort")
         or ""
     ).strip()
@@ -2746,6 +2752,7 @@ async def generate_opinion(
                 model=selected_model,
                 create_fn=create_fn,
                 generation_backend=generation_backend,
+                generation_effort=generation_effort,
                 repair_attempts=repair_attempts - 1,
                 _repair_response=row["raw_response"],
                 _repair_error=row["generation_error"],

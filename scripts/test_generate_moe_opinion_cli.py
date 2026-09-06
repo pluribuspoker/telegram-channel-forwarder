@@ -42,6 +42,19 @@ class GenerateMoeOpinionCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("not allowed with argument --show-input", result.stderr)
 
+    def test_generation_effort_requires_agent_response(self) -> None:
+        result = self._run(
+            "--api",
+            "--generation-effort",
+            "max",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--generation-effort requires --agent-response",
+            result.stderr,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

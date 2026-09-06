@@ -73,12 +73,14 @@ limits, and billing.
    python scripts/generate_moe_opinion.py \
      --event-id <event-id> --expert <schedule|win_total|ak> \
      --model <selected-model> \
+     --generation-effort <actual-agent-effort> \
      --agent-response <temporary-opinion.json>
 
    # Divisional Expert
    python scripts/generate_moe_opinion.py \
      --event-id <event-id> --expert divisional \
      --model <selected-model> \
+     --generation-effort <actual-agent-effort> \
      --agent-response <temporary-opinion.json> \
      --agent-factuality-response <temporary-factuality.json>
    ```
@@ -86,7 +88,7 @@ limits, and billing.
 7. Confirm the persisted row records:
    - `model=<selected-model>`
    - `generation_backend=agent_runtime`
-   - `generation_effort=max`
+   - `generation_effort=<actual-agent-effort>`
    - `review_status=pending`
 
 8. Review factual accuracy and policy compliance one section at a time. Approve

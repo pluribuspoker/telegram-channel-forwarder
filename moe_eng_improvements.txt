@@ -1,0 +1,66 @@
+MOE engineering improvements
+
+1. Preserve the model policy
+
+- Keep claude-opus-4-8 as the default/minimum production expert model.
+- Permit another registered model, such as claude-fable-5, only when explicitly
+  requested for a comparison.
+- Verify the actual runtime model and reasoning effort against the requested
+  registered configuration. Fail closed on substitution or missing provenance.
+
+2. Restrict fresh-context expert tools
+
+- Define dedicated inference and verification subagents instead of using an
+  unrestricted general-purpose subagent.
+- Give each subagent an explicit tool allowlist. The initial inference profile
+  should expose only Read.
+- Explicitly deny Bash, WebSearch, WebFetch, browser tools, MCP tools, Skill,
+  Task, and file-writing tools as defense in depth.
+- Keep preparation, orchestration, validation, and persistence tools available
+  only to the parent receptionist.
+- Continue requiring every opinion claim to derive solely from the supplied
+  deterministic evidence. Tool restrictions cannot remove pretrained model
+  knowledge, so the independent verifier must enforce evidence grounding.
+
+3. Permit non-executing tool requests
+
+- Let an inference or verification subagent report that an additional tool or
+  evidence source might improve a future version of the expert.
+- Treat this strictly as an engineering suggestion. The current run must
+  complete using only its existing allowlist and input.
+- A request must never grant access, trigger a tool, fetch evidence, change the
+  current opinion, or retry automatically.
+- Record each request outside the opinion's prediction fields with:
+  - requested capability or evidence
+  - specific reason it would improve the expert
+  - expected effect on coverage or uncertainty
+  - risks of leakage, overlap with another expert, or nondeterminism
+  - the narrowest proposed permission and data scope
+- Prefer an orchestrator-owned sidecar/receipt field over adding free-form
+  content to the user-visible opinion. This preserves the strict opinion schema.
+- Require human review before changing an expert prompt, input profile, or tool
+  allowlist in response to a request.
+- Deduplicate repeated requests and retain the originating expert version,
+  prompt version, model, input hash, task ID, and run ID for auditability.
+
+4. Strengthen run isolation and provenance
+
+- Use a unique temporary directory for every parent run and separate immutable
+  input/output paths for inference and verification.
+- Hash the deterministic input before inference and require the same hash at
+  persistence and verification.
+- Record distinct fresh task IDs for inference and independent verification.
+- Record the raw inference output hash and give the verifier that exact output.
+- Add explicit timeouts and terminal failure states for child and parent runs.
+- Fail closed if model, effort, task freshness, hashes, or verifier provenance
+  cannot be established.
+
+5. Make verification structured
+
+- Give the verifier only the immutable deterministic input and exact raw
+  inference output.
+- Require a structured field-by-field result for numeric claims, records,
+  percentages, rankings, subset labels, factual characterizations, and expert
+  scope restrictions.
+- Do not accept a general statement that an opinion looks correct.
+- Approval remains hash-bound and occurs only after all required checks pass.

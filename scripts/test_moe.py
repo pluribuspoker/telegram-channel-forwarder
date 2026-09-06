@@ -494,6 +494,55 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["review_status"], "pending")
         self.assertEqual(store.rows, [row])
 
+    async def test_agent_generation_can_record_actual_effort_override(
+        self,
+    ) -> None:
+        output = {
+            "matchup_bucket": "division",
+            "matchup_bucket_description": (
+                "the teams are in the same division"
+            ),
+            "predicted_winner": "Philadelphia Eagles",
+            "home_win_probability": 0.61,
+            "expected_home_margin": 3.5,
+            "predicted_away_score": 20,
+            "predicted_home_score": 24,
+            "confidence_stars": 3,
+            "thesis": "The schedule profile modestly favors Philadelphia.",
+            "supporting_factors": ["Philadelphia was 2-0 in the sample."],
+            "counterarguments": ["The historical sample is small."],
+            "no_signal_factors": ["No Thursday history."],
+            "discarded_considerations": [
+                "Travel fatigue - discarded because no travel input exists."
+            ],
+            "full_opinion": (
+                "Matchup bucket: division - the teams are in the same "
+                "division.\n\n"
+                "A detailed schedule-only opinion."
+            ),
+        }
+        captured = {}
+
+        async def create_fn(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                content=[SimpleNamespace(text=json.dumps(output))]
+            )
+
+        row = await generate_opinion(
+            expert_id="schedule",
+            game=_game(),
+            history=_history(),
+            store=MemoryStore(),
+            model="claude-fable-5",
+            create_fn=create_fn,
+            generation_backend="agent_runtime",
+            generation_effort="max",
+        )
+
+        self.assertEqual(row["generation_effort"], "max")
+        self.assertEqual(captured["output_config"], {"effort": "max"})
+
     async def test_divisional_expert_uses_divisional_input(self) -> None:
         output = {
             "predicted_winner": "Philadelphia Eagles",
