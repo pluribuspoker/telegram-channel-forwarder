@@ -1084,6 +1084,37 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
                 schedule_input=schedule_input,
             )
 
+    def test_schedule_opinion_allows_description_terminal_period(self) -> None:
+        schedule_input = build_schedule_input(_game(), _history())
+        opinion = {
+            "matchup_bucket": "division",
+            "matchup_bucket_description": (
+                "the teams are in the same division."
+            ),
+            "predicted_winner": "Philadelphia Eagles",
+            "home_win_probability": 0.6,
+            "expected_home_margin": 3,
+            "predicted_away_score": 20,
+            "predicted_home_score": 24,
+            "confidence_stars": 3,
+            "thesis": "The schedule profile favors Philadelphia.",
+            "supporting_factors": ["The home schedule sample favors them."],
+            "counterarguments": ["The week sample is small."],
+            "no_signal_factors": [],
+            "discarded_considerations": [],
+            "full_opinion": (
+                "Matchup bucket: division - the teams are in the same "
+                "division.\n\nThe schedule profile favors Philadelphia."
+            ),
+        }
+
+        validate_opinion(
+            opinion,
+            away_team="Dallas Cowboys",
+            home_team="Philadelphia Eagles",
+            schedule_input=schedule_input,
+        )
+
     def test_schedule_opinion_rejects_matchup_performance_reasoning(self) -> None:
         schedule_input = build_schedule_input(_game(), _history())
         opinion = {

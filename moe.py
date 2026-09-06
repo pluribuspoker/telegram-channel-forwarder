@@ -2103,7 +2103,11 @@ def validate_opinion(
                 "matchup_bucket must exactly match game.matchup_type"
             )
         expected_description = bucket_descriptions[expected_bucket]
-        if opinion.get("matchup_bucket_description") != expected_description:
+        supplied_description = str(
+            opinion.get("matchup_bucket_description") or ""
+        ).strip()
+        normalized_description = supplied_description.removesuffix(".").rstrip()
+        if normalized_description != expected_description:
             raise ValueError(
                 "matchup_bucket_description must exactly describe the "
                 "supplied matchup bucket"
