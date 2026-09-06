@@ -2493,7 +2493,16 @@ async def generate_opinion(
         raise ValueError(
             f"Model {selected_model} is not allowed for expert {expert_id}"
         )
-    reasoning_effort = str(expert.get("reasoning_effort") or "").strip()
+    model_reasoning_effort = expert.get("model_reasoning_effort") or {}
+    if not isinstance(model_reasoning_effort, dict):
+        raise ValueError(
+            f"Invalid model reasoning effort map for expert {expert_id}"
+        )
+    reasoning_effort = str(
+        model_reasoning_effort.get(selected_model)
+        or expert.get("reasoning_effort")
+        or ""
+    ).strip()
     if reasoning_effort not in {"low", "medium", "high", "xhigh", "max"}:
         raise ValueError(
             f"Invalid reasoning effort for expert {expert_id}: "

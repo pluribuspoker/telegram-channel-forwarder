@@ -16,8 +16,8 @@ limits, and billing.
 - Use the exact registered expert prompt and deterministic input.
 - Use the user-requested model only when it appears in the expert's
   `allowed_models`; otherwise use the expert's `default_model`.
-- Perform inference at the expert's configured reasoning effort and with long
-  context when available.
+- Perform inference at the selected model's configured reasoning effort,
+  falling back to the expert-wide effort, and use long context when available.
 - In Claude Code, use the current agent when it already matches the selected
   model and effort. Otherwise launch an isolated agent with those settings when
   the runtime supports per-agent model selection.
@@ -47,7 +47,7 @@ limits, and billing.
 
 3. Run one isolated agent inference:
    - Model: requested allowed model, otherwise the expert default
-   - Reasoning effort: the expert's configured value
+   - Reasoning effort: selected model override, otherwise expert-wide value
    - Context: long context when available
 
    Give it the complete registered expert prompt and exact contents of the

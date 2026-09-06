@@ -10,6 +10,8 @@ experts:
     output_schema_version: 6
     default_model: claude-opus-4-8
     reasoning_effort: max
+    model_reasoning_effort:
+      claude-fable-5: high
     allowed_models:
       - claude-opus-4-8
       - claude-fable-5
@@ -25,6 +27,8 @@ experts:
     output_schema_version: 4
     default_model: claude-opus-4-8
     reasoning_effort: max
+    model_reasoning_effort:
+      claude-fable-5: high
     allowed_models:
       - claude-opus-4-8
       - claude-fable-5
