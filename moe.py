@@ -32,7 +32,7 @@ from moe_win_total import build_win_total_input
 ROOT = Path(__file__).resolve().parent
 MOE_ROOT = ROOT / "moe"
 EXPERTS_PATH = MOE_ROOT / "experts.yaml"
-FACTUALITY_PROMPT_PATH = MOE_ROOT / "prompts" / "factuality" / "v2.md"
+FACTUALITY_PROMPT_PATH = MOE_ROOT / "prompts" / "factuality" / "v3.md"
 MOE_PENDING_PATH = ROOT / "logs" / "moe_pending.jsonl"
 MOE_PENDING_LOCK_PATH = ROOT / "logs" / "moe_pending.lock"
 ET = ZoneInfo("America/New_York")
@@ -2630,16 +2630,16 @@ async def generate_opinion(
         if int(expert["output_schema_version"]) == 3:
             opinion = _normalize_cited_opinion(opinion, input_payload)
         elif int(expert["output_schema_version"]) == 4:
+            opinion = _normalize_evidence_card_opinion(
+                opinion,
+                input_payload,
+            )
             nondeterministic = await _fact_check_nondeterministic_analysis(
                 opinion.get("nondeterministic_analysis"),
                 input_payload,
                 model=selected_model,
                 reasoning_effort=reasoning_effort,
                 create_fn=create_fn,
-            )
-            opinion = _normalize_evidence_card_opinion(
-                opinion,
-                input_payload,
             )
         elif int(expert["output_schema_version"]) == 5:
             opinion = _normalize_ak_opinion(opinion, input_payload)

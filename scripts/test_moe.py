@@ -621,11 +621,11 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(row["expert_id"], "divisional")
         self.assertEqual(row["input_profile"], "divisional")
-        self.assertEqual(row["expert_version"], 31)
+        self.assertEqual(row["expert_version"], 32)
         self.assertEqual(row["output_schema_version"], 4)
         self.assertEqual(row["model"], "claude-fable-5")
         self.assertEqual(row["generation_backend"], "agent_runtime")
-        self.assertIn("Divisional Expert v18", captured[0]["system"])
+        self.assertIn("Divisional Expert v19", captured[0]["system"])
         self.assertEqual(captured[0]["output_config"], {"effort": "medium"})
         self.assertEqual(captured[1]["output_config"], {"effort": "medium"})
         self.assertIn("lean toward Philadelphia Eagles", row["thesis"])
@@ -650,6 +650,70 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
             len(json.loads(row["counterarguments_json"])),
             3,
         )
+
+    async def test_divisional_paths_validate_before_factuality(self) -> None:
+        output = {
+            "predicted_winner": "Philadelphia Eagles",
+            "home_win_probability": 0.58,
+            "expected_home_margin": 2.5,
+            "predicted_away_score": 20,
+            "predicted_home_score": 23,
+            "confidence_stars": 2,
+            "evidence_paths": [
+                "historical_data.home_team.division_games",
+                "historical_data.divisional_home_side_meeting_cohorts.nfl.meeting_1",
+                "historical_data.divisional_home_side_meeting_cohorts.division.meeting_1",
+                "historical_data.divisional_home_side_meeting_cohorts.opponent_pair.meeting_1",
+                "historical_data.away_team.division_games",
+            ],
+            "no_signal_evidence_paths": [
+                "historical_data.divisional_home_side_meeting_cohorts",
+            ],
+            "nondeterministic_analysis": [
+                "Philadelphia appears better positioned for this matchup."
+            ],
+            "discarded_considerations": [],
+        }
+        calls = []
+
+        async def create_fn(**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                content=[SimpleNamespace(text=json.dumps(output))]
+            )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "not selectable|No-signal path has usable evidence",
+        ):
+            await generate_opinion(
+                expert_id="divisional",
+                game=_game(),
+                history=_history(),
+                schedule=[
+                    {
+                        "event_id": "401772510",
+                        "season": 2026,
+                        "week": 1,
+                        "kickoff_utc": _game()["commence_time_utc"],
+                        "away_team": "Dallas Cowboys",
+                        "home_team": "Philadelphia Eagles",
+                    },
+                    {
+                        "event_id": "rematch",
+                        "season": 2026,
+                        "week": 12,
+                        "kickoff_utc": "2026-11-26T18:00:00+00:00",
+                        "away_team": "Philadelphia Eagles",
+                        "home_team": "Dallas Cowboys",
+                    },
+                ],
+                store=MemoryStore(),
+                create_fn=create_fn,
+                generation_backend="agent_runtime",
+            )
+
+        self.assertEqual(len(calls), 1)
 
     async def test_schedule_expert_rejects_non_opus_model(self) -> None:
         with self.assertRaisesRegex(ValueError, "not allowed"):
@@ -1451,12 +1515,12 @@ class OpinionViewTest(unittest.TestCase):
         self.assertEqual(len(expert["prompt_sha256"]), 64)
 
         divisional = load_expert("divisional")
-        self.assertEqual(divisional["version"], 31)
-        self.assertEqual(divisional["prompt_version"], 18)
+        self.assertEqual(divisional["version"], 32)
+        self.assertEqual(divisional["prompt_version"], 19)
         self.assertEqual(divisional["output_schema_version"], 4)
         self.assertEqual(
             divisional["prompt_path"],
-            "moe/prompts/divisional/v18.md",
+            "moe/prompts/divisional/v19.md",
         )
         self.assertEqual(divisional["default_model"], "claude-opus-4-8")
         self.assertEqual(divisional["reasoning_effort"], "max")

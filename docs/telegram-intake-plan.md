@@ -262,6 +262,11 @@ Authoritative configuration lives under `moe/`:
   The model supplies only the pick values and path ranking. The overview thesis
   and conclusion are also rendered deterministically from the winner,
   confidence, and existence of retained counterevidence.
+- Divisional prompt v19 requires complete selectable evidence-card or null
+  paths and explicitly rejects parent containers and scalar children in the
+  opinion path lists. Deterministic path normalization now runs before the
+  separate factuality inference, so a malformed opinion is audited and repaired
+  without spending a factuality call.
 - The same main inference may return freeform `nondeterministic_analysis`
   claims. A separate versioned factuality prompt classifies each exact claim as
   supported, reasonable inference, or unsupported against the same controlled
@@ -271,6 +276,9 @@ Authoritative configuration lives under `moe/`:
   validation, code downgrades that claim to unsupported rather than invalidating
   the deterministic opinion. Numeric discarded text is likewise excluded from
   rendered output while remaining preserved in the raw response.
+- Factuality prompt v3 states that overall-team interpretations require the
+  applicable parent path ending in `.all_games`; citing only scalar children
+  does not satisfy that deterministic invariant.
 - The current ESPN schedule determines whether divisional opponents are in
   meeting one or two and the days between their two scheduled games. For a
   second meeting only, generation fetches completed current-season ESPN games

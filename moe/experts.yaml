@@ -20,9 +20,9 @@ experts:
   divisional:
     name: Divisional Expert
     mode: agent
-    version: 31
-    prompt_version: 18
-    prompt: prompts/divisional/v18.md
+    version: 32
+    prompt_version: 19
+    prompt: prompts/divisional/v19.md
     input_profile: divisional
     output_schema_version: 4
     default_model: claude-opus-4-8

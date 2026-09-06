@@ -58,7 +58,13 @@ limits, and billing.
 4. Save the agent's exact response as `<temporary-opinion.json>`. Do not correct
    its claims before persistence; validator failures are audit records.
 
-5. For an output-schema-v4 expert, run a second isolated inference with the
+5. For an output-schema-v4 expert, validate and persist the deterministic
+   response structure before spending a separate factuality inference. If path
+   validation fails, retain the invalid audit row and allow at most one fresh
+   schema-repair inference using the exact error and original response.
+
+6. For an output-schema-v4 expert whose deterministic structure passed, run a
+   second isolated inference with the
    same selected model and configured effort. Give it:
    - the complete registered factuality prompt;
    - the same exact deterministic input;
@@ -66,7 +72,7 @@ limits, and billing.
 
    Save its exact raw JSON as `<temporary-factuality.json>`.
 
-6. Persist through the normal pipeline:
+7. Persist through the normal pipeline:
 
    ```bash
    # Schedule, Win Total, or AK Expert
@@ -85,13 +91,13 @@ limits, and billing.
      --agent-factuality-response <temporary-factuality.json>
    ```
 
-7. Confirm the persisted row records:
+8. Confirm the persisted row records:
    - `model=<selected-model>`
    - `generation_backend=agent_runtime`
    - `generation_effort=<actual-agent-effort>`
    - `review_status=pending`
 
-8. Review factual accuracy and policy compliance one section at a time. Approve
+9. Review factual accuracy and policy compliance one section at a time. Approve
    only the exact persisted opinion using `scripts/review_moe_opinion.py`.
 
 ## Runtime notes
