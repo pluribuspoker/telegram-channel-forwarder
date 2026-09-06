@@ -25,6 +25,7 @@ from moe import (
     opinion_output_sha256,
     opinion_summary,
     validate_opinion,
+    _normalize_cited_claim,
     _normalize_cited_opinion,
     _normalize_evidence_card_opinion,
     _persist_attempt,
@@ -528,6 +529,81 @@ class DivisionalInputTest(unittest.TestCase):
 
 
 class OpinionTest(unittest.IsolatedAsyncioTestCase):
+    def test_cited_claim_accepts_exact_single_game_scoreline(self) -> None:
+        input_payload = {
+            "game": {
+                "away_team": "New England Patriots",
+                "home_team": "Seattle Seahawks",
+            },
+            "historical_data": {
+                "home_team": {
+                    "against_current_opponent": {
+                        "games": 1,
+                        "wins": 1,
+                        "losses": 0,
+                        "ties": 0,
+                        "win_rate": 1.0,
+                        "average_points_for": 23.0,
+                        "average_points_against": 20.0,
+                        "average_margin": 3.0,
+                    }
+                }
+            },
+        }
+
+        normalized = _normalize_cited_claim(
+            {
+                "claim": "Seattle won the lone prior meeting 23-20.",
+                "evidence_paths": [
+                    "historical_data.home_team.against_current_opponent"
+                ],
+            },
+            input_payload,
+            role="test",
+        )
+
+        self.assertEqual(
+            normalized["evidence"][0]["path"],
+            "historical_data.home_team.against_current_opponent",
+        )
+
+    def test_cited_claim_rejects_average_as_exact_scoreline(self) -> None:
+        input_payload = {
+            "game": {
+                "away_team": "New England Patriots",
+                "home_team": "Seattle Seahawks",
+            },
+            "historical_data": {
+                "home_team": {
+                    "against_current_opponent": {
+                        "games": 2,
+                        "wins": 1,
+                        "losses": 1,
+                        "ties": 0,
+                        "win_rate": 0.5,
+                        "average_points_for": 23.0,
+                        "average_points_against": 20.0,
+                        "average_margin": 3.0,
+                    }
+                }
+            },
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "record or one-game scoreline 23-20",
+        ):
+            _normalize_cited_claim(
+                {
+                    "claim": "Seattle won the prior meeting 23-20.",
+                    "evidence_paths": [
+                        "historical_data.home_team.against_current_opponent"
+                    ],
+                },
+                input_payload,
+                role="test",
+            )
+
     async def test_generation_records_prompt_and_input_versions(self) -> None:
         output = {
             "matchup_bucket": "division",

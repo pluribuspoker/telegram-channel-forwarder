@@ -1043,6 +1043,36 @@ def _matching_record_paths(
     return matches
 
 
+def _matches_single_game_scoreline(
+    value: Any,
+    scoreline: tuple[int, ...],
+) -> bool:
+    if len(scoreline) != 2 or not isinstance(value, dict):
+        return False
+    games = value.get("games")
+    if (
+        isinstance(games, bool)
+        or not isinstance(games, (int, float))
+        or float(games) != 1.0
+    ):
+        return False
+    points_for = value.get("average_points_for")
+    points_against = value.get("average_points_against")
+    if not isinstance(points_for, (int, float)) or isinstance(
+        points_for, bool
+    ):
+        return False
+    if not isinstance(points_against, (int, float)) or isinstance(
+        points_against, bool
+    ):
+        return False
+    return (
+        float(points_for).is_integer()
+        and float(points_against).is_integer()
+        and (int(points_for), int(points_against)) == scoreline
+    )
+
+
 def _validate_claim_numbers(
     claim: str,
     paths: list[str],
@@ -1057,7 +1087,7 @@ def _validate_claim_numbers(
         record = tuple(
             int(group) for group in match.groups() if group is not None
         )
-        if not any(
+        record_matches = any(
             isinstance(value, dict)
             and (
                 int(value.get("wins", -1)),
@@ -1070,10 +1100,16 @@ def _validate_claim_numbers(
             )
             == record
             for value in evidence
-        ):
+        )
+        scoreline_matches = any(
+            _matches_single_game_scoreline(value, record)
+            for value in evidence
+        )
+        if not record_matches and not scoreline_matches:
             candidates = _matching_record_paths(input_payload, record)
             raise ValueError(
-                f"Claim record {match.group(0)} is absent from cited evidence; "
+                f"Claim record or one-game scoreline {match.group(0)} is "
+                "absent from cited evidence; "
                 f"candidate paths: {candidates[:8]}"
             )
         remaining = remaining.replace(match.group(0), " ", 1)

@@ -1,0 +1,50 @@
+MOE retry strategy
+
+Purpose
+
+Preserve rich expert interpretation without retrying until a sampled model or
+verifier happens to accept an answer.
+
+Standard budget
+
+- Run one initial opinion inference.
+- Allow one targeted fresh repair when structural or factuality validation
+  identifies a correctable response problem.
+- Keep every failed attempt as an append-only audit row.
+- Never rerun an unchanged opinion through factuality repeatedly.
+
+Prompt-compliance exception
+
+Up to two additional targeted repairs may be authorized when all of the
+following are true:
+
+- The rejected text violates a rule already explicit in the versioned prompt.
+- The deterministic forecast is otherwise valid.
+- The exact rejected claim, prompt rule, and validation reason are supplied.
+- Winner, scores, probability, expected margin, confidence, evidence paths,
+  no-signal paths, and discarded considerations are frozen.
+- Only the rejected interpretive text may change.
+- Repairs use max effort and the same registered model.
+- The first passing repair is retained; outputs are never selected because the
+  prediction is more desirable.
+- Every attempt remains auditable and models receive the same retry policy.
+
+When not to retry
+
+- If validation rejected a supported claim because of validator behavior, fix
+  the validator and revalidate the unchanged response.
+- If the same failure recurs across games or models, improve and version the
+  shared prompt or deterministic validator rather than adding retries.
+- Do not retry to find a verifier false negative or to improve a pick after
+  seeing earlier outputs.
+
+Current scoreline incident
+
+The repaired Sonnet Patriots-Seahawks interpretation cited a 23-20 result from
+a one-game opponent cohort. The cohort supplied average_points_for=23,
+average_points_against=20, and games=1, which uniquely represents that exact
+score. Validation treated every hyphenated pair as a W-L record and rejected
+23-20 because it was not a wins-losses tuple. This is a validator false
+positive, not a reason for another Sonnet opinion retry. The validator should
+accept an exact scoreline only when the cited team sample contains exactly one
+game; multi-game scoring averages must never be accepted as an exact result.
