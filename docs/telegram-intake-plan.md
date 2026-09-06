@@ -426,6 +426,11 @@ The Schedule Expert also permits `claude-fable-5` as an explicitly selected
 comparison model while retaining Opus 4.8 as its default. The selected model is
 recorded in the opinion row and approval hash.
 
+The Divisional Expert likewise permits `claude-fable-5` as an explicitly
+selected comparison model while retaining Opus 4.8 as its default. Its
+independent factuality pass must use the same selected model and configured
+effort.
+
 Agent-session generation is the preferred interactive workflow for every
 registered expert. Direct application API generation remains available only
 through the explicit `--api` flag.

@@ -562,13 +562,17 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
                 },
             ],
             store=store,
+            model="claude-fable-5",
             create_fn=create_fn,
+            generation_backend="agent_runtime",
         )
 
         self.assertEqual(row["expert_id"], "divisional")
         self.assertEqual(row["input_profile"], "divisional")
-        self.assertEqual(row["expert_version"], 30)
+        self.assertEqual(row["expert_version"], 31)
         self.assertEqual(row["output_schema_version"], 4)
+        self.assertEqual(row["model"], "claude-fable-5")
+        self.assertEqual(row["generation_backend"], "agent_runtime")
         self.assertIn("Divisional Expert v18", captured[0]["system"])
         self.assertEqual(captured[0]["output_config"], {"effort": "max"})
         self.assertEqual(captured[1]["output_config"], {"effort": "max"})
@@ -1323,7 +1327,7 @@ class OpinionViewTest(unittest.TestCase):
         self.assertEqual(len(expert["prompt_sha256"]), 64)
 
         divisional = load_expert("divisional")
-        self.assertEqual(divisional["version"], 30)
+        self.assertEqual(divisional["version"], 31)
         self.assertEqual(divisional["prompt_version"], 18)
         self.assertEqual(divisional["output_schema_version"], 4)
         self.assertEqual(
@@ -1332,6 +1336,10 @@ class OpinionViewTest(unittest.TestCase):
         )
         self.assertEqual(divisional["default_model"], "claude-opus-4-8")
         self.assertEqual(divisional["reasoning_effort"], "max")
+        self.assertEqual(
+            divisional["allowed_models"],
+            ["claude-opus-4-8", "claude-fable-5"],
+        )
 
 
 if __name__ == "__main__":

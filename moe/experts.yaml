@@ -18,7 +18,7 @@ experts:
   divisional:
     name: Divisional Expert
     mode: agent
-    version: 30
+    version: 31
     prompt_version: 18
     prompt: prompts/divisional/v18.md
     input_profile: divisional
@@ -27,6 +27,7 @@ experts:
     reasoning_effort: max
     allowed_models:
       - claude-opus-4-8
+      - claude-fable-5
     enabled: true
     initial_weight: 1.0
   win_total:
