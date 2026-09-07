@@ -79,6 +79,20 @@ def _latest_alignment(history: list[dict]) -> list[dict]:
     return list(alignment.values())
 
 
+def current_season_finals(history: list[dict], season: int) -> list[dict]:
+    """ESPN finals for one season, shaped like nfl_game_history rows.
+
+    Shared by the aggregator branch below and scripts/god_judge_runner.py.
+    """
+    events = fetch_regular_season_events(season, expected_games=None)
+    return build_game_history(
+        {season: events},
+        {season: _latest_alignment(history)},
+        validate=False,
+        require_complete_divisional_pairs=False,
+    )
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--event-id", required=True)
@@ -140,11 +154,34 @@ async def main() -> None:
             "to persist if the rebuilt input no longer matches it."
         ),
     )
+    parser.add_argument(
+        "--input-file",
+        type=Path,
+        help=(
+            "JSON file holding the full aggregator input, as printed by "
+            "--expert god_rules --show-input. The rules arm persists it "
+            "verbatim; the judge persists the request derived from it. Valid "
+            "with --deterministic, --agent-response, and --show-input; the "
+            "sheet's opinions, snapshots, and finals are not read."
+        ),
+    )
+    parser.add_argument(
+        "--generation-backend",
+        choices=("agent_runtime", "claude_headless"),
+        help=(
+            "How the --agent-response was produced (default agent_runtime; "
+            "claude_headless is the timer's headless claude -p call)."
+        ),
+    )
     args = parser.parse_args()
     if args.generation_effort and not args.agent_response:
         parser.error("--generation-effort requires --agent-response")
     if args.expected_input_sha256 and not args.agent_response:
         parser.error("--expected-input-sha256 requires --agent-response")
+    if args.generation_backend and not args.agent_response:
+        parser.error("--generation-backend requires --agent-response")
+    if args.input_file and args.api:
+        parser.error("--input-file is not valid with --api")
 
     credentials = os.environ.get("GOOGLE_CREDENTIALS", "")
     sheet_id = os.environ.get("NFL_INTAKE_SHEET_ID", "")
@@ -184,6 +221,13 @@ async def main() -> None:
         parser.error(
             "The rules aggregator requires --deterministic or --show-input"
         )
+    if args.input_file and expert["input_profile"] != AGGREGATOR_PROFILE:
+        parser.error("--input-file is only valid for the aggregator experts")
+    prebuilt: dict | None = None
+    if args.input_file:
+        prebuilt = json.loads(args.input_file.read_text(encoding="utf-8"))
+        if not isinstance(prebuilt, dict):
+            parser.error("--input-file must hold one JSON object")
     if args.api and "anthropic_api" not in {
         str(value)
         for value in expert.get("allowed_backends", ["anthropic_api"])
@@ -214,23 +258,16 @@ async def main() -> None:
     store = configured_opinion_store()
 
     def _current_results() -> list[dict]:
-        season = int(game["season"])
-        current_events = fetch_regular_season_events(
-            season, expected_games=None
-        )
-        return build_game_history(
-            {season: current_events},
-            {season: _latest_alignment(history)},
-            validate=False,
-            require_complete_divisional_pairs=False,
-        )
+        return current_season_finals(history, int(game["season"]))
 
     if expert["input_profile"] == "divisional":
         schedule = spreadsheet.worksheet(SCHEDULE_TAB).get_all_records(
             expected_headers=SCHEDULE_HEADERS
         )
         current_results = _current_results()
-    elif expert["input_profile"] == AGGREGATOR_PROFILE:
+    elif expert["input_profile"] == AGGREGATOR_PROFILE and prebuilt is None:
+        # With --input-file the file is the state: no opinions, snapshots,
+        # or finals are read, so nothing can drift between show and persist.
         current_results = _current_results()
         line_snapshots = spreadsheet.worksheet(
             "nfl_line_snapshots"
@@ -288,15 +325,24 @@ async def main() -> None:
                 leans or [],
             )
         elif expert["input_profile"] == AGGREGATOR_PROFILE:
-            registry = load_registry()
-            input_payload = build_aggregator_input(
-                game,
-                approved_opinions=approved_opinions(opinions or []),
-                finals=current_results or [],
-                snapshots=line_snapshots or [],
-                registry=registry,
-                policy=aggregator_policy(registry),
-            )
+            if prebuilt is not None:
+                # The rules arm re-prints the file's canonical form and its
+                # hash; the judge prints the request derived from the file.
+                if str((prebuilt.get("game") or {}).get("event_id")) != str(
+                    args.event_id
+                ):
+                    raise ValueError("--input-file describes a different event")
+                input_payload = prebuilt
+            else:
+                registry = load_registry()
+                input_payload = build_aggregator_input(
+                    game,
+                    approved_opinions=approved_opinions(opinions or []),
+                    finals=current_results or [],
+                    snapshots=line_snapshots or [],
+                    registry=registry,
+                    policy=aggregator_policy(registry),
+                )
             if expert_mode == JUDGE_MODE:
                 # What the judge model reads: masked voices, shuffled by seed.
                 input_payload = build_judge_request(input_payload)
@@ -339,7 +385,7 @@ async def main() -> None:
             )
 
         create_fn = agent_create_fn
-        generation_backend = "agent_runtime"
+        generation_backend = args.generation_backend or "agent_runtime"
 
     generation_kwargs = {}
     if create_fn is not None:
@@ -357,6 +403,7 @@ async def main() -> None:
         win_predictions=win_predictions,
         team_history=team_history,
         opinions=opinions,
+        input_payload=prebuilt,
         store=store,
         model=args.model,
         generation_backend=generation_backend,

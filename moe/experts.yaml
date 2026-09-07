@@ -124,4 +124,5 @@ experts:
       - claude-fable-5-1
     allowed_backends:
       - agent_runtime
+      - claude_headless
     enabled: true

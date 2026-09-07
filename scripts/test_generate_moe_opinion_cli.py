@@ -55,6 +55,25 @@ class GenerateMoeOpinionCliTests(unittest.TestCase):
             result.stderr,
         )
 
+    def test_input_file_is_refused_with_api(self) -> None:
+        result = self._run("--api", "--input-file", "input.json")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--input-file is not valid with --api", result.stderr)
+
+    def test_generation_backend_requires_agent_response(self) -> None:
+        result = self._run(
+            "--deterministic",
+            "--generation-backend",
+            "claude_headless",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--generation-backend requires --agent-response",
+            result.stderr,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

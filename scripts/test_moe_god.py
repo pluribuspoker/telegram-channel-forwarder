@@ -5,11 +5,14 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from moe import (
     OPINION_HEADERS,
+    approved_opinions,
     generate_opinion,
     load_expert,
     opinion_output_sha256,
@@ -27,6 +30,8 @@ from moe_god import (
     build_judge_request,
     build_market_block,
     build_scoreboard,
+    canonical_json,
+    committee_key,
     cover_probability,
     fair_pair,
     grade_opinion_row,
@@ -34,8 +39,10 @@ from moe_god import (
     load_registry,
     normalize_aggregator_opinion,
     over_probability,
+    reason_reference_text,
     rules_arm_response,
     select_voice_rows,
+    sha256_text,
 )
 from nfl_lines import (
     AWAY_SNAPSHOT_COLUMN,
@@ -53,6 +60,12 @@ EVENT_ID = "8c94552d022acec4a0458d70c19d3da9"
 AWAY = "New England Patriots"
 HOME = "Seattle Seahawks"
 KICKOFF = "2026-09-10T00:20:00+00:00"
+# The four persisted Week 1 rows (two rules, two judge), parsed.
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "god_week1"
+
+
+def _fixture(name: str) -> dict:
+    return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
 
 
 class MemoryStore:
@@ -790,6 +803,238 @@ class RenderTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(summary_buttons)
 
 
+class CommitteeKeyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.registry = load_registry()
+        self.policy = aggregator_policy(self.registry)
+
+    def _payload(self, game: dict | None = None, rows: list[dict] | None = None) -> dict:
+        return build_aggregator_input(
+            game or _game(),
+            approved_opinions=rows or _committee(),
+            finals=[],
+            snapshots=[],
+            registry=self.registry,
+            policy=self.policy,
+        )
+
+    def test_key_ignores_the_capture_timestamp(self) -> None:
+        base = self._payload()
+        self.assertEqual(base["committee_key"], committee_key(base))
+        self.assertRegex(base["committee_key"], r"^[0-9a-f]{64}$")
+        refetched = _game()
+        refetched["latest_captured_at"] = "2026-09-07T03:05:00Z"
+        again = self._payload(refetched)
+        self.assertNotEqual(again["market"]["latest"]["captured_at"], base["market"]["latest"]["captured_at"])
+        self.assertNotEqual(sha256_text(canonical_json(again)), sha256_text(canonical_json(base)))
+        self.assertEqual(again["committee_key"], base["committee_key"])
+        self.assertEqual(build_judge_request(base)["committee_key"], base["committee_key"])
+
+    def test_key_changes_with_a_voice_or_a_price(self) -> None:
+        base = self._payload()
+        moved = _game()
+        moved[LATEST_HOME_COLUMN] = "-3.5,-105,-181|-2.5,-115,-155|-0.5,115,-140"
+        self.assertNotEqual(self._payload(moved)["committee_key"], base["committee_key"])
+        rows = _committee() + [
+            # A newer default-model row displaces the voice: new opinion id, same numbers.
+            _opinion("schedule", model="claude-opus-4-8", probability=0.66, margin=6, away_score=20, home_score=26, generated_at="2026-09-07T02:00:00+00:00")
+        ]
+        self.assertNotEqual(self._payload(rows=rows)["committee_key"], base["committee_key"])
+
+    def test_inputs_without_a_key_derive_one_for_the_request(self) -> None:
+        legacy = self._payload()
+        del legacy["committee_key"]
+        self.assertEqual(build_judge_request(legacy)["committee_key"], committee_key(legacy))
+
+
+class ReasonGuardTests(unittest.TestCase):
+    """The persisted Week 1 judge responses replay; invented numbers do not."""
+
+    def _week1(self, prefix: str) -> tuple[dict, dict, dict]:
+        rules = _fixture(f"{prefix}_rules")
+        judge = _fixture(f"{prefix}_judge")
+        return rules, judge, rules["input_json"]
+
+    def test_week1_requests_derive_from_the_full_input(self) -> None:
+        for prefix in ("sea", "lar"):
+            with self.subTest(game=prefix):
+                rules, judge, full_input = self._week1(prefix)
+                self.assertEqual(sha256_text(canonical_json(full_input)), rules["input_sha256"])
+                derived = build_judge_request(full_input)
+                self.assertEqual(derived.pop("committee_key"), committee_key(full_input))
+                self.assertEqual(derived, judge["input_json"])
+                self.assertEqual(sha256_text(canonical_json(derived)), judge["input_sha256"])
+                self.assertEqual(judge["input_json"]["aggregator_input_sha256"], rules["input_sha256"])
+
+    def test_week1_judge_responses_validate(self) -> None:
+        expert = load_expert("god_judge")
+        for prefix in ("sea", "lar"):
+            with self.subTest(game=prefix):
+                _rules, judge, full_input = self._week1(prefix)
+                opinion = normalize_aggregator_opinion(judge["raw_response"], full_input, expert=expert, model="claude-fable-5-1")
+                validate_opinion(
+                    opinion,
+                    away_team=full_input["game"]["away_team"],
+                    home_team=full_input["game"]["home_team"],
+                    schedule_input=full_input,
+                )
+                self.assertEqual(opinion["home_win_probability"], judge["home_win_probability"])
+                self.assertEqual(opinion["expected_home_margin"], judge["expected_home_margin"])
+                self.assertEqual(opinion["predicted_winner"], judge["predicted_winner"])
+
+    def _sea(self) -> tuple[dict, dict]:
+        _rules, judge, full_input = self._week1("sea")
+        return json.loads(json.dumps(judge["raw_response"])), full_input
+
+    def test_invented_record_is_rejected(self) -> None:
+        response, full_input = self._sea()
+        first = response["key_reasons"][0]
+        self.assertIn("11-4", first["text"])
+        first["text"] = first["text"].replace("11-4", "12-4")
+        with self.assertRaises(ValueError) as caught:
+            normalize_aggregator_opinion(response, full_input, expert=load_expert("god_judge"))
+        self.assertIn("12-4", str(caught.exception))
+
+    def test_invented_game_count_is_rejected(self) -> None:
+        response, full_input = self._sea()
+        response["key_reasons"][0]["text"] += " over 40 games"
+        with self.assertRaises(ValueError) as caught:
+            normalize_aggregator_opinion(response, full_input, expert=load_expert("god_judge"))
+        self.assertIn("40 games", str(caught.exception))
+        response, full_input = self._sea()
+        response["counterpoints"][0]["text"] += " A 9-game slice agrees."
+        with self.assertRaises(ValueError):
+            normalize_aggregator_opinion(response, full_input, expert=load_expert("god_judge"))
+
+    def test_structured_numbers_are_not_invented(self) -> None:
+        response, full_input = self._sea()
+        labels = full_input["judge_view"]["labels"]
+        ak_label = next(label for label, voice_id in labels.items() if voice_id == "ak")
+        response["counterpoints"] = [
+            # The AK voice's projected score, an en dash, the winner-vote split.
+            {"voice": ak_label, "text": "Its 21-27 projection implies a cover and an over."},
+            {"voice": "Voice D", "text": "The 11–4 non-conference mark is the largest cohort."},
+            {"voice": "pool", "text": "A 4-0 winner split leaves no dissent to weigh."},
+        ]
+        normalize_aggregator_opinion(response, full_input, expert=load_expert("god_judge"))
+        # The reference is the request text, a newline, then the derived strings.
+        derived = reason_reference_text(build_judge_request(full_input)).split("\n")[-1].split()
+        self.assertIn("21-27", derived)
+        self.assertIn("4-0", derived)
+        self.assertIn("0-0-0", derived)
+
+    def test_rams_response_needs_the_vote_split_and_the_record_cohort(self) -> None:
+        # "The 2-2 split pool" is the winner-vote split, and "17-8 over 25
+        # games" is the cohort the 17-8 record implies ("across 25 home games"
+        # in the source). Neither is in the prose within the guard's window.
+        _rules, judge, full_input = self._week1("lar")
+        request = build_judge_request(full_input)
+        bare = canonical_json(request).lower()
+        self.assertNotIn("2-2", bare)
+        self.assertIsNone(re.search(r"game\w*\W{0,12}\b25\b|\b25\b\W{0,12}game", bare))
+        self.assertIn("across 25 home games", bare)
+        derived = reason_reference_text(request).split("\n")[-1]
+        self.assertIn("2-2", derived.split())
+        self.assertIn("25 games", derived)
+        cited = json.dumps(judge["raw_response"]["key_reasons"])
+        self.assertIn("2-2 split pool", cited)
+        self.assertIn("17-8 over 25 games", cited)
+
+    def test_rules_arm_reasons_are_not_guarded(self) -> None:
+        for prefix in ("sea", "lar"):
+            with self.subTest(game=prefix):
+                _rules, _judge, full_input = self._week1(prefix)
+                response = rules_arm_response(full_input)
+                self.assertTrue(any(re.search(r"\b\d+-\d+\b", item["text"]) for item in response["key_reasons"]))
+                normalize_aggregator_opinion(response, full_input, expert=load_expert("god_rules"))
+
+
+class InputFileTests(unittest.IsolatedAsyncioTestCase):
+    """generate_opinion(input_payload=...) persists exactly the shown state."""
+
+    def setUp(self) -> None:
+        registry = load_registry()
+        self.payload = build_aggregator_input(
+            _game(), approved_opinions=approved_opinions(_committee()), finals=[], snapshots=[], registry=registry, policy=aggregator_policy(registry)
+        )
+        # What --input-file reads back: the --show-input document after a trip through JSON text.
+        self.file_payload = json.loads(json.dumps(self.payload, indent=2, sort_keys=True))
+        self.request = build_judge_request(self.file_payload)
+        labels = [voice["label"] for voice in self.request["voices"]]
+        self.response = {
+            "home_win_probability": 0.6,
+            "expected_home_margin": 2.5,
+            "projected_total": 44.0,
+            "key_reasons": [
+                {"voice": labels[0], "text": "Broad cohort."},
+                {"voice": "market", "text": "Close to fair."},
+            ],
+            "counterpoints": [],
+            "discarded_considerations": [],
+        }
+
+    async def _create_fn(self, **_kwargs):
+        return SimpleNamespace(content=[SimpleNamespace(text=json.dumps(self.response))])
+
+    async def test_rules_arm_persists_the_file_verbatim(self) -> None:
+        store = MemoryStore()
+        row = await generate_opinion(
+            expert_id="god_rules", game=_game(), history=[], input_payload=self.file_payload, store=store, generation_backend=DETERMINISTIC_BACKEND
+        )
+        self.assertEqual(row["generation_status"], "valid")
+        self.assertEqual(row["input_json"], canonical_json(self.file_payload))
+        self.assertEqual(row["input_sha256"], sha256_text(canonical_json(self.payload)))
+        self.assertEqual(json.loads(row["input_json"])["committee_key"], self.payload["committee_key"])
+        self.assertEqual(store.rows, [row])
+
+    async def test_judge_arm_persists_the_derived_request_and_checks_its_hash(self) -> None:
+        store = MemoryStore()
+        with self.assertRaises(ValueError):
+            await generate_opinion(
+                expert_id="god_judge", game=_game(), history=[], input_payload=self.file_payload, store=store, create_fn=self._create_fn,
+                generation_backend="claude_headless", generation_effort="max", model="claude-fable-5-1", expected_input_sha256="0" * 64,
+            )
+        self.assertEqual(store.rows, [])
+        row = await generate_opinion(
+            expert_id="god_judge", game=_game(), history=[], input_payload=self.file_payload, store=store, create_fn=self._create_fn,
+            generation_backend="claude_headless", generation_effort="max", model="claude-fable-5-1",
+            expected_input_sha256=sha256_text(canonical_json(self.request)),
+        )
+        self.assertEqual(row["generation_status"], "valid")
+        self.assertEqual(row["input_json"], canonical_json(self.request))
+        self.assertEqual(row["generation_backend"], "claude_headless")
+        self.assertEqual(row["generation_effort"], "max")
+        self.assertEqual(row["model"], "claude-fable-5-1")
+        self.assertEqual(json.loads(row["input_json"])["aggregator_input_sha256"], sha256_text(canonical_json(self.file_payload)))
+        self.assertEqual(json.loads(row["input_json"])["committee_key"], self.payload["committee_key"])
+
+    async def test_prebuilt_input_must_describe_this_game(self) -> None:
+        store = MemoryStore()
+        cases = [
+            ("another event", _game(event_id="another-event"), "god_rules", self.file_payload),
+            ("other teams", _game(home="Denver Broncos"), "god_rules", self.file_payload),
+            ("a judge request is not an input", _game(), "god_judge", self.request),
+            ("a non-aggregator expert", _game(), "schedule", self.file_payload),
+        ]
+        for label, game, expert_id, payload in cases:
+            with self.subTest(case=label):
+                with self.assertRaises(ValueError):
+                    await generate_opinion(
+                        expert_id=expert_id, game=game, history=[], input_payload=payload, store=store, create_fn=self._create_fn,
+                        generation_backend=DETERMINISTIC_BACKEND if expert_id == "god_rules" else "agent_runtime",
+                    )
+        self.assertEqual(store.rows, [])
+
+    async def test_file_policy_is_used_as_shown(self) -> None:
+        shown = json.loads(json.dumps(self.file_payload))
+        shown["policy"]["shrink_lambda"] = 0.25
+        row = await generate_opinion(
+            expert_id="god_rules", game=_game(), history=[], input_payload=shown, store=MemoryStore(), generation_backend=DETERMINISTIC_BACKEND
+        )
+        self.assertEqual(json.loads(row["input_json"])["policy"]["shrink_lambda"], 0.25)
+        self.assertEqual(row["input_sha256"], sha256_text(canonical_json(shown)))
+
+
 class RegistryTests(unittest.TestCase):
     def test_registry_entries(self) -> None:
         rules = load_expert("god_rules")
@@ -800,7 +1045,9 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(judge["mode"], "aggregator_judge")
         self.assertEqual(judge["default_model"], "claude-fable-5-1")
         self.assertEqual(judge["allowed_models"], ["claude-fable-5-1"])
-        self.assertEqual(judge["allowed_backends"], ["agent_runtime"])
+        self.assertEqual(
+            judge["allowed_backends"], ["agent_runtime", "claude_headless"]
+        )
         self.assertEqual(judge["reasoning_effort"], "max")
         self.assertIn("Return exactly one JSON object", judge["prompt_text"])
         policy = aggregator_policy(load_registry())
