@@ -20,6 +20,7 @@ import hashlib
 import json
 import math
 import random
+import re
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -1480,6 +1481,27 @@ def build_feature_block(
     }
 
 
+def committee_key(input_payload: dict[str, Any]) -> str:
+    """Identity of the committee state an aggregator input was built from.
+
+    The sorted voice opinion ids plus the latest full-game lines and prices,
+    and deliberately not the capture timestamp: every fetch rewrites the
+    timestamp, but the judge only needs to run again when a voice or a
+    number changed. The runner dedupes its subscription calls on this key.
+    """
+    latest = input_payload["market"]["latest"]
+    return sha256_text(
+        canonical_json(
+            {
+                "opinion_ids": sorted(
+                    str(voice["opinion_id"]) for voice in input_payload["voices"]
+                ),
+                "latest": {field: latest[field] for field in MARKET_FIELDS},
+            }
+        )
+    )
+
+
 def build_aggregator_input(
     game: dict[str, Any],
     *,
@@ -1558,6 +1580,7 @@ def build_aggregator_input(
         "feature_block": feature_block,
         "scoreboard": scoreboard,
     }
+    payload["committee_key"] = committee_key(payload)
     seed = sha256_text(canonical_json(payload))[:16]
     order = [voice["voice_id"] for voice in voices]
     random.Random(seed).shuffle(order)
@@ -1611,6 +1634,12 @@ def build_judge_request(input_payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "input_profile": JUDGE_REQUEST_PROFILE,
         "aggregator_input_sha256": sha256_text(canonical_json(input_payload)),
+        # A hash of opinion ids and prices leaks nothing; the runner reads it
+        # back from persisted judge rows to dedupe. Inputs persisted before
+        # the key existed derive it here and never match a live key anyway.
+        "committee_key": (
+            input_payload.get("committee_key") or committee_key(input_payload)
+        ),
         "seed": input_payload["judge_view"]["seed"],
         "policy": {
             "sigma_margin": policy["sigma_margin"],
@@ -1988,6 +2017,100 @@ def rules_arm_response(input_payload: dict[str, Any]) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 # Normalization shared by both arms
 
+# The record style of moe._complete_unique_record_paths: W-L or W-L-T.
+_RECORD_PATTERN = re.compile(r"\b(\d+)-(\d+)(?:-(\d+))?\b")
+_GAME_COUNT_PATTERN = re.compile(r"\b(\d+)[\s-]games?\b")
+_COUNT_KEY_WORDS = ("games", "count", "sample", "resolved")
+
+
+def _reference_form(text: str) -> str:
+    """Dash and case normalization applied to a reason and the reference alike."""
+    return text.replace("−", "-").replace("–", "-").lower()
+
+
+def reason_reference_text(request: dict[str, Any]) -> str:
+    """The judge request plus the numbers it carries in structured form.
+
+    The reason guard rejects invented numbers, never numbers the request
+    holds somewhere: a voice's projected score ("21-27"), the winner-vote
+    split of the pool ("2-2"), a track-record tally, a count stored under a
+    numeric key, or the cohort size a cited record implies ("17-8" is 25
+    games). Those are rendered the way a reason would write them and
+    appended to the request text.
+    """
+    text = canonical_json(request)
+    derived: list[str] = []
+    for voice in request.get("voices", []):
+        derived.append(
+            f"{voice['predicted_away_score']}-{voice['predicted_home_score']}"
+        )
+        record = voice.get("track_record") or {}
+        for kind in ("legs", "ats", "ou"):
+            tally = record.get(kind) or {}
+            if all(key in tally for key in ("w", "l", "p")):
+                derived.append(f"{tally['w']}-{tally['l']}-{tally['p']}")
+                derived.append(f"{tally['w']}-{tally['l']}")
+    dispersion = (request.get("feature_block") or {}).get("dispersion") or {}
+    home_votes = dispersion.get("home_winner_votes")
+    away_votes = dispersion.get("away_winner_votes")
+    if home_votes is not None and away_votes is not None:
+        derived.append(f"{home_votes}-{away_votes}")
+        derived.append(f"{away_votes}-{home_votes}")
+
+    def counts(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                name = str(key).lower()
+                if (
+                    isinstance(item, int)
+                    and not isinstance(item, bool)
+                    and (
+                        name == "n"
+                        or any(word in name for word in _COUNT_KEY_WORDS)
+                    )
+                ):
+                    derived.append(f"{item} games")
+                counts(item)
+        elif isinstance(value, list):
+            for item in value:
+                counts(item)
+
+    counts(request)
+    for match in _RECORD_PATTERN.finditer(_reference_form(text)):
+        derived.append(
+            f"{sum(int(group) for group in match.groups() if group)} games"
+        )
+    return text + "\n" + " ".join(derived)
+
+
+def _check_reason_citations(text: str, reference: str, *, field: str) -> None:
+    """Reject a record or game count the request does not carry.
+
+    ``reference`` is already in ``_reference_form``. A record must appear
+    verbatim; a count must sit within twelve non-word characters of the
+    word "game".
+    """
+    claim = _reference_form(text)
+    for match in _RECORD_PATTERN.finditer(claim):
+        if match.group(0) not in reference:
+            raise ValueError(
+                f"{field} cites a record the request does not carry: "
+                f"{match.group(0)!r}"
+            )
+    for match in _GAME_COUNT_PATTERN.finditer(claim):
+        count = match.group(1)
+        if (
+            re.search(
+                rf"game\w*\W{{0,12}}\b{count}\b|\b{count}\b\W{{0,12}}game",
+                reference,
+            )
+            is None
+        ):
+            raise ValueError(
+                f"{field} cites a game count the request does not carry: "
+                f"{match.group(0)!r}"
+            )
+
 
 def _validate_reasons(
     value: Any,
@@ -1996,6 +2119,7 @@ def _validate_reasons(
     allowed_labels: set[str],
     policy: dict[str, Any],
     minimum: int,
+    reference_text: str | None = None,
 ) -> list[dict[str, str]]:
     if not isinstance(value, list):
         raise ValueError(f"{field} must be a list")
@@ -2005,6 +2129,9 @@ def _validate_reasons(
         raise ValueError(
             f"{field} may hold at most {policy['reason_limit']} items"
         )
+    reference = (
+        None if reference_text is None else _reference_form(reference_text)
+    )
     normalized = []
     for item in value:
         if not isinstance(item, dict):
@@ -2019,6 +2146,8 @@ def _validate_reasons(
             raise ValueError(
                 f"{field} text longer than {policy['reason_chars']} characters"
             )
+        if reference is not None:
+            _check_reason_citations(text, reference, field=field)
         normalized.append({"voice": label, "text": text})
     return normalized
 
@@ -2134,12 +2263,21 @@ def normalize_aggregator_opinion(
         raise ValueError("expected_home_margin is implausible")
     if not 20 <= projected_total <= 90:
         raise ValueError("projected_total is implausible")
+    # The judge's reasons may cite only records and counts the request
+    # carries. The rules arm's reasons are generated arithmetic (they quote
+    # projected scores) and go unguarded.
+    reference = (
+        reason_reference_text(build_judge_request(input_payload))
+        if judge
+        else None
+    )
     key_reasons = _validate_reasons(
         response.get("key_reasons"),
         field="key_reasons",
         allowed_labels=allowed_labels,
         policy=policy,
         minimum=2,
+        reference_text=reference,
     )
     counterpoints = _validate_reasons(
         response.get("counterpoints", []),
@@ -2147,6 +2285,7 @@ def normalize_aggregator_opinion(
         allowed_labels=allowed_labels,
         policy=policy,
         minimum=0,
+        reference_text=reference,
     )
     discarded = response.get("discarded_considerations", [])
     if not isinstance(discarded, list) or not all(

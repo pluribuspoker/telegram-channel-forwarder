@@ -2580,6 +2580,56 @@ def validate_opinion(
             raise ValueError(
                 "Opinion invents week context when the schedule week is null"
             )
+
+
+def _check_prebuilt_aggregator_input(
+    payload: Any,
+    *,
+    expert: dict[str, Any],
+    game: dict[str, Any],
+) -> None:
+    """Refuse a prebuilt input that is not an aggregator input for this game.
+
+    Nothing is persisted on refusal: this runs before the row is built.
+    """
+    if expert["input_profile"] != AGGREGATOR_PROFILE:
+        raise ValueError(
+            "A prebuilt input is only accepted for the aggregator experts"
+        )
+    if (
+        not isinstance(payload, dict)
+        or payload.get("input_profile") != AGGREGATOR_PROFILE
+    ):
+        raise ValueError(
+            f"The prebuilt input must carry input_profile {AGGREGATOR_PROFILE}"
+        )
+    missing = [
+        key
+        for key in (
+            "policy",
+            "game",
+            "market",
+            "voices",
+            "feature_block",
+            "scoreboard",
+            "judge_view",
+        )
+        if key not in payload
+    ]
+    if missing:
+        raise ValueError(f"The prebuilt input is missing {missing}")
+    described = payload["game"]
+    if str(described.get("event_id")) != str(game["event_id"]):
+        raise ValueError(
+            f"The prebuilt input describes event {described.get('event_id')}, "
+            f"not {game['event_id']}"
+        )
+    if str(described.get("away_team")) != str(game["away_team"]) or str(
+        described.get("home_team")
+    ) != str(game["home_team"]):
+        raise ValueError("The prebuilt input's teams do not match the game")
+
+
 async def generate_opinion(
     *,
     expert_id: str,
@@ -2601,11 +2651,20 @@ async def generate_opinion(
     generation_effort: str | None = None,
     expected_input_sha256: str | None = None,
     repair_attempts: int = 0,
+    input_payload: dict[str, Any] | None = None,
     _repair_response: str = "",
     _repair_error: str = "",
 ) -> dict[str, Any]:
     expert = load_expert(expert_id)
-    if expert["input_profile"] == "schedule_only":
+    # Kept apart from the built input so a repair attempt passes on exactly
+    # what the caller passed, not the input this call built.
+    prebuilt_input = input_payload
+    if input_payload is not None:
+        # A prebuilt aggregator input (--input-file, or the judge runner's):
+        # the builder is skipped and the payload's own policy is used as-is,
+        # because it is the state that was shown to the judge.
+        _check_prebuilt_aggregator_input(input_payload, expert=expert, game=game)
+    elif expert["input_profile"] == "schedule_only":
         input_payload = build_schedule_input(game, history)
     elif expert["input_profile"] == "divisional":
         if schedule is None:
@@ -2691,6 +2750,7 @@ async def generate_opinion(
         "anthropic_api",
         "agent_runtime",
         "copilot_subagent",
+        "claude_headless",
         DETERMINISTIC_BACKEND,
     }:
         raise ValueError(
@@ -2732,9 +2792,13 @@ async def generate_opinion(
             raise ValueError(
                 f"Invalid model reasoning effort map for expert {expert_id}"
             )
-        if generation_effort and generation_backend != "agent_runtime":
+        if generation_effort and generation_backend not in {
+            "agent_runtime",
+            "claude_headless",
+        }:
             raise ValueError(
-                "Generation effort override requires the agent_runtime backend"
+                "Generation effort override requires the agent_runtime or "
+                "claude_headless backend"
             )
         reasoning_effort = str(
             generation_effort
@@ -2993,6 +3057,7 @@ async def generate_opinion(
                 generation_effort=generation_effort,
                 expected_input_sha256=expected_input_sha256,
                 repair_attempts=repair_attempts - 1,
+                input_payload=prebuilt_input,
                 _repair_response=row["raw_response"],
                 _repair_error=row["generation_error"],
             )

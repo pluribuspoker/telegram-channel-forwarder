@@ -1,0 +1,15 @@
+# Every 30 minutes at :12 and :42. nfl-lines-fetcher.timer runs on
+# OnUnitActiveSec=30min (not calendar-aligned), so "after the fetcher" is
+# approximate: the runner simply uses the latest captured lines and dedupes
+# by committee key, so an early slot costs nothing.
+[Unit]
+Description=Run the God Expert judge runner at :12 and :42
+
+[Timer]
+OnCalendar=*-*-* *:12,42:00
+AccuracySec=30s
+Persistent=true
+Unit=god-judge.service
+
+[Install]
+WantedBy=timers.target

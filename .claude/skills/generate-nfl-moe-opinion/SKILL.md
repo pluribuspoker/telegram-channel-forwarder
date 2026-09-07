@@ -8,9 +8,10 @@ description: Generate an NFL MOE opinion with an allowed agent-session model, in
 Use this skill when the user asks an agent to generate any registered NFL MOE
 opinion without invoking the application's `ANTHROPIC_API_KEY` path. It is the
 preferred interactive generation workflow for the Schedule, Divisional, Win
-Total, and AK Experts, and the only generation workflow for the God Expert
-judge (`god_judge`). The active agent runtime has its own authentication,
-limits, and billing.
+Total, and AK Experts, and the manual fallback for the God Expert judge
+(`god_judge`), whose normal path is the headless timer described under
+"God Expert". The active agent runtime has its own authentication, limits,
+and billing.
 
 ## Invariants
 
@@ -117,18 +118,67 @@ limits, and billing.
   --event-id <event-id> --expert god_rules --deterministic` computes and
   persists the rules opinion from the approved committee rows and the
   BetOnline market.
-- `god_judge` accepts exactly one model, `claude-fable-5-1`, and only the
-  agent-runtime backend; `--api` is refused. Its `--show-input` output is the
+- `god_judge` accepts exactly one model, `claude-fable-5-1`, and two
+  backends: `claude_headless` (the timer) and `agent_runtime` (the manual
+  fallback below); `--api` is refused. Its `--show-input` output is the
   masked judge request: voices labeled `Voice A…` in a seeded shuffle, lenses
   described without names. Give the agent exactly that document plus
   `moe/prompts/god_judge/v1.md`. Never tell it which expert or person a voice
   belongs to, and never hand it the full aggregator input or the sheet.
 - The judge returns only probabilities and reasons; the application derives
-  the side and total legs. Persist with `--agent-response <file> --model
-  claude-fable-5-1 --generation-effort <actual-agent-effort>`.
+  the side and total legs. Every `W-L` record and "N games" count a reason
+  cites must appear in the request, or follow from it (a voice's projected
+  score, the winner-vote split, the cohort size a record implies); an
+  invented number fails validation and persists as an audit row.
 - Run the judge after every voice for the game is approved. It reads only
   approved, hash-verified rows, one per expert, on that expert's registry
   default model.
+- **The judge never runs in a session that has seen unmasked committee
+  rows.** One fresh session per judge run, the request in, the response out.
+
+### Normal path: the timer
+
+`god-judge.timer` runs `scripts/god_judge_runner.py` every 30 minutes at :12
+and :42. For each upcoming game with a complete committee (an approved row
+for every enabled non-aggregator expert) it builds one input, persists the
+rules arm on it, runs one headless `claude -p` call (Fable 5.1 at max
+effort, every tool disabled, the registered prompt as the whole system
+prompt, from an empty directory whose environment holds no sheet
+credentials), persists the judge row with backend `claude_headless`, and
+DMs the reviewer through the watchdog bot. It dedupes on the committee key
+(voice opinion ids plus the latest lines and prices), stops two hours before
+kickoff, gives up on a committee after two invalid judge rows, and never
+approves anything. `python scripts/god_judge_runner.py --dry-run` prints the
+plan without persisting or calling anything.
+
+### Manual fallback: a fresh interactive session
+
+Use this only when the timer cannot run, from a session that has never
+printed unmasked committee rows. The input file pins both arms to one sheet
+state, so the judge no longer races the 30-minute lines fetcher:
+
+1. `python scripts/generate_moe_opinion.py --event-id <id> --expert
+   god_rules --show-input > input.json` and note the `input_sha256` printed
+   on stderr (the full aggregator input's hash).
+2. `python scripts/generate_moe_opinion.py --event-id <id> --expert
+   god_rules --deterministic --input-file input.json` persists the rules row
+   on exactly that input.
+3. `python scripts/generate_moe_opinion.py --event-id <id> --expert
+   god_judge --show-input --input-file input.json > request.json` prints the
+   masked request derived from the file; note its `input_sha256` (the
+   request's hash, which is what the judge row persists). Nothing is re-read
+   from the sheet's opinions, snapshots, or finals.
+4. Run one isolated Fable 5.1 inference at max effort with
+   `moe/prompts/god_judge/v1.md` as the whole prompt and `request.json` as
+   the only input, and save its exact raw JSON as `response.json`.
+5. `python scripts/generate_moe_opinion.py --event-id <id> --expert
+   god_judge --agent-response response.json --input-file input.json
+   --expected-input-sha256 <request sha> --model claude-fable-5-1
+   --generation-effort <effort>` persists the judge row; the backend is
+   `agent_runtime` by default (`--generation-backend claude_headless` only
+   for a response captured from a headless `claude -p` call).
+6. Review each row with `python scripts/review_moe_opinion.py --opinion-id
+   <id> --status approved --reviewed-by <you>`.
 
 ## Runtime notes
 

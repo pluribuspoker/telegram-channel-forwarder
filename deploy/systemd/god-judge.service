@@ -1,0 +1,32 @@
+# God Expert judge runner: one headless Claude Code call per upcoming game
+# whose committee is complete (scripts/god_judge_runner.py), the rules arm on
+# the same input, then a DM to the reviewer. Never approves anything.
+#
+# TimeoutStartSec=3600 = 3 games per invocation (the runner's --max-games
+# default) x the 900 s claude timeout, plus sheet reads and persistence.
+# The runner makes a single attempt per game; run_god_judge.sh never retries.
+#
+# Environment: .env (sheet + watchdog config), .env.local (server-only
+# values), and ~/.claude/auth.env (CLAUDE_CODE_OAUTH_TOKEN, the subscription
+# token the judge bills; the runner refuses to run without it). PATH must
+# hold the npm-global claude binary; HOME lets the CLI find ~/.claude.
+[Unit]
+Description=God Expert judge runner (headless Claude Code)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+EnvironmentFile=-/home/forwarder/.claude/auth.env
+Environment=PATH=/home/forwarder/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/forwarder
+ExecStart=/home/forwarder/app/run_god_judge.sh
+TimeoutStartSec=3600
+SyslogIdentifier=god-judge
+StandardOutput=journal
+StandardError=journal
