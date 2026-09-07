@@ -227,3 +227,6 @@ angles/data/activity.db-shm
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# angles/data/ was covered by the old unanchored "data/" rule; keep it ignored
+angles/data/
