@@ -841,6 +841,17 @@ def snapshot_lean_submission(
     )
 
 
+def requires_ak_projection(
+    sender_id: int,
+    ak_user_id: str,
+    celebrity: Any,
+) -> bool:
+    return (
+        str(sender_id) == ak_user_id
+        and not isinstance(celebrity, dict)
+    )
+
+
 def _record(wins: Any, losses: Any, ties: Any = 0) -> str:
     values = [str(int(wins)), str(int(losses))]
     if int(ties or 0):
@@ -1921,7 +1932,11 @@ async def main() -> None:
             )
             return
         prediction = None
-        if str(event.sender_id) == ak_user_id:
+        if requires_ak_projection(
+            event.sender_id,
+            ak_user_id,
+            submission.get("celebrity"),
+        ):
             prediction = parse_ak_projection(
                 lean_text,
                 away_team=str(submission["game"]["away_team"]),
@@ -2754,7 +2769,11 @@ async def main() -> None:
                 f"Score: {state['game']['away_team']} 23, "
                 f"{state['game']['home_team']} 27\n"
                 "Rationale: your game analysis."
-                if str(event.sender_id) == ak_user_id
+                if requires_ak_projection(
+                    event.sender_id,
+                    ak_user_id,
+                    state.get("celebrity"),
+                )
                 else (
                     "Enter your lean, reasoning, and the line or price where "
                     "your preference changes:"

@@ -35,6 +35,7 @@ from intake_bot import (
     market_side_summary,
     page_games,
     period_market_summary,
+    requires_ak_projection,
     select_games,
     selected_market_context,
     side_buttons,
@@ -582,6 +583,17 @@ class GameSelectionTest(unittest.TestCase):
             submission["celebrity"],
             {"id": -123, "name": "LeBron James"},
         )
+
+    def test_ak_projection_required_only_for_own_submission(self):
+        self.assertTrue(requires_ak_projection(123, "123", None))
+        self.assertFalse(
+            requires_ak_projection(
+                123,
+                "123",
+                {"id": -123, "name": "Bill Simmons"},
+            )
+        )
+        self.assertFalse(requires_ak_projection(456, "123", None))
 
     def test_implied_score_uses_latest_total_and_spread(self):
         score = implied_score(
