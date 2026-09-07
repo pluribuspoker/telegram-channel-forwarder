@@ -90,7 +90,7 @@ Rules here are terse on purpose. Each section points to a `docs/*.md` file holdi
 ## Broadcast results — docs/tracker.md
 
 - `_format_pick` (`audit.py`) is the ONE renderer (broadcast, merged broadcast, Sheets) — **every `bet_type` branch must interpolate `period_tag`** (after team/player, before the bet). New branch = new case in `scripts/test_period_tag.py`, incl. the MLB/KBO renames (`1h`→`F5`, `1q`→`1st Inn`). The `_clean_desc` fallback must never truncate to a bare team name (its vs-strip requires bet content before the "vs"); a market with two parse shapes (BTTS = prop OR line-less total) converges into the structured branches, not the fallback. Sweep net for renderer changes: replay `_format_pick` old-vs-new over all cached picks.
-- A lone result renders via `broadcast_group` (score header "⚾️ Marlins 1–6 Cubs", capper after dash) once its final score resolved; no final (mid-game settle, non-ESPN sport) or parlay/multi-pick → compact `broadcast_results` line. Gate on the score, not the event. Test: `scripts/test_single_score_header.py`.
+- The game-title header is EXCLUSIVELY the final-score format: a scored result — lone or merged — renders via `broadcast_group` ("⚾️ Marlins 1–6 Cubs", capper after dash). No final yet → a merge still posts as ONE message but headerless (bare pick lines); a lone result stays a compact `broadcast_results` line; parlays/multi-pick always compact. Gate on the score, not the event. Test: `scripts/test_single_score_header.py`.
 - Test workflow: `scripts/clear_emojis.py --channel <id>` (or `--days 2`) then `python tracker.py --live --channel <id>`.
 
 ## Sauce daily — docs/sauce.md

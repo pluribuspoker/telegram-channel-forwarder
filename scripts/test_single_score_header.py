@@ -13,7 +13,9 @@ rule is coherent and this pins it:
   1. lone result + completed ESPN event  -> group format (score header, capper after dash)
   2. lone result + game still in progress -> compact line (never print a running score)
   3. lone result + no ESPN event at all   -> compact line (CFL/KBO, offseason, no match)
-  4. two results on the same game         -> merged into one message, unchanged
+  4. two results on the same game, final  -> merged into one message with score header
+  5. two results, game still in progress  -> merged into ONE message, but headerless —
+     the title header is exclusively the final-score format
 """
 import asyncio
 import sys
@@ -133,6 +135,21 @@ print("merged:", text.replace("\n", " | "))
 check("merge posts once", len(posts) == 1, f"{len(posts)} posts")
 check("merge has score header", "Marlins 1–6 Cubs" in text, text)
 check("merge names both cappers", "Midwest Mike" in text and "Tony" in text, text)
+
+# ── 5. two cappers, game in progress -> ONE merged message, NO header ─────────
+# The title header is exclusively the final-score format (2026-09-07, "WIS VS
+# ND" over two mid-game-settled unders read as a final missing its score). A
+# scoreless merge still posts once — merging is the notification knob — but as
+# bare pick lines: no <b><u> title, no matchup, no running score.
+posts = run_flush({"events": [make_event(completed=False)]}, n_items=2)
+text = posts[0]["text"] if posts else ""
+print("merged+live:", text.replace("\n", " | "))
+check("merge+live posts once", len(posts) == 1, f"{len(posts)} posts")
+check("merge+live has no header", "<u>" not in text and "Marlins" not in text
+      and not text.startswith("\n"), text)
+check("merge+live keeps both pick lines",
+      text.count("✅ Chicago Cubs ML [-167]") >= 1
+      and "Midwest Mike" in text and "Tony" in text, text)
 
 print()
 if failures:

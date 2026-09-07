@@ -354,9 +354,10 @@ async def _resolve_game_keys(pending: list[dict], espn_cache: _ESPNCache) -> Non
 def _group_header(group: list[dict]) -> str:
     """Game label for a merged broadcast — '⚾️ Yankees 2–5 Cubs', '… · 7/31' if stale.
 
-    Degrades to the ESPN matchup, then the pick's own team labels, then the sport,
-    when there is no final score: the header is context, never a reason to hold up
-    or drop a result.
+    The caller only renders a header when the game is final (a title over an
+    unfinished game reads as a final with the score missing), so the fallbacks
+    below — ESPN matchup, then the pick's own team labels, then the sport — are
+    defensive only.
     """
     sport, game_date, _ = group[0]["game_key"]
     # The date earns its place only when the game isn't today's — a pick graded late,
@@ -450,11 +451,14 @@ async def _flush_broadcasts(
     instead of one per capper — three cappers on Cubs ML used to fire three
     near-identical messages and three notifications. A lone result also renders
     through the group format once its final score is in hand, so every scored
-    single carries the "⚾️ Marlins 1–6 Cubs" header; the score is the whole point
-    of that header, so a lone result *without* one (mid-game settle, non-ESPN
-    sport, no event match) keeps the compact per-pick line. Anything without a
-    resolvable game key, plus parlays and multi-pick messages, always falls
-    through to the unchanged per-message path.
+    single carries the "⚾️ Marlins 1–6 Cubs" header. The score is the whole
+    point of that header — it renders ONLY when the game is final: a lone
+    result without one (mid-game settle, non-ESPN sport, no event match) keeps
+    the compact per-pick line, and a merge without one still posts as a single
+    message but headerless (bare merged pick lines — a game-title header over
+    an unfinished game reads as a final with the score missing). Anything
+    without a resolvable game key, plus parlays and multi-pick messages, always
+    falls through to the unchanged per-message path.
 
     Ordering matches the pre-grouping code: mark broadcasted and persist BEFORE
     sending, so a crash mid-flush drops a result rather than double-posting one
@@ -489,18 +493,21 @@ async def _flush_broadcasts(
             _mark_broadcasted(cache, item)
         _save_pending_cache(cache)
 
-        # A lone result takes the same header format only when the final score is
-        # known — a "Team vs Team" header over a single line adds nothing, so the
-        # degraded-header fallbacks stay reserved for actual merges.
-        single_with_score = (
-            len(group) == 1
-            and group[0].get("event") is not None
-            and _final_score_text(group[0]["event"]) is not None
-        )
+        # The bold+underline game header is EXCLUSIVELY the final-score format
+        # (operator rule, 2026-09-07): printing it over a mid-game settle
+        # misreads as a final — "🏈 WIS VS ND" over two dead unders looked like
+        # a finished game with the score missing. A merge without a known final
+        # still goes out as ONE message (that's the notification-spam knob),
+        # just as bare merged pick lines with no title; a lone result without a
+        # final keeps the compact per-pick line as before.
+        group_event = next((it["event"] for it in group if it.get("event")), None)
+        has_final = (group_event is not None
+                     and _final_score_text(group_event) is not None)
+        single_with_score = len(group) == 1 and has_final
         if key[0] == "game" and (len(group) >= GROUP_MIN or single_with_score):
             await audit.broadcast_group(
                 target_channel=key[1],
-                header=_group_header(group),
+                header=_group_header(group) if has_final else "",
                 items=[{
                     "channel_id": it["channel_id"], "message_id": it["message_id"],
                     "capper": it["capper"], "pick": it["bc_results"][0][0],
@@ -512,7 +519,8 @@ async def _flush_broadcasts(
             ident_s = "/".join(ident) if isinstance(ident, tuple) else ident
             if len(group) > 1:
                 print(f"  ⊞ merged {len(group)} results on {key[2][0]} {ident_s} "
-                      f"into one broadcast")
+                      f"into one broadcast"
+                      + ("" if has_final else " (no final yet — headerless)"))
             else:
                 print(f"  ⊞ broadcast with final-score header on {key[2][0]} {ident_s}")
         else:
