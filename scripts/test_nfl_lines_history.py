@@ -43,6 +43,7 @@ from scripts.fetch_nfl_lines_history import (
     format_cross_check,
     format_number,
     home_spread_from_nflverse,
+    is_live_provider,
     lines_csv_text,
     load_open_close,
     main,
@@ -332,11 +333,29 @@ class EspnExtractionTest(unittest.TestCase):
 
     def test_partial_provider_is_recorded_with_empty_blocks(self):
         payload = _payload(BAL_KC_FIXTURE)
-        payload["items"] = [item for item in payload["items"] if item["provider"]["name"] != "ESPN BET"]
+        espn_bet = next(item for item in payload["items"] if item["provider"]["name"] == "ESPN BET")
+        del espn_bet["close"]
+        del espn_bet["homeTeamOdds"]["close"]
+        del espn_bet["awayTeamOdds"]["close"]
         provider, blocks = extract_open_close(payload)
-        self.assertEqual(provider, "ESPN Bet - Live Odds")  # has open + current, no close
+        self.assertEqual(provider, "ESPN BET")  # has open + current, no close
         self.assertEqual(blocks["open"]["home_spread"], -3.0)
+        self.assertEqual(blocks["current"]["home_spread"], -2.5)
         self.assertEqual(blocks["close"], {name: None for name in BLOCK_FIELDS})
+
+    def test_live_odds_providers_are_never_selected(self):
+        # 2024 wk2 PIT @ DEN had only Bet 365 and "ESPN Bet - Live Odds", whose
+        # blocks are in-game snapshots (away moneyline -10000, total 18.5).
+        payload = _payload(BAL_KC_FIXTURE)
+        payload["items"] = [item for item in payload["items"] if item["provider"]["name"] != "ESPN BET"]
+        self.assertEqual([item["provider"]["name"] for item in payload["items"]], ["Bet 365", "ESPN Bet - Live Odds"])
+        self.assertTrue(is_live_provider("ESPN Bet - Live Odds"))
+        self.assertFalse(is_live_provider("ESPN BET"))
+        self.assertFalse(is_live_provider(None))
+        self.assertIsNone(select_provider(payload["items"]))
+        provider, blocks = extract_open_close(payload)
+        self.assertIsNone(provider)
+        self.assertEqual(blocks["open"], {name: None for name in BLOCK_FIELDS})
 
     def test_no_usable_provider(self):
         payload = _payload(BAL_KC_FIXTURE)

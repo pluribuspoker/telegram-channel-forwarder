@@ -457,11 +457,22 @@ def provider_name(item: dict[str, Any]) -> str | None:
     return str(name) if name else None
 
 
+def is_live_provider(name: str | None) -> bool:
+    """``ESPN Bet - Live Odds`` and kin: their blocks are in-game snapshots
+    (an ``away_moneyline`` of -10000 and a total of 18.5 were observed for
+    2024 wk2 PIT @ DEN), never a pregame open or close."""
+    return bool(name) and "live" in str(name).lower()
+
+
 def select_provider(items: list[dict[str, Any]]) -> tuple[str, dict[str, Any]] | None:
     """``ESPN BET`` when it has open and close; else the first provider that
     has both; else ``ESPN BET`` with whatever it has; else the first provider
-    with any block."""
-    named = [(provider_name(item), item) for item in items if provider_name(item)]
+    with any block. Live-odds providers are never candidates."""
+    named = [
+        (provider_name(item), item)
+        for item in items
+        if provider_name(item) and not is_live_provider(provider_name(item))
+    ]
     complete = [
         (name, item)
         for name, item in named
