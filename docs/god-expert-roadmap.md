@@ -224,6 +224,25 @@ anywhere; judge runs bill the Claude Code subscription.
 - Tests: synthetic duplicate voices; relevance masks; the Week 1 replay
   numbers on the persisted inputs (Seahawks pool margin from +4.2 toward
   +3.9; Rams side edge from 4.4% to roughly 3.2%).
+- Built 2026-09-07. Tuples are `[W, L, T, games]` from every `W-L`/`W-L-T`
+  token in the FULL factor lists (the count nearest the record in the same
+  item, else W+L+T), persisted per voice as `evidence`; overlap is Jaccard
+  keyed by voice id; the discount divides the Hedge weight by one plus the
+  summed overlap with the voices ranked before it (`hedge_weights` and the
+  discounted `weights` both persist). Registry `markets`: schedule and ak
+  side+total, divisional and win_total side only; an empty pool takes the
+  market expectation. Legacy inputs replay unchanged and their judge
+  requests stay byte-identical. Prompts bumped to `god_rules/v2.md` (pool
+  step and the veto/floor in step 7) and `god_judge/v2.md`. Replay under
+  the formula as specified: Seahawks pool margin +4.25 → +4.21 (divisional
+  and schedule share 4 of 16 distinct tuples, overlap 0.25, schedule at
+  0.8); Rams side edge 4.42% → 4.38% (overlap 0.11 and 0.10). The roadmap's
+  +3.9 and 3.2% need the divisional/schedule pair to pool as about one
+  voice, which a rank-ordered Jaccard discount does not produce; and the
+  "two voices reciting one table sum to about one voice" phrase is false
+  under the rank rule (identical voices pool as 1.0 and 0.5). Open for the
+  user: keep the rank rule, or divide every voice by one plus its overlap
+  with all other voices (n copies of one table then sum to exactly one).
 
 ### WP6 — Empirical margins (1.5 d, needs WP4)
 

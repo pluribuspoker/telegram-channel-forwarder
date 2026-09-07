@@ -49,6 +49,7 @@ experts:
       - claude-haiku-4-5
     enabled: true
     initial_weight: 1.0
+    markets: [side, total]
   divisional:
     name: Divisional Expert
     mode: agent
@@ -75,6 +76,7 @@ experts:
       - claude-haiku-4-5
     enabled: true
     initial_weight: 1.0
+    markets: [side]
   win_total:
     name: Win Total Expert
     mode: agent
@@ -89,6 +91,7 @@ experts:
       - claude-opus-4-8
     enabled: true
     initial_weight: 1.0
+    markets: [side]
   ak:
     name: AK Expert
     mode: human_calibration
@@ -103,12 +106,13 @@ experts:
       - claude-opus-4-8
     enabled: true
     initial_weight: 1.0
+    markets: [side, total]
   god_rules:
     name: God Expert (Rules)
     mode: aggregator
-    version: 1
-    prompt_version: 1
-    prompt: prompts/god_rules/v1.md
+    version: 2
+    prompt_version: 2
+    prompt: prompts/god_rules/v2.md
     input_profile: aggregator
     output_schema_version: 8
     allowed_backends:
@@ -117,9 +121,9 @@ experts:
   god_judge:
     name: God Expert (Judge)
     mode: aggregator_judge
-    version: 1
-    prompt_version: 1
-    prompt: prompts/god_judge/v1.md
+    version: 2
+    prompt_version: 2
+    prompt: prompts/god_judge/v2.md
     input_profile: aggregator
     output_schema_version: 8
     default_model: claude-fable-5-1
