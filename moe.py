@@ -27,6 +27,19 @@ from ai import _claude_create_with_retry
 from nfl_lines import _call_with_retry, get_gspread_client
 from nfl_win_predictions import ensure_worksheet
 from moe_ak import WNBA_PRIOR_PATH, build_ak_input
+from moe_god import (
+    AGGREGATOR_PROFILE,
+    DETERMINISTIC_BACKEND,
+    DETERMINISTIC_MODEL,
+    JUDGE_MODE,
+    RULES_MODE,
+    aggregator_policy,
+    build_aggregator_input,
+    build_judge_request,
+    load_registry,
+    normalize_aggregator_opinion,
+    rules_arm_response,
+)
 from moe_win_total import build_win_total_input
 
 ROOT = Path(__file__).resolve().parent
@@ -193,6 +206,8 @@ def _source_sha256(expert: dict[str, Any]) -> str:
         paths.extend((ROOT / "moe_ak.py", WNBA_PRIOR_PATH))
     if expert.get("input_profile") == "win_total":
         paths.append(ROOT / "moe_win_total.py")
+    if expert.get("input_profile") == AGGREGATOR_PROFILE:
+        paths.extend((ROOT / "moe_god.py", ROOT / "moe_ak.py"))
     digest = hashlib.sha256()
     for path in paths:
         digest.update(str(path.relative_to(ROOT)).encode("utf-8"))
@@ -2578,11 +2593,13 @@ async def generate_opinion(
     win_totals: list[dict[str, Any]] | None = None,
     win_predictions: list[dict[str, Any]] | None = None,
     team_history: list[dict[str, Any]] | None = None,
+    opinions: list[dict[str, Any]] | None = None,
     store: MoeOpinionStore,
     model: str | None = None,
     create_fn: CreateFn = _claude_create_with_retry,
     generation_backend: str = "anthropic_api",
     generation_effort: str | None = None,
+    expected_input_sha256: str | None = None,
     repair_attempts: int = 0,
     _repair_response: str = "",
     _repair_error: str = "",
@@ -2628,56 +2645,109 @@ async def generate_opinion(
             team_history,
             leans,
         )
+    elif expert["input_profile"] == AGGREGATOR_PROFILE:
+        if opinions is None:
+            raise ValueError(
+                "Aggregator experts require the persisted opinion rows"
+            )
+        registry = load_registry()
+        input_payload = build_aggregator_input(
+            game,
+            approved_opinions=approved_opinions(opinions),
+            finals=current_season_results or [],
+            snapshots=line_snapshots or [],
+            registry=registry,
+            policy=aggregator_policy(registry),
+        )
     else:
         raise NotImplementedError(
             f"Unsupported input profile: {expert['input_profile']}"
         )
     input_json = _canonical_json(input_payload)
+    expert_mode = str(expert.get("mode") or "")
+    if expert_mode == JUDGE_MODE:
+        # The judge reads a masked, seeded-shuffled request, and that request
+        # is the exact input persisted with its row. The full aggregator input
+        # stays recoverable through aggregator_input_sha256 and the rules row.
+        input_json = _canonical_json(build_judge_request(input_payload))
     if len(input_json) >= MAX_SHEET_CELL_CHARS:
         raise ValueError("MOE input exceeds the Google Sheets cell limit")
-    selected_model = (
-        model
-        or str(expert.get("default_model") or "")
-        or os.getenv("MOE_MODEL")
-        or "claude-sonnet-4-6"
-    )
-    allowed_models = {
-        str(candidate) for candidate in expert.get("allowed_models", [])
+    if expected_input_sha256 and _sha256_text(input_json) != str(
+        expected_input_sha256
+    ):
+        raise ValueError(
+            "The rebuilt input does not match expected_input_sha256; the "
+            "sheet changed since the agent inference, so nothing was persisted"
+        )
+    allowed_backends = {
+        str(candidate) for candidate in expert.get("allowed_backends", [])
     }
-    if allowed_models and selected_model not in allowed_models:
+    if allowed_backends and generation_backend not in allowed_backends:
         raise ValueError(
-            f"Model {selected_model} is not allowed for expert {expert_id}"
-        )
-    expert = load_expert(expert_id, model=selected_model)
-    model_reasoning_effort = expert.get("model_reasoning_effort") or {}
-    if not isinstance(model_reasoning_effort, dict):
-        raise ValueError(
-            f"Invalid model reasoning effort map for expert {expert_id}"
-        )
-    if generation_effort and generation_backend != "agent_runtime":
-        raise ValueError(
-            "Generation effort override requires the agent_runtime backend"
-        )
-    reasoning_effort = str(
-        generation_effort
-        or model_reasoning_effort.get(selected_model)
-        or expert.get("reasoning_effort")
-        or ""
-    ).strip()
-    if reasoning_effort not in {"low", "medium", "high", "xhigh", "max"}:
-        raise ValueError(
-            f"Invalid reasoning effort for expert {expert_id}: "
-            f"{reasoning_effort or '<missing>'}"
+            f"Backend {generation_backend} is not allowed for expert "
+            f"{expert_id}"
         )
     if generation_backend not in {
         "anthropic_api",
         "agent_runtime",
         "copilot_subagent",
+        DETERMINISTIC_BACKEND,
     }:
         raise ValueError(
             f"Unsupported MOE generation backend: {generation_backend}"
         )
-    max_tokens = 5000
+    if expert_mode == RULES_MODE:
+        if generation_backend != DETERMINISTIC_BACKEND:
+            raise ValueError(
+                "The rules aggregator only runs on the deterministic backend"
+            )
+        if model or generation_effort:
+            raise ValueError(
+                "The rules aggregator takes no model or reasoning effort"
+            )
+        selected_model = DETERMINISTIC_MODEL
+        reasoning_effort = ""
+        max_tokens = 0
+    else:
+        if generation_backend == DETERMINISTIC_BACKEND:
+            raise ValueError(
+                "The deterministic backend is only for the rules aggregator"
+            )
+        selected_model = (
+            model
+            or str(expert.get("default_model") or "")
+            or os.getenv("MOE_MODEL")
+            or "claude-sonnet-4-6"
+        )
+        allowed_models = {
+            str(candidate) for candidate in expert.get("allowed_models", [])
+        }
+        if allowed_models and selected_model not in allowed_models:
+            raise ValueError(
+                f"Model {selected_model} is not allowed for expert {expert_id}"
+            )
+        expert = load_expert(expert_id, model=selected_model)
+        model_reasoning_effort = expert.get("model_reasoning_effort") or {}
+        if not isinstance(model_reasoning_effort, dict):
+            raise ValueError(
+                f"Invalid model reasoning effort map for expert {expert_id}"
+            )
+        if generation_effort and generation_backend != "agent_runtime":
+            raise ValueError(
+                "Generation effort override requires the agent_runtime backend"
+            )
+        reasoning_effort = str(
+            generation_effort
+            or model_reasoning_effort.get(selected_model)
+            or expert.get("reasoning_effort")
+            or ""
+        ).strip()
+        if reasoning_effort not in {"low", "medium", "high", "xhigh", "max"}:
+            raise ValueError(
+                f"Invalid reasoning effort for expert {expert_id}: "
+                f"{reasoning_effort or '<missing>'}"
+            )
+        max_tokens = 5000
     away = str(game["away_team"])
     home = str(game["home_team"])
     generated_at = datetime.now(timezone.utc)
@@ -2748,30 +2818,34 @@ async def generate_opinion(
         "calibration_summary_json": "",
     }
     try:
-        request = (
-            f"Generate the {expert['name']} opinion from this exact input:\n"
-            f"{input_json}"
-        )
-        if _repair_response:
-            request += (
-                "\n\nYour previous JSON response failed validation. Correct "
-                "only the response so it satisfies the same prompt and input."
-                f"\nValidation error: {_repair_error}"
-                f"\nPrevious response:\n{_repair_response}"
+        if expert_mode == RULES_MODE:
+            raw_response = _canonical_json(rules_arm_response(input_payload))
+        else:
+            request = (
+                f"Generate the {expert['name']} opinion from this exact "
+                f"input:\n{input_json}"
             )
-        response = await create_fn(
-            model=selected_model,
-            max_tokens=max_tokens,
-            output_config={"effort": reasoning_effort},
-            system=expert["prompt_text"],
-            messages=[
-                {
-                    "role": "user",
-                    "content": request,
-                }
-            ],
-        )
-        raw_response = str(response.content[0].text).strip()
+            if _repair_response:
+                request += (
+                    "\n\nYour previous JSON response failed validation. "
+                    "Correct only the response so it satisfies the same "
+                    "prompt and input."
+                    f"\nValidation error: {_repair_error}"
+                    f"\nPrevious response:\n{_repair_response}"
+                )
+            response = await create_fn(
+                model=selected_model,
+                max_tokens=max_tokens,
+                output_config={"effort": reasoning_effort},
+                system=expert["prompt_text"],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": request,
+                    }
+                ],
+            )
+            raw_response = str(response.content[0].text).strip()
         row["raw_response"] = raw_response
         if len(raw_response) >= MAX_SHEET_CELL_CHARS:
             raise ValueError(
@@ -2795,6 +2869,13 @@ async def generate_opinion(
                 )
         elif int(expert["output_schema_version"]) == 5:
             opinion = _normalize_ak_opinion(opinion, input_payload)
+        elif int(expert["output_schema_version"]) == 8:
+            opinion = normalize_aggregator_opinion(
+                opinion,
+                input_payload,
+                expert=expert,
+                model=selected_model if expert_mode == JUDGE_MODE else "",
+            )
         validate_opinion(
             opinion,
             away_team=away,
@@ -2904,11 +2985,13 @@ async def generate_opinion(
                 win_totals=win_totals,
                 win_predictions=win_predictions,
                 team_history=team_history,
+                opinions=opinions,
                 store=store,
                 model=selected_model,
                 create_fn=create_fn,
                 generation_backend=generation_backend,
                 generation_effort=generation_effort,
+                expected_input_sha256=expected_input_sha256,
                 repair_attempts=repair_attempts - 1,
                 _repair_response=row["raw_response"],
                 _repair_error=row["generation_error"],
@@ -3334,7 +3417,7 @@ def opinion_summary(
     for index, row in enumerate(visible):
         if index:
             lines.append("")
-        if str(row.get("expert_id")) == "ak" and row.get("side_pick_json"):
+        if str(row.get("pick_market")) == "side_and_total" and row.get("side_pick_json"):
             side = json.loads(str(row["side_pick_json"]))
             total = json.loads(str(row["total_pick_json"]))
             side_stars = "★" * int(side["confidence_stars"])
@@ -3450,7 +3533,7 @@ def opinion_model_picker(
     buttons: list[list[Any]] = []
     for row in visible:
         model = str(row.get("model") or "unknown model")
-        if str(row.get("expert_id")) == "ak" and row.get("side_pick_json"):
+        if str(row.get("pick_market")) == "side_and_total" and row.get("side_pick_json"):
             side = json.loads(str(row["side_pick_json"]))
             total = json.loads(str(row["total_pick_json"]))
             side_label = (
@@ -3547,7 +3630,7 @@ def opinion_detail(
     margin = float(row["expected_home_margin"])
     away_score = int(row["predicted_away_score"])
     home_score = int(row["predicted_home_score"])
-    if str(row.get("expert_id")) == "ak" and row.get("side_pick_json"):
+    if str(row.get("pick_market")) == "side_and_total" and row.get("side_pick_json"):
         side = json.loads(str(row["side_pick_json"]))
         total = json.loads(str(row["total_pick_json"]))
         side_label = (

@@ -128,6 +128,12 @@ Rules here are terse on purpose. Each section points to a `docs/*.md` file holdi
 - Env: `ANGLES_AUTH_SECRET` (required), `ANGLES_PORT`, `ANGLES_ADMIN_IDS`, `BOT_TOKEN`.
 - Manual pull: `su - forwarder -c "cd ~/app && ~/venv/bin/python angles/extract_angles.py"`
 
+## NFL MOE + God Expert — docs/telegram-intake-plan.md
+
+- Registry `moe/experts.yaml`; every opinion is an append-only row in the `moe_opinions` tab of the NFL Guesser sheet (creds VPS-only), approved hash-bound via `scripts/review_moe_opinion.py`; only approved rows display in @nflguesser_bot. Generate with `scripts/generate_moe_opinion.py` — agent path via the `generate-nfl-moe-opinion` skill (subscription billing); `--api` is an explicit fallback.
+- **God Expert = two arms, one input, one policy** (`moe_god.py`): `god_rules` (deterministic pool→shrink→policy, `--deterministic`, no model) and `god_judge` (Fable 5.1 via the skill, `agent_runtime` only, `--api` refused — the app transport would truncate it). The judge returns only probabilities; `apply_policy` decides legs, stars, and stake. The judge sees a masked, seeded-shuffled request (`--show-input` prints it); the rules row persists the full input. Policy knobs live under `aggregator_policy` in `experts.yaml` and are copied into every input (hash-bound). The bot's two-leg layout keys on `pick_market == side_and_total`.
+- Scoreboard/ledger: `scripts/moe_grade.py` (Brier · ATS/O-U at close · leg CLV; `--write` appends to `moe_grades`) feeds Hedge weights and the bake-off ledger. Tests: `python -m unittest scripts.test_moe_god` — Unix only (`moe.py` imports `fcntl`), so run them on the VPS from a scratch clone, never in `~/app`.
+
 ## Infra sync + runners
 
 - `deploy/` is the source of truth for systemd units and hooks: edit there, commit, then `sudo cp` + `daemon-reload` + restart (units) or `cp` + `chmod +x` (hooks). Drift check: `bash scripts/check_deploy_sync.sh`.

@@ -549,6 +549,85 @@ verification gates, backups, and rollback with post-cutover delta replay. It
 must be reconciled with the final script names after the backend implementation
 and rehearsed against a production export before use.
 
+### Implemented locally — 2026-09-06: God Expert aggregator (rules + judge)
+
+Two aggregator experts sit on top of the committee and ride the identical
+validate → persist → approve → display rail. Design record: the God Expert
+Bake-off page
+(`https://claude.ai/code/artifact/092a9011-e22f-4022-8546-80cc6b2a9467`) and
+its two companions. Both arms consume one input and one policy; only the
+probability estimate differs between them.
+
+- `god_rules` (`mode: aggregator`, `input_profile: aggregator`, output schema
+  v8, `allowed_backends: [deterministic]`). No model. `moe_god.py` builds one
+  input: one approved opinion per enabled non-aggregator expert (the latest
+  approved row on the expert's registry `default_model`, else the latest on
+  any model; the rule used is persisted per voice), the BetOnline
+  opening/latest full-game market de-vigged pairwise, each voice's projected
+  margin and total converted to cover and over probabilities through a normal
+  model (`sigma_margin`, `sigma_total`), a weighted pool, the pool shrunk
+  toward the market (`shrink_lambda`), and the per-expert scoreboard (Brier,
+  ATS and O/U at close, leg record, leg CLV) graded from ESPN finals and the
+  last snapshot before kickoff. Hedge weights
+  `exp(-eta * resolved * (brier - mean_brier))`, clipped to
+  `weight_floor..weight_cap`, activate once at least two voices have
+  `weights_min_resolved` graded games; until then every weight is 1.0.
+  `moe/prompts/god_rules/v1.md` is the versioned algorithm spec and is hashed
+  like a prompt; no model reads it. The row records `model=deterministic`,
+  `generation_backend=deterministic`, and an empty effort.
+- `god_judge` (`mode: aggregator_judge`, same input profile and schema,
+  `default_model: claude-fable-5-1`, `allowed_models: [claude-fable-5-1]`,
+  `allowed_backends: [agent_runtime]`). The judge reads a masked request
+  (`moe_god.build_judge_request`): voices become `Voice A…` in an order
+  shuffled by a seed derived from the full input's hash, lenses are described
+  without naming anyone, factor lists are capped (`factor_limit`,
+  `factor_chars`), and the scoreboard reaches it only as each voice's own
+  track record. That request is the exact `input_json` persisted with the
+  judge row; it carries `aggregator_input_sha256`, so the full input
+  (persisted with the rules row) is recoverable. The judge returns only
+  `home_win_probability`, `expected_home_margin`, `projected_total`,
+  `key_reasons`, `counterpoints`, and `discarded_considerations`; reasons
+  may cite only voice labels or `market`/`pool`/`scoreboard`. There is no
+  `--api` path for the judge: the application transport caps output at 5,000
+  tokens with no thinking configuration, and the judge is meant to bill the
+  Claude Code subscription through the agent-runtime skill.
+- Shared policy (`aggregator_policy` at the top of `moe/experts.yaml`, copied
+  into every input so a parameter change changes the input hash): for both
+  arms the application derives `p_cover_home` and `p_over` from the estimate,
+  computes `edge = estimate − fair` for each side of the spread and the
+  total, bets the larger edge when it reaches `edge_threshold` and the
+  expected value at the posted price is positive, assigns stars by
+  `star_edges`, and sizes `kelly_fraction` of full Kelly capped at
+  `max_stake_fraction`; otherwise PASS with one star. The model never chooses
+  a side, stars, or a stake. Rows persist the legs in `side_pick_json` and
+  `total_pick_json` (the AK shape) and the feature summary, voice key, and
+  judge labels in `calibration_summary_json`; `pick_market` is
+  `side_and_total`.
+- Coherence: probability exactly 0.5 or margin 0 is rejected from the judge
+  and resolved by the market favorite in the rules arm; a probability/margin
+  sign disagreement is rejected from the judge and clamped in the rules arm,
+  recorded as a discarded consideration. Predicted scores are derived from
+  the projected total and margin, never tied.
+- Telegram: the two-leg detail layout now keys on
+  `pick_market == side_and_total` instead of the literal AK expert id, so
+  aggregator rows render like AK rows. Nothing else in the bot changed; the
+  new experts appear as buttons once a row is approved.
+- CLI: `scripts/generate_moe_opinion.py --expert god_rules --deterministic`
+  computes and persists the rules opinion (no model). `--expert god_judge
+  --show-input` prints the judge request for the agent-runtime skill, and
+  `--agent-response … --model claude-fable-5-1 --generation-effort max`
+  persists it. `scripts/moe_grade.py` prints the scoreboard and, with
+  `--write`, appends graded rows to a `moe_grades` tab (one row per graded
+  opinion, skipped when its opinion id is already present).
+- Bake-off protocol, pre-registered on the design page: both arms run on
+  every game; the primary metric is Brier on the probability estimates,
+  secondary is CLV on fired legs, units are reported but not decisive; the
+  Week 6 agreement check (identical legs on 90% or more of legs → stop and
+  keep rules); Week 18 decision with ties to rules; the mean of the two arms
+  is scored as a free third row.
+- Tests: `python -m unittest scripts.test_moe_god` (Unix only, since
+  `moe.py` imports `fcntl`).
+
 ### Implemented locally — 2026-09-04: authoritative NFL week metadata
 
 `nfl_games.week` previously remained blank because `new_game_row()` hardcoded

@@ -19,6 +19,7 @@ load_dotenv(ROOT / ".env.local")
 load_dotenv(ROOT / ".env")
 
 from moe import (
+    approved_opinions,
     build_divisional_input,
     build_schedule_input,
     configured_opinion_store,
@@ -26,6 +27,18 @@ from moe import (
     load_expert,
 )
 from moe_ak import build_ak_input
+from moe_god import (
+    AGGREGATOR_PROFILE,
+    DETERMINISTIC_BACKEND,
+    JUDGE_MODE,
+    RULES_MODE,
+    aggregator_policy,
+    build_aggregator_input,
+    build_judge_request,
+    canonical_json,
+    load_registry,
+    sha256_text,
+)
 from moe_identity import (
     resolve_moe_expert_user_id_from_spreadsheet,
 )
@@ -96,6 +109,14 @@ async def main() -> None:
             "generation is the preferred workflow."
         ),
     )
+    generation_mode.add_argument(
+        "--deterministic",
+        action="store_true",
+        help=(
+            "Run the deterministic aggregator (god_rules). No model is "
+            "called; the computed opinion is persisted like any other."
+        ),
+    )
     parser.add_argument(
         "--agent-factuality-response",
         type=Path,
@@ -112,9 +133,18 @@ async def main() -> None:
             "model effort only with --agent-response."
         ),
     )
+    parser.add_argument(
+        "--expected-input-sha256",
+        help=(
+            "SHA-256 printed by --show-input. With --agent-response, refuse "
+            "to persist if the rebuilt input no longer matches it."
+        ),
+    )
     args = parser.parse_args()
     if args.generation_effort and not args.agent_response:
         parser.error("--generation-effort requires --agent-response")
+    if args.expected_input_sha256 and not args.agent_response:
+        parser.error("--expected-input-sha256 requires --agent-response")
 
     credentials = os.environ.get("GOOGLE_CREDENTIALS", "")
     sheet_id = os.environ.get("NFL_INTAKE_SHEET_ID", "")
@@ -147,6 +177,18 @@ async def main() -> None:
         or "claude-sonnet-4-6"
     )
     expert = load_expert(args.expert, model=selected_model)
+    expert_mode = str(expert.get("mode") or "")
+    if args.deterministic and expert_mode != RULES_MODE:
+        parser.error("--deterministic is only valid for the rules aggregator")
+    if expert_mode == RULES_MODE and not (args.deterministic or args.show_input):
+        parser.error(
+            "The rules aggregator requires --deterministic or --show-input"
+        )
+    if args.api and "anthropic_api" not in {
+        str(value)
+        for value in expert.get("allowed_backends", ["anthropic_api"])
+    }:
+        parser.error(f"--api is not allowed for expert {args.expert}")
     if args.agent_factuality_response and not args.agent_response:
         parser.error(
             "--agent-factuality-response requires --agent-response"
@@ -168,20 +210,32 @@ async def main() -> None:
     win_totals: list[dict] | None = None
     win_predictions: list[dict] | None = None
     team_history: list[dict] | None = None
-    if expert["input_profile"] == "divisional":
-        schedule = spreadsheet.worksheet(SCHEDULE_TAB).get_all_records(
-            expected_headers=SCHEDULE_HEADERS
-        )
+    opinions: list[dict] | None = None
+    store = configured_opinion_store()
+
+    def _current_results() -> list[dict]:
         season = int(game["season"])
         current_events = fetch_regular_season_events(
             season, expected_games=None
         )
-        current_results = build_game_history(
+        return build_game_history(
             {season: current_events},
             {season: _latest_alignment(history)},
             validate=False,
             require_complete_divisional_pairs=False,
         )
+
+    if expert["input_profile"] == "divisional":
+        schedule = spreadsheet.worksheet(SCHEDULE_TAB).get_all_records(
+            expected_headers=SCHEDULE_HEADERS
+        )
+        current_results = _current_results()
+    elif expert["input_profile"] == AGGREGATOR_PROFILE:
+        current_results = _current_results()
+        line_snapshots = spreadsheet.worksheet(
+            "nfl_line_snapshots"
+        ).get_all_records(expected_headers=SNAPSHOT_HEADERS)
+        opinions = store.list()
     elif expert["input_profile"] == "ak_calibration":
         ak_user_id = resolve_moe_expert_user_id_from_spreadsheet(
             spreadsheet,
@@ -233,6 +287,19 @@ async def main() -> None:
                 team_history or [],
                 leans or [],
             )
+        elif expert["input_profile"] == AGGREGATOR_PROFILE:
+            registry = load_registry()
+            input_payload = build_aggregator_input(
+                game,
+                approved_opinions=approved_opinions(opinions or []),
+                finals=current_results or [],
+                snapshots=line_snapshots or [],
+                registry=registry,
+                policy=aggregator_policy(registry),
+            )
+            if expert_mode == JUDGE_MODE:
+                # What the judge model reads: masked voices, shuffled by seed.
+                input_payload = build_judge_request(input_payload)
         else:
             raise NotImplementedError(
                 f"Unsupported input profile: {expert['input_profile']}"
@@ -244,10 +311,19 @@ async def main() -> None:
                 sort_keys=True,
             )
         )
+        # The hash of the exact input generate_opinion will persist; pass it
+        # back as --expected-input-sha256 so a sheet change between the
+        # inference and the persist fails closed instead of misfiling.
+        print(
+            f"input_sha256={sha256_text(canonical_json(input_payload))}",
+            file=sys.stderr,
+        )
         return
 
     create_fn = None
     generation_backend = "anthropic_api"
+    if args.deterministic:
+        generation_backend = DETERMINISTIC_BACKEND
     if args.agent_response:
         responses = [args.agent_response.read_text(encoding="utf-8")]
         if args.agent_factuality_response:
@@ -280,10 +356,12 @@ async def main() -> None:
         win_totals=win_totals,
         win_predictions=win_predictions,
         team_history=team_history,
-        store=configured_opinion_store(),
+        opinions=opinions,
+        store=store,
         model=args.model,
         generation_backend=generation_backend,
         generation_effort=args.generation_effort,
+        expected_input_sha256=args.expected_input_sha256,
         repair_attempts=(
             2
             if create_fn is None

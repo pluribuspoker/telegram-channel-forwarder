@@ -8,7 +8,8 @@ description: Generate an NFL MOE opinion with an allowed agent-session model, in
 Use this skill when the user asks an agent to generate any registered NFL MOE
 opinion without invoking the application's `ANTHROPIC_API_KEY` path. It is the
 preferred interactive generation workflow for the Schedule, Divisional, Win
-Total, and AK Experts. The active agent runtime has its own authentication,
+Total, and AK Experts, and the only generation workflow for the God Expert
+judge (`god_judge`). The active agent runtime has its own authentication,
 limits, and billing.
 
 ## Invariants
@@ -109,6 +110,25 @@ limits, and billing.
 
 9. Review factual accuracy and policy compliance one section at a time. Approve
    only the exact persisted opinion using `scripts/review_moe_opinion.py`.
+
+## God Expert
+
+- `god_rules` never uses an agent. `python scripts/generate_moe_opinion.py
+  --event-id <event-id> --expert god_rules --deterministic` computes and
+  persists the rules opinion from the approved committee rows and the
+  BetOnline market.
+- `god_judge` accepts exactly one model, `claude-fable-5-1`, and only the
+  agent-runtime backend; `--api` is refused. Its `--show-input` output is the
+  masked judge request: voices labeled `Voice A…` in a seeded shuffle, lenses
+  described without names. Give the agent exactly that document plus
+  `moe/prompts/god_judge/v1.md`. Never tell it which expert or person a voice
+  belongs to, and never hand it the full aggregator input or the sheet.
+- The judge returns only probabilities and reasons; the application derives
+  the side and total legs. Persist with `--agent-response <file> --model
+  claude-fable-5-1 --generation-effort <actual-agent-effort>`.
+- Run the judge after every voice for the game is approved. It reads only
+  approved, hash-verified rows, one per expert, on that expert's registry
+  default model.
 
 ## Runtime notes
 

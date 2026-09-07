@@ -28,8 +28,8 @@ class GenerateMoeOpinionCliTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn(
-            "one of the arguments --show-input --agent-response --api is "
-            "required",
+            "one of the arguments --show-input --agent-response --api "
+            "--deterministic is required",
             result.stderr,
         )
 
