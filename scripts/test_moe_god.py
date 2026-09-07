@@ -1566,8 +1566,11 @@ class MeanOfArmsTests(unittest.TestCase):
         self.registry = load_registry()
         self.policy = aggregator_policy(self.registry)
         committee = _committee()
+        # The default market opens the home side at -110 and prices it at +100
+        # now, which the market-move veto reads as the market leaving the
+        # Seahawks; a steady opening price keeps the mean's side leg a bet.
         self.payload = build_aggregator_input(
-            _game(), approved_opinions=committee, finals=[], snapshots=[], registry=self.registry, policy=self.policy
+            _game(opening_home=STEADY_HOME), approved_opinions=committee, finals=[], snapshots=[], registry=self.registry, policy=self.policy
         )
         self.rules = _with_input(
             _arm("god_rules", event_id=EVENT_ID, kickoff=KICKOFF, probability=0.70, margin=5, away_score=21, home_score=26, side_leg=self.HOME_35, total_leg=self.OVER_445, opinion_id="rules-sea"),
