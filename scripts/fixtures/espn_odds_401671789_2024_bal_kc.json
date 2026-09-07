@@ -1,0 +1,283 @@
+{
+ "count": 3,
+ "pageIndex": 1,
+ "pageSize": 25,
+ "pageCount": 1,
+ "items": [
+  {
+   "provider": {
+    "id": "2000",
+    "name": "Bet 365",
+    "priority": 0
+   },
+   "moneylineWinner": false,
+   "spreadWinner": false
+  },
+  {
+   "provider": {
+    "id": "58",
+    "name": "ESPN BET",
+    "priority": 0
+   },
+   "details": "KC -2.5",
+   "spread": -2.5,
+   "overUnder": 45.5,
+   "overOdds": -115.0,
+   "underOdds": -105.0,
+   "moneylineWinner": false,
+   "spreadWinner": false,
+   "awayTeamOdds": {
+    "favorite": false,
+    "underdog": true,
+    "moneyLine": 120,
+    "spreadOdds": 100.0,
+    "open": {
+     "favorite": false,
+     "pointSpread": {
+      "american": "+3",
+      "alternateDisplayValue": "+3"
+     },
+     "spread": {
+      "american": "-110",
+      "alternateDisplayValue": "-110"
+     },
+     "moneyLine": {
+      "american": "+130",
+      "alternateDisplayValue": "+130"
+     }
+    },
+    "close": {
+     "pointSpread": {
+      "american": "+2.5",
+      "alternateDisplayValue": "+2.5"
+     },
+     "spread": {
+      "american": "+100",
+      "alternateDisplayValue": "+100"
+     },
+     "moneyLine": {
+      "american": "+120",
+      "alternateDisplayValue": "+120"
+     }
+    },
+    "current": {
+     "pointSpread": {
+      "american": "+2.5",
+      "alternateDisplayValue": "+2.5"
+     },
+     "spread": {
+      "american": "+100",
+      "alternateDisplayValue": "+100"
+     },
+     "moneyLine": {
+      "american": "+120",
+      "alternateDisplayValue": "+120"
+     }
+    }
+   },
+   "homeTeamOdds": {
+    "favorite": true,
+    "underdog": false,
+    "moneyLine": -140,
+    "spreadOdds": -120.0,
+    "open": {
+     "favorite": true,
+     "pointSpread": {
+      "american": "-3",
+      "alternateDisplayValue": "-3"
+     },
+     "spread": {
+      "american": "-110",
+      "alternateDisplayValue": "-110"
+     },
+     "moneyLine": {
+      "american": "-150",
+      "alternateDisplayValue": "-150"
+     }
+    },
+    "close": {
+     "pointSpread": {
+      "american": "-2.5",
+      "alternateDisplayValue": "-2.5"
+     },
+     "spread": {
+      "american": "-120",
+      "alternateDisplayValue": "-120"
+     },
+     "moneyLine": {
+      "american": "-140",
+      "alternateDisplayValue": "-140"
+     }
+    },
+    "current": {
+     "pointSpread": {
+      "american": "-2.5",
+      "alternateDisplayValue": "-2.5"
+     },
+     "spread": {
+      "american": "-120",
+      "alternateDisplayValue": "-120"
+     },
+     "moneyLine": {
+      "american": "-140",
+      "alternateDisplayValue": "-140"
+     }
+    }
+   },
+   "open": {
+    "over": {
+     "american": "-115",
+     "alternateDisplayValue": "-115"
+    },
+    "under": {
+     "american": "-105",
+     "alternateDisplayValue": "-105"
+    },
+    "total": {
+     "american": "46.5",
+     "alternateDisplayValue": "46.5"
+    }
+   },
+   "close": {
+    "over": {
+     "american": "-115",
+     "alternateDisplayValue": "-115"
+    },
+    "under": {
+     "american": "-105",
+     "alternateDisplayValue": "-105"
+    },
+    "total": {
+     "american": "45.5",
+     "alternateDisplayValue": "45.5"
+    }
+   },
+   "current": {
+    "over": {
+     "american": "-115",
+     "alternateDisplayValue": "-115"
+    },
+    "under": {
+     "american": "-105",
+     "alternateDisplayValue": "-105"
+    },
+    "total": {
+     "american": "45.5",
+     "alternateDisplayValue": "45.5"
+    }
+   }
+  },
+  {
+   "provider": {
+    "id": "59",
+    "name": "ESPN Bet - Live Odds",
+    "priority": 0
+   },
+   "details": "KC -10.5",
+   "spread": -10.5,
+   "overUnder": 48.5,
+   "overOdds": 185.0,
+   "underOdds": -275.0,
+   "moneylineWinner": false,
+   "spreadWinner": false,
+   "awayTeamOdds": {
+    "favorite": false,
+    "underdog": true,
+    "moneyLine": 700,
+    "spreadOdds": -1000.0,
+    "open": {
+     "favorite": false,
+     "pointSpread": {
+      "american": "+3",
+      "alternateDisplayValue": "+3"
+     },
+     "spread": {
+      "american": "-110",
+      "alternateDisplayValue": "-110"
+     },
+     "moneyLine": {
+      "american": "+130",
+      "alternateDisplayValue": "+130"
+     }
+    },
+    "current": {
+     "pointSpread": {
+      "american": "+10.5",
+      "alternateDisplayValue": "+10.5"
+     },
+     "spread": {
+      "american": "-1000",
+      "alternateDisplayValue": "-1000"
+     },
+     "moneyLine": {
+      "american": "+700",
+      "alternateDisplayValue": "+700"
+     }
+    }
+   },
+   "homeTeamOdds": {
+    "favorite": true,
+    "underdog": false,
+    "moneyLine": -1500,
+    "spreadOdds": 475.0,
+    "open": {
+     "favorite": true,
+     "pointSpread": {
+      "american": "-3",
+      "alternateDisplayValue": "-3"
+     },
+     "spread": {
+      "american": "-110",
+      "alternateDisplayValue": "-110"
+     },
+     "moneyLine": {
+      "american": "-150",
+      "alternateDisplayValue": "-150"
+     }
+    },
+    "current": {
+     "pointSpread": {
+      "american": "-10.5",
+      "alternateDisplayValue": "-10.5"
+     },
+     "spread": {
+      "american": "+475",
+      "alternateDisplayValue": "+475"
+     },
+     "moneyLine": {
+      "american": "-1500",
+      "alternateDisplayValue": "-1500"
+     }
+    }
+   },
+   "open": {
+    "over": {
+     "american": "-115",
+     "alternateDisplayValue": "-115"
+    },
+    "under": {
+     "american": "-105",
+     "alternateDisplayValue": "-105"
+    },
+    "total": {
+     "american": "46.5",
+     "alternateDisplayValue": "46.5"
+    }
+   },
+   "current": {
+    "over": {
+     "american": "+185",
+     "alternateDisplayValue": "+185"
+    },
+    "under": {
+     "american": "-275",
+     "alternateDisplayValue": "-275"
+    },
+    "total": {
+     "american": "48.5",
+     "alternateDisplayValue": "48.5"
+    }
+   }
+  }
+ ]
+}
