@@ -51,18 +51,26 @@ These are settled. Do not relitigate them inside an implementation session.
   abbreviations (`LA`, `LV`, `KC`, …); build and assert a 32-team map to the
   full names used everywhere in this repo (`TEAM_ABBREVIATIONS` in
   `nfl_win_predictions.py` is full-name → abbreviation and its codes differ
-  in places). Verify the sign convention of `spread_line` against a few
-  known games before use.
+  in places). Sign convention (verified 2026-09-07 by WP4 on the data):
+  `spread_line` is positive when the home team is favored, so the repo's
+  `home_spread = -spread_line`; the moneyline favorite agrees in 2,731 of
+  2,746 games. `NFLVERSE_TEAMS` in `scripts/fetch_nfl_lines_history.py` is
+  the asserted 32-team map; `data/nfl_lines_history.csv` is the pulled file.
 - **ESPN core odds** —
   `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/events/{id}/competitions/{id}/odds`.
-  Returns `items[]` per provider. For 2024 and 2025 games the `ESPN BET`
-  item carries `open`, `close`, and `current` blocks (total line and juice
-  in the top-level blocks; spread line and moneyline inside
-  `homeTeamOdds`/`awayTeamOdds` per block). For 2023 games the endpoint
-  lists thirteen providers with inconsistent opens; use closes only, or skip
-  2023 for movement. The `details`/`spread` top-level fields and the
-  per-team `pointSpread` did not obviously agree in one probe; cross-check
-  signs against nflverse for the same games before trusting either.
+  Returns `items[]` per provider. The `ESPN BET` item carries `open`,
+  `close`, and `current` blocks (total line and juice in the top-level
+  blocks; spread line and moneyline inside `homeTeamOdds`/`awayTeamOdds` per
+  block) for 2024 and 2025 through week 12; from 2025 week 13 the pregame
+  provider is DraftKings (79 games), and 2024 wk2 PIT@DEN has no pregame
+  provider at all. 2023 is unusable, not merely inconsistent: its blocks put
+  a price in the line field and carry no `open`. Resolved 2026-09-07 by WP4:
+  the per-team `pointSpread.american` is home-relative and is the spread of
+  record (the top-level `spread` agrees in 544/544 events; `details` is
+  favorite-relative, which was the apparent disagreement). ESPN's close is
+  within half a point of nflverse's for 86% of spreads and 75% of totals;
+  seven near-pick'em games favor different teams. Pulled into
+  `data/nfl_open_close.json` (544 events, 464 with ESPN BET open+close).
 - **ESPN game-summary `pickcenter`** (what `scores.espn_closing_odds` uses)
   holds roughly eight months and is empty for older games. Not a backtest
   source.
@@ -90,6 +98,13 @@ anywhere; judge runs bill the Claude Code subscription.
 - Docs: intake plan section + `moe/prompts/god_rules/v2.md` is **not**
   needed — the spec file describes the algorithm generically; bump only if
   the wording there becomes wrong.
+- Built 2026-09-07. Direction pinned by the acceptance test: "adverse" means
+  the market moved away from the bet's side (the bet's own line or price got
+  cheaper), not that the bettor's number got worse. Every leg carries
+  `pass_reason`; `movement_since_open()` and `price_cents()` are module-level
+  so persisted inputs without the price deltas replay. Open: v1 step 7 no
+  longer mentions the veto or the floor (bump to v2 or leave), and a knob of
+  0 vetoes every leg rather than disabling the check.
 
 ### WP2 — Judge plumbing and automation (2 d)
 
@@ -138,6 +153,20 @@ anywhere; judge runs bill the Claude Code subscription.
 - Tests: input-file round trip, hash mismatch refused, reason guard
   positive/negative, runner committee-key dedupe and kickoff cutoff with a
   stubbed `claude` invocation.
+- Built 2026-09-07. `--input-file` holds the full aggregator input (the
+  judge's normalization needs the labels and voice names); the masked
+  request is derived from it and is what the judge row persists and what
+  `--expected-input-sha256` checks. `--show-input --input-file` prints that
+  request without re-reading the sheet, so the manual runbook pins both arms
+  to one state. The runner defaults to `--safe-mode`, not `--bare`: the
+  installed CLI's help (2.1.263) says `--bare` never reads OAuth, which
+  would refuse the subscription token. The rules arm is deduped on the
+  committee key too, so a judge retry never duplicates it; a rejected judge
+  row does not block a fresh run. The reason guard also accepts numbers the
+  request carries in structured form (projected scores, the winner-vote
+  split, track-record tallies, count-like integer keys, and the cohort a
+  cited record implies — the real Rams response needed `2-2` and `17-8 →
+  25 games`). Usage per call is appended to `logs/god_judge_runs.jsonl`.
 
 ### WP3 — Disagreement report (0.5 d)
 
@@ -147,6 +176,11 @@ anywhere; judge runs bill the Claude Code subscription.
   rate on legs, disagreement record. Add the mean-of-arms row to the ledger
   output (ledger only; it is not an expert).
 - Tests with synthetic rules/judge rows on the same events.
+- Built 2026-09-07. Pairs prefer the judge row whose request hash links to a
+  rules row's input hash; the mean-of-arms row is graded with the rules
+  row's persisted market and policy merged over `DEFAULT_POLICY`, so Week 1
+  mean rows carry the veto and floor the arms never saw. `--json` is now
+  `{"scoreboard", "disagreement", "mean_of_arms"}`.
 
 ### WP4 — Historical lines pull (0.5 d)
 
@@ -158,6 +192,13 @@ anywhere; judge runs bill the Claude Code subscription.
   the current season when needed.
 - Tests: parser fixtures for both formats; 32-team map asserted; sign
   convention test on a handful of known games.
+- Built 2026-09-07: 2,639 games in the CSV (324 KB), 544 events in the JSON
+  (497 KB; ESPN BET open+close for 464, DraftKings for 2025 weeks 13–18, one
+  event without a pregame provider). Live-odds providers are never selected.
+  Two closes now exist (nflverse in the CSV, ESPN in the JSON); WP6 must
+  name which it fits — nflverse for depth, ESPN only for open→close movement
+  is the suggestion. `.gitignore` is `data/*` with the two files re-included
+  (and `angles/data/` re-ignored explicitly).
 
 ### WP5 — Evidence overlap and per-market relevance (2 d)
 
@@ -251,6 +292,11 @@ anywhere; judge runs bill the Claude Code subscription.
 
 ## Acceptance for the phase-1 deploy
 
+Status 2026-09-07: every item below is met on main (238 tests on a fresh
+scratch clone; the Week 1 replay numbers match the table; `--input-file`
+round trip and reason guard are pinned by tests; `moe_grade.py` prints the
+paired report; the skill runbook is updated). Deploy pending.
+
 - All suites green on the VPS scratch clone.
 - Week 1 replay test reproduces the roadmap table: Seahawks side and Over
   pass under veto/floor; 49ers +3.5 still bets.
@@ -286,6 +332,22 @@ approves them.
   for every row, headless judge automation); WP2 expanded with the runner
   and timer, WP7 with the bulk review mode, WP9 with the hidden-sample
   design. Phase 1 is now about four build days.
+- 2026-09-07 — phase 1 built: WP1, WP2, WP3, WP4 implemented in four
+  worktrees (`god/veto-floor`, `god/judge-runner`, `god/disagreement`,
+  `god/lines-history`), merged into main in the order WP4, WP1, WP3, WP2, and
+  verified on a fresh VPS scratch clone: `Ran 238 tests … OK` across
+  `scripts.test_moe_god`, `test_moe`, `test_moe_ak`, `test_moe_win_total`,
+  `test_generate_moe_opinion_cli`, `test_intake_bot`,
+  `test_god_judge_runner`, `test_nfl_lines_history`. The four persisted
+  Week 1 rows are fixtures under `scripts/fixtures/god_week1/`. Week 1 replay
+  under the new policy: Seahawks −3.5 vetoed (`adverse move`, price −110 →
+  +100), Over 44.5 `ev floor` (EV 0.0194), 49ers +3.5 still bets (EV 0.039),
+  Rams total plain pass. Not deployed; not pushed. Deviations recorded next
+  to each WP below. Remaining for the deploy: push, pull as root, restart
+  `telegram-intake` (`moe.py` changed), add `GOD_JUDGE_HEALTHCHECK_URL` to
+  `.env` + `syncenv`, install `god-judge.service`/`.timer`, one cheap
+  `claude -p --safe-mode` auth check as forwarder before the first timer
+  pass.
 
 ## Session opener (phase 1)
 

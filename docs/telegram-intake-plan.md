@@ -629,6 +629,191 @@ probability estimate differs between them.
 - Tests: `python -m unittest scripts.test_moe_god` (Unix only, since
   `moe.py` imports `fcntl`).
 
+### Implemented locally — 2026-09-07: Market-move veto and EV floor (WP1)
+
+- Four knobs joined `aggregator_policy` (`moe/experts.yaml` and `DEFAULT_POLICY`
+  in `moe_god.py`), hash-bound like the rest: `veto_adverse_spread_points` 0.5,
+  `veto_adverse_total_points` 1.0, `veto_adverse_price_cents` 10,
+  `min_ev_per_unit` 0.02. `aggregator_policy()` requires non-negative numbers
+  (bools rejected), coerces them to float, and holds `min_ev_per_unit` within
+  0..1. `version` stays 1; the judge request's policy subset is unchanged.
+- `build_market_block` now fills `movement_since_open` through the module-level
+  `movement_since_open(opening, latest)`: the existing keys keep their values,
+  `away_spread` joins them, and `home_spread_price`, `away_spread_price`,
+  `over_price`, `under_price` give the move in bettor cents via `price_cents()`
+  (`+p − 100` / `−p + 100`, so ±100 is 0: −110 → +100 and −105 → +105 are both
+  +10). A missing opening value leaves its delta `None`.
+- `apply_policy`: once a leg clears `edge_threshold` with positive EV, an
+  adverse move vetoes it — the market moved away from the bet's side since
+  open: the team's spread rose by ≥ `veto_adverse_spread_points` (home bet:
+  `home_spread` delta ≥ +0.5; away bet: ≤ −0.5) or its spread price lengthened
+  by ≥ `veto_adverse_price_cents`; an Over when the total fell by ≥
+  `veto_adverse_total_points` or the over price lengthened, an Under when the
+  total rose or the under price lengthened. Then `ev_per_unit` under
+  `min_ev_per_unit` passes as `ev floor`. Comparisons are ≥ with a 1e-9
+  tolerance; missing opening data never vetoes. Either case is a PASS leg
+  (edge, probability, fair kept; one star; stake 0) whose note starts with
+  `adverse move:` / `ev floor:` and renders as `Policy: …` like before.
+- Every leg carries `pass_reason`: `None` for a bet or a plain sub-threshold
+  pass, else `adverse move`, `ev floor`, or `no positive expectation at the
+  posted price`. `_leg_from_json` and the bot ignore it.
+- Inputs persisted before the price deltas (the Week 1 rows) replay:
+  `apply_policy` recomputes the movement from `market["opening"]`/`["latest"]`
+  when the price keys are absent and reads the four knobs with the module
+  defaults when the policy predates them. Week 1 under the new policy:
+  Seahawks −3.5 passes (`adverse move`: −110 → +100, +10 cents; EV would have
+  been 0.0225), Over 44.5 passes (`ev floor`: edge 3.3%, EV 0.0194); 49ers
+  +3.5 at −110 still bets (EV 0.039, 1.1u, ★); the Rams total stays a plain
+  pass (edge 0.7%). With the knobs disabled the persisted legs reproduce
+  exactly.
+- Renderings: the full opinion's "Movement since open" line and the "Line
+  movement since open" counterargument add non-zero price moves in cents; the
+  counterargument now also appears when only prices moved.
+- `moe/prompts/god_rules/v1.md` is unchanged; its step 7 does not mention the
+  veto or the floor (open decision: bump to v2 or leave). A knob of 0 is
+  accepted and vetoes every leg with opening data (0 is not "disabled").
+- Tests: `PolicyTests` (line/price vetoes on both sides and both totals, the
+  floor, fail-open without opening data, veto before floor, pass reasons,
+  knob validation, cents arithmetic incl. the ±100 crossing),
+  `MovementRenderTests`, `Week1ReplayTests` on
+  `scripts/fixtures/god_week1/{sea,lar}_rules.json` (the four persisted Week 1
+  rows, read from the sheet on 2026-09-07; canonical JSON of `input_json`
+  reproduces `input_sha256`).
+
+### Implemented locally — 2026-09-07: Judge plumbing and the headless judge runner (WP2)
+
+- `generate_opinion(..., input_payload=...)` accepts a prebuilt aggregator
+  input; `scripts/generate_moe_opinion.py --input-file <path>` (valid with
+  `--deterministic`, `--agent-response`, and `--show-input`) makes the file
+  the state: the rules arm persists it verbatim, the judge persists the
+  request derived from it, `--expected-input-sha256` is checked against that
+  request, and the sheet's opinions, snapshots, and finals are not re-read.
+  Both arms pin to one shown state; the judge no longer races the lines
+  fetcher. `--input-file` with `--api` or a non-aggregator expert is refused.
+  The file holds the full input (normalization needs the judge labels and
+  voice names); the masked request is derived from it, which is how the
+  roadmap's `--input-file <req>` is realized.
+- `moe_god.committee_key`: SHA-256 of the sorted voice opinion ids plus the
+  nine latest full-game fields, never the capture timestamp. It rides in the
+  input (before the seed) and in the judge request; rows persisted earlier
+  lack it and never match.
+- Backend `claude_headless` (allowed for `god_judge` next to `agent_runtime`;
+  effort override allowed) records that a row came from the timer.
+- Reason guard: every `W-L`/`W-L-T` record and "N games" count a judge reason
+  cites must appear in the request text or among the numbers it carries in
+  structured form (projected scores, winner-vote split, track-record tallies,
+  integer counts under count-like keys, a cited record's implied cohort
+  size). Failure is a ValueError → invalid audit row. The rules arm's
+  generated reasons are unguarded. Both Week 1 judge responses replay from
+  `scripts/fixtures/god_week1/`; the Rams one needed the vote split (`2-2`)
+  and the record cohort (`17-8` → 25 games) to ground.
+- `scripts/god_judge_runner.py` + `god-judge.timer` (:12/:42): per upcoming
+  game with a complete committee, outside two hours of kickoff, build the
+  input and request into a temp dir, persist the rules arm (unless a valid
+  row carries the key), one `claude -p` call (Fable 5.1, max effort, no
+  tools, registered prompt as the system prompt, request on stdin, empty
+  cwd, no sheet credentials in the environment), persist the judge row,
+  delete the temp dir, DM the reviewer with the review commands. Dedupe by
+  committee key; two invalid judge rows stop attempts on that key; at most
+  `--max-games` (3) per pass; a failed call is logged and DMed, never
+  retried (`run_god_judge.sh` is single-attempt). Usage per call in
+  `logs/god_judge_runs.jsonl`. `--dry-run` persists and calls nothing.
+  Isolation: `--safe-mode` by default (every customization off — CLAUDE.md,
+  skills, plugins, hooks, MCP — with auth working normally, so the
+  subscription OAuth token from `~/.claude/auth.env` is honored);
+  `GOD_JUDGE_CLAUDE_ISOLATION=bare` exists but the CLI's help says `--bare`
+  never reads OAuth. A judge row the reviewer rejected does not block a
+  fresh run on the same committee key; a pending or approved one does. The
+  lines fetcher timer is `OnUnitActiveSec`, not calendar-aligned, so ":12/:42
+  after the fetcher" is approximate; the runner uses the latest captured
+  lines.
+- Skill runbook: the timer is the normal path; the manual fallback runs from
+  a fresh session that has never printed unmasked rows, through the input
+  file. Tests: `scripts.test_god_judge_runner` (stub claude), new classes in
+  `scripts.test_moe_god`, two CLI tests.
+
+### Implemented locally — 2026-09-07: Disagreement report and mean-of-arms ledger row (WP3)
+
+- `scripts/moe_grade.py` prints, after the scoreboard, the God Expert
+  disagreement report (`moe_god.arm_pairs` → `disagreement_report` →
+  `format_disagreement_report`): one block per game graded for both arms with
+  each arm's Brier and their difference, then one line per leg (side, total)
+  saying whether the arms agreed (same selection and line; two passes agree)
+  and, where they differed, who was right — the arm that bet and won; against
+  a lost bet, the arm that passed; two winners, two losers, or a push →
+  neither. Totals: games, legs, agreement rate, the paired Brier difference
+  (rules − judge over games where both Briers exist) with its standard error
+  (sample std ÷ √n, blank below two games), and the disagreement record
+  (rules / judge / neither). `--json` becomes `{"scoreboard", "disagreement",
+  "mean_of_arms"}`; the scoreboard content is unchanged.
+- Pairing: per event, the judge row whose masked request carries an
+  `aggregator_input_sha256` equal to a rules row's `input_sha256` (both arms
+  on one sheet state) is preferred and marked `linked`; otherwise the latest
+  row per arm pairs up. Only events graded for both arms appear.
+- Mean of arms (the bake-off's free third row): `mean_of_arms_results`
+  averages the two rows' `home_win_probability`, `expected_home_margin`, and
+  projected total (sum of predicted scores), runs the shared `apply_policy`
+  on the rules row's persisted market and policy (keys added after the row
+  was persisted take `DEFAULT_POLICY`, so Week 1 mean rows are graded under
+  the veto and floor the arms never saw), derives scores the way
+  `normalize_aggregator_opinion` does, and grades it with
+  `grade_opinion_row`. Ledger only: expert id `mean_of_arms`, opinion id
+  `mean:<rules_opinion_id>:<judge_opinion_id>` (stable, so the `moe_grades`
+  opinion-id dedupe holds); `--write` appends these after the per-opinion
+  rows. It never enters the registry, `build_scoreboard`, Hedge weights, or
+  voice selection — it is not an expert. A rules row without a persisted
+  input aborts the run rather than being skipped.
+- Week 1 replay on `scripts/fixtures/god_week1/sea_*`: the pair links by
+  hash; rules bet Seahawks −3.5 and Over 44.5, the judge passed both; the
+  mean is p 0.623, margin 3.74, total 45.5 → side passes (2.9% edge), Over
+  44.5 bets.
+- Tests: `DisagreementReportTests` and `MeanOfArmsTests` in
+  `scripts/test_moe_god.py` (Unix only).
+
+### Implemented locally — 2026-09-07: Historical NFL lines (nflverse + ESPN open/close) (WP4)
+
+Free historical lines for the God Expert backtests (roadmap WP4), two
+committed data files produced by one idempotent, resumable script.
+
+- `scripts/fetch_nfl_lines_history.py` downloads nflverse's `games.csv`,
+  keeps `game_type == REG` for `--seasons` (default `2016-2025`, a range or
+  a list), maps team codes through `NFLVERSE_TEAMS` to the 32 canonical
+  names (`OAK`/`SD`/`STL`/`LAR` fold into the current franchise; the map's
+  values are asserted equal to `TEAM_ABBREVIATIONS`), and rewrites
+  `data/nfl_lines_history.csv` (2,639 games, 324 KB) with columns season,
+  week, gameday, weekday, gametime, espn_id, away_team, home_team, scores,
+  home_spread, total, moneylines, spread prices, over/under prices,
+  nflverse_spread_line. `home_spread` follows the BetOnline convention
+  (negative = home favored); nflverse's `spread_line` is the opposite sign,
+  verified on 2024 BAL@KC (`3`, KC −148, won 27-20), 2023 DET@KC (`4`,
+  KC −198, lost 20-21), 2025 SF@SEA (`-2.5`, SF −135) and by the moneyline
+  favorite in 2,731 of 2,746 games.
+- ESPN core odds (`…/events/{id}/competitions/{id}/odds`) for every game of
+  `--espn-seasons` (default `2024 2025`, 544 events) → `data/nfl_open_close.json`
+  (497 KB, keyed by ESPN id, sorted keys, `indent=1`): provider, fetched_at,
+  and `open`/`close`/`current` blocks in the repo's field names. The
+  per-team `pointSpread.american` is home-relative and is the spread of
+  record (top-level `spread` agrees in 544/544; `details` is
+  favorite-relative). ESPN BET carries open+close for 464 games; the 79
+  games of 2025 weeks 13-18 come from DraftKings (first provider with
+  open+close); 2024 wk2 PIT@DEN has no pregame provider (live-odds providers
+  are never selected). Plausibility guards null the 2023-style blocks where
+  a price sits in the line field. Paced 0.75 s, 20 s timeout, four
+  backoff retries, checkpoint every 25 games; stored ids are skipped unless
+  `--refresh`; `--espn-limit N`, `--skip-espn`, `--games-csv` for offline
+  runs. Append a season with
+  `--seasons 2016-2026 --espn-seasons 2024 2025 2026`.
+- Cross-check printed by every run: ESPN's close is within half a point of
+  nflverse's for 85.8% of spreads and 74.9% of totals; seven near-pick'em
+  games favor different teams (one ESPN close, 2024 wk1 MIN@NYG, contradicts
+  ESPN's own moneyline). Both books' closes are kept — the CSV is nflverse's,
+  the JSON is ESPN's; WP6 should name which close it fits (nflverse for depth,
+  ESPN only for open→close movement is the suggestion).
+- Tests: `scripts/test_nfl_lines_history.py` (44 cases, offline: real
+  nflverse rows and trimmed real ESPN payloads under `scripts/fixtures/`).
+  `.gitignore` ignores `data/*` except the two data files (and keeps
+  `angles/data/` ignored, which the old unanchored `data/` rule covered).
+
 ### Implemented locally — 2026-09-04: authoritative NFL week metadata
 
 `nfl_games.week` previously remained blank because `new_game_row()` hardcoded
