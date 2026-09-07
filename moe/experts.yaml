@@ -8,6 +8,10 @@ aggregator_policy:
   star_edges: [0.03, 0.05, 0.08, 0.12, 0.16]
   kelly_fraction: 0.25
   max_stake_fraction: 0.05
+  veto_adverse_spread_points: 0.5
+  veto_adverse_total_points: 1.0
+  veto_adverse_price_cents: 10
+  min_ev_per_unit: 0.02
   voice_rule: default_model
   voice_fallback: latest_any_model
   hedge_eta: 2.0

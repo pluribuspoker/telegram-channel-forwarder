@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import math
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from moe import (
@@ -16,10 +17,13 @@ from moe import (
     validate_opinion,
 )
 from moe_god import (
+    ADVERSE_MOVE_REASON,
     AGGREGATOR_PROFILE,
     DETERMINISTIC_BACKEND,
     DETERMINISTIC_MODEL,
+    EV_FLOOR_REASON,
     JUDGE_REQUEST_PROFILE,
+    NO_EXPECTATION_REASON,
     aggregator_policy,
     american_to_implied,
     apply_policy,
@@ -27,15 +31,19 @@ from moe_god import (
     build_judge_request,
     build_market_block,
     build_scoreboard,
+    canonical_json,
     cover_probability,
     fair_pair,
     grade_opinion_row,
     hedge_weights,
     load_registry,
+    movement_since_open,
     normalize_aggregator_opinion,
     over_probability,
+    price_cents,
     rules_arm_response,
     select_voice_rows,
+    sha256_text,
 )
 from nfl_lines import (
     AWAY_SNAPSHOT_COLUMN,
@@ -77,13 +85,13 @@ def _game(
     home: str = HOME,
     kickoff: str = KICKOFF,
     week: int | str = 1,
+    opening_away: str = "3.5,-110,165|2.5,-105,135|0.5,-135,120",
+    opening_home: str = "-3.5,-110,-190|-2.5,-115,-155|-0.5,115,-140",
+    opening_totals: str = "44,-110,-110|21.5,-110,-110|7.5,-105,-115",
+    latest_away: str = "3.5,-120,158|2.5,-105,135|0.5,-135,120",
+    latest_home: str = "-3.5,100,-181|-2.5,-115,-155|-0.5,115,-140",
+    latest_totals: str = "44.5,-105,-115|21.5,-110,-110|7.5,-105,-115",
 ) -> dict:
-    opening_away = "3.5,-110,165|2.5,-105,135|0.5,-135,120"
-    opening_home = "-3.5,-110,-190|-2.5,-115,-155|-0.5,115,-140"
-    opening_totals = "44,-110,-110|21.5,-110,-110|7.5,-105,-115"
-    latest_away = "3.5,-120,158|2.5,-105,135|0.5,-135,120"
-    latest_home = "-3.5,100,-181|-2.5,-115,-155|-0.5,115,-140"
-    latest_totals = "44.5,-105,-115|21.5,-110,-110|7.5,-105,-115"
     return {
         "event_id": event_id,
         "season": 2026,
@@ -256,6 +264,20 @@ class ArithmeticTests(unittest.TestCase):
         self.assertEqual(market["movement_since_open"]["total"], 0.5)
         self.assertEqual(market["movement_since_open"]["home_spread"], 0.0)
         self.assertEqual(market["implied_totals"], {"away": 20.5, "home": 24.0})
+        movement = market["movement_since_open"]
+        self.assertEqual(movement["away_spread"], 0.0)
+        self.assertEqual(movement["home_moneyline"], 9.0)
+        self.assertAlmostEqual(movement["fair_home_ml"], -0.0102, places=4)
+        self.assertEqual(movement["home_spread_price"], 10.0)  # -110 -> +100
+        self.assertEqual(movement["away_spread_price"], -10.0)  # -110 -> -120
+        self.assertEqual(movement["over_price"], 5.0)  # -110 -> -105
+        self.assertEqual(movement["under_price"], -5.0)  # -110 -> -115
+
+
+# The default home line opens at +100, so its price never moves since open.
+# The default market's -110 -> +100 home price is the Week 1 veto case.
+STEADY_HOME = "-3.5,100,-190|-2.5,-115,-155|-0.5,115,-140"
+NO_DATA_GROUPS = "nodata,nodata,nodata|nodata,nodata,nodata|nodata,nodata,nodata"
 
 
 class PolicyTests(unittest.TestCase):
@@ -263,13 +285,24 @@ class PolicyTests(unittest.TestCase):
         self.policy = aggregator_policy(load_registry())
         self.market = build_market_block(_game())
 
-    def _legs(self, probability: float, margin: float, total: float) -> dict:
+    def _market(self, **packed: str) -> dict:
+        return build_market_block(_game(**packed))
+
+    def _legs(
+        self,
+        probability: float,
+        margin: float,
+        total: float,
+        *,
+        market: dict | None = None,
+        policy: dict | None = None,
+    ) -> dict:
         return apply_policy(
             home_win_probability=probability,
             expected_home_margin=margin,
             projected_total=total,
-            market=self.market,
-            policy=self.policy,
+            market=market if market is not None else self.market,
+            policy=policy if policy is not None else self.policy,
             away_team=AWAY,
             home_team=HOME,
         )
@@ -286,7 +319,10 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(legs["side"]["stake_units"], 0.0)
 
     def test_large_edge_bets_with_stars_and_kelly(self) -> None:
-        legs = self._legs(0.80, 9.0, 52.0)
+        # On the default market this home bet is vetoed for its +10-cent move
+        # (test_veto_side_on_price_move); a home price that opened at +100
+        # lets the bet stand, and the stake arithmetic only reads the latest.
+        legs = self._legs(0.80, 9.0, 52.0, market=self._market(opening_home=STEADY_HOME))
         side, total = legs["side"], legs["total"]
         self.assertEqual(side["selection"], HOME)
         self.assertEqual(side["line"], -3.5)
@@ -306,6 +342,282 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(legs["side"]["selection"], AWAY)
         self.assertEqual(legs["side"]["line"], 3.5)
         self.assertEqual(legs["total"]["selection"], "Under")
+
+    def test_price_cents_and_movement_arithmetic(self) -> None:
+        self.assertEqual(price_cents(-110), -10.0)
+        self.assertEqual(price_cents(110), 10.0)
+        self.assertEqual(price_cents(100), 0.0)
+        self.assertEqual(price_cents(-100), 0.0)
+        for bad in (0, 50, -99.5):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    price_cents(bad)
+        opening = {
+            "home_spread": -3.5, "away_spread": 3.5, "total": 44,
+            "home_moneyline": -190, "away_moneyline": 165,
+            "home_spread_price": -110, "away_spread_price": -105,
+            "over_price": -105, "under_price": -115,
+        }
+        latest = {
+            "home_spread": -3, "away_spread": 3, "total": 44.5,
+            "home_moneyline": -181, "away_moneyline": 158,
+            "home_spread_price": 100, "away_spread_price": 105,
+            "over_price": -110, "under_price": 100,
+        }
+        movement = movement_since_open(opening, latest)
+        self.assertEqual(movement["home_spread"], 0.5)
+        self.assertEqual(movement["away_spread"], -0.5)
+        self.assertEqual(movement["total"], 0.5)
+        self.assertEqual(movement["home_moneyline"], 9.0)
+        self.assertAlmostEqual(movement["fair_home_ml"], -0.0102, places=4)
+        # Crossing even money: -110 -> +100 and -105 -> +105 are both +10.
+        self.assertEqual(movement["home_spread_price"], 10.0)
+        self.assertEqual(movement["away_spread_price"], 10.0)
+        self.assertEqual(movement["over_price"], -5.0)
+        self.assertEqual(movement["under_price"], 15.0)
+        self.assertEqual(
+            set(movement),
+            {
+                "home_spread", "away_spread", "total", "home_moneyline",
+                "fair_home_ml", "home_spread_price", "away_spread_price",
+                "over_price", "under_price",
+            },
+        )
+        # A missing opening value leaves its delta unset.
+        partial = movement_since_open({**opening, "home_spread": None, "home_spread_price": None, "home_moneyline": None}, latest)
+        self.assertIsNone(partial["home_spread"])
+        self.assertIsNone(partial["home_spread_price"])
+        self.assertIsNone(partial["fair_home_ml"])
+        self.assertEqual(partial["total"], 0.5)
+
+    def test_veto_home_side_on_line_move(self) -> None:
+        # Home spread -4 -> -3.5 since open: the home side got cheaper.
+        market = self._market(
+            opening_home="-4,-110,-190|-2.5,-115,-155|-0.5,115,-140",
+            opening_away="4,-110,165|2.5,-105,135|0.5,-135,120",
+            latest_home="-3.5,-110,-181|-2.5,-115,-155|-0.5,115,-140",
+            latest_away="3.5,-110,158|2.5,-105,135|0.5,-135,120",
+        )
+        self.assertEqual(market["movement_since_open"]["home_spread"], 0.5)
+        self.assertEqual(market["movement_since_open"]["home_spread_price"], 0.0)
+        legs = self._legs(0.80, 9.0, 52.0, market=market)
+        side = legs["side"]
+        self.assertEqual(side["selection"], "PASS")
+        self.assertEqual(side["pass_reason"], ADVERSE_MOVE_REASON)
+        self.assertIsNone(side["line"])
+        self.assertIsNone(side["price"])
+        self.assertIsNone(side["ev_per_unit"])
+        self.assertEqual(side["confidence_stars"], 1)
+        self.assertEqual(side["stake_fraction"], 0.0)
+        self.assertEqual(side["stake_units"], 0.0)
+        self.assertGreater(side["edge"], self.policy["edge_threshold"])
+        self.assertEqual(
+            legs["notes"],
+            [f"adverse move: {HOME} spread -4 → -3.5 (+0.5 points) since open"],
+        )
+        # The total leg is judged on its own movement.
+        self.assertEqual(legs["total"]["selection"], "Over")
+        self.assertIsNone(legs["total"]["pass_reason"])
+
+    def test_veto_away_side_on_line_move(self) -> None:
+        # Home spread -3.5 -> -4 since open: the away side now gets more points.
+        market = self._market(
+            latest_home="-4,-110,-181|-2.5,-115,-155|-0.5,115,-140",
+            latest_away="4,-110,158|2.5,-105,135|0.5,-135,120",
+        )
+        self.assertEqual(market["movement_since_open"]["home_spread"], -0.5)
+        self.assertEqual(market["movement_since_open"]["away_spread"], 0.5)
+        legs = self._legs(0.30, -6.0, 36.0, market=market)
+        self.assertEqual(legs["side"]["selection"], "PASS")
+        self.assertEqual(legs["side"]["pass_reason"], ADVERSE_MOVE_REASON)
+        self.assertEqual(
+            legs["notes"],
+            [f"adverse move: {AWAY} spread +3.5 → +4 (+0.5 points) since open"],
+        )
+        self.assertEqual(legs["total"]["selection"], "Under")
+        # The mirror move is steam toward the bet: the away side keeps betting.
+        favorable = self._market(
+            latest_home="-3,-110,-181|-2.5,-115,-155|-0.5,115,-140",
+            latest_away="3,-110,158|2.5,-105,135|0.5,-135,120",
+        )
+        self.assertEqual(self._legs(0.30, -6.0, 36.0, market=favorable)["side"]["selection"], AWAY)
+
+    def test_veto_side_on_price_move(self) -> None:
+        # The default market: the home side opened -110 and is now +100.
+        legs = self._legs(0.80, 9.0, 52.0)
+        side = legs["side"]
+        self.assertEqual(side["selection"], "PASS")
+        self.assertEqual(side["pass_reason"], ADVERSE_MOVE_REASON)
+        self.assertEqual(
+            legs["notes"],
+            [f"adverse move: {HOME} spread price -110 → +100 (+10 cents) since open"],
+        )
+        # Nine cents is not ten.
+        market = self._market(
+            latest_home="-3.5,-101,-181|-2.5,-115,-155|-0.5,115,-140",
+            latest_away="3.5,-119,158|2.5,-105,135|0.5,-135,120",
+        )
+        self.assertEqual(market["movement_since_open"]["home_spread_price"], 9.0)
+        legs = self._legs(0.80, 9.0, 52.0, market=market)
+        self.assertEqual(legs["side"]["selection"], HOME)
+        self.assertIsNone(legs["side"]["pass_reason"])
+        # The away side's price shortened (-110 -> -120): no veto for an away bet.
+        self.assertEqual(self._legs(0.30, -6.0, 36.0)["side"]["selection"], AWAY)
+
+    def test_veto_total_on_line_move(self) -> None:
+        # Total 45.5 -> 44.5 since open: the Over got cheaper.
+        market = self._market(
+            opening_home=STEADY_HOME,
+            opening_totals="45.5,-110,-110|21.5,-110,-110|7.5,-105,-115",
+            latest_totals="44.5,-110,-110|21.5,-110,-110|7.5,-105,-115",
+        )
+        self.assertEqual(market["movement_since_open"]["total"], -1.0)
+        legs = self._legs(0.80, 9.0, 52.0, market=market)
+        self.assertEqual(legs["side"]["selection"], HOME)
+        self.assertEqual(legs["total"]["selection"], "PASS")
+        self.assertEqual(legs["total"]["pass_reason"], ADVERSE_MOVE_REASON)
+        self.assertEqual(
+            legs["notes"],
+            ["adverse move: total 45.5 → 44.5 (-1 points) against the Over since open"],
+        )
+        # Total 43.5 -> 44.5: the Under got cheaper.
+        market = self._market(
+            opening_totals="43.5,-110,-110|21.5,-110,-110|7.5,-105,-115",
+            latest_totals="44.5,-110,-110|21.5,-110,-110|7.5,-105,-115",
+        )
+        legs = self._legs(0.30, -6.0, 36.0, market=market)
+        self.assertEqual(legs["side"]["selection"], AWAY)
+        self.assertEqual(legs["total"]["pass_reason"], ADVERSE_MOVE_REASON)
+        self.assertEqual(
+            legs["notes"],
+            ["adverse move: total 43.5 → 44.5 (+1 points) against the Under since open"],
+        )
+        # Half a point is under the bar: the default 44 -> 44.5 leaves the Under alone.
+        self.assertEqual(self._legs(0.30, -6.0, 36.0)["total"]["selection"], "Under")
+
+    def test_veto_total_on_price_move(self) -> None:
+        # Over -110 -> +100 since open.
+        market = self._market(
+            opening_home=STEADY_HOME,
+            latest_totals="44.5,100,-120|21.5,-110,-110|7.5,-105,-115",
+        )
+        self.assertEqual(market["movement_since_open"]["over_price"], 10.0)
+        legs = self._legs(0.80, 9.0, 52.0, market=market)
+        self.assertEqual(legs["side"]["selection"], HOME)
+        self.assertEqual(legs["total"]["selection"], "PASS")
+        self.assertEqual(legs["total"]["pass_reason"], ADVERSE_MOVE_REASON)
+        self.assertEqual(
+            legs["notes"],
+            ["adverse move: Over price -110 → +100 (+10 cents) since open"],
+        )
+        # Under -110 -> +100 since open.
+        market = self._market(
+            latest_totals="44.5,-120,100|21.5,-110,-110|7.5,-105,-115",
+        )
+        legs = self._legs(0.30, -6.0, 36.0, market=market)
+        self.assertEqual(legs["side"]["selection"], AWAY)
+        self.assertEqual(legs["total"]["pass_reason"], ADVERSE_MOVE_REASON)
+        self.assertEqual(
+            legs["notes"],
+            ["adverse move: Under price -110 → +100 (+10 cents) since open"],
+        )
+
+    def test_ev_floor(self) -> None:
+        # The Week 1 Seahawks estimate on a market whose home price never
+        # moved: the side bets (ev 0.0225) while the Over, a 3.3% edge worth
+        # only 0.0194 per unit at -105, sits under the 2% floor.
+        market = self._market(opening_home=STEADY_HOME)
+        legs = self._legs(0.6259, 3.88, 45.25, market=market)
+        side, total = legs["side"], legs["total"]
+        self.assertEqual(side["selection"], HOME)
+        self.assertEqual(side["ev_per_unit"], 0.0225)
+        self.assertIsNone(side["pass_reason"])
+        self.assertEqual(total["selection"], "PASS")
+        self.assertEqual(total["pass_reason"], EV_FLOOR_REASON)
+        self.assertEqual(total["edge"], 0.033)
+        self.assertEqual(total["probability"], 0.5222)
+        self.assertIsNone(total["ev_per_unit"])
+        self.assertEqual(total["stake_units"], 0.0)
+        self.assertEqual(legs["notes"], ["ev floor: Over 44.5 (-105) ev +0.019 under 0.020"])
+        # A floor of zero lets the same leg through, unchanged.
+        loose = dict(self.policy, min_ev_per_unit=0.0)
+        legs = self._legs(0.6259, 3.88, 45.25, market=market, policy=loose)
+        self.assertEqual(legs["total"]["selection"], "Over")
+        self.assertEqual(legs["total"]["ev_per_unit"], 0.0194)
+        self.assertEqual(legs["total"]["stake_units"], 0.5)
+        self.assertEqual(legs["notes"], [])
+
+    def test_no_veto_without_opening_data(self) -> None:
+        market = self._market(
+            opening_away=NO_DATA_GROUPS,
+            opening_home=NO_DATA_GROUPS,
+            opening_totals=NO_DATA_GROUPS,
+        )
+        self.assertTrue(all(value is None for value in market["movement_since_open"].values()))
+        legs = self._legs(0.80, 9.0, 52.0, market=market)
+        self.assertEqual(legs["side"]["selection"], HOME)
+        self.assertEqual(legs["side"]["price"], 100)
+        self.assertIsNone(legs["side"]["pass_reason"])
+        self.assertEqual(legs["total"]["selection"], "Over")
+        self.assertEqual(legs["notes"], [])
+
+    def test_veto_precedes_floor(self) -> None:
+        # With the floor above the Seahawks side's 0.0225, the -110 -> +100
+        # move still names the veto; the Over is floored as before.
+        strict = dict(self.policy, min_ev_per_unit=0.05)
+        legs = self._legs(0.6259, 3.88, 45.25, policy=strict)
+        self.assertEqual(legs["side"]["pass_reason"], ADVERSE_MOVE_REASON)
+        self.assertEqual(legs["total"]["pass_reason"], EV_FLOOR_REASON)
+        self.assertTrue(legs["notes"][0].startswith("adverse move: "))
+        self.assertEqual(legs["notes"][1], "ev floor: Over 44.5 (-105) ev +0.019 under 0.050")
+
+    def test_pass_reasons(self) -> None:
+        self.assertEqual(ADVERSE_MOVE_REASON, "adverse move")
+        self.assertEqual(EV_FLOOR_REASON, "ev floor")
+        self.assertEqual(NO_EXPECTATION_REASON, "no positive expectation at the posted price")
+        # Sub-threshold edges pass with no reason at all.
+        legs = self._legs(0.60, 3.5, 45.0)
+        self.assertEqual(legs["side"]["selection"], "PASS")
+        self.assertIsNone(legs["side"]["pass_reason"])
+        self.assertIsNone(legs["total"]["pass_reason"])
+        self.assertEqual(legs["notes"], [])
+        # A bet carries None as well.
+        legs = self._legs(0.30, -6.0, 36.0)
+        self.assertEqual(legs["side"]["selection"], AWAY)
+        self.assertIsNone(legs["side"]["pass_reason"])
+        # A 5.9% edge that still loses money at -150 on both sides.
+        market = self._market(
+            latest_home="-3.5,-150,-181|-2.5,-115,-155|-0.5,115,-140",
+            latest_away="3.5,-150,158|2.5,-105,135|0.5,-135,120",
+        )
+        legs = self._legs(0.60, 5.5, 45.0, market=market)
+        self.assertEqual(legs["side"]["selection"], "PASS")
+        self.assertGreater(legs["side"]["edge"], self.policy["edge_threshold"])
+        self.assertEqual(legs["side"]["pass_reason"], NO_EXPECTATION_REASON)
+        self.assertEqual(legs["notes"], [NO_EXPECTATION_REASON])
+
+    def test_policy_validation_of_veto_and_floor_keys(self) -> None:
+        base = dict(load_registry()["aggregator_policy"])
+        keys = (
+            "veto_adverse_spread_points",
+            "veto_adverse_total_points",
+            "veto_adverse_price_cents",
+            "min_ev_per_unit",
+        )
+        for key in keys:
+            for bad in (-0.1, True, "10"):
+                with self.subTest(key=key, bad=bad):
+                    with self.assertRaises(ValueError):
+                        aggregator_policy({"aggregator_policy": {**base, key: bad}})
+        with self.assertRaises(ValueError):
+            aggregator_policy({"aggregator_policy": {**base, "min_ev_per_unit": 1.5}})
+        policy = aggregator_policy({"aggregator_policy": base})
+        for key in keys:
+            self.assertIsInstance(policy[key], float)
+        self.assertEqual(policy["veto_adverse_price_cents"], 10.0)
+        # Zero is allowed for every knob.
+        zeros = aggregator_policy({"aggregator_policy": {**base, **{key: 0 for key in keys}}})
+        self.assertEqual([zeros[key] for key in keys], [0.0, 0.0, 0.0, 0.0])
 
 
 class VoiceSelectionTests(unittest.TestCase):
@@ -807,6 +1119,172 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(policy["edge_threshold"], 0.03)
         self.assertEqual(policy["shrink_lambda"], 0.5)
         self.assertTrue(math.isclose(policy["kelly_fraction"], 0.25))
+        self.assertEqual(policy["version"], 1)
+        self.assertEqual(policy["veto_adverse_spread_points"], 0.5)
+        self.assertEqual(policy["veto_adverse_total_points"], 1.0)
+        self.assertEqual(policy["veto_adverse_price_cents"], 10)
+        self.assertEqual(policy["min_ev_per_unit"], 0.02)
+
+
+class MovementRenderTests(unittest.TestCase):
+    def test_rendering_mentions_price_moves_and_policy_notes(self) -> None:
+        registry = load_registry()
+        policy = aggregator_policy(registry)
+        payload = build_aggregator_input(
+            _game(), approved_opinions=_committee(), finals=[], snapshots=[], registry=registry, policy=policy
+        )
+        # The knobs ride in the input, so they are hash-bound like the rest.
+        self.assertEqual(payload["policy"]["min_ev_per_unit"], 0.02)
+        self.assertEqual(payload["policy"]["veto_adverse_price_cents"], 10.0)
+        self.assertEqual(payload["market"]["movement_since_open"]["home_spread_price"], 10.0)
+        opinion = normalize_aggregator_opinion(rules_arm_response(payload), payload, expert=load_expert("god_rules"))
+        validate_opinion(opinion, away_team=AWAY, home_team=HOME, schedule_input=payload)
+        side = json.loads(opinion["side_pick_json"])
+        total = json.loads(opinion["total_pick_json"])
+        self.assertEqual(side["pass_reason"], ADVERSE_MOVE_REASON)
+        self.assertEqual(total["pass_reason"], EV_FLOOR_REASON)
+        self.assertEqual(opinion["pick_side"], "PASS | PASS")
+        self.assertIn(
+            f"Policy: adverse move: {HOME} spread price -110 → +100 (+10 cents) since open.",
+            opinion["counterarguments"],
+        )
+        self.assertIn("Policy: ev floor: Over 44.5 (-105) ev +0.019 under 0.020.", opinion["counterarguments"])
+        price_text = (
+            f"{HOME} spread price +10 cents, {AWAY} spread price -10 cents, "
+            "over price +5 cents, under price -5 cents"
+        )
+        self.assertIn(
+            f"Line movement since open: home spread +0 points, total +0.5 points; {price_text}.",
+            opinion["counterarguments"],
+        )
+        self.assertIn(f"- Movement since open: home spread 0.0, total 0.5; {price_text}", opinion["full_opinion"])
+        self.assertIn("Policy: adverse move:", opinion["full_opinion"])
+
+    def test_rendering_is_unchanged_without_price_moves(self) -> None:
+        registry = load_registry()
+        policy = aggregator_policy(registry)
+        game = _game(
+            opening_away="3.5,-120,165|2.5,-105,135|0.5,-135,120",
+            opening_home=STEADY_HOME,
+            opening_totals="44,-105,-115|21.5,-110,-110|7.5,-105,-115",
+        )
+        payload = build_aggregator_input(
+            game, approved_opinions=_committee(), finals=[], snapshots=[], registry=registry, policy=policy
+        )
+        movement = payload["market"]["movement_since_open"]
+        self.assertEqual([movement[key] for key in ("home_spread_price", "away_spread_price", "over_price", "under_price")], [0.0, 0.0, 0.0, 0.0])
+        opinion = normalize_aggregator_opinion(rules_arm_response(payload), payload, expert=load_expert("god_rules"))
+        self.assertIn("Line movement since open: home spread +0 points, total +0.5 points.", opinion["counterarguments"])
+        self.assertIn("- Movement since open: home spread 0.0, total 0.5\n", opinion["full_opinion"])
+        self.assertNotIn("cents", opinion["full_opinion"])
+
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "god_week1"
+
+
+def _fixture(name: str) -> dict:
+    return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
+
+
+def _persisted_leg(row: dict, kind: str) -> dict:
+    # The fixtures hold the pick columns already parsed; the sheet holds strings.
+    value = row[f"{kind}_pick_json"]
+    return json.loads(value) if isinstance(value, str) else dict(value)
+
+
+class Week1ReplayTests(unittest.TestCase):
+    """The persisted Week 1 rules rows replayed under the veto and the floor."""
+
+    def setUp(self) -> None:
+        self.policy = aggregator_policy(load_registry())
+
+    def _replay(self, name: str, policy: dict | None = None) -> tuple[dict, dict]:
+        row = _fixture(name)
+        payload = row["input_json"]
+        self.assertEqual(sha256_text(canonical_json(payload)), row["input_sha256"])
+        for key in ("sigma_margin", "sigma_total", "shrink_lambda", "edge_threshold"):
+            self.assertEqual(self.policy[key], payload["policy"][key])
+        estimate = rules_arm_response(payload)
+        for key in ("home_win_probability", "expected_home_margin", "projected_total"):
+            self.assertEqual(estimate[key], row["raw_response"][key])
+        game = payload["game"]
+        legs = apply_policy(
+            home_win_probability=estimate["home_win_probability"],
+            expected_home_margin=estimate["expected_home_margin"],
+            projected_total=estimate["projected_total"],
+            market=payload["market"],
+            policy=policy if policy is not None else self.policy,
+            away_team=game["away_team"],
+            home_team=game["home_team"],
+        )
+        return row, legs
+
+    def test_persisted_movement_is_reproduced(self) -> None:
+        for name in ("sea_rules", "lar_rules"):
+            with self.subTest(name=name):
+                market = _fixture(name)["input_json"]["market"]
+                persisted = market["movement_since_open"]
+                self.assertNotIn("home_spread_price", persisted)
+                recomputed = movement_since_open(market["opening"], market["latest"])
+                self.assertEqual({key: recomputed[key] for key in persisted}, persisted)
+
+    def test_seahawks_side_vetoed_and_over_floored(self) -> None:
+        row, legs = self._replay("sea_rules")
+        self.assertEqual(row["home_win_probability"], 0.6259)
+        self.assertEqual(row["expected_home_margin"], 3.88)
+        side, total = legs["side"], legs["total"]
+        self.assertEqual(side["selection"], "PASS")
+        self.assertEqual(side["pass_reason"], ADVERSE_MOVE_REASON)
+        self.assertEqual(side["edge"], 0.0329)
+        self.assertEqual(side["probability"], 0.5112)
+        self.assertEqual(total["selection"], "PASS")
+        self.assertEqual(total["pass_reason"], EV_FLOOR_REASON)
+        self.assertEqual(total["edge"], 0.033)
+        self.assertEqual(
+            legs["notes"],
+            [
+                "adverse move: Seattle Seahawks spread price -110 → +100 (+10 cents) since open",
+                "ev floor: Over 44.5 (-105) ev +0.019 under 0.020",
+            ],
+        )
+        market = row["input_json"]["market"]
+        self.assertEqual(movement_since_open(market["opening"], market["latest"])["home_spread_price"], 10.0)
+
+    def test_rams_side_still_bets(self) -> None:
+        row, legs = self._replay("lar_rules")
+        self.assertEqual(row["home_win_probability"], 0.581)
+        self.assertEqual(row["expected_home_margin"], 2.0)
+        side, total = legs["side"], legs["total"]
+        self.assertEqual(side["selection"], "San Francisco 49ers")
+        self.assertEqual(side["line"], 3.5)
+        self.assertEqual(side["price"], -110)
+        self.assertEqual(side["edge"], 0.0442)
+        self.assertEqual(side["ev_per_unit"], 0.039)
+        self.assertEqual(side["stake_units"], 1.1)
+        self.assertEqual(side["confidence_stars"], 1)
+        self.assertIsNone(side["pass_reason"])
+        self.assertEqual(total["selection"], "PASS")
+        self.assertIsNone(total["pass_reason"])
+        self.assertEqual(total["edge"], 0.0073)
+        self.assertEqual(legs["notes"], [])
+
+    def test_persisted_legs_reproduce_without_veto_and_floor(self) -> None:
+        loose = dict(
+            self.policy,
+            veto_adverse_spread_points=1e9,
+            veto_adverse_total_points=1e9,
+            veto_adverse_price_cents=1e9,
+            min_ev_per_unit=0.0,
+        )
+        for name in ("sea_rules", "lar_rules"):
+            with self.subTest(name=name):
+                row, legs = self._replay(name, policy=loose)
+                self.assertEqual(legs["notes"], [])
+                for kind in ("side", "total"):
+                    leg = dict(legs[kind])
+                    self.assertIn("pass_reason", leg)
+                    del leg["pass_reason"]
+                    self.assertEqual(leg, _persisted_leg(row, kind))
 
 
 if __name__ == "__main__":
