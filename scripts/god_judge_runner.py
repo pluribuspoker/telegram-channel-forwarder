@@ -23,9 +23,11 @@ for every enabled non-aggregator expert -- it:
 Dedupe is by committee key (``moe_god.committee_key``: the sorted voice
 opinion ids plus the latest full-game lines and prices, never the capture
 timestamp). A game is skipped inside two hours of kickoff, when its
-committee is incomplete, when a valid judge row already carries the current
-key, or when two invalid judge rows carry it (the judge failed twice on this
-committee; the reviewer is told once per invocation). At most ``--max-games``
+committee is incomplete, when a valid judge row that the reviewer has not
+rejected already carries the current key, or when two invalid judge rows
+carry it (the judge failed twice on this committee; the reviewer is told once
+per invocation). A rejected judge row does not block: rejection is the
+reviewer asking for a fresh run. At most ``--max-games``
 games run per invocation. Every judge call bills the Claude Code
 subscription, so a failed call is logged and DMed, never retried; the next
 timer slot tries again.
@@ -103,10 +105,12 @@ CLAUDE_TIMEOUT_SECONDS = 900
 DEFAULT_CLAUDE_BIN = "/home/forwarder/.npm-global/bin/claude"
 DEFAULT_RUNS_LOG = ROOT / "logs" / "god_judge_runs.jsonl"
 RESPONSE_INSTRUCTION = "Return exactly one JSON object and nothing else."
-# --bare skips hooks, plugins, keychain reads and CLAUDE.md discovery, but its
-# help text (2.1.263) says OAuth is never read in that mode. --safe-mode
-# disables the same customizations with auth working normally. Switch with
-# GOD_JUDGE_CLAUDE_ISOLATION=safe-mode if the subscription token is refused.
+# --safe-mode disables every customization (CLAUDE.md, skills, plugins, hooks,
+# MCP servers) while auth works normally, so the subscription OAuth token is
+# honored; it is the default. --bare goes further (no keychain reads, no
+# background traffic) but its help text (2.1.263) says OAuth is never read in
+# that mode, so it only suits an ANTHROPIC_API_KEY setup. Switch with
+# GOD_JUDGE_CLAUDE_ISOLATION.
 ISOLATION_FLAGS: dict[str, list[str]] = {
     "bare": ["--bare"],
     "safe-mode": ["--safe-mode"],
@@ -137,7 +141,7 @@ class ClaudeHeadlessInvoker:
         claude_bin: str | Path,
         *,
         oauth_token: str,
-        isolation: str = "bare",
+        isolation: str = "safe-mode",
         timeout: float = CLAUDE_TIMEOUT_SECONDS,
         path: str | None = None,
         home: str | None = None,
@@ -431,6 +435,8 @@ async def run_once(
             str(row.get("generation_status") or "")
             for row in rows_for(event_id, JUDGE_EXPERT_ID)
             if row_committee_key(row) == key
+            # A rejected row is the reviewer asking for a fresh run.
+            and str(row.get("review_status") or "") != "rejected"
         ]
         if "valid" in judge_statuses:
             skip(game, f"a valid judge row already carries committee {key[:12]}")
@@ -625,9 +631,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--isolation",
         choices=sorted(ISOLATION_FLAGS),
-        default=os.environ.get("GOD_JUDGE_CLAUDE_ISOLATION") or "bare",
+        default=os.environ.get("GOD_JUDGE_CLAUDE_ISOLATION") or "safe-mode",
         help="How the CLI is isolated from hooks, plugins and CLAUDE.md "
-        "(GOD_JUDGE_CLAUDE_ISOLATION; default bare).",
+        "(GOD_JUDGE_CLAUDE_ISOLATION; default safe-mode, which keeps the "
+        "OAuth token usable; bare never reads OAuth).",
     )
     parser.add_argument(
         "--runs-log",

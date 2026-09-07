@@ -243,7 +243,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         call = calls[0]
         argv = call["argv"]
         self.assertEqual(argv[argv.index("--system-prompt") + 1], load_expert("god_judge")["prompt_text"])
-        for flag in ("-p", "--bare", "--strict-mcp-config", "--no-session-persistence"):
+        for flag in ("-p", "--safe-mode", "--strict-mcp-config", "--no-session-persistence"):
             self.assertIn(flag, argv)
         self.assertEqual(argv[argv.index("--model") + 1], "claude-fable-5-1")
         self.assertEqual(argv[argv.index("--effort") + 1], "max")
@@ -295,6 +295,24 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.harness.notifications), 1)
         self.assertEqual(summary["attempted"], [])
         self.assertIn("valid judge row already carries", summary["skipped"][0]["reason"])
+
+    async def test_rejected_judge_row_does_not_block_a_fresh_run(self) -> None:
+        await self.harness.run([_game()], _committee())
+        for row in self.harness.store.rows:
+            if row["expert_id"] == "god_judge":
+                row["review_status"] = "rejected"
+        summary = await self.harness.run([_game()], _committee())
+
+        # Rejection is the reviewer asking for a fresh judge run; the rules
+        # arm on the same committee is still deduped.
+        self.assertEqual(len(summary["attempted"]), 1)
+        self.assertEqual(len(self.harness.calls()), 2)
+        by_expert = {}
+        for row in self.harness.store.rows:
+            by_expert.setdefault(row["expert_id"], []).append(row)
+        self.assertEqual(len(by_expert["god_judge"]), 2)
+        self.assertEqual(len(by_expert["god_rules"]), 1)
+        self.assertEqual(by_expert["god_judge"][-1]["review_status"], "pending")
 
     async def test_price_move_makes_a_new_committee_key(self) -> None:
         await self.harness.run([_game()], _committee())
