@@ -32,6 +32,7 @@ from moe_god import (
     DETERMINISTIC_BACKEND,
     DETERMINISTIC_MODEL,
     JUDGE_MODE,
+    MARGINS_TABLE_PATH,
     RULES_MODE,
     aggregator_policy,
     build_aggregator_input,
@@ -207,7 +208,7 @@ def _source_sha256(expert: dict[str, Any]) -> str:
     if expert.get("input_profile") == "win_total":
         paths.append(ROOT / "moe_win_total.py")
     if expert.get("input_profile") == AGGREGATOR_PROFILE:
-        paths.extend((ROOT / "moe_god.py", ROOT / "moe_ak.py"))
+        paths.extend((ROOT / "moe_god.py", ROOT / "moe_ak.py", MARGINS_TABLE_PATH))
     digest = hashlib.sha256()
     for path in paths:
         digest.update(str(path.relative_to(ROOT)).encode("utf-8"))
