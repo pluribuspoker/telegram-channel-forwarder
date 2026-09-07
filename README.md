@@ -360,6 +360,10 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python angles/extract_angles.py"
 
 ---
 
+## NFL Guesser (MOE + God Expert)
+
+The NFL intake bot (`intake_bot.py`, `telegram-intake.service`), the BetOnline line fetcher (`nfl_lines.py`, `nfl-lines-fetcher.timer`), the mixture-of-experts opinions (`moe.py`, `moe/experts.yaml`, `scripts/generate_moe_opinion.py`, `scripts/review_moe_opinion.py`) and the God Expert aggregator (`moe_god.py`: deterministic `god_rules` and Fable 5.1 `god_judge` on one shared policy; `scripts/god_judge_runner.py` on `god-judge.timer`; `scripts/moe_grade.py` scoreboard and disagreement report) are documented in `docs/telegram-intake-plan.md` and `docs/god-expert-roadmap.md`. Historical lines for the backtests come from free sources only: `scripts/fetch_nfl_lines_history.py` → `data/nfl_lines_history.csv` and `data/nfl_open_close.json`. These tests are Unix-only (`moe.py` imports `fcntl`); run them on the VPS from a scratch clone, never in `~/app`.
+
 ## VPS deployment
 
 See `CLAUDE.md` for server aliases, deploy workflow, and switching to test mode.

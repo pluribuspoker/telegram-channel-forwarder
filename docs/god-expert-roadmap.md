@@ -36,6 +36,13 @@ These are settled. Do not relitigate them inside an implementation session.
   `/home/forwarder/app` (root owns files there; a pull as `forwarder` fails
   half-way and leaves a partial checkout) → `systemctl restart
   telegram-intake.service` only when `moe.py` or `intake_bot.py` changed.
+- Units: `deploy/systemd/` is the source of truth; install with `cp` into
+  `/etc/systemd/system/`, `systemctl daemon-reload`, `systemctl enable --now
+  <timer>`, and `bash scripts/check_deploy_sync.sh` must report all in sync.
+  The headless judge call on the VPS is `claude -p --safe-mode`: plugins are
+  off, so it leaves the Telegram channels session alone (verified
+  2026-09-07), and `--bare` would be wrong because it never reads the OAuth
+  token. The judge never runs from an interactive session.
 - Historical lines come from free sources only: the nflverse games file and
   ESPN's core odds endpoint. Never the paid Odds API historical endpoint.
 
@@ -270,7 +277,9 @@ anywhere; judge runs bill the Claude Code subscription.
   sample closest to the mean). One row per game reaches the human gate, so
   the ensemble does not multiply approvals. Starts once two weeks of
   single-sample runner usage show the subscription carries three times the
-  calls.
+  calls. Usage is read from `logs/god_judge_runs.jsonl` (one line per call:
+  duration, cost, turns); remember the current committee key already
+  re-judges a game on every price move.
 
 ### WP10 — Refit on the ledger (data, ~50 graded games)
 
@@ -278,17 +287,27 @@ anywhere; judge runs bill the Claude Code subscription.
 
 ## Dependencies and parallelism
 
-- Phase 1 = WP1, WP2, WP3, WP4: independent (about four build days). Run as four worktrees
-  (`git worktree add ../telegram-forwarder-<slug> -b god/<slug>`), each with
-  its own VPS scratch clone. Merge order into main: WP4, WP1, WP3, WP2
-  (WP2 touches `moe.py` and the CLI; WP1 touches `moe_god.py`; low overlap).
-- WP5 touches `moe_god.py` heavily: start it after WP1 merges, not in
-  parallel with it.
-- WP6 and WP7 need WP4's files; WP8 needs WP6 and WP7. WP6 and WP7 can run
-  in parallel with each other.
-- After each merge: full suite on a fresh scratch clone, then deploy at a
-  week boundary (Tuesday after the Monday game is graded is the natural
-  slot). Phase 1 targets the Week 2 boundary (SAT SEP 12).
+- Phase 1 (WP1–WP4) landed and was deployed on 2026-09-07 (status log).
+  Built as four worktrees (`git worktree add ../telegram-forwarder-<slug>
+  -b god/<slug>`), each with its own VPS scratch clone, merged in the order
+  WP4, WP1, WP3, WP2; the one merge interaction was WP3's tests meeting
+  WP1's veto on the default test market.
+- Phase 2: WP5 can start now (WP1 is merged). WP5 touches `moe_god.py`
+  heavily, so no other `moe_god.py` change runs beside it; WP6 and WP7 can
+  run in parallel with each other and read WP4's files. Merge WP5 first and
+  rebase WP6 on it (WP6 changes `cover_probability`/`over_probability`).
+  Note for WP7: the committed CSV covers 2016–2025; the Elo warm-up on
+  1999–2022 needs `scripts/fetch_nfl_lines_history.py --seasons 1999-2025
+  --skip-espn` (about 7,000 rows) or a direct read of the nflverse file;
+  decide whether the wider CSV is committed.
+- WP8 needs WP6 and WP7. Its open→close calibration has 543 usable events
+  (392 with movement): ESPN BET through 2025 week 12, DraftKings after.
+- After each merge: full suite on a fresh scratch clone — eight modules now:
+  `scripts.test_moe_god scripts.test_moe scripts.test_moe_ak
+  scripts.test_moe_win_total scripts.test_generate_moe_opinion_cli
+  scripts.test_intake_bot scripts.test_god_judge_runner
+  scripts.test_nfl_lines_history` — then deploy at a week boundary (Tuesday
+  after the Monday game is graded is the natural slot).
 
 ## Acceptance for the phase-1 deploy
 
@@ -324,6 +343,28 @@ model, one row per expert"), stake language, grading cadence, the server's
 dirty tree, and the two hidden rows. Week 1 rows stay pending until a human
 approves them.
 
+Open after phase 1 (2026-09-07) — the user's call, nothing in code assumes
+an answer:
+
+- `moe/prompts/god_rules/v1.md` step 7 omits the veto and the floor. Bump to
+  v2 (re-hashes `prompt_sha256` on every future rules row) or leave.
+- A veto knob of 0 vetoes every leg that has opening data. If 0 should mean
+  disabled, the checks need `knob > 0`.
+- The reason guard grounds a cited "N games" through the cohort a cited
+  record implies (`17-8` → 25 games); the real Week 1 Rams response needs
+  it. Keep, or drop and accept that row as an audit record.
+- Judge call volume: the committee key includes the latest prices, so every
+  BetOnline price move re-judges the game (cap 3 calls per pass, 144 a
+  day). Read `logs/god_judge_runs.jsonl` for a week, or coarsen
+  `committee_key` to lines only.
+- `GOD_JUDGE_HEALTHCHECK_URL` is unset; `ping_hc` no-ops until it is added
+  to the local `.env` and synced.
+- WP6 must name its close: nflverse (the CSV, 2016–2025) or ESPN (the JSON,
+  2024–2025 open/close). They differ by a point or more on 14% of spreads.
+- Rejected judge rows re-run on the same committee key (session decision
+  2026-09-07 in `scripts/god_judge_runner.py`); pending and approved rows
+  block. Reverse it if a rejection should stay final.
+
 ## Status log
 
 - 2026-09-07 — plan written from the roadmap page; nothing started. Week 1
@@ -353,19 +394,22 @@ approves them.
   2026-09-06 rows stay pending until a human decides. Still unset:
   `GOD_JUDGE_HEALTHCHECK_URL` (`ping_hc` no-ops without it).
 
-## Session opener (phase 1)
+## Session opener (phase 2)
 
 Paste this as the first message of a fresh session started in the repo
-directory. Later phases reuse it with the scope line changed.
+directory. Phase 1 used the same shape (git history has it); later phases
+change the scope line and the merge order.
 
 ```
-You are orchestrating phase 1 of the God Expert roadmap in this repo.
+You are orchestrating phase 2 of the God Expert roadmap in this repo.
 
 Read, in this order, before anything else: CLAUDE.md (section "NFL MOE +
 God Expert"); docs/god-expert-roadmap.md — the executable plan, whose
-ground rules are settled and not up for debate; the section "Implemented
-locally — 2026-09-06: God Expert aggregator" in docs/telegram-intake-plan.md;
-moe_god.py; scripts/test_moe_god.py; and
+ground rules are settled and not up for debate, including its status log,
+the "Open after phase 1" list, and the notes recorded under WP1–WP4; the
+four "Completed — 2026-09-07" sections in docs/telegram-intake-plan.md;
+moe_god.py; scripts/test_moe_god.py; scripts/god_judge_runner.py; the
+module docstring of scripts/fetch_nfl_lines_history.py; and
 .claude/skills/generate-nfl-moe-opinion/SKILL.md. Then read the Desk page's
 decisions with the Artifact tool (action read_db, url
 https://claude.ai/code/artifact/ac0d6098-d35c-45d5-85c4-cede602d06ab,
@@ -373,39 +417,45 @@ collection "decisions") and tell me what is decided and what is still open
 before you write any code. If any decision there is an approval, show me
 the exact review commands you would run and wait for my go-ahead.
 
-Scope for this session: WP1 (veto and EV floor), WP2 (judge plumbing, the
-headless runner and its timer), WP3 (disagreement report), WP4 (historical
-lines pull). Nothing from phase 2.
+Scope for this session: WP5 (evidence overlap and per-market relevance),
+WP6 (empirical margins), WP7 (rating voice with its bulk review mode).
+Nothing from WP8 onward.
 
 Method: one git worktree per work package
 (git worktree add ../telegram-forwarder-<slug> -b god/<slug>), one subagent
-per worktree, all four in parallel. Each subagent implements its WP exactly
-as the plan specifies, writes tests in the repo's unittest style, and
-verifies on the VPS from its OWN scratch clone at /tmp/godbuild-<slug>:
-clone from /home/forwarder/app as the forwarder user, overlay the changed
-files with tar, strip CRs, chown to forwarder, run
+per worktree, all three in parallel. Each subagent implements its WP
+exactly as the plan specifies, writes tests in the repo's unittest style,
+and verifies on the VPS from its OWN scratch clone at /tmp/godbuild-<slug>:
+clone from /home/forwarder/app as the forwarder user, overlay the files
+that differ from origin/main with tar, strip CRs, chown to forwarder, run
 ~/venv/bin/python -m unittest scripts.test_moe_god scripts.test_moe
 scripts.test_moe_ak scripts.test_moe_win_total
-scripts.test_generate_moe_opinion_cli scripts.test_intake_bot, remove the
-clone, and report the exact test output. No subagent touches ~/app, the
-live sheet, or approves anything. WP4 may use the network (the nflverse
-CSV and ESPN's core odds endpoint) but must pace ESPN requests and commit
-only small data files.
+scripts.test_generate_moe_opinion_cli scripts.test_intake_bot
+scripts.test_god_judge_runner scripts.test_nfl_lines_history plus its own
+new modules, remove the clone, and report the exact test output. No
+subagent touches ~/app, the live sheet, or approves anything. WP6 and WP7
+read data/nfl_lines_history.csv; WP7 may re-run
+scripts/fetch_nfl_lines_history.py --seasons 1999-2025 --skip-espn for the
+Elo warm-up (nflverse only). Nothing else touches the network.
 
 Constraints: tests are Unix-only because moe.py imports fcntl — never
 report them as passing locally. Do not push to GitHub and do not deploy
 without asking me. Do not run the judge from this session or from any
-interactive session; the WP2 runner is tested with a stubbed claude
-invocation only. Keep the two-arms, one-policy rule: no new experts beyond
-the plumbing the plan names, no policy versioning.
+interactive session; god-judge.timer owns judge runs. Keep the two-arms,
+one-policy rule: the rating voice is a committee input registered like any
+other expert, not a third arm; no policy versioning; the empirical table
+is a policy switch (margin_model), not a new arm.
 
-When all four report green: merge into main from the main repo directory
-in the order WP4, WP1, WP3, WP2, resolve conflicts, remove the worktrees,
-run the full suite once more on a fresh scratch clone, update the status
-log in docs/god-expert-roadmap.md and the intake plan, then stop and give
-me: what changed per WP, the test output, the Week 1 replay numbers from
-the new veto and EV test, and the deploy you propose (pull as root in
-/home/forwarder/app; restart telegram-intake only if moe.py or
-intake_bot.py changed; install the timer per the deploy/ rules). I decide
-the deploy timing; the target is the Week 2 boundary, Saturday Sep 12.
+When all three report green: merge into main from the main repo directory
+in the order WP5, WP6, WP7, resolve conflicts, remove the worktrees, run
+the full suite once more on a fresh scratch clone, update the status log
+in docs/god-expert-roadmap.md and the intake plan, then stop and give me:
+what changed per WP, the test output, the Week 1 replay numbers from the
+overlap and relevance tests (Seahawks pool margin from +4.2 toward +3.9;
+Rams side edge from 4.4% toward 3.2%), the 2025 calibration check for the
+empirical table, the Elo Brier against the closing moneyline on 2025, and
+the deploy you propose (pull as root in /home/forwarder/app; restart
+telegram-intake only if moe.py or intake_bot.py changed; the margin_model
+switch stays "normal" until the calibration check is read). I decide the
+deploy timing; the target is a week boundary.
 ```

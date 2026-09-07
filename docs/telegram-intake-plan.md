@@ -578,7 +578,8 @@ probability estimate differs between them.
   `generation_backend=deterministic`, and an empty effort.
 - `god_judge` (`mode: aggregator_judge`, same input profile and schema,
   `default_model: claude-fable-5-1`, `allowed_models: [claude-fable-5-1]`,
-  `allowed_backends: [agent_runtime]`). The judge reads a masked request
+  `allowed_backends: [agent_runtime]`; `claude_headless` joined it on
+  2026-09-07 for the timer). The judge reads a masked request
   (`moe_god.build_judge_request`): voices become `Voice A…` in an order
   shuffled by a seed derived from the full input's hash, lenses are described
   without naming anyone, factor lists are capped (`factor_limit`,
@@ -627,9 +628,22 @@ probability estimate differs between them.
   keep rules); Week 18 decision with ties to rules; the mean of the two arms
   is scored as a free third row.
 - Tests: `python -m unittest scripts.test_moe_god` (Unix only, since
-  `moe.py` imports `fcntl`).
+  `moe.py` imports `fcntl`). Since 2026-09-07 the God Expert suite is the
+  eight modules listed under "Completed — 2026-09-07: God Expert roadmap
+  phase 1".
 
-### Implemented locally — 2026-09-07: Market-move veto and EV floor (WP1)
+### Completed — 2026-09-07: God Expert roadmap phase 1 (WP1–WP4)
+
+The four sections below are phase 1 of `docs/god-expert-roadmap.md`. All four
+were deployed together on 2026-09-07 at 19:13 EDT (main `92a3151`): pulled as
+root, `telegram-intake.service` restarted (`moe.py` changed),
+`god-judge.service`/`.timer` installed and enabled (first pass 19:42 EDT),
+`check_deploy_sync.sh` all in sync. The suite of record was 238 tests on a
+fresh VPS scratch clone across `scripts.test_moe_god`, `test_moe`,
+`test_moe_ak`, `test_moe_win_total`, `test_generate_moe_opinion_cli`,
+`test_intake_bot`, `test_god_judge_runner`, `test_nfl_lines_history`.
+
+### Completed — 2026-09-07: Market-move veto and EV floor (WP1)
 
 - Four knobs joined `aggregator_policy` (`moe/experts.yaml` and `DEFAULT_POLICY`
   in `moe_god.py`), hash-bound like the rest: `veto_adverse_spread_points` 0.5,
@@ -680,7 +694,7 @@ probability estimate differs between them.
   rows, read from the sheet on 2026-09-07; canonical JSON of `input_json`
   reproduces `input_sha256`).
 
-### Implemented locally — 2026-09-07: Judge plumbing and the headless judge runner (WP2)
+### Completed — 2026-09-07: Judge plumbing and the headless judge runner (WP2)
 
 - `generate_opinion(..., input_payload=...)` accepts a prebuilt aggregator
   input; `scripts/generate_moe_opinion.py --input-file <path>` (valid with
@@ -732,7 +746,7 @@ probability estimate differs between them.
   file. Tests: `scripts.test_god_judge_runner` (stub claude), new classes in
   `scripts.test_moe_god`, two CLI tests.
 
-### Implemented locally — 2026-09-07: Disagreement report and mean-of-arms ledger row (WP3)
+### Completed — 2026-09-07: Disagreement report and mean-of-arms ledger row (WP3)
 
 - `scripts/moe_grade.py` prints, after the scoreboard, the God Expert
   disagreement report (`moe_god.arm_pairs` → `disagreement_report` →
@@ -770,7 +784,7 @@ probability estimate differs between them.
 - Tests: `DisagreementReportTests` and `MeanOfArmsTests` in
   `scripts/test_moe_god.py` (Unix only).
 
-### Implemented locally — 2026-09-07: Historical NFL lines (nflverse + ESPN open/close) (WP4)
+### Completed — 2026-09-07: Historical NFL lines (nflverse + ESPN open/close) (WP4)
 
 Free historical lines for the God Expert backtests (roadmap WP4), two
 committed data files produced by one idempotent, resumable script.
@@ -1426,6 +1440,9 @@ lean fields were preserved. VPS deployment remains.
   touching the VPS. Follow the repo's cautious deploy rule — verify locally, then
   push + deploy only when confident (per `CLAUDE.md`).
 - Watch for Telegram flood-waits on repeated bot restarts during dev.
+- MOE and God Expert suites are Unix-only (`moe.py` imports `fcntl`): run
+  them on the VPS from a scratch clone, never in `~/app`. Protocol and the
+  eight-module list: `docs/god-expert-roadmap.md`, Ground rules.
 
 ---
 
@@ -1446,6 +1463,14 @@ lean fields were preserved. VPS deployment remains.
 | `scripts/check_deploy_sync.sh` | Modified | include new unit |
 | `CLAUDE.md` | Modified | document the intake bot |
 | `.env` / `.env.local` | Modified | dedicated bot and intake env vars |
+| `moe_god.py`, `moe.py`, `moe/experts.yaml` | Modified (2026-09-07) | veto/EV-floor knobs, prebuilt input, `claude_headless`, committee key, reason guard, disagreement report, mean-of-arms |
+| `scripts/generate_moe_opinion.py`, `scripts/moe_grade.py` | Modified (2026-09-07) | `--input-file`, `--generation-backend`, `current_season_finals()`; paired report + mean-of-arms ledger rows |
+| `scripts/god_judge_runner.py`, `run_god_judge.sh` | New (2026-09-07) | headless judge runner and its single-attempt wrapper |
+| `deploy/systemd/god-judge.service` / `.timer` | New (2026-09-07) | :12/:42 timer, `TimeoutStartSec=3600`, loads `~/.claude/auth.env` |
+| `scripts/fetch_nfl_lines_history.py` | New (2026-09-07) | nflverse closes + ESPN open/close pull, paced and resumable |
+| `data/nfl_lines_history.csv`, `data/nfl_open_close.json` | New, committed (2026-09-07) | 2016–2025 closes (324 KB); 2024–2025 open/close (497 KB) |
+| `scripts/test_god_judge_runner.py`, `scripts/test_nfl_lines_history.py`, `scripts/fixtures/god_week1/*`, `scripts/fixtures/nflverse_games_excerpt.csv`, `scripts/fixtures/espn_odds_*.json` | New (2026-09-07) | stubbed runner tests, offline parser tests, the persisted Week 1 rows |
+| `.claude/skills/generate-nfl-moe-opinion/SKILL.md` | Modified (2026-09-07) | timer is the judge's normal path; input-file manual fallback |
 
 New env vars:
 - `INTAKE_ALLOWED_USER_IDS` — comma-separated numeric Telegram user IDs
@@ -1453,6 +1478,13 @@ New env vars:
 - `INTAKE_BOT_TOKEN` / `INTAKE_BOT_SESSION` — dedicated intake bot credentials
 - `GOOGLE_CREDENTIALS` — base64 service-account JSON, used repo-wide
 - `ODDS_API_KEY` — The Odds API credential used for BetOnline lines
+- `GOD_JUDGE_HEALTHCHECK_URL` (2026-09-07, optional, `.env`) — healthchecks.io
+  ping for `run_god_judge.sh`; `ping_hc` no-ops unset
+- `GOD_JUDGE_CLAUDE_BIN`, `GOD_JUDGE_CLAUDE_ISOLATION` (`safe-mode` default,
+  `bare` never reads OAuth), `GOD_JUDGE_MAX_GAMES` (3), `GOD_JUDGE_RUNS_LOG`,
+  `GOD_JUDGE_WORK_ROOT` (2026-09-07, all optional) — judge runner overrides.
+  The runner's Claude token is `CLAUDE_CODE_OAUTH_TOKEN` from
+  `~/.claude/auth.env`, loaded by the unit, not by an env file
 
 ---
 
