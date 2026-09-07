@@ -4,9 +4,11 @@ Two registered experts share this module and one input:
 
 - ``god_rules`` (mode ``aggregator``) is a deterministic gate. Every approved
   expert opinion for the game becomes one voice; voices are pooled with the
-  registry weights, the pool is shrunk toward the de-vigged BetOnline market,
-  and the shared policy turns the blended probabilities into side and total
-  legs. No model is involved anywhere.
+  registry weights (discounted for evidence they share with voices ranked
+  before them, and only into the markets their expert informs), the pool is
+  shrunk toward the de-vigged BetOnline market, and the shared policy turns
+  the blended probabilities into side and total legs. No model is involved
+  anywhere.
 - ``god_judge`` (mode ``aggregator_judge``) receives the same arithmetic plus a
   masked, seeded-shuffled view of the voices and returns only probabilities.
   The identical policy turns those probabilities into legs.
@@ -164,6 +166,17 @@ ADVERSE_MOVE_REASON = "adverse move"
 EV_FLOOR_REASON = "ev floor"
 NO_EXPECTATION_REASON = "no positive expectation at the posted price"
 
+# The markets a voice can inform (registry ``markets``); the side pool
+# averages side-informed voices, the total pool total-informed ones.
+MARKETS = ("side", "total")
+
+# The record style of moe._complete_unique_record_paths: W-L or W-L-T. Shared
+# by the evidence extractor (what two voices cite in common) and the judge's
+# reason guard (what a reason may cite at all).
+_RECORD_PATTERN = re.compile(r"\b(\d+)-(\d+)(?:-(\d+))?\b")
+_GAME_COUNT_PATTERN = re.compile(r"\b(\d+)[\s-]games?\b")
+_COUNT_KEY_WORDS = ("games", "count", "sample", "resolved")
+
 
 # --------------------------------------------------------------------------
 # Registry and policy
@@ -175,7 +188,40 @@ def load_registry() -> dict[str, Any]:
         config.get("experts"), dict
     ):
         raise ValueError("moe/experts.yaml must define an experts map")
+    for expert_id, expert in config["experts"].items():
+        if not isinstance(expert, dict):
+            continue
+        if str(expert.get("mode") or "") in AGGREGATOR_MODES:
+            continue
+        try:
+            voice_markets(expert)
+        except ValueError as exc:
+            raise ValueError(
+                f"moe/experts.yaml expert {expert_id}: {exc}"
+            ) from exc
     return config
+
+
+def voice_markets(config: dict[str, Any]) -> list[str]:
+    """The markets a registered expert informs, in canonical order.
+
+    ``markets`` in the registry is a non-empty subset of ``side`` and
+    ``total``; an entry without it informs both. A voice enters only the
+    pools of the markets its expert informs.
+    """
+    raw = config.get("markets")
+    if raw is None:
+        return list(MARKETS)
+    if (
+        not isinstance(raw, list)
+        or not raw
+        or len(set(raw)) != len(raw)
+        or any(item not in MARKETS for item in raw)
+    ):
+        raise ValueError(
+            f"markets must be a non-empty subset of {list(MARKETS)}: {raw!r}"
+        )
+    return [market for market in MARKETS if market in raw]
 
 
 def aggregator_policy(config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -499,6 +545,143 @@ def _capped(items: list[str], limit: int, chars: int) -> dict[str, Any]:
     }
 
 
+def extract_evidence(items: Iterable[str]) -> dict[str, Any]:
+    """Record tuples and cohort labels cited in a voice's factor text.
+
+    A heuristic, pinned on the Week 1 fixture texts by the tests. Every
+    ``W-L`` or ``W-L-T`` token (``_RECORD_PATTERN``, the reason guard's
+    record shape) is a record. Its cohort size is an explicit "N games" count
+    in the same item: each count is claimed by the record nearest to it (the
+    earlier record on a tie), and a record takes the nearest count it
+    claimed, else W+L+T, the cohort a bare record implies. The cohort label is
+    the last four non-numeric words before the record and after the previous
+    one; it is informational and never enters the overlap.
+
+    Returns ``{"tuples": [[W, L, T, games], ...], "cohorts": [label, ...]}``
+    aligned by index, deduplicated on the tuple in order of first
+    appearance, so the persisted form is deterministic.
+    """
+    tuples: list[list[int]] = []
+    cohorts: list[str] = []
+    seen: set[tuple[int, int, int, int]] = set()
+
+    def gap(a: Any, b: Any) -> int:
+        return max(0, b.start() - a.end(), a.start() - b.end())
+
+    for item in items:
+        text = str(item)
+        records = list(_RECORD_PATTERN.finditer(text))
+        if not records:
+            continue
+        claimed: dict[int, list[Any]] = {}
+        for count in _GAME_COUNT_PATTERN.finditer(text):
+            nearest = min(
+                range(len(records)),
+                key=lambda index: (gap(records[index], count), index),
+            )
+            claimed.setdefault(nearest, []).append(count)
+        previous_end = 0
+        for index, record in enumerate(records):
+            wins, losses, ties = (
+                int(group) if group else 0 for group in record.groups()
+            )
+            mine = claimed.get(index)
+            if mine:
+                games = int(
+                    min(
+                        mine, key=lambda count: (gap(record, count), count.start())
+                    ).group(1)
+                )
+            else:
+                games = wins + losses + ties
+            words = [
+                word
+                for word in re.split(
+                    r"[^a-z0-9]+", text[previous_end : record.start()].lower()
+                )
+                if word and not word.isdigit()
+            ]
+            previous_end = record.end()
+            key = (wins, losses, ties, games)
+            if key in seen:
+                continue
+            seen.add(key)
+            tuples.append(list(key))
+            cohorts.append(" ".join(words[-4:]))
+    return {"tuples": tuples, "cohorts": cohorts}
+
+
+def voice_evidence(voice: dict[str, Any]) -> dict[str, Any]:
+    """A voice's evidence block.
+
+    Voices persisted before the block existed are re-extracted from their
+    capped factor text, so a replayed input still gets an overlap matrix.
+    """
+    evidence = voice.get("evidence")
+    if isinstance(evidence, dict) and isinstance(evidence.get("tuples"), list):
+        return evidence
+    return extract_evidence(
+        list((voice.get("supporting_factors") or {}).get("items") or [])
+        + list((voice.get("counterarguments") or {}).get("items") or [])
+    )
+
+
+def _voice_markets(voice: dict[str, Any]) -> list[str]:
+    """The markets a voice informs; a voice persisted without the field
+    informs both, which is what every registry entry did before it existed."""
+    markets = voice.get("markets")
+    if not markets:
+        return list(MARKETS)
+    return [market for market in MARKETS if market in markets]
+
+
+def _jaccard(a: set[Any], b: set[Any]) -> float:
+    if not a and not b:
+        return 0.0
+    return round(len(a & b) / len(a | b), 4)
+
+
+def evidence_overlap(
+    voices: list[dict[str, Any]],
+) -> dict[str, dict[str, float]]:
+    """Pairwise Jaccard overlap of the record tuples the voices cite.
+
+    Keyed by voice id both ways with the diagonal omitted; two voices that
+    cite no records at all overlap 0.
+    """
+    sets = {
+        voice["voice_id"]: {
+            tuple(int(value) for value in item)
+            for item in voice_evidence(voice)["tuples"]
+        }
+        for voice in voices
+    }
+    return {
+        a: {b: _jaccard(sets[a], sets[b]) for b in sets if b != a} for a in sets
+    }
+
+
+def overlap_adjusted_weights(
+    hedge: dict[str, float], overlap: dict[str, dict[str, float]]
+) -> dict[str, float]:
+    """Hedge weights discounted for evidence shared with higher-ranked voices.
+
+    Voices rank by id (alphabetical); a voice's weight is divided by one plus
+    the sum of its overlap with every voice ranked before it, so the first
+    voice to cite a table keeps its full weight and a later voice reciting
+    the same table counts for half of its own.
+    """
+    weights: dict[str, float] = {}
+    order = sorted(hedge)
+    for index, voice_id in enumerate(order):
+        divisor = 1.0 + sum(
+            float((overlap.get(voice_id) or {}).get(other, 0.0))
+            for other in order[:index]
+        )
+        weights[voice_id] = round(float(hedge[voice_id]) / divisor, 4)
+    return weights
+
+
 def _leg_from_json(value: Any) -> dict[str, Any] | None:
     if value in (None, ""):
         return None
@@ -644,6 +827,12 @@ def voice_from_row(
             "side": _leg_from_json(row.get("side_pick_json")),
             "total": _leg_from_json(row.get("total_pick_json")),
         },
+        "markets": voice_markets(config),
+        # Extracted from the full factor lists, before the caps below.
+        "evidence": extract_evidence(
+            _text_items(row.get("supporting_factors_json"))
+            + _text_items(row.get("counterarguments_json"))
+        ),
         "thesis": str(row.get("thesis") or "").strip(),
         "supporting_factors": _capped(
             _text_items(row.get("supporting_factors_json")), limit, chars
@@ -1393,28 +1582,50 @@ def build_feature_block(
     *,
     home_team: str,
 ) -> dict[str, Any]:
+    """Pool, shrink, and edges for both arms.
+
+    ``hedge_weights`` are the track-record weights; ``weights`` divide them
+    by one plus each voice's evidence overlap with the voices ranked before
+    it (``overlap_adjusted_weights``) and are what every pool uses. The side
+    pool (win probability, margin, cover probability, winner votes) averages
+    the side-informed voices, the total pool (projected total, over
+    probability) the total-informed ones; ``markets`` records both lists. An
+    empty pool has nothing to shrink: its pooled values are None and the
+    blend is the market expectation, so the only edge left is the asymmetry
+    of the posted prices.
+    """
     if not voices:
         raise ValueError("No approved voices exist for this game")
-    weights = weighting["weights"]
-    total_weight = sum(weights[voice["voice_id"]] for voice in voices)
+    hedge = {
+        voice["voice_id"]: float(weighting["weights"][voice["voice_id"]])
+        for voice in voices
+    }
+    overlap = evidence_overlap(voices)
+    weights = overlap_adjusted_weights(hedge, overlap)
+    side_voices = [voice for voice in voices if "side" in _voice_markets(voice)]
+    total_voices = [
+        voice for voice in voices if "total" in _voice_markets(voice)
+    ]
 
-    def pooled(key: str) -> float:
-        return (
-            sum(weights[voice["voice_id"]] * float(voice[key]) for voice in voices)
-            / total_weight
-        )
-
-    def pooled_derived(key: str) -> float:
+    def pooled(
+        key: str, group: list[dict[str, Any]], *, derived: bool = False
+    ) -> float | None:
+        total_weight = sum(weights[voice["voice_id"]] for voice in group)
+        if not group or total_weight <= 0:
+            return None
         return (
             sum(
-                weights[voice["voice_id"]] * float(voice["derived"][key])
-                for voice in voices
+                weights[voice["voice_id"]]
+                * float(voice["derived"][key] if derived else voice[key])
+                for voice in group
             )
             / total_weight
         )
 
-    def spread(key: str) -> dict[str, float]:
-        values = [float(voice[key]) for voice in voices]
+    def spread(key: str, group: list[dict[str, Any]]) -> dict[str, float] | None:
+        if not group:
+            return None
+        values = [float(voice[key]) for voice in group]
         return {
             "min": round(min(values), 4),
             "max": round(max(values), 4),
@@ -1424,21 +1635,38 @@ def build_feature_block(
     fair = market["fair"]
     latest = market["latest"]
     lam = policy["shrink_lambda"]
-    pool_p = pooled("home_win_probability")
-    pool_margin = pooled("expected_home_margin")
-    pool_total = pooled("projected_total")
-    shrunk_p = lam * pool_p + (1 - lam) * float(fair["home_ml"])
-    shrunk_margin = lam * pool_margin + (1 - lam) * float(
-        market["market_expectation"]["home_margin"]
+    fair_home = float(fair["home_ml"])
+    market_margin = float(market["market_expectation"]["home_margin"])
+    market_total = float(market["market_expectation"]["total"])
+    pool_p = pooled("home_win_probability", side_voices)
+    pool_margin = pooled("expected_home_margin", side_voices)
+    pool_total = pooled("projected_total", total_voices)
+    shrunk_p = (
+        fair_home if pool_p is None else lam * pool_p + (1 - lam) * fair_home
     )
-    shrunk_total = lam * pool_total + (1 - lam) * float(
-        market["market_expectation"]["total"]
+    shrunk_margin = (
+        market_margin
+        if pool_margin is None
+        else lam * pool_margin + (1 - lam) * market_margin
+    )
+    shrunk_total = (
+        market_total
+        if pool_total is None
+        else lam * pool_total + (1 - lam) * market_total
     )
     home_votes = sum(
-        1 for voice in voices if voice["predicted_winner"] == home_team
+        1 for voice in side_voices if voice["predicted_winner"] == home_team
     )
     return {
         "n_voices": len(voices),
+        "markets": {
+            "side": [voice["voice_id"] for voice in side_voices],
+            "total": [voice["voice_id"] for voice in total_voices],
+        },
+        "hedge_weights": {
+            voice["voice_id"]: hedge[voice["voice_id"]] for voice in voices
+        },
+        "overlap": overlap,
         "weights": {
             voice["voice_id"]: weights[voice["voice_id"]] for voice in voices
         },
@@ -1447,8 +1675,10 @@ def build_feature_block(
             "home_win_probability": _round(pool_p),
             "expected_home_margin": _round(pool_margin, 2),
             "projected_total": _round(pool_total, 2),
-            "p_cover_home": _round(pooled_derived("p_cover_home")),
-            "p_over": _round(pooled_derived("p_over")),
+            "p_cover_home": _round(
+                pooled("p_cover_home", side_voices, derived=True)
+            ),
+            "p_over": _round(pooled("p_over", total_voices, derived=True)),
         },
         "shrunk": {
             "lambda": lam,
@@ -1472,11 +1702,11 @@ def build_feature_block(
             ),
         },
         "dispersion": {
-            "home_win_probability": spread("home_win_probability"),
-            "expected_home_margin": spread("expected_home_margin"),
-            "projected_total": spread("projected_total"),
+            "home_win_probability": spread("home_win_probability", side_voices),
+            "expected_home_margin": spread("expected_home_margin", side_voices),
+            "projected_total": spread("projected_total", total_voices),
             "home_winner_votes": home_votes,
-            "away_winner_votes": len(voices) - home_votes,
+            "away_winner_votes": len(side_voices) - home_votes,
         },
     }
 
@@ -1598,14 +1828,24 @@ def build_aggregator_input(
 def build_judge_request(input_payload: dict[str, Any]) -> dict[str, Any]:
     """The masked, shuffled document the judge model actually reads."""
     labels: dict[str, str] = input_payload["judge_view"]["labels"]
+    label_of = {voice_id: label for label, voice_id in labels.items()}
     by_voice = {voice["voice_id"]: voice for voice in input_payload["voices"]}
     policy = input_payload["policy"]
     weights = input_payload["feature_block"]["weights"]
+    # Present only on inputs built with the overlap discount and the market
+    # masks; a request derived from an older input stays byte-identical.
+    hedge_weights = input_payload["feature_block"].get("hedge_weights")
     masked_voices = []
     for label in sorted(labels, key=JUDGE_LABELS.index):
         voice = by_voice[labels[label]]
+        extra: dict[str, Any] = {}
+        if "markets" in voice:
+            extra["markets"] = list(voice["markets"])
+        if hedge_weights is not None:
+            extra["hedge_weight"] = hedge_weights[voice["voice_id"]]
         masked_voices.append(
             {
+                **extra,
                 "label": label,
                 "lens": voice["lens"],
                 "selection_rule": voice["selection_rule"],
@@ -1631,6 +1871,25 @@ def build_judge_request(input_payload: dict[str, Any]) -> dict[str, Any]:
     feature_block["weights"] = {
         label: weights[voice_id] for label, voice_id in labels.items()
     }
+    if hedge_weights is not None:
+        feature_block["hedge_weights"] = {
+            label_of[voice_id]: value for voice_id, value in hedge_weights.items()
+        }
+    if "overlap" in feature_block:
+        feature_block["overlap"] = {
+            label_of[a]: {label_of[b]: value for b, value in row.items()}
+            for a, row in feature_block["overlap"].items()
+        }
+    if "markets" in feature_block:
+        # Label order, never id order: the ids sort alphabetically and an
+        # id-ordered list would reveal which label is which expert.
+        feature_block["markets"] = {
+            market: sorted(
+                (label_of[voice_id] for voice_id in voice_ids),
+                key=JUDGE_LABELS.index,
+            )
+            for market, voice_ids in feature_block["markets"].items()
+        }
     return {
         "input_profile": JUDGE_REQUEST_PROFILE,
         "aggregator_input_sha256": sha256_text(canonical_json(input_payload)),
@@ -1966,9 +2225,9 @@ def rules_arm_response(input_payload: dict[str, Any]) -> dict[str, Any]:
             "voice": POOL_LABEL,
             "text": (
                 f"{weighted} pool of {feature['n_voices']} voices: p(home) "
-                f"{float(pool['home_win_probability']):.3f}, margin "
-                f"{float(pool['expected_home_margin']):+.1f}, total "
-                f"{float(pool['projected_total']):.1f}."
+                f"{_fmt(pool['home_win_probability'], '.3f')}, margin "
+                f"{_fmt(pool['expected_home_margin'], '+.1f')}, total "
+                f"{_fmt(pool['projected_total'], '.1f')}."
             ),
         },
         {
@@ -1995,12 +2254,9 @@ def rules_arm_response(input_payload: dict[str, Any]) -> dict[str, Any]:
             }
         )
     dispersion = feature["dispersion"]["home_win_probability"]
-    return {
-        "home_win_probability": round(probability, 4),
-        "expected_home_margin": round(margin, 2),
-        "projected_total": round(total, 2),
-        "key_reasons": reasons[: input_payload["policy"]["reason_limit"]],
-        "counterpoints": [
+    counterpoints = []
+    if dispersion:
+        counterpoints.append(
             {
                 "voice": MARKET_LABEL,
                 "text": (
@@ -2009,19 +2265,49 @@ def rules_arm_response(input_payload: dict[str, Any]) -> dict[str, Any]:
                     "disagreement rather than reporting a consensus."
                 ),
             }
-        ],
+        )
+    overlap_note = _largest_overlap_text(input_payload)
+    if overlap_note:
+        counterpoints.append({"voice": POOL_LABEL, "text": overlap_note})
+    return {
+        "home_win_probability": round(probability, 4),
+        "expected_home_margin": round(margin, 2),
+        "projected_total": round(total, 2),
+        "key_reasons": reasons[: input_payload["policy"]["reason_limit"]],
+        "counterpoints": counterpoints[: input_payload["policy"]["reason_limit"]],
         "discarded_considerations": notes,
     }
 
 
+def _largest_overlap_text(input_payload: dict[str, Any]) -> str | None:
+    """The pair sharing the most evidence and the weight the discount left.
+
+    None when the input predates the overlap matrix or no pair overlaps.
+    """
+    overlap = input_payload["feature_block"].get("overlap") or {}
+    pairs = [
+        (a, b, float(value))
+        for a, row in overlap.items()
+        for b, value in row.items()
+        if a < b and float(value) > 0
+    ]
+    if not pairs:
+        return None
+    a, b, value = max(pairs, key=lambda item: (item[2], item[0], item[1]))
+    names = {
+        voice["voice_id"]: voice["expert_name"]
+        for voice in input_payload["voices"]
+    }
+    weight = input_payload["feature_block"]["weights"][b]
+    return (
+        f"{names.get(a, a)} and {names.get(b, b)} cite the same records "
+        f"(overlap {value:.2f}); {names.get(b, b)} pools at weight "
+        f"{float(weight):g} after the discount."
+    )
+
+
 # --------------------------------------------------------------------------
 # Normalization shared by both arms
-
-# The record style of moe._complete_unique_record_paths: W-L or W-L-T.
-_RECORD_PATTERN = re.compile(r"\b(\d+)-(\d+)(?:-(\d+))?\b")
-_GAME_COUNT_PATTERN = re.compile(r"\b(\d+)[\s-]games?\b")
-_COUNT_KEY_WORDS = ("games", "count", "sample", "resolved")
-
 
 def _reference_form(text: str) -> str:
     """Dash and case normalization applied to a reason and the reference alike."""
@@ -2366,6 +2652,17 @@ def normalize_aggregator_opinion(
             f"below the {policy['weights_min_resolved']}-per-voice bar for "
             "Hedge weights; weights stay 1.0."
         )
+    pool_markets = input_payload["feature_block"].get("markets")
+    if isinstance(pool_markets, dict):
+        for market_name, expectation in (
+            ("side", "the market's expected margin and fair probability"),
+            ("total", "the market total"),
+        ):
+            if not pool_markets.get(market_name):
+                no_signal.append(
+                    f"No voice informs the {market_name} market; that pool is "
+                    f"empty and the blend takes {expectation}."
+                )
     full_opinion = _render_full_opinion(
         input_payload,
         arm=arm,
@@ -2398,6 +2695,9 @@ def normalize_aggregator_opinion(
         "shrunk": input_payload["feature_block"]["shrunk"],
         "weights": input_payload["feature_block"]["weights"],
         "weights_active": input_payload["feature_block"]["weights_active"],
+        "hedge_weights": input_payload["feature_block"].get("hedge_weights"),
+        "overlap": input_payload["feature_block"].get("overlap"),
+        "markets": input_payload["feature_block"].get("markets"),
         "estimate": {
             "home_win_probability": round(probability, 4),
             "expected_home_margin": round(margin, 2),
@@ -2460,12 +2760,22 @@ def _render_full_opinion(
     home = game["home_team"]
     away = game["away_team"]
     voice_lines = []
+    overlap = feature.get("overlap") or {}
     for voice in input_payload["voices"]:
         legs_note = ""
         if voice["legs"]["side"] or voice["legs"]["total"]:
             side_leg = voice["legs"]["side"] or {"selection": "PASS", "line": None}
             total_leg = voice["legs"]["total"] or {"selection": "PASS", "line": None}
             legs_note = f"; legs {_leg_label(side_leg)} | {_leg_label(total_leg)}"
+        pool_note = ""
+        if voice.get("markets"):
+            pool_note += f"; markets {'+'.join(voice['markets'])}"
+        top_overlap = max(
+            (float(value) for value in (overlap.get(voice["voice_id"]) or {}).values()),
+            default=0.0,
+        )
+        if top_overlap > 0:
+            pool_note += f"; overlap {top_overlap:.2f}"
         voice_lines.append(
             f"{voice['expert_name']} v{voice['expert_version']} · "
             f"{voice['model']}: {voice['predicted_winner']} "
@@ -2475,7 +2785,7 @@ def _render_full_opinion(
             f"{'★' * int(voice['confidence_stars'])} (cover "
             f"{float(voice['derived']['p_cover_home']):.2f}, over "
             f"{float(voice['derived']['p_over']):.2f}; weight "
-            f"{feature['weights'][voice['voice_id']]:g}{legs_note})"
+            f"{feature['weights'][voice['voice_id']]:g}{pool_note}{legs_note})"
         )
     blend_title = (
         "Blend (rules: pool, then shrink toward the market)"
@@ -2517,10 +2827,16 @@ def _render_full_opinion(
         f"· total {projected_total:.1f}"
         + (f" · model {model}" if model else "")
         + f"\n- Pool before shrink: p({home}) "
-        f"{float(feature['pool']['home_win_probability']):.3f} · margin "
-        f"{float(feature['pool']['expected_home_margin']):+.1f} · total "
-        f"{float(feature['pool']['projected_total']):.1f}"
-        f"\n- Edges vs fair: {home} ML {float(legs['edges']['home_ml']):+.1%}, "
+        f"{_fmt(feature['pool']['home_win_probability'], '.3f')} · margin "
+        f"{_fmt(feature['pool']['expected_home_margin'], '+.1f')} · total "
+        f"{_fmt(feature['pool']['projected_total'], '.1f')}"
+        + (
+            f" (side pool {len(feature['markets']['side'])} voices, total "
+            f"pool {len(feature['markets']['total'])})"
+            if isinstance(feature.get("markets"), dict)
+            else ""
+        )
+        + f"\n- Edges vs fair: {home} ML {float(legs['edges']['home_ml']):+.1%}, "
         f"{home} cover {float(legs['edges']['home_cover']):+.1%}, over "
         f"{float(legs['edges']['over']):+.1%}",
         f"Side pick\n- {leg_line(side)}",

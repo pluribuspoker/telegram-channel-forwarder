@@ -828,6 +828,77 @@ committed data files produced by one idempotent, resumable script.
   `.gitignore` ignores `data/*` except the two data files (and keeps
   `angles/data/` ignored, which the old unanchored `data/` rule covered).
 
+### Completed — 2026-09-07: Evidence overlap and per-market relevance (WP5)
+
+Roadmap WP5: the pool no longer counts a table twice when two voices recite
+it, and a voice enters only the markets its expert informs.
+
+- Evidence. `moe_god.extract_evidence` turns every `W-L` / `W-L-T` token in
+  a voice's full supporting-factor and counterargument lists (before the
+  `factor_limit` cap) into a tuple `[W, L, T, games]`; the cohort size is the
+  "N games" count in the same item nearest to the record (each count is
+  claimed by its nearest record, so "14-11 (over 25 games) … 19-7" gives
+  19-7 its own 26), else W+L+T. A four-word cohort label rides beside each
+  tuple for reading. Tuples dedupe on first appearance; the block persists
+  per voice as `evidence`. Known limitation: a scoreline ("won 23-20") reads
+  as a record. Voices persisted before the block (the Week 1 rows) are
+  re-extracted from their capped text when replayed (`voice_evidence`).
+- Overlap. `evidence_overlap` is the pairwise Jaccard index of the tuple
+  sets (0 when both are empty), keyed by voice id without the diagonal, and
+  persists in the feature block as `overlap`. `overlap_adjusted_weights`
+  ranks voices by id and divides each Hedge weight by one plus the summed
+  overlap with the voices ranked before it; the feature block keeps the raw
+  values as `hedge_weights` and the discounted ones as `weights`, which is
+  what every pool uses and what the judge sees as `pool_weight` (with
+  `hedge_weight` beside it). Two identical voices therefore pool as 1.0 and
+  0.5; three as 1.0, 0.5, 0.33. The roadmap's "sum to about one voice" does
+  not hold under this rank rule (see the roadmap note; open for the user).
+- Relevance. Registry `markets` per non-aggregator expert (schedule and ak
+  `[side, total]`, divisional and win_total `[side]`; absent means both;
+  `voice_markets` validates a non-empty subset, and `load_registry` refuses
+  a bad entry). The side pool (win probability, margin, cover probability,
+  winner votes, their dispersion) averages the side-informed voices; the
+  total pool (projected total, over probability) the total-informed ones;
+  `feature_block.markets` lists both. An empty pool has nothing to shrink:
+  its pooled values are `null` and the blend is the market expectation, so
+  the only edge left is the asymmetry of the posted prices (0.5 against the
+  fair over of 0.489 on a -105/-115 total); the opinion records it as a
+  no-signal factor. With the current registry the synthetic test
+  committee's total pool holds schedule (46) and ak (48) only, so its
+  shrunk total is 45.75 and the Over clears the EV floor at 0.048.
+- Judge request. `overlap` (label-keyed both ways), `hedge_weights`, and
+  `markets` (membership lists in label order, never id order, which would
+  reveal the alphabetical ids) join the feature block; each masked voice
+  carries `markets` and `hedge_weight` next to `pool_weight`; `evidence`
+  itself stays out (the factor text is already there). Every new field is
+  added only when the input carries it, so a request derived from a
+  pre-WP5 input — the Week 1 fixtures — is byte-identical to before.
+  `committee_key` is unchanged.
+- Renderings. The rules arm adds one `pool` counterpoint naming the pair
+  with the largest overlap and the weight the discount left; voice lines in
+  the full opinion show `markets side+total` and the voice's largest
+  overlap; the pool line shows the side and total pool sizes;
+  `calibration_summary_json` carries `hedge_weights`, `overlap`, `markets`.
+- Prompts. `moe/prompts/god_rules/v2.md` (step 4 describes both discounts;
+  step 7 now states the market-move veto and the EV floor, closing the WP1
+  open item) and `moe/prompts/god_judge/v2.md` (the judge is told the pool
+  already discounts shared evidence once and reads `overlap` as voice
+  independence). Registry: both experts at `version: 2`,
+  `prompt_version: 2`; v1 files stay for the rows that hash them.
+- Week 1 replay (persisted voices re-pooled under the current registry):
+  Seahawks — divisional and schedule share exactly `11-4/15`, `6-9/15`,
+  `23-10/33`, `13-20/33` (4 of 16 distinct tuples, overlap 0.25), schedule
+  weight 0.8, pool margin +4.25 → +4.21, total pool (ak, schedule) 47.11,
+  home-cover edge 3.28% → 3.22%, over edge 3.3% → 4.9%. Rams — overlap
+  divisional/schedule 0.11 (the 4-2 head-to-head and a coincidental 2-1
+  over 3), divisional/win_total 0.10 (a coincidental 1-2 over 3), weights
+  schedule 0.9 and win_total 0.91, pool margin +0.50 → +0.53, 49ers side
+  edge 4.42% → 4.38%. The roadmap's +3.9 and 3.2% targets are not reached
+  by the specified formula.
+- Tests: `EvidenceTests`, `OverlapWeightTests`, `Week1OverlapReplayTests`
+  in `scripts/test_moe_god.py`; `MovementRenderTests` now floors the Over at
+  5% to keep the floor note on show; `RegistryTests` pins v2 and `markets`.
+
 ### Implemented locally — 2026-09-04: authoritative NFL week metadata
 
 `nfl_games.week` previously remained blank because `new_game_row()` hardcoded

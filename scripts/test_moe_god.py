@@ -28,6 +28,7 @@ from moe_god import (
     EV_FLOOR_REASON,
     GRADE_HEADERS,
     JUDGE_REQUEST_PROFILE,
+    MARKETS,
     MEAN_OF_ARMS_ID,
     NO_EXPECTATION_REASON,
     aggregator_policy,
@@ -35,6 +36,7 @@ from moe_god import (
     apply_policy,
     arm_pairs,
     build_aggregator_input,
+    build_feature_block,
     build_judge_request,
     build_market_block,
     build_scoreboard,
@@ -43,6 +45,8 @@ from moe_god import (
     compare_legs,
     cover_probability,
     disagreement_report,
+    evidence_overlap,
+    extract_evidence,
     fair_pair,
     format_disagreement_report,
     grade_all,
@@ -54,11 +58,14 @@ from moe_god import (
     movement_since_open,
     normalize_aggregator_opinion,
     over_probability,
+    overlap_adjusted_weights,
     price_cents,
     reason_reference_text,
     rules_arm_response,
     select_voice_rows,
     sha256_text,
+    voice_evidence,
+    voice_markets,
 )
 from nfl_lines import (
     AWAY_SNAPSHOT_COLUMN,
@@ -154,6 +161,7 @@ def _opinion(
     total_leg: dict | None = None,
     review_status: str = "approved",
     factors: list | None = None,
+    counters: list | None = None,
 ) -> dict:
     winner = home if probability > 0.5 else away
     row = {header: "" for header in OPINION_HEADERS}
@@ -189,7 +197,9 @@ def _opinion(
                 if factors is not None
                 else [f"{expert_id} factor one", f"{expert_id} factor two"]
             ),
-            "counterarguments_json": json.dumps([f"{expert_id} counter"]),
+            "counterarguments_json": json.dumps(
+                counters if counters is not None else [f"{expert_id} counter"]
+            ),
             "no_signal_factors_json": json.dumps([]),
             "discarded_considerations_json": json.dumps(["Injuries unavailable."]),
             "full_opinion": f"{expert_id} full opinion text",
@@ -988,7 +998,7 @@ class GenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["generation_backend"], "agent_runtime")
         self.assertEqual(row["generation_effort"], "max")
         self.assertEqual(captured["model"], "claude-fable-5-1")
-        self.assertIn("God Expert Judge v1", captured["system"])
+        self.assertIn("God Expert Judge v2", captured["system"])
         persisted_input = json.loads(row["input_json"])
         self.assertEqual(persisted_input["input_profile"], JUDGE_REQUEST_PROFILE)
         self.assertEqual(persisted_input, request)
@@ -1362,7 +1372,18 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(rules["mode"], "aggregator")
         self.assertEqual(rules["allowed_backends"], ["deterministic"])
         self.assertEqual(rules["output_schema_version"], 8)
+        # v2 of both prompts: the pool discounts shared evidence and splits
+        # by market; v1 stays on disk for the rows that hash it.
+        self.assertEqual((rules["version"], rules["prompt_version"]), (2, 2))
+        self.assertEqual(rules["prompt_path"], "moe/prompts/god_rules/v2.md")
+        self.assertIn("God Expert Rules v2", rules["prompt_text"])
+        self.assertIn("Evidence overlap", rules["prompt_text"])
+        self.assertIn("adverse move", rules["prompt_text"])
         self.assertEqual(judge["mode"], "aggregator_judge")
+        self.assertEqual((judge["version"], judge["prompt_version"]), (2, 2))
+        self.assertEqual(judge["prompt_path"], "moe/prompts/god_judge/v2.md")
+        self.assertIn("God Expert Judge v2", judge["prompt_text"])
+        self.assertIn("`overlap`", judge["prompt_text"])
         self.assertEqual(judge["default_model"], "claude-fable-5-1")
         self.assertEqual(judge["allowed_models"], ["claude-fable-5-1"])
         self.assertEqual(
@@ -1370,6 +1391,22 @@ class RegistryTests(unittest.TestCase):
         )
         self.assertEqual(judge["reasoning_effort"], "max")
         self.assertIn("Return exactly one JSON object", judge["prompt_text"])
+        registry = load_registry()
+        self.assertEqual(
+            {
+                expert_id: voice_markets(config)
+                for expert_id, config in registry["experts"].items()
+                if config.get("mode") not in {"aggregator", "aggregator_judge"}
+            },
+            {
+                "ak": ["side", "total"],
+                "divisional": ["side"],
+                "schedule": ["side", "total"],
+                "win_total": ["side"],
+            },
+        )
+        for expert_id in ("god_rules", "god_judge"):
+            self.assertNotIn("markets", registry["experts"][expert_id])
         policy = aggregator_policy(load_registry())
         self.assertEqual(policy["edge_threshold"], 0.03)
         self.assertEqual(policy["shrink_lambda"], 0.5)
@@ -1384,14 +1421,18 @@ class RegistryTests(unittest.TestCase):
 class MovementRenderTests(unittest.TestCase):
     def test_rendering_mentions_price_moves_and_policy_notes(self) -> None:
         registry = load_registry()
-        policy = aggregator_policy(registry)
+        # Since the total pool holds only the total-informed voices (schedule
+        # and ak: 46 and 48), the shrunk total is 45.75 and the Over clears
+        # the 2% floor at 0.048; a 5% floor keeps the floor note on show.
+        policy = dict(aggregator_policy(registry), min_ev_per_unit=0.05)
         payload = build_aggregator_input(
             _game(), approved_opinions=_committee(), finals=[], snapshots=[], registry=registry, policy=policy
         )
         # The knobs ride in the input, so they are hash-bound like the rest.
-        self.assertEqual(payload["policy"]["min_ev_per_unit"], 0.02)
+        self.assertEqual(payload["policy"]["min_ev_per_unit"], 0.05)
         self.assertEqual(payload["policy"]["veto_adverse_price_cents"], 10.0)
         self.assertEqual(payload["market"]["movement_since_open"]["home_spread_price"], 10.0)
+        self.assertEqual(payload["feature_block"]["shrunk"]["projected_total"], 45.75)
         opinion = normalize_aggregator_opinion(rules_arm_response(payload), payload, expert=load_expert("god_rules"))
         validate_opinion(opinion, away_team=AWAY, home_team=HOME, schedule_input=payload)
         side = json.loads(opinion["side_pick_json"])
@@ -1403,7 +1444,7 @@ class MovementRenderTests(unittest.TestCase):
             f"Policy: adverse move: {HOME} spread price -110 → +100 (+10 cents) since open.",
             opinion["counterarguments"],
         )
-        self.assertIn("Policy: ev floor: Over 44.5 (-105) ev +0.019 under 0.020.", opinion["counterarguments"])
+        self.assertIn("Policy: ev floor: Over 44.5 (-105) ev +0.048 under 0.050.", opinion["counterarguments"])
         price_text = (
             f"{HOME} spread price +10 cents, {AWAY} spread price -10 cents, "
             "over price +5 cents, under price -5 cents"
@@ -1962,6 +2003,318 @@ class MeanOfArmsTests(unittest.TestCase):
         self.assertNotIn("side", legs)
         self.assertEqual((legs["total"]["selection"], legs["total"]["line"], legs["total"]["result"]), ("Over", 44.5, "W"))
         self.assertEqual(ledger_row(mean, graded_at_utc="now")["expert_id"], MEAN_OF_ARMS_ID)
+
+
+# Two voices reciting one table: the same records, the same numbers.
+SHARED_TABLE = [
+    "Seattle non-conference: 11-4, 73.3% win rate (15 games)",
+    "New England non-conference: 6-9, 40.0% win rate (15 games)",
+]
+
+
+def _tuples(voice: dict) -> set[tuple[int, int, int, int]]:
+    return {tuple(item) for item in voice_evidence(voice)["tuples"]}
+
+
+class EvidenceTests(unittest.TestCase):
+    """The record-tuple extractor, pinned on the Week 1 fixture texts."""
+
+    def test_week1_seahawks_pair_shares_four_tuples(self) -> None:
+        voices = {voice["voice_id"]: voice for voice in _fixture("sea_rules")["input_json"]["voices"]}
+        divisional, schedule = _tuples(voices["divisional"]), _tuples(voices["schedule"])
+        self.assertEqual(
+            divisional,
+            {(11, 4, 0, 15), (6, 9, 0, 15), (23, 10, 0, 33), (13, 20, 0, 33), (10, 8, 0, 18), (9, 9, 0, 18)},
+        )
+        self.assertEqual(len(schedule), 14)
+        self.assertEqual(divisional & schedule, {(11, 4, 0, 15), (6, 9, 0, 15), (23, 10, 0, 33), (13, 20, 0, 33)})
+        # "14-11 (... over 25 games) ... 19-7 (.7308)": the count belongs to
+        # the nearer record, so 19-7 falls back to its own 26.
+        self.assertIn((14, 11, 0, 25), schedule)
+        self.assertIn((19, 7, 0, 26), schedule)
+        # Known limitation: a scoreline ("won by Seattle 23-20") reads as a record.
+        self.assertIn((23, 20, 0, 43), schedule)
+        self.assertEqual(_tuples(voices["ak"]), set())
+        self.assertEqual(_tuples(voices["win_total"]), {(26, 23, 0, 49), (9, 12, 0, 21)})
+        overlap = evidence_overlap(list(voices.values()))
+        self.assertEqual(overlap["divisional"]["schedule"], 0.25)  # 4 shared of 16 distinct
+        self.assertEqual(overlap["schedule"]["divisional"], 0.25)
+        self.assertEqual(overlap["ak"], {"divisional": 0.0, "schedule": 0.0, "win_total": 0.0})
+        self.assertNotIn("divisional", overlap["divisional"])  # no diagonal
+
+    def test_week1_rams_pair_shares_two_tuples(self) -> None:
+        voices = {voice["voice_id"]: voice for voice in _fixture("lar_rules")["input_json"]["voices"]}
+        divisional, schedule = _tuples(voices["divisional"]), _tuples(voices["schedule"])
+        self.assertEqual((len(divisional), len(schedule)), (9, 11))
+        # The head-to-head 4-2 over 6 is the same evidence; the 2-1 over 3 is
+        # two different cohorts that happen to share a record.
+        self.assertEqual(divisional & schedule, {(4, 2, 0, 6), (2, 1, 0, 3)})
+        self.assertEqual(_tuples(voices["win_total"]), {(9, 12, 0, 21), (1, 2, 0, 3)})
+        overlap = evidence_overlap(list(voices.values()))
+        self.assertEqual(overlap["divisional"]["schedule"], 0.1111)
+        self.assertEqual(overlap["divisional"]["win_total"], 0.1)
+        self.assertEqual(overlap["schedule"]["win_total"], 0.0)
+
+    def test_count_assignment_dedupe_and_cohorts(self) -> None:
+        evidence = extract_evidence(
+            [
+                "Seattle's overall home-role record (as_home) is its weaker split at 14-11 (.5600, +1.60 over 25 games), below its road split of 19-7 (.7308, +4.62).",
+                "September samples (11 games each) show Seattle 8-3 (.7273) versus New England 4-7 (.3636).",
+                "home teams went just 9-12-0 in 21 games",
+                "no record here, only 7 of 10 games under",
+                "Seattle 1-2 (3 games) and New England also 1-2 (3 games)",
+            ]
+        )
+        self.assertEqual(
+            evidence["tuples"],
+            [[14, 11, 0, 25], [19, 7, 0, 26], [8, 3, 0, 11], [4, 7, 0, 11], [9, 12, 0, 21], [1, 2, 0, 3]],
+        )
+        self.assertEqual(len(evidence["cohorts"]), len(evidence["tuples"]))
+        self.assertEqual(evidence["cohorts"][0], "its weaker split at")
+        self.assertEqual(evidence["cohorts"][2], "games each show seattle")
+        self.assertEqual(evidence["cohorts"][4], "home teams went just")
+        self.assertEqual(extract_evidence([]), {"tuples": [], "cohorts": []})
+        self.assertEqual(extract_evidence(["nothing numeric"])["tuples"], [])
+        json.dumps(evidence)
+
+    def test_overlap_of_voices_without_records_is_zero(self) -> None:
+        voices = [
+            {"voice_id": "a", "supporting_factors": {"items": []}, "counterarguments": {"items": []}},
+            {"voice_id": "b", "supporting_factors": {"items": ["prose only"]}, "counterarguments": {"items": []}},
+            {"voice_id": "c", "evidence": {"tuples": [[1, 2, 0, 3]], "cohorts": ["x"]}},
+        ]
+        self.assertEqual(evidence_overlap(voices), {"a": {"b": 0.0, "c": 0.0}, "b": {"a": 0.0, "c": 0.0}, "c": {"a": 0.0, "b": 0.0}})
+        # A persisted evidence block wins over re-extraction.
+        self.assertEqual(voice_evidence(voices[2])["tuples"], [[1, 2, 0, 3]])
+
+    def test_voice_markets_validation(self) -> None:
+        self.assertEqual(MARKETS, ("side", "total"))
+        self.assertEqual(voice_markets({}), ["side", "total"])
+        self.assertEqual(voice_markets({"markets": ["total", "side"]}), ["side", "total"])
+        self.assertEqual(voice_markets({"markets": ["total"]}), ["total"])
+        for bad in ([], ["side", "side"], ["spread"], "side", ["side", "props"]):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    voice_markets({"markets": bad})
+
+    def test_voice_from_row_carries_markets_and_full_evidence(self) -> None:
+        registry = load_registry()
+        policy = aggregator_policy(registry)
+        # Twelve factors: the voice keeps five, the evidence sees all twelve.
+        factors = [f"cohort {index}: {index + 1}-{index + 2} ({2 * index + 3} games)" for index in range(12)]
+        rows = [
+            _opinion("divisional", model="claude-opus-4-8", probability=0.6, margin=3, away_score=20, home_score=23, factors=factors, counters=[])
+        ]
+        payload = build_aggregator_input(_game(), approved_opinions=rows, finals=[], snapshots=[], registry=registry, policy=policy)
+        voice = payload["voices"][0]
+        self.assertEqual(voice["markets"], ["side"])
+        self.assertEqual(len(voice["supporting_factors"]["items"]), policy["factor_limit"])
+        self.assertEqual(len(voice["evidence"]["tuples"]), 12)
+        self.assertEqual(voice["evidence"]["tuples"][11], [12, 13, 0, 25])
+
+
+class OverlapWeightTests(unittest.TestCase):
+    """Overlap-discounted weights and the per-market pools."""
+
+    def setUp(self) -> None:
+        self.registry = load_registry()
+        self.policy = aggregator_policy(self.registry)
+
+    def _payload(self, rows: list[dict], **game_kwargs) -> dict:
+        return build_aggregator_input(
+            _game(**game_kwargs), approved_opinions=rows, finals=[], snapshots=[], registry=self.registry, policy=self.policy
+        )
+
+    def _duplicates(self) -> list[dict]:
+        return [
+            _opinion("divisional", model="claude-opus-4-8", probability=0.66, margin=6, away_score=20, home_score=26, factors=SHARED_TABLE, counters=[]),
+            _opinion("schedule", model="claude-opus-4-8", probability=0.66, margin=6, away_score=20, home_score=26, factors=SHARED_TABLE, counters=[]),
+            _opinion("win_total", model="claude-opus-4-8", probability=0.57, margin=1, away_score=23, home_score=24, factors=["no records"], counters=[]),
+        ]
+
+    def test_duplicate_voices_are_discounted_by_rank(self) -> None:
+        feature = self._payload(self._duplicates())["feature_block"]
+        self.assertEqual(feature["overlap"]["divisional"]["schedule"], 1.0)
+        self.assertEqual(feature["overlap"]["schedule"]["win_total"], 0.0)
+        self.assertEqual(feature["hedge_weights"], {"divisional": 1.0, "schedule": 1.0, "win_total": 1.0})
+        # Ranked by id: divisional keeps its weight, schedule (the recital)
+        # is divided by 1 + 1.0; a voice with no records keeps 1.0. The pair
+        # therefore pools as 1.5 voices, not the roadmap's "about one".
+        self.assertEqual(feature["weights"], {"divisional": 1.0, "schedule": 0.5, "win_total": 1.0})
+        self.assertEqual(feature["pool"]["expected_home_margin"], 4.0)  # (6 + 6·0.5 + 1) / 2.5
+        self.assertAlmostEqual(feature["pool"]["home_win_probability"], (0.66 + 0.33 + 0.57) / 2.5, places=4)
+        self.assertEqual(overlap_adjusted_weights({"a": 1.0, "b": 1.0, "c": 1.0}, {"a": {"b": 1.0, "c": 1.0}, "b": {"a": 1.0, "c": 1.0}, "c": {"a": 1.0, "b": 1.0}}), {"a": 1.0, "b": 0.5, "c": 0.3333})
+        self.assertEqual(overlap_adjusted_weights({"b": 2.0, "a": 0.5}, {"a": {"b": 0.25}, "b": {"a": 0.25}}), {"a": 0.5, "b": 1.6})
+
+    def test_rules_arm_names_the_largest_overlap(self) -> None:
+        payload = self._payload(self._duplicates())
+        response = rules_arm_response(payload)
+        self.assertEqual(
+            response["counterpoints"][-1],
+            {
+                "voice": "pool",
+                "text": "Divisional Expert and Schedule Expert cite the same records (overlap 1.00); Schedule Expert pools at weight 0.5 after the discount.",
+            },
+        )
+        self.assertIn("weight 0.5", next(item["text"] for item in response["key_reasons"] if item["voice"] == "schedule"))
+        opinion = normalize_aggregator_opinion(response, payload, expert=load_expert("god_rules"))
+        validate_opinion(opinion, away_team=AWAY, home_team=HOME, schedule_input=payload)
+        self.assertIn(
+            "Pool: Divisional Expert and Schedule Expert cite the same records (overlap 1.00); Schedule Expert pools at weight 0.5 after the discount.",
+            opinion["counterarguments"],
+        )
+        self.assertIn("weight 0.5; markets side+total; overlap 1.00", opinion["full_opinion"])
+        self.assertIn("(side pool 3 voices, total pool 1)", opinion["full_opinion"])
+        summary = json.loads(opinion["calibration_summary_json"])
+        self.assertEqual(summary["overlap"]["divisional"]["schedule"], 1.0)
+        self.assertEqual(summary["markets"]["total"], ["schedule"])
+        # No overlap, no counterpoint: the default committee cites no records.
+        plain = rules_arm_response(self._payload(_committee()))
+        self.assertEqual([item["voice"] for item in plain["counterpoints"]], ["market"])
+
+    def test_relevance_masks_split_the_pools(self) -> None:
+        feature = self._payload(_committee())["feature_block"]
+        self.assertEqual(feature["markets"], {"side": ["ak", "divisional", "schedule", "win_total"], "total": ["ak", "schedule"]})
+        # Side pool: all four; total pool: schedule 46 and ak 48 only.
+        self.assertAlmostEqual(feature["pool"]["home_win_probability"], (0.66 + 0.70 + 0.57 + 0.62) / 4, places=4)
+        self.assertEqual(feature["pool"]["expected_home_margin"], 4.5)
+        self.assertEqual(feature["pool"]["projected_total"], 47.0)
+        self.assertEqual(feature["shrunk"]["projected_total"], 45.75)
+        self.assertEqual(feature["dispersion"]["projected_total"], {"min": 46.0, "max": 48.0, "range": 2.0})
+        self.assertEqual(feature["dispersion"]["home_winner_votes"], 4)
+        self.assertAlmostEqual(
+            feature["pool"]["p_over"],
+            (over_probability(46, 44.5, 13.5) + over_probability(48, 44.5, 13.5)) / 2,
+            places=3,
+        )
+
+    def test_empty_total_pool_takes_the_market_total(self) -> None:
+        rows = [_opinion("divisional", model="claude-opus-4-8", probability=0.70, margin=5, away_score=19, home_score=24)]
+        payload = self._payload(rows)
+        feature = payload["feature_block"]
+        self.assertEqual(feature["markets"], {"side": ["divisional"], "total": []})
+        self.assertIsNone(feature["pool"]["projected_total"])
+        self.assertIsNone(feature["pool"]["p_over"])
+        self.assertIsNone(feature["dispersion"]["projected_total"])
+        self.assertEqual(feature["pool"]["expected_home_margin"], 5.0)
+        self.assertEqual(feature["shrunk"]["projected_total"], 44.5)  # the market total
+        # With the total at the line, p(over) is 0.5 and the only edge left
+        # is the juice asymmetry: 0.5 - 0.4892 on the -105/-115 total.
+        self.assertEqual(feature["edges_if_shrunk"]["over"], 0.0108)
+        response = rules_arm_response(payload)
+        self.assertEqual(response["projected_total"], 44.5)
+        self.assertIn("total —", response["key_reasons"][0]["text"])
+        opinion = normalize_aggregator_opinion(response, payload, expert=load_expert("god_rules"))
+        validate_opinion(opinion, away_team=AWAY, home_team=HOME, schedule_input=payload)
+        self.assertEqual(json.loads(opinion["total_pick_json"])["selection"], "PASS")
+        self.assertIn("No voice informs the total market; that pool is empty and the blend takes the market total.", opinion["no_signal_factors"])
+        self.assertIn("total — (side pool 1 voices, total pool 0)", opinion["full_opinion"])
+        request = build_judge_request(payload)
+        self.assertEqual(request["feature_block"]["markets"], {"side": ["Voice A"], "total": []})
+        self.assertEqual(request["feature_block"]["overlap"], {"Voice A": {}})
+
+    def test_judge_request_relabels_the_new_fields(self) -> None:
+        payload = self._payload(self._duplicates())
+        request = build_judge_request(payload)
+        labels = payload["judge_view"]["labels"]
+        label_of = {voice_id: label for label, voice_id in labels.items()}
+        feature = request["feature_block"]
+        self.assertEqual(set(feature["overlap"]), set(labels))
+        self.assertEqual(feature["overlap"][label_of["divisional"]][label_of["schedule"]], 1.0)
+        self.assertEqual(feature["hedge_weights"], {label: 1.0 for label in labels})
+        self.assertEqual(feature["weights"][label_of["schedule"]], 0.5)
+        # Membership lists follow label order, never the alphabetical id order.
+        self.assertEqual(feature["markets"]["side"], ["Voice A", "Voice B", "Voice C"])
+        self.assertEqual(feature["markets"]["total"], [label_of["schedule"]])
+        by_label = {voice["label"]: voice for voice in request["voices"]}
+        self.assertEqual(by_label[label_of["schedule"]]["markets"], ["side", "total"])
+        self.assertEqual(by_label[label_of["schedule"]]["pool_weight"], 0.5)
+        self.assertEqual(by_label[label_of["schedule"]]["hedge_weight"], 1.0)
+        self.assertEqual(by_label[label_of["divisional"]]["markets"], ["side"])
+        new_fields = json.dumps(
+            {
+                "feature": {key: feature[key] for key in ("overlap", "hedge_weights", "markets", "weights")},
+                "voices": [{key: voice[key] for key in ("markets", "hedge_weight", "pool_weight")} for voice in request["voices"]],
+            }
+        )
+        for leak in ("divisional", "schedule", "win_total", "ak", "Expert", "opinion", "claude"):
+            self.assertNotIn(leak, new_fields)
+        self.assertNotIn("evidence", json.dumps(request))
+        # The request shape is stable across rebuilds.
+        self.assertEqual(build_judge_request(self._payload(self._duplicates())), request)
+
+    def test_legacy_input_request_has_no_new_fields(self) -> None:
+        # Byte-identity of the Week 1 requests is pinned in ReasonGuardTests;
+        # this pins the mechanism: nothing is added that the input lacks.
+        for name in ("sea_rules", "lar_rules"):
+            with self.subTest(name=name):
+                request = build_judge_request(_fixture(name)["input_json"])
+                for key in ("overlap", "hedge_weights", "markets"):
+                    self.assertNotIn(key, request["feature_block"])
+                for voice in request["voices"]:
+                    self.assertNotIn("markets", voice)
+                    self.assertNotIn("hedge_weight", voice)
+                    self.assertNotIn("evidence", voice)
+
+
+class Week1OverlapReplayTests(unittest.TestCase):
+    """The persisted Week 1 voices re-pooled under the discount and the masks.
+
+    The roadmap expected the Seahawks pool margin to move from +4.2 toward
+    +3.9 and the Rams side edge from 4.4% toward 3.2%. Under the formula as
+    specified (Jaccard over record tuples; a voice divided by one plus its
+    overlap with the voices ranked before it) the moves are much smaller,
+    because the divisional and schedule voices share only four of sixteen
+    distinct tuples on the Seahawks (overlap 0.25) and two of eighteen on the
+    Rams (0.11); the roadmap's figures need the pair to pool as about one
+    voice. These tests pin the arithmetic and the direction.
+    """
+
+    def _replay(self, name: str) -> tuple[dict, dict]:
+        payload = _fixture(name)["input_json"]
+        registry = load_registry()
+        voices = json.loads(json.dumps(payload["voices"]))
+        for voice in voices:
+            self.assertNotIn("markets", voice)
+            self.assertNotIn("evidence", voice)
+            voice["markets"] = voice_markets(registry["experts"][voice["voice_id"]])
+        persisted = payload["feature_block"]
+        weighting = {"weights": persisted["weights"], "active": persisted["weights_active"], "mean_brier": None}
+        feature = build_feature_block(voices, payload["market"], payload["policy"], weighting, home_team=payload["game"]["home_team"])
+        self.assertEqual(feature["hedge_weights"], persisted["weights"])
+        return persisted, feature
+
+    def test_seahawks_pool_margin(self) -> None:
+        persisted, feature = self._replay("sea_rules")
+        self.assertEqual(persisted["pool"]["expected_home_margin"], 4.25)
+        self.assertEqual(persisted["weights"], {"ak": 1.0, "divisional": 1.0, "schedule": 1.0, "win_total": 1.0})
+        self.assertEqual(feature["overlap"]["divisional"]["schedule"], 0.25)
+        self.assertEqual(feature["weights"], {"ak": 1.0, "divisional": 1.0, "schedule": 0.8, "win_total": 1.0})
+        self.assertEqual(feature["markets"], {"side": ["ak", "divisional", "schedule", "win_total"], "total": ["ak", "schedule"]})
+        # (6 + 5 + 5·0.8 + 1) / 3.8
+        self.assertEqual(feature["pool"]["expected_home_margin"], 4.21)
+        self.assertLess(feature["pool"]["expected_home_margin"], persisted["pool"]["expected_home_margin"])
+        self.assertEqual(feature["pool"]["home_win_probability"], 0.6258)
+        self.assertEqual(feature["pool"]["projected_total"], 47.11)  # (46·0.8 + 48) / 1.8
+        self.assertEqual(feature["shrunk"]["expected_home_margin"], 3.86)
+        self.assertEqual(feature["shrunk"]["projected_total"], 45.81)
+        self.assertEqual(feature["edges_if_shrunk"]["home_cover"], 0.0322)
+        self.assertEqual(persisted["edges_if_shrunk"]["home_cover"], 0.0328)
+        self.assertEqual(feature["edges_if_shrunk"]["over"], 0.0493)
+
+    def test_rams_side_edge(self) -> None:
+        persisted, feature = self._replay("lar_rules")
+        self.assertEqual(persisted["edges_if_shrunk"]["home_cover"], -0.0442)
+        self.assertEqual(feature["overlap"]["divisional"]["schedule"], 0.1111)
+        self.assertEqual(feature["overlap"]["divisional"]["win_total"], 0.1)
+        self.assertEqual(feature["weights"], {"ak": 1.0, "divisional": 1.0, "schedule": 0.9, "win_total": 0.9091})
+        # (4 - 2 - 2·0.9 + 2·0.9091) / 3.8091
+        self.assertEqual(feature["pool"]["expected_home_margin"], 0.53)
+        self.assertEqual(feature["shrunk"]["expected_home_margin"], 2.01)
+        self.assertEqual(feature["edges_if_shrunk"]["home_cover"], -0.0438)
+        self.assertLess(abs(feature["edges_if_shrunk"]["home_cover"]), abs(persisted["edges_if_shrunk"]["home_cover"]))
+        self.assertEqual(feature["pool"]["projected_total"], 47.63)  # ak 50 and schedule 45 at 0.9
+        self.assertEqual(feature["edges_if_shrunk"]["over"], -0.0162)
 
 
 if __name__ == "__main__":
