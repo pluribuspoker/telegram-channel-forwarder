@@ -44,6 +44,10 @@ JUDGE_MODE = "aggregator_judge"
 AGGREGATOR_MODES = {RULES_MODE, JUDGE_MODE}
 DETERMINISTIC_MODEL = "deterministic"
 DETERMINISTIC_BACKEND = "deterministic"
+RULES_EXPERT_ID = "god_rules"
+JUDGE_EXPERT_ID = "god_judge"
+# Ledger-only row for the bake-off: the mean of the two arms. Never an expert.
+MEAN_OF_ARMS_ID = "mean_of_arms"
 
 JUDGE_LABELS = tuple(f"Voice {letter}" for letter in "ABCDEFGHIJKL")
 MARKET_LABEL = "market"
@@ -517,14 +521,15 @@ def _number(value: Any, field: str) -> float:
     return number
 
 
-def _latest_row(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    return max(
-        rows,
-        key=lambda row: (
-            str(row.get("generated_at_utc") or ""),
-            str(row.get("opinion_id") or ""),
-        ),
+def _row_order(row: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(row.get("generated_at_utc") or ""),
+        str(row.get("opinion_id") or ""),
     )
+
+
+def _latest_row(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    return max(rows, key=_row_order)
 
 
 def select_voice_rows(
@@ -954,6 +959,388 @@ def ledger_row(result: dict[str, Any], *, graded_at_utc: str) -> dict[str, Any]:
         ),
         "closing_available": bool(result["closing_available"]),
     }
+
+
+# --------------------------------------------------------------------------
+# Disagreement report: the two arms on one game, and the mean-of-arms row
+
+
+def _parsed_json(value: Any) -> dict[str, Any] | None:
+    """A persisted JSON column as a dict; None when empty or not an object."""
+    if isinstance(value, dict):
+        return value
+    if value in (None, ""):
+        return None
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _latest_item(
+    items: list[tuple[dict[str, Any], dict[str, Any]]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    return max(items, key=lambda item: _row_order(item[0]))
+
+
+def arm_pairs(
+    approved_rows: Iterable[dict[str, Any]],
+    graded: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """One (rules, judge) pair per event graded for both arms.
+
+    ``graded`` is :func:`grade_all` over ``approved_rows``. The judge row
+    whose masked request names a rules row's ``input_sha256`` wins (both
+    arms on one sheet state, ``linked``); otherwise the latest row per arm
+    pairs up. Sorted by kickoff, then event id.
+    """
+    rows_by_id = {
+        str(row.get("opinion_id") or ""): row for row in approved_rows
+    }
+    by_event: dict[
+        str, dict[str, list[tuple[dict[str, Any], dict[str, Any]]]]
+    ] = {}
+    for result in graded:
+        expert_id = str(result.get("expert_id") or "")
+        if expert_id not in {RULES_EXPERT_ID, JUDGE_EXPERT_ID}:
+            continue
+        row = rows_by_id.get(str(result.get("opinion_id") or ""))
+        if row is None:
+            continue
+        by_event.setdefault(str(result["event_id"]), {}).setdefault(
+            expert_id, []
+        ).append((row, result))
+    pairs = []
+    for event_id, arms in by_event.items():
+        rules_items = arms.get(RULES_EXPERT_ID) or []
+        judge_items = arms.get(JUDGE_EXPERT_ID) or []
+        if not rules_items or not judge_items:
+            continue
+        rules_by_hash: dict[
+            str, list[tuple[dict[str, Any], dict[str, Any]]]
+        ] = {}
+        for item in rules_items:
+            rules_by_hash.setdefault(
+                str(item[0].get("input_sha256") or ""), []
+            ).append(item)
+        linked = []
+        for judge_item in judge_items:
+            request = _parsed_json(judge_item[0].get("input_json")) or {}
+            digest = str(request.get("aggregator_input_sha256") or "")
+            if digest and digest in rules_by_hash:
+                linked.append(
+                    (_latest_item(rules_by_hash[digest]), judge_item)
+                )
+        if linked:
+            rules_item, judge_item = max(
+                linked, key=lambda item: _row_order(item[1][0])
+            )
+        else:
+            rules_item = _latest_item(rules_items)
+            judge_item = _latest_item(judge_items)
+        rules_row, rules_result = rules_item
+        judge_row, judge_result = judge_item
+        pairs.append(
+            {
+                "event_id": event_id,
+                "season": rules_result.get("season"),
+                "week": rules_result.get("week"),
+                "away_team": rules_result["away_team"],
+                "home_team": rules_result["home_team"],
+                "commence_time_utc": str(
+                    rules_row.get("commence_time_utc") or ""
+                ),
+                "final": rules_result["final"],
+                "rules": rules_result,
+                "judge": judge_result,
+                "rules_row": rules_row,
+                "judge_row": judge_row,
+                "linked": bool(linked),
+            }
+        )
+    pairs.sort(
+        key=lambda pair: (
+            _parse_time(pair["commence_time_utc"]),
+            pair["event_id"],
+        )
+    )
+    return pairs
+
+
+def _graded_leg(result: dict[str, Any], kind: str) -> dict[str, Any] | None:
+    return next((leg for leg in result["legs"] if leg["kind"] == kind), None)
+
+
+def _graded_leg_label(leg: dict[str, Any] | None) -> str:
+    if leg is None:
+        return "PASS"
+    return f"{_leg_label(leg)} ({leg['result']})"
+
+
+def compare_legs(
+    rules_leg: dict[str, Any] | None,
+    judge_leg: dict[str, Any] | None,
+    *,
+    kind: str | None = None,
+) -> dict[str, Any]:
+    """Compare one graded leg per arm; ``None`` is a PASS.
+
+    Agreement is the same selection and line (two passes agree). Where the
+    arms differ, the arm that bet and won is right; against a lost bet, the
+    arm that passed; two winners, two losers, or a push leave ``neither``.
+    """
+    if kind is None:
+        kind = str((rules_leg or judge_leg or {}).get("kind") or "")
+    agreed = (rules_leg is None and judge_leg is None) or (
+        rules_leg is not None
+        and judge_leg is not None
+        and rules_leg["selection"] == judge_leg["selection"]
+        and rules_leg["line"] == judge_leg["line"]
+    )
+    right = None
+    if not agreed:
+        results = {
+            "rules": None if rules_leg is None else rules_leg["result"],
+            "judge": None if judge_leg is None else judge_leg["result"],
+        }
+        winners = [arm for arm, result in results.items() if result == "W"]
+        losers = [arm for arm, result in results.items() if result == "L"]
+        passes = [arm for arm, result in results.items() if result is None]
+        if len(winners) == 1:
+            right = winners[0]
+        elif len(losers) == 1 and len(passes) == 1:
+            right = passes[0]
+        else:
+            right = "neither"
+    return {
+        "kind": kind,
+        "agreed": agreed,
+        "rules": _graded_leg_label(rules_leg),
+        "judge": _graded_leg_label(judge_leg),
+        "right": right,
+    }
+
+
+def disagreement_report(pairs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per-game Briers and leg agreement, with season totals.
+
+    ``brier_diff_mean`` is rules minus judge over games where both Briers
+    exist; ``brier_diff_se`` is the sample standard deviation (ddof=1) over
+    the square root of that count, None below two games.
+    """
+    games = []
+    diffs: list[float] = []
+    agreed = 0
+    record = {"rules": 0, "judge": 0, "neither": 0}
+    for pair in pairs:
+        legs = [
+            compare_legs(
+                _graded_leg(pair["rules"], kind),
+                _graded_leg(pair["judge"], kind),
+                kind=kind,
+            )
+            for kind in ("side", "total")
+        ]
+        for leg in legs:
+            if leg["agreed"]:
+                agreed += 1
+            else:
+                record[leg["right"]] += 1
+        brier_rules = pair["rules"]["brier"]
+        brier_judge = pair["judge"]["brier"]
+        if brier_rules is not None and brier_judge is not None:
+            diffs.append(float(brier_rules) - float(brier_judge))
+        games.append(
+            {
+                "event": pair["event_id"],
+                "week": pair["week"],
+                "teams": f"{pair['away_team']} @ {pair['home_team']}",
+                "kickoff": pair["commence_time_utc"],
+                "linked": pair["linked"],
+                "final": pair["final"],
+                "brier_rules": brier_rules,
+                "brier_judge": brier_judge,
+                "legs": legs,
+            }
+        )
+    legs_total = 2 * len(games)
+    mean = se = None
+    if diffs:
+        mean = sum(diffs) / len(diffs)
+        if len(diffs) >= 2:
+            variance = sum((diff - mean) ** 2 for diff in diffs) / (
+                len(diffs) - 1
+            )
+            se = math.sqrt(variance) / math.sqrt(len(diffs))
+    return {
+        "games": games,
+        "totals": {
+            "n_games": len(games),
+            "legs_total": legs_total,
+            "legs_agreed": agreed,
+            "agreement_rate": (
+                None if not legs_total else round(agreed / legs_total, 4)
+            ),
+            "brier_diff_n": len(diffs),
+            "brier_diff_mean": _round(mean),
+            "brier_diff_se": _round(se),
+            "disagreement_record": record,
+        },
+    }
+
+
+def _fmt(value: Any, spec: str = ".4f") -> str:
+    return "—" if value is None else format(float(value), spec)
+
+
+def format_disagreement_report(report: dict[str, Any]) -> list[str]:
+    """Plain aligned lines for a terminal; ``—`` marks a missing number."""
+    games = report["games"]
+    if not games:
+        return ["no games graded for both arms"]
+    totals = report["totals"]
+    width = max(len(game["teams"]) for game in games)
+    count = int(totals["n_games"])
+    lines = [
+        f"Disagreement report: {count} game{'s' if count != 1 else ''} "
+        "graded for both arms"
+    ]
+    for game in games:
+        week = "wk—" if game["week"] in (None, "") else f"wk{game['week']}"
+        diff = (
+            None
+            if game["brier_rules"] is None or game["brier_judge"] is None
+            else float(game["brier_rules"]) - float(game["brier_judge"])
+        )
+        lines.append(
+            f"{week:<5} {game['teams']:<{width}}  final={game['final']:<7} "
+            f"brier rules={_fmt(game['brier_rules'])} "
+            f"judge={_fmt(game['brier_judge'])} diff={_fmt(diff, '+.4f')}  "
+            f"linked={'yes' if game['linked'] else 'no'}"
+        )
+        for leg in game["legs"]:
+            if leg["agreed"]:
+                lines.append(f"      {leg['kind']:<6} agree   {leg['rules']}")
+            else:
+                lines.append(
+                    f"      {leg['kind']:<6} differ  rules={leg['rules']}  "
+                    f"judge={leg['judge']}  right={leg['right']}"
+                )
+    rate = totals["agreement_rate"]
+    rate_text = "—" if rate is None else format(float(rate), ".1%")
+    lines.append(
+        f"games={totals['n_games']} legs={totals['legs_total']} "
+        f"agreed={totals['legs_agreed']} agreement_rate={rate_text}"
+    )
+    lines.append(
+        "brier diff (rules - judge): "
+        f"mean={_fmt(totals['brier_diff_mean'], '+.4f')} "
+        f"se={_fmt(totals['brier_diff_se'])} n={totals['brier_diff_n']}"
+    )
+    record = totals["disagreement_record"]
+    lines.append(
+        f"disagreement record: rules={record['rules']} "
+        f"judge={record['judge']} neither={record['neither']}"
+    )
+    return lines
+
+
+def mean_of_arms_results(
+    pairs: list[dict[str, Any]],
+    *,
+    finals: Iterable[dict[str, Any]],
+    snapshots: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Grade the mean of the two arms' estimates per pair, for the ledger only.
+
+    The bake-off scores the mean as a free third row. It is not an expert:
+    it never enters the registry, the scoreboard, Hedge weights, or voice
+    selection. Legs come from the shared policy on the rules row's persisted
+    market; policy keys added since that row was persisted take their
+    defaults. Results have the :func:`grade_opinion_row` shape plus
+    ``estimate`` and ``arms``, so :func:`ledger_row` flattens them.
+    """
+    finals = list(finals)
+    snapshots = list(snapshots)
+    results = []
+    for pair in pairs:
+        rules_row, judge_row = pair["rules_row"], pair["judge_row"]
+        rules_input = _parsed_json(rules_row.get("input_json"))
+        if not rules_input or not isinstance(rules_input.get("market"), dict):
+            raise ValueError(
+                f"Rules opinion {rules_row.get('opinion_id')} has no "
+                "persisted aggregator input"
+            )
+        policy = {**DEFAULT_POLICY, **(rules_input.get("policy") or {})}
+        probability = (
+            _number(rules_row.get("home_win_probability"), "home_win_probability")
+            + _number(judge_row.get("home_win_probability"), "home_win_probability")
+        ) / 2
+        margin = (
+            _number(rules_row.get("expected_home_margin"), "expected_home_margin")
+            + _number(judge_row.get("expected_home_margin"), "expected_home_margin")
+        ) / 2
+        projected_total = sum(
+            int(_number(row.get("predicted_away_score"), "predicted_away_score"))
+            + int(_number(row.get("predicted_home_score"), "predicted_home_score"))
+            for row in (rules_row, judge_row)
+        ) / 2
+        away_team = str(pair["away_team"])
+        home_team = str(pair["home_team"])
+        legs = apply_policy(
+            home_win_probability=probability,
+            expected_home_margin=margin,
+            projected_total=projected_total,
+            market=rules_input["market"],
+            policy=policy,
+            away_team=away_team,
+            home_team=home_team,
+        )
+        away_score, home_score = _scores_from_estimate(
+            probability, margin, projected_total
+        )
+        rules_id = str(rules_row.get("opinion_id") or "")
+        judge_id = str(judge_row.get("opinion_id") or "")
+        row = {
+            "opinion_id": f"mean:{rules_id}:{judge_id}",
+            "expert_id": MEAN_OF_ARMS_ID,
+            "generated_at_utc": max(
+                str(rules_row.get("generated_at_utc") or ""),
+                str(judge_row.get("generated_at_utc") or ""),
+            ),
+            "event_id": pair["event_id"],
+            "season": pair["season"],
+            "week": pair["week"],
+            "commence_time_utc": pair["commence_time_utc"],
+            "away_team": away_team,
+            "home_team": home_team,
+            "predicted_winner": home_team if probability > 0.5 else away_team,
+            "home_win_probability": round(probability, 4),
+            "expected_home_margin": round(margin, 2),
+            "predicted_away_score": away_score,
+            "predicted_home_score": home_score,
+            "confidence_stars": max(
+                legs["side"]["confidence_stars"],
+                legs["total"]["confidence_stars"],
+            ),
+            "pick_market": "side_and_total",
+            "side_pick_json": canonical_json(legs["side"]),
+            "total_pick_json": canonical_json(legs["total"]),
+        }
+        result = grade_opinion_row(row, finals=finals, snapshots=snapshots)
+        if result is None:
+            continue
+        result["estimate"] = {
+            "home_win_probability": row["home_win_probability"],
+            "expected_home_margin": row["expected_home_margin"],
+            "projected_total": round(projected_total, 2),
+            "predicted_away_score": away_score,
+            "predicted_home_score": home_score,
+        }
+        result["arms"] = {"rules": rules_id, "judge": judge_id}
+        results.append(result)
+    return results
 
 
 def hedge_weights(
@@ -1676,6 +2063,20 @@ def _price_move_texts(
     ]
 
 
+def _scores_from_estimate(
+    probability: float, margin: float, projected_total: float
+) -> tuple[int, int]:
+    """Predicted (away, home) scores from a total and margin, never tied."""
+    home_score = round((projected_total + margin) / 2)
+    away_score = round((projected_total - margin) / 2)
+    if home_score == away_score:
+        if probability > 0.5:
+            home_score += 1
+        else:
+            away_score += 1
+    return int(away_score), int(home_score)
+
+
 def normalize_aggregator_opinion(
     response: dict[str, Any],
     input_payload: dict[str, Any],
@@ -1755,13 +2156,9 @@ def normalize_aggregator_opinion(
             "discarded_considerations must contain non-empty strings"
         )
 
-    home_score = round((projected_total + margin) / 2)
-    away_score = round((projected_total - margin) / 2)
-    if home_score == away_score:
-        if probability > 0.5:
-            home_score += 1
-        else:
-            away_score += 1
+    away_score, home_score = _scores_from_estimate(
+        probability, margin, projected_total
+    )
     winner = home_team if probability > 0.5 else away_team
     legs = apply_policy(
         home_win_probability=probability,

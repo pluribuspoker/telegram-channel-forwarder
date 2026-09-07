@@ -2,8 +2,14 @@
 """Grade every approved MOE opinion against ESPN finals and closing lines.
 
 Prints the per-expert scoreboard (Brier, ATS and O/U at close, leg record,
-closing-line value) and, with --write, appends one row per graded opinion to
-the append-only ``moe_grades`` tab, skipping opinion ids already present.
+closing-line value), then the God Expert disagreement report: per game
+graded for both arms, each arm's Brier, whether the legs agreed, and who was
+right where they differed; season totals give the paired Brier difference
+with its standard error, the leg agreement rate, and the disagreement
+record. With --write, appends one row per graded opinion to the append-only
+``moe_grades`` tab, then one ``mean_of_arms`` row per paired game (the
+bake-off's free third row: a ledger row, never an expert), skipping opinion
+ids already present.
 """
 
 from __future__ import annotations
@@ -26,11 +32,16 @@ from moe import approved_opinions, configured_opinion_store
 from moe_god import (
     GRADE_HEADERS,
     GRADES_TAB,
+    MEAN_OF_ARMS_ID,
     aggregator_policy,
+    arm_pairs,
     build_scoreboard,
+    disagreement_report,
+    format_disagreement_report,
     grade_all,
     ledger_row,
     load_registry,
+    mean_of_arms_results,
 )
 from nfl_game_history import (
     GAME_HISTORY_HEADERS,
@@ -77,7 +88,10 @@ def main() -> None:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Print the scoreboard as JSON instead of a table.",
+        help=(
+            "Print the scoreboard, the disagreement report, and the "
+            "mean-of-arms grades as JSON instead of text."
+        ),
     )
     args = parser.parse_args()
 
@@ -125,8 +139,21 @@ def main() -> None:
         registry=registry,
         policy=policy,
     )
+    pairs = arm_pairs(approved, graded)
+    report = disagreement_report(pairs)
+    means = mean_of_arms_results(pairs, finals=finals, snapshots=snapshots)
     if args.json:
-        print(json.dumps(scoreboard, indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "scoreboard": scoreboard,
+                    "disagreement": report,
+                    "mean_of_arms": means,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
     else:
         print(
             f"Season {season}: {scoreboard['resolved_games']} resolved games, "
@@ -135,6 +162,9 @@ def main() -> None:
         )
         for expert_id, record in sorted(scoreboard["by_expert"].items()):
             print(_record_line(expert_id, record))
+        print()
+        for line in format_disagreement_report(report):
+            print(line)
     if not args.write:
         return
     worksheet = ensure_worksheet(spreadsheet, GRADES_TAB, GRADE_HEADERS)
@@ -145,7 +175,7 @@ def main() -> None:
     )
     new_rows = [
         ledger_row(result, graded_at_utc=graded_at)
-        for result in graded
+        for result in graded + means
         if result["opinion_id"] not in existing
     ]
     if not new_rows:
@@ -156,7 +186,13 @@ def main() -> None:
         [[row.get(header, "") for header in GRADE_HEADERS] for row in new_rows],
         value_input_option="RAW",
     )
-    print(f"Appended {len(new_rows)} graded opinions to {GRADES_TAB}.")
+    mean_count = sum(
+        1 for row in new_rows if row["expert_id"] == MEAN_OF_ARMS_ID
+    )
+    print(
+        f"Appended {len(new_rows)} graded rows to {GRADES_TAB} "
+        f"({mean_count} mean-of-arms)."
+    )
 
 
 if __name__ == "__main__":

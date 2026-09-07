@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import math
+import statistics
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,24 +20,34 @@ from moe import (
 from moe_god import (
     ADVERSE_MOVE_REASON,
     AGGREGATOR_PROFILE,
+    DEFAULT_POLICY,
     DETERMINISTIC_BACKEND,
     DETERMINISTIC_MODEL,
     EV_FLOOR_REASON,
+    GRADE_HEADERS,
     JUDGE_REQUEST_PROFILE,
+    MEAN_OF_ARMS_ID,
     NO_EXPECTATION_REASON,
     aggregator_policy,
     american_to_implied,
     apply_policy,
+    arm_pairs,
     build_aggregator_input,
     build_judge_request,
     build_market_block,
     build_scoreboard,
     canonical_json,
+    compare_legs,
     cover_probability,
+    disagreement_report,
     fair_pair,
+    format_disagreement_report,
+    grade_all,
     grade_opinion_row,
     hedge_weights,
+    ledger_row,
     load_registry,
+    mean_of_arms_results,
     movement_since_open,
     normalize_aggregator_opinion,
     over_probability,
@@ -1285,6 +1296,425 @@ class Week1ReplayTests(unittest.TestCase):
                     self.assertIn("pass_reason", leg)
                     del leg["pass_reason"]
                     self.assertEqual(leg, _persisted_leg(row, kind))
+
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "god_week1"
+PASS_LEG = {"selection": "PASS", "line": None, "confidence_stars": 1}
+
+
+def _stamp(row: dict) -> dict:
+    """Recompute the approval hashes after editing a hashed column."""
+    digest = opinion_output_sha256(row)
+    row["output_sha256"] = digest
+    row["approved_output_sha256"] = (
+        digest if row.get("review_status") == "approved" else ""
+    )
+    return row
+
+
+def _with_input(row: dict, payload: dict) -> dict:
+    """Persist ``payload`` as the row's input the way generation does."""
+    row["input_json"] = canonical_json(payload)
+    row["input_sha256"] = sha256_text(row["input_json"])
+    return _stamp(row)
+
+
+def _final(
+    event_id: str,
+    kickoff: str,
+    away_score: int,
+    home_score: int,
+    *,
+    away: str = AWAY,
+    home: str = HOME,
+) -> dict:
+    return {
+        "event_id": f"espn-{event_id}",
+        "kickoff_utc": kickoff,
+        "away_team": away,
+        "home_team": home,
+        "away_score": away_score,
+        "home_score": home_score,
+    }
+
+
+def _arm(
+    expert_id: str,
+    *,
+    event_id: str,
+    kickoff: str,
+    away: str = AWAY,
+    home: str = HOME,
+    probability: float,
+    margin: float,
+    away_score: int,
+    home_score: int,
+    side_leg: dict | None = None,
+    total_leg: dict | None = None,
+    generated_at: str = "2026-09-05T02:00:00+00:00",
+    opinion_id: str | None = None,
+) -> dict:
+    """An approved row for one arm; legs default to PASS."""
+    return _opinion(
+        expert_id,
+        model=DETERMINISTIC_MODEL if expert_id == "god_rules" else "claude-fable-5-1",
+        probability=probability,
+        margin=margin,
+        away_score=away_score,
+        home_score=home_score,
+        stars=1,
+        generated_at=generated_at,
+        opinion_id=opinion_id or f"{expert_id}-{event_id}",
+        event_id=event_id,
+        away=away,
+        home=home,
+        kickoff=kickoff,
+        side_leg=side_leg or PASS_LEG,
+        total_leg=total_leg or PASS_LEG,
+    )
+
+
+def _fixture_row(name: str) -> dict:
+    """A persisted Week 1 row as the sheet returns it, approved.
+
+    The fixture holds the JSON columns parsed; canonical JSON of
+    ``input_json`` reproduces ``input_sha256``. The fixture omits the factor
+    columns, so the approval hash is recomputed rather than copied.
+    """
+    data = json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
+    row = {header: "" for header in OPINION_HEADERS}
+    for key, value in data.items():
+        if key == "fixture_note":
+            continue
+        row[key] = canonical_json(value) if isinstance(value, (dict, list)) else value
+    row["review_status"] = "approved"
+    return _stamp(row)
+
+
+class DisagreementReportTests(unittest.TestCase):
+    """Both arms on three games, graded without closing lines."""
+
+    E1 = {"event_id": "evt-c", "kickoff": "2026-09-13T17:00:00+00:00", "away": AWAY, "home": HOME}
+    E2 = {"event_id": "evt-b", "kickoff": "2026-09-13T20:25:00+00:00", "away": "San Francisco 49ers", "home": "Los Angeles Rams"}
+    E3 = {"event_id": "evt-a", "kickoff": "2026-09-14T00:20:00+00:00", "away": "Dallas Cowboys", "home": "Philadelphia Eagles"}
+
+    def setUp(self) -> None:
+        self.registry = load_registry()
+        self.policy = aggregator_policy(self.registry)
+        e1, e2, e3 = self.E1, self.E2, self.E3
+        self.finals = [
+            _final("evt-c", e1["kickoff"], 20, 27),
+            _final("evt-b", e2["kickoff"], 24, 20, away=e2["away"], home=e2["home"]),
+            _final("evt-a", e3["kickoff"], 21, 24, away=e3["away"], home=e3["home"]),
+        ]
+
+        def home_side(game: dict) -> dict:
+            return {"selection": game["home"], "line": -3.5, "confidence_stars": 1}
+
+        def away_side(game: dict) -> dict:
+            return {"selection": game["away"], "line": 3.5, "confidence_stars": 1}
+
+        def over(line: float) -> dict:
+            return {"selection": "Over", "line": line, "confidence_stars": 1}
+
+        self.rows = [
+            # 20-27: both arms take Seahawks -3.5 and Over 44.5, both win. An
+            # older rules row on the same game must lose to the latest one.
+            _arm("god_rules", **e1, probability=0.55, margin=1, away_score=21, home_score=22, generated_at="2026-09-04T00:00:00+00:00", opinion_id="god_rules-evt-c-old"),
+            _arm("god_rules", **e1, probability=0.70, margin=5, away_score=21, home_score=26, side_leg=home_side(e1), total_leg=over(44.5)),
+            _arm("god_judge", **e1, probability=0.60, margin=3, away_score=21, home_score=24, side_leg=home_side(e1), total_leg=over(44.5)),
+            # 24-20 (total 44): rules takes 49ers +3.5 (wins) and Over 44.5
+            # (loses); the judge passes both.
+            _arm("god_rules", **e2, probability=0.45, margin=-1, away_score=23, home_score=22, side_leg=away_side(e2), total_leg=over(44.5)),
+            _arm("god_judge", **e2, probability=0.40, margin=-2, away_score=23, home_score=21),
+            # 21-24 (total 45): opposite sides, the judge's Cowboys +3.5 wins;
+            # rules' Over 45 pushes against a pass.
+            _arm("god_rules", **e3, probability=0.60, margin=4, away_score=21, home_score=25, side_leg=home_side(e3), total_leg=over(45)),
+            _arm("god_judge", **e3, probability=0.55, margin=1, away_score=22, home_score=23, side_leg=away_side(e3)),
+        ]
+
+    def _pairs(self, rows: list[dict] | None = None) -> list[dict]:
+        rows = self.rows if rows is None else rows
+        graded = grade_all(rows, finals=self.finals, snapshots=[], registry=self.registry, policy=self.policy)
+        return arm_pairs(rows, graded)
+
+    def test_pairs_follow_kickoff_and_fall_back_to_latest_per_arm(self) -> None:
+        pairs = self._pairs()
+        self.assertEqual([pair["event_id"] for pair in pairs], ["evt-c", "evt-b", "evt-a"])
+        self.assertEqual([pair["linked"] for pair in pairs], [False, False, False])
+        first = pairs[0]
+        self.assertEqual(first["rules_row"]["opinion_id"], "god_rules-evt-c")
+        self.assertEqual(first["rules"]["home_win_probability"], 0.7)
+        self.assertEqual(first["judge_row"]["opinion_id"], "god_judge-evt-c")
+        self.assertEqual((first["away_team"], first["home_team"], first["final"]), (AWAY, HOME, "20-27"))
+        self.assertEqual((first["season"], first["week"], first["commence_time_utc"]), (2026, 1, self.E1["kickoff"]))
+        self.assertEqual(first["judge"]["expert_id"], "god_judge")
+        # A game graded for one arm only never pairs.
+        self.assertEqual(self._pairs(self.rows[:2]), [])
+
+    def test_compare_legs(self) -> None:
+        def leg(kind: str, selection: str, line: float, result: str) -> dict:
+            return {"kind": kind, "selection": selection, "line": line, "result": result, "clv_points": None}
+
+        home_w, home_l, home_p = (leg("side", HOME, -3.5, r) for r in "WLP")
+        away_w, away_l, away_p = (leg("side", AWAY, 3.5, r) for r in "WLP")
+        self.assertEqual(
+            compare_legs(home_w, home_w),
+            {"kind": "side", "agreed": True, "rules": f"{HOME} -3.5 (W)", "judge": f"{HOME} -3.5 (W)", "right": None},
+        )
+        self.assertEqual(
+            compare_legs(None, None, kind="total"),
+            {"kind": "total", "agreed": True, "rules": "PASS", "judge": "PASS", "right": None},
+        )
+        self.assertEqual(compare_legs(home_w, None)["right"], "rules")  # bet and won against a pass
+        self.assertEqual(compare_legs(home_l, None)["right"], "judge")  # bet and lost against a pass
+        self.assertEqual(compare_legs(None, away_w)["right"], "judge")
+        self.assertEqual(compare_legs(None, away_l)["right"], "rules")
+        self.assertEqual(compare_legs(home_l, away_w)["right"], "judge")  # opposite sides
+        self.assertEqual(compare_legs(home_w, away_l)["right"], "rules")
+        self.assertEqual(compare_legs(home_p, None)["right"], "neither")  # push
+        self.assertEqual(compare_legs(None, away_p)["right"], "neither")
+        self.assertEqual(compare_legs(home_p, away_p)["right"], "neither")
+        self.assertEqual(compare_legs(home_l, away_l)["right"], "neither")  # two losers
+        same_side_other_line = compare_legs(home_w, leg("side", HOME, -4.0, "W"))
+        self.assertFalse(same_side_other_line["agreed"])
+        self.assertEqual(same_side_other_line["right"], "neither")  # two winners
+        self.assertEqual(compare_legs(None, leg("total", "Over", 44.5, "L"))["judge"], "Over 44.5 (L)")
+
+    def test_report_games_and_totals(self) -> None:
+        report = disagreement_report(self._pairs())
+        games = report["games"]
+        self.assertEqual(
+            [game["teams"] for game in games],
+            [f"{AWAY} @ {HOME}", "San Francisco 49ers @ Los Angeles Rams", "Dallas Cowboys @ Philadelphia Eagles"],
+        )
+        self.assertEqual([game["final"] for game in games], ["20-27", "24-20", "21-24"])
+        self.assertEqual([[leg["agreed"] for leg in game["legs"]] for game in games], [[True, True], [False, False], [False, False]])
+        self.assertEqual([[leg["right"] for leg in game["legs"]] for game in games], [[None, None], ["rules", "judge"], ["judge", "neither"]])
+        self.assertEqual([leg["kind"] for leg in games[0]["legs"]], ["side", "total"])
+        self.assertEqual(games[1]["legs"][0]["rules"], "San Francisco 49ers +3.5 (W)")
+        self.assertEqual(games[1]["legs"][0]["judge"], "PASS")
+        self.assertEqual(games[1]["legs"][1]["rules"], "Over 44.5 (L)")
+        self.assertEqual(games[2]["legs"][0]["judge"], "Dallas Cowboys +3.5 (W)")
+        self.assertEqual(games[2]["legs"][1]["rules"], "Over 45 (P)")
+        self.assertAlmostEqual(games[0]["brier_rules"], 0.09, places=6)
+        self.assertAlmostEqual(games[0]["brier_judge"], 0.16, places=6)
+        totals = report["totals"]
+        self.assertEqual((totals["n_games"], totals["legs_total"], totals["legs_agreed"]), (3, 6, 2))
+        self.assertAlmostEqual(totals["agreement_rate"], round(2 / 6, 4), places=6)
+        diffs = [0.09 - 0.16, 0.2025 - 0.16, 0.16 - 0.2025]
+        self.assertEqual(totals["brier_diff_n"], 3)
+        self.assertAlmostEqual(totals["brier_diff_mean"], round(statistics.mean(diffs), 4), places=6)
+        self.assertAlmostEqual(totals["brier_diff_mean"], -0.0233, places=4)
+        self.assertAlmostEqual(totals["brier_diff_se"], round(statistics.stdev(diffs) / math.sqrt(len(diffs)), 4), places=6)
+        self.assertAlmostEqual(totals["brier_diff_se"], 0.0339, places=4)
+        self.assertEqual(totals["disagreement_record"], {"rules": 1, "judge": 2, "neither": 1})
+        json.dumps(report)  # the --json output must serialize
+
+    def test_single_game_has_no_standard_error(self) -> None:
+        totals = disagreement_report(self._pairs()[:1])["totals"]
+        self.assertEqual(totals["brier_diff_n"], 1)
+        self.assertAlmostEqual(totals["brier_diff_mean"], -0.07, places=4)
+        self.assertIsNone(totals["brier_diff_se"])
+        self.assertEqual(totals["agreement_rate"], 1.0)
+        self.assertEqual(totals["disagreement_record"], {"rules": 0, "judge": 0, "neither": 0})
+
+    def test_missing_brier_is_left_out_of_the_difference(self) -> None:
+        pairs = self._pairs()
+        pairs[0]["rules"]["brier"] = None  # a tie leaves no Brier
+        totals = disagreement_report(pairs)["totals"]
+        self.assertEqual(totals["brier_diff_n"], 2)
+        self.assertAlmostEqual(totals["brier_diff_mean"], 0.0, places=6)
+        self.assertEqual(totals["n_games"], 3)
+
+    def test_formatted_report(self) -> None:
+        lines = format_disagreement_report(disagreement_report(self._pairs()))
+        self.assertEqual(lines[0], "Disagreement report: 3 games graded for both arms")
+        self.assertTrue(lines[1].startswith(f"wk1   {AWAY} @ {HOME}"), lines[1])
+        self.assertIn("final=20-27   brier rules=0.0900 judge=0.1600 diff=-0.0700  linked=no", lines[1])
+        self.assertEqual(lines[2].strip(), f"side   agree   {HOME} -3.5 (W)")
+        self.assertEqual(lines[3].strip(), "total  agree   Over 44.5 (W)")
+        self.assertIn("side   differ  rules=San Francisco 49ers +3.5 (W)  judge=PASS  right=rules", lines[5])
+        self.assertIn("total  differ  rules=Over 45 (P)  judge=PASS  right=neither", lines[9])
+        self.assertEqual(lines[-3], "games=3 legs=6 agreed=2 agreement_rate=33.3%")
+        self.assertEqual(lines[-2], "brier diff (rules - judge): mean=-0.0233 se=0.0339 n=3")
+        self.assertEqual(lines[-1], "disagreement record: rules=1 judge=2 neither=1")
+        self.assertEqual(len(lines), 1 + 3 * 3 + 3)
+        single = format_disagreement_report(disagreement_report(self._pairs()[:1]))
+        self.assertEqual(single[0], "Disagreement report: 1 game graded for both arms")
+        self.assertEqual(single[-2], "brier diff (rules - judge): mean=-0.0700 se=— n=1")
+        self.assertEqual(format_disagreement_report(disagreement_report([])), ["no games graded for both arms"])
+
+    def test_scoreboard_never_lists_mean_of_arms(self) -> None:
+        board = build_scoreboard(self.rows, finals=self.finals, snapshots=[], registry=self.registry, policy=self.policy, as_of="now")
+        self.assertNotIn(MEAN_OF_ARMS_ID, board["by_expert"])
+        self.assertEqual(board["by_expert"]["god_rules"]["resolved"], 4)  # three games plus the older row
+        self.assertEqual(board["by_expert"]["god_judge"]["resolved"], 3)
+        self.assertNotIn(MEAN_OF_ARMS_ID, hedge_weights(board, list(board["by_expert"]), self.policy)["weights"])
+        # The mean needs the rules row's persisted input; these rows carry none.
+        with self.assertRaises(ValueError):
+            mean_of_arms_results(self._pairs(), finals=self.finals, snapshots=[])
+
+
+class MeanOfArmsTests(unittest.TestCase):
+    """The mean of the two arms, graded from the rules row's persisted input."""
+
+    HOME_35 = {"selection": HOME, "line": -3.5, "confidence_stars": 1}
+    OVER_445 = {"selection": "Over", "line": 44.5, "confidence_stars": 1}
+
+    def setUp(self) -> None:
+        self.registry = load_registry()
+        self.policy = aggregator_policy(self.registry)
+        committee = _committee()
+        self.payload = build_aggregator_input(
+            _game(), approved_opinions=committee, finals=[], snapshots=[], registry=self.registry, policy=self.policy
+        )
+        self.rules = _with_input(
+            _arm("god_rules", event_id=EVENT_ID, kickoff=KICKOFF, probability=0.70, margin=5, away_score=21, home_score=26, side_leg=self.HOME_35, total_leg=self.OVER_445, opinion_id="rules-sea"),
+            self.payload,
+        )
+        self.judge = _with_input(
+            _arm("god_judge", event_id=EVENT_ID, kickoff=KICKOFF, probability=0.60, margin=3, away_score=21, home_score=24, opinion_id="judge-sea"),
+            build_judge_request(self.payload),
+        )
+        # A newer judge row from another sheet state must not displace the linked one.
+        self.stray = _with_input(
+            _arm("god_judge", event_id=EVENT_ID, kickoff=KICKOFF, probability=0.90, margin=10, away_score=17, home_score=27, generated_at="2026-09-08T02:00:00+00:00", opinion_id="judge-sea-stray"),
+            {**build_judge_request(self.payload), "aggregator_input_sha256": "0" * 64},
+        )
+        self.rows = committee + [self.rules, self.judge, self.stray]
+        self.finals = [_final("sea", KICKOFF, 20, 27)]
+        # Closing: home -4.5, total 45.5.
+        self.snapshots = [
+            _snapshot(EVENT_ID, "2026-09-09T23:50:00+00:00", away="4.5,-110,170|nodata,nodata,nodata|nodata,nodata,nodata", home="-4.5,-110,-200|nodata,nodata,nodata|nodata,nodata,nodata", totals="45.5,-110,-110|nodata,nodata,nodata|nodata,nodata,nodata"),
+        ]
+
+    def _pairs(self, rows: list[dict] | None = None) -> list[dict]:
+        rows = self.rows if rows is None else rows
+        graded = grade_all(rows, finals=self.finals, snapshots=self.snapshots, registry=self.registry, policy=self.policy)
+        return arm_pairs(rows, graded)
+
+    def test_hash_linked_pair_beats_newer_unlinked_judge_row(self) -> None:
+        self.assertEqual(json.loads(self.judge["input_json"])["aggregator_input_sha256"], self.rules["input_sha256"])
+        pairs = self._pairs()
+        self.assertEqual(len(pairs), 1)
+        self.assertTrue(pairs[0]["linked"])
+        self.assertEqual(pairs[0]["rules_row"]["opinion_id"], "rules-sea")
+        self.assertEqual(pairs[0]["judge_row"]["opinion_id"], "judge-sea")
+        # Without the linked judge row the newest judge row pairs up, unlinked.
+        pairs = self._pairs([row for row in self.rows if row["opinion_id"] != "judge-sea"])
+        self.assertFalse(pairs[0]["linked"])
+        self.assertEqual(pairs[0]["judge_row"]["opinion_id"], "judge-sea-stray")
+
+    def test_mean_estimate_legs_and_grade(self) -> None:
+        means = mean_of_arms_results(self._pairs(), finals=self.finals, snapshots=self.snapshots)
+        self.assertEqual(len(means), 1)
+        mean = means[0]
+        self.assertEqual(mean["expert_id"], MEAN_OF_ARMS_ID)
+        self.assertEqual(mean["opinion_id"], "mean:rules-sea:judge-sea")
+        self.assertEqual(mean["arms"], {"rules": "rules-sea", "judge": "judge-sea"})
+        self.assertEqual((mean["event_id"], mean["season"], mean["week"], mean["final"]), (EVENT_ID, 2026, 1, "20-27"))
+        self.assertAlmostEqual(mean["home_win_probability"], 0.65, places=6)  # (0.70 + 0.60) / 2
+        self.assertEqual(
+            mean["estimate"],
+            {"home_win_probability": 0.65, "expected_home_margin": 4.0, "projected_total": 46.0, "predicted_away_score": 21, "predicted_home_score": 25},
+        )
+        self.assertAlmostEqual(mean["brier"], 0.35**2, places=6)
+        self.assertEqual(mean["home_won"], 1.0)
+        expected = apply_policy(
+            home_win_probability=0.65, expected_home_margin=4.0, projected_total=46.0, market=self.payload["market"], policy=self.policy, away_team=AWAY, home_team=HOME
+        )
+        legs = {leg["kind"]: leg for leg in mean["legs"]}
+        self.assertEqual((legs["side"]["selection"], legs["side"]["line"]), (expected["side"]["selection"], expected["side"]["line"]))
+        self.assertEqual((legs["side"]["selection"], legs["side"]["line"], legs["side"]["result"]), (HOME, -3.5, "W"))
+        self.assertEqual((legs["total"]["selection"], legs["total"]["line"], legs["total"]["result"]), ("Over", 44.5, "W"))
+        self.assertEqual(legs["side"]["clv_points"], 1.0)  # took -3.5, closed -4.5
+        self.assertEqual(legs["total"]["clv_points"], 1.0)  # Over 44.5, closed 45.5
+        self.assertEqual(mean["ats_at_close"], "W")
+        self.assertEqual(mean["ou_at_close"], "W")  # mean total 46 leans over the 45.5 close; 47 landed
+        self.assertTrue(mean["closing_available"])
+        json.dumps(means)
+
+    def test_persisted_policy_governs_and_missing_keys_take_defaults(self) -> None:
+        pairs = self._pairs()
+        rules_input = json.loads(self.rules["input_json"])
+        # The persisted policy wins over the live registry: a 10% bar passes both legs.
+        # (input_sha256 stays as is: pairing reads the hash column, not the content.)
+        strict = {**rules_input, "policy": {**rules_input["policy"], "edge_threshold": 0.10}}
+        pairs[0]["rules_row"] = {**self.rules, "input_json": canonical_json(strict)}
+        means = mean_of_arms_results(pairs, finals=self.finals, snapshots=[])
+        self.assertEqual(means[0]["legs"], [])
+        # A key the row predates takes its default, so the legs bet again.
+        self.assertEqual(DEFAULT_POLICY["edge_threshold"], 0.03)
+        older = {**rules_input, "policy": {key: value for key, value in rules_input["policy"].items() if key != "edge_threshold"}}
+        pairs[0]["rules_row"] = {**self.rules, "input_json": canonical_json(older)}
+        means = mean_of_arms_results(pairs, finals=self.finals, snapshots=[])
+        self.assertEqual([(leg["kind"], leg["selection"]) for leg in means[0]["legs"]], [("side", HOME), ("total", "Over")])
+        self.assertFalse(means[0]["closing_available"])
+
+    def test_ledger_row_flattens_the_mean(self) -> None:
+        mean = mean_of_arms_results(self._pairs(), finals=self.finals, snapshots=self.snapshots)[0]
+        row = ledger_row(mean, graded_at_utc="2026-09-10T12:00:00+00:00")
+        self.assertEqual(set(row), set(GRADE_HEADERS))
+        self.assertEqual(row["expert_id"], MEAN_OF_ARMS_ID)
+        self.assertEqual(row["opinion_id"], "mean:rules-sea:judge-sea")
+        self.assertEqual((row["side_selection"], row["side_line"], row["side_result"], row["side_clv_points"]), (HOME, -3.5, "W", 1.0))
+        self.assertEqual((row["total_selection"], row["total_line"], row["total_result"], row["total_clv_points"]), ("Over", 44.5, "W", 1.0))
+        self.assertEqual((row["season"], row["week"], row["final"], row["home_won"]), (2026, 1, "20-27", 1))
+        self.assertAlmostEqual(row["brier"], 0.1225, places=6)
+        self.assertTrue(row["closing_available"])
+
+    def test_mean_never_reaches_the_scoreboard_or_weights(self) -> None:
+        # A stray row claiming the id is neither a voice nor an aggregator.
+        stray = _opinion(MEAN_OF_ARMS_ID, model=DETERMINISTIC_MODEL, probability=0.65, margin=4, away_score=21, home_score=25)
+        rows = self.rows + [stray]
+        self.assertNotIn(MEAN_OF_ARMS_ID, self.registry["experts"])
+        self.assertNotIn(MEAN_OF_ARMS_ID, {item[0] for item in select_voice_rows(rows, event_id=EVENT_ID, registry=self.registry, policy=self.policy)})
+        board = build_scoreboard(rows, finals=self.finals, snapshots=self.snapshots, registry=self.registry, policy=self.policy, as_of="now")
+        self.assertNotIn(MEAN_OF_ARMS_ID, board["by_expert"])
+        self.assertEqual(board["by_expert"]["god_rules"]["resolved"], 1)
+        self.assertEqual(board["by_expert"]["god_judge"]["resolved"], 2)
+        self.assertNotIn(MEAN_OF_ARMS_ID, hedge_weights(board, list(board["by_expert"]), self.policy)["weights"])
+        graded = grade_all(rows, finals=self.finals, snapshots=self.snapshots, registry=self.registry, policy=self.policy)
+        self.assertNotIn(MEAN_OF_ARMS_ID, {result["expert_id"] for result in graded})
+
+    def test_week1_fixture_pair_links_by_hash(self) -> None:
+        rules = _fixture_row("sea_rules")
+        judge = _fixture_row("sea_judge")
+        self.assertEqual(sha256_text(rules["input_json"]), rules["input_sha256"])
+        self.assertEqual(sha256_text(judge["input_json"]), judge["input_sha256"])
+        self.assertEqual(json.loads(judge["input_json"])["aggregator_input_sha256"], rules["input_sha256"])
+        rows = [rules, judge]
+        finals = [_final("sea-week1", "2026-09-10T00:20:00+00:00", 20, 27)]
+        graded = grade_all(rows, finals=finals, snapshots=[], registry=self.registry, policy=self.policy)
+        self.assertEqual({result["expert_id"] for result in graded}, {"god_rules", "god_judge"})
+        pairs = arm_pairs(rows, graded)
+        self.assertEqual(len(pairs), 1)
+        pair = pairs[0]
+        self.assertTrue(pair["linked"])
+        self.assertEqual(pair["rules_row"]["opinion_id"], "c884d868-3e1e-4b58-abba-4fa3707e08d8")
+        self.assertEqual(pair["judge_row"]["opinion_id"], "444bf3de-ceba-4862-b423-0a5041da0763")
+        self.assertEqual((pair["week"], pair["final"], pair["home_team"]), (1, "20-27", HOME))
+        report = disagreement_report(pairs)
+        game = report["games"][0]
+        # Rules bet Seahawks -3.5 and Over 44.5 (both won); the judge passed both.
+        self.assertEqual([leg["rules"] for leg in game["legs"]], ["Seattle Seahawks -3.5 (W)", "Over 44.5 (W)"])
+        self.assertEqual([leg["judge"] for leg in game["legs"]], ["PASS", "PASS"])
+        self.assertEqual([leg["right"] for leg in game["legs"]], ["rules", "rules"])
+        self.assertEqual(report["totals"]["disagreement_record"], {"rules": 2, "judge": 0, "neither": 0})
+        self.assertAlmostEqual(game["brier_rules"], (1 - 0.6259) ** 2, places=3)
+        self.assertAlmostEqual(game["brier_judge"], (1 - 0.62) ** 2, places=3)
+        mean = mean_of_arms_results(pairs, finals=finals, snapshots=[])[0]
+        self.assertEqual(mean["opinion_id"], "mean:c884d868-3e1e-4b58-abba-4fa3707e08d8:444bf3de-ceba-4862-b423-0a5041da0763")
+        self.assertAlmostEqual(mean["home_win_probability"], 0.623, places=3)  # (0.6259 + 0.62) / 2
+        self.assertAlmostEqual(mean["estimate"]["expected_home_margin"], 3.74, places=2)  # (3.88 + 3.6) / 2
+        self.assertAlmostEqual(mean["estimate"]["projected_total"], 45.5, places=2)  # (46 + 45) / 2
+        self.assertEqual((mean["estimate"]["predicted_away_score"], mean["estimate"]["predicted_home_score"]), (21, 25))
+        legs = {leg["kind"]: leg for leg in mean["legs"]}
+        # Margin 3.74 against -3.5 is a 2.9% cover edge, under the bar; total 45.5 vs 44.5 clears it.
+        self.assertNotIn("side", legs)
+        self.assertEqual((legs["total"]["selection"], legs["total"]["line"], legs["total"]["result"]), ("Over", 44.5, "W"))
+        self.assertEqual(ledger_row(mean, graded_at_utc="now")["expert_id"], MEAN_OF_ARMS_ID)
 
 
 if __name__ == "__main__":
