@@ -286,3 +286,60 @@ approves them.
   for every row, headless judge automation); WP2 expanded with the runner
   and timer, WP7 with the bulk review mode, WP9 with the hidden-sample
   design. Phase 1 is now about four build days.
+
+## Session opener (phase 1)
+
+Paste this as the first message of a fresh session started in the repo
+directory. Later phases reuse it with the scope line changed.
+
+```
+You are orchestrating phase 1 of the God Expert roadmap in this repo.
+
+Read, in this order, before anything else: CLAUDE.md (section "NFL MOE +
+God Expert"); docs/god-expert-roadmap.md — the executable plan, whose
+ground rules are settled and not up for debate; the section "Implemented
+locally — 2026-09-06: God Expert aggregator" in docs/telegram-intake-plan.md;
+moe_god.py; scripts/test_moe_god.py; and
+.claude/skills/generate-nfl-moe-opinion/SKILL.md. Then read the Desk page's
+decisions with the Artifact tool (action read_db, url
+https://claude.ai/code/artifact/ac0d6098-d35c-45d5-85c4-cede602d06ab,
+collection "decisions") and tell me what is decided and what is still open
+before you write any code. If any decision there is an approval, show me
+the exact review commands you would run and wait for my go-ahead.
+
+Scope for this session: WP1 (veto and EV floor), WP2 (judge plumbing, the
+headless runner and its timer), WP3 (disagreement report), WP4 (historical
+lines pull). Nothing from phase 2.
+
+Method: one git worktree per work package
+(git worktree add ../telegram-forwarder-<slug> -b god/<slug>), one subagent
+per worktree, all four in parallel. Each subagent implements its WP exactly
+as the plan specifies, writes tests in the repo's unittest style, and
+verifies on the VPS from its OWN scratch clone at /tmp/godbuild-<slug>:
+clone from /home/forwarder/app as the forwarder user, overlay the changed
+files with tar, strip CRs, chown to forwarder, run
+~/venv/bin/python -m unittest scripts.test_moe_god scripts.test_moe
+scripts.test_moe_ak scripts.test_moe_win_total
+scripts.test_generate_moe_opinion_cli scripts.test_intake_bot, remove the
+clone, and report the exact test output. No subagent touches ~/app, the
+live sheet, or approves anything. WP4 may use the network (the nflverse
+CSV and ESPN's core odds endpoint) but must pace ESPN requests and commit
+only small data files.
+
+Constraints: tests are Unix-only because moe.py imports fcntl — never
+report them as passing locally. Do not push to GitHub and do not deploy
+without asking me. Do not run the judge from this session or from any
+interactive session; the WP2 runner is tested with a stubbed claude
+invocation only. Keep the two-arms, one-policy rule: no new experts beyond
+the plumbing the plan names, no policy versioning.
+
+When all four report green: merge into main from the main repo directory
+in the order WP4, WP1, WP3, WP2, resolve conflicts, remove the worktrees,
+run the full suite once more on a fresh scratch clone, update the status
+log in docs/god-expert-roadmap.md and the intake plan, then stop and give
+me: what changed per WP, the test output, the Week 1 replay numbers from
+the new veto and EV test, and the deploy you propose (pull as root in
+/home/forwarder/app; restart telegram-intake only if moe.py or
+intake_bot.py changed; install the timer per the deploy/ rules). I decide
+the deploy timing; the target is the Week 2 boundary, Saturday Sep 12.
+```
