@@ -87,6 +87,10 @@ DEFAULT_POLICY: dict[str, Any] = {
     "star_edges": [0.03, 0.05, 0.08, 0.12, 0.16],
     "kelly_fraction": 0.25,
     "max_stake_fraction": 0.05,
+    "veto_adverse_spread_points": 0.5,
+    "veto_adverse_total_points": 1.0,
+    "veto_adverse_price_cents": 10,
+    "min_ev_per_unit": 0.02,
     "voice_rule": "default_model",
     "voice_fallback": "latest_any_model",
     "hedge_eta": 2.0,
@@ -133,6 +137,28 @@ MARKET_FIELDS = (
     "under_price",
 )
 
+# Price fields whose movement since open is reported in cents. Their absence
+# from a persisted movement block marks an input built before they existed.
+MOVEMENT_PRICE_FIELDS = (
+    "home_spread_price",
+    "away_spread_price",
+    "over_price",
+    "under_price",
+)
+
+# Policy knobs behind the market-move veto and the expected-value floor.
+VETO_FLOOR_KEYS = (
+    "veto_adverse_spread_points",
+    "veto_adverse_total_points",
+    "veto_adverse_price_cents",
+    "min_ev_per_unit",
+)
+
+# ``pass_reason`` values; the first two open the matching policy note.
+ADVERSE_MOVE_REASON = "adverse move"
+EV_FLOOR_REASON = "ev floor"
+NO_EXPECTATION_REASON = "no positive expectation at the posted price"
+
 
 # --------------------------------------------------------------------------
 # Registry and policy
@@ -166,11 +192,17 @@ def aggregator_policy(config: dict[str, Any] | None = None) -> dict[str, Any]:
         "hedge_eta",
         "weight_floor",
         "weight_cap",
+        *VETO_FLOOR_KEYS,
     ):
         value = policy[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"aggregator_policy.{key} must be numeric")
         policy[key] = float(value)
+    for key in VETO_FLOOR_KEYS:
+        if policy[key] < 0:
+            raise ValueError(f"aggregator_policy.{key} must be non-negative")
+    if policy["min_ev_per_unit"] > 1.0:
+        raise ValueError("aggregator_policy.min_ev_per_unit must be within 0..1")
     if not 0.0 <= policy["shrink_lambda"] <= 1.0:
         raise ValueError("aggregator_policy.shrink_lambda must be within 0..1")
     if policy["sigma_margin"] <= 0 or policy["sigma_total"] <= 0:
@@ -286,6 +318,61 @@ def _clip(value: float, low: float, high: float) -> float:
 # Market
 
 
+def price_cents(price: Any) -> float:
+    """An American price on the bettor's cents scale.
+
+    ``-110`` is -10, ``+110`` is +10, and both ``-100`` and ``+100`` are 0, so
+    the difference of two values is the move in cents: ``-110`` to ``+100`` is
+    +10, as is ``-105`` to ``+105``.
+    """
+    value = float(price)
+    if not math.isfinite(value) or value == 0 or -100 < value < 100:
+        raise ValueError(f"Invalid American price: {price}")
+    return value - 100.0 if value > 0 else value + 100.0
+
+
+def movement_since_open(
+    opening: dict[str, Any], latest: dict[str, Any]
+) -> dict[str, float | None]:
+    """Latest minus opening: lines in points, prices in cents, None when unset.
+
+    Accepts the decoded market dicts as well as a persisted block's
+    ``market["opening"]`` and ``market["latest"]``, so ``apply_policy`` can
+    recompute the price deltas for inputs stored before they were recorded.
+    """
+
+    def delta(field: str) -> float | None:
+        if opening.get(field) is None or latest.get(field) is None:
+            return None
+        return round(float(latest[field]) - float(opening[field]), 2)
+
+    def cents_delta(field: str) -> float | None:
+        if opening.get(field) is None or latest.get(field) is None:
+            return None
+        return round(
+            price_cents(latest[field]) - price_cents(opening[field]), 2
+        )
+
+    fair_home_ml = None
+    if all(
+        block.get(field) is not None
+        for block in (opening, latest)
+        for field in ("home_moneyline", "away_moneyline")
+    ):
+        fair_home_ml = _round(
+            fair_pair(latest["home_moneyline"], latest["away_moneyline"])[0]
+            - fair_pair(opening["home_moneyline"], opening["away_moneyline"])[0]
+        )
+    return {
+        "home_spread": delta("home_spread"),
+        "total": delta("total"),
+        "home_moneyline": delta("home_moneyline"),
+        "fair_home_ml": fair_home_ml,
+        "away_spread": delta("away_spread"),
+        **{field: cents_delta(field) for field in MOVEMENT_PRICE_FIELDS},
+    }
+
+
 def build_market_block(game: dict[str, Any]) -> dict[str, Any]:
     opening = _market_from_packed(game, prefix="opening")
     latest = _market_from_packed(game, prefix="latest")
@@ -303,20 +390,6 @@ def build_market_block(game: dict[str, Any]) -> dict[str, Any]:
     fair_over, fair_under, hold_total = fair_pair(
         latest["over_price"], latest["under_price"]
     )
-    opening_fair_home_ml = None
-    if (
-        opening.get("home_moneyline") is not None
-        and opening.get("away_moneyline") is not None
-    ):
-        opening_fair_home_ml = fair_pair(
-            opening["home_moneyline"], opening["away_moneyline"]
-        )[0]
-
-    def delta(field: str) -> float | None:
-        if opening.get(field) is None:
-            return None
-        return round(float(latest[field]) - float(opening[field]), 2)
-
     home_spread = float(latest["home_spread"])
     total_line = float(latest["total"])
     return {
@@ -348,16 +421,7 @@ def build_market_block(game: dict[str, Any]) -> dict[str, Any]:
             "away": round((total_line + home_spread) / 2, 2),
             "home": round((total_line - home_spread) / 2, 2),
         },
-        "movement_since_open": {
-            "home_spread": delta("home_spread"),
-            "total": delta("total"),
-            "home_moneyline": delta("home_moneyline"),
-            "fair_home_ml": (
-                None
-                if opening_fair_home_ml is None
-                else _round(fair_home_ml - opening_fair_home_ml)
-            ),
-        },
+        "movement_since_open": movement_since_open(opening, latest),
     }
 
 
@@ -1202,7 +1266,9 @@ def _kelly(probability: float, price: Any, policy: dict[str, Any]) -> dict[str, 
     }
 
 
-def _pass_leg(edge: float, probability: float, fair: float) -> dict[str, Any]:
+def _pass_leg(
+    edge: float, probability: float, fair: float, reason: str | None = None
+) -> dict[str, Any]:
     return {
         "selection": "PASS",
         "line": None,
@@ -1214,7 +1280,108 @@ def _pass_leg(edge: float, probability: float, fair: float) -> dict[str, Any]:
         "ev_per_unit": None,
         "stake_fraction": 0.0,
         "stake_units": 0.0,
+        "pass_reason": reason,
     }
+
+
+def _knob(policy: dict[str, Any], key: str) -> float:
+    """A veto/floor knob; a policy persisted before the knob existed reads
+    the module default when its row is replayed."""
+    return float(policy.get(key, DEFAULT_POLICY[key]))
+
+
+def _policy_movement(market: dict[str, Any]) -> dict[str, Any]:
+    """The movement block, recomputed when it predates the price deltas."""
+    movement = market.get("movement_since_open")
+    if isinstance(movement, dict) and all(
+        field in movement for field in MOVEMENT_PRICE_FIELDS
+    ):
+        return movement
+    opening, latest = market.get("opening"), market.get("latest")
+    if isinstance(opening, dict) and isinstance(latest, dict):
+        return movement_since_open(opening, latest)
+    return dict(movement or {})
+
+
+def _move_text(
+    opening: Any, latest: Any, delta: float, *, unit: str, signed: bool = True
+) -> str:
+    change = f"{float(delta):+g} {unit}"
+    if opening is None or latest is None:
+        return change
+    if unit == "cents":
+        return f"{int(opening):+d} → {int(latest):+d} ({change})"
+    spec = "+g" if signed else "g"
+    return f"{float(opening):{spec}} → {float(latest):{spec}} ({change})"
+
+
+def _adverse_move_note(
+    selection: str,
+    *,
+    kind: str,
+    market: dict[str, Any],
+    movement: dict[str, Any],
+    policy: dict[str, Any],
+    home_team: str,
+) -> str | None:
+    """The policy note when the market moved away from this leg since open.
+
+    A leg is vetoed when its own side got cheaper: the team's spread rose by
+    the points threshold (home bet: home spread up; away bet: home spread
+    down), the total fell against an Over or rose against an Under, or the
+    leg's price lengthened by the cents threshold. Missing opening data never
+    vetoes. Returns None when the leg stands.
+    """
+    tolerance = 1e-9
+    opening = market.get("opening") or {}
+    latest = market.get("latest") or {}
+    if kind == "side":
+        is_home = selection == home_team
+        home_delta = movement.get("home_spread")
+        if home_delta is not None:
+            team_delta = float(home_delta) if is_home else -float(home_delta)
+            if team_delta >= _knob(policy, "veto_adverse_spread_points") - tolerance:
+                field = "home_spread" if is_home else "away_spread"
+                return (
+                    f"{ADVERSE_MOVE_REASON}: {selection} spread "
+                    + _move_text(
+                        opening.get(field), latest.get(field), team_delta, unit="points"
+                    )
+                    + " since open"
+                )
+        field = "home_spread_price" if is_home else "away_spread_price"
+        label = f"{selection} spread price"
+    else:
+        is_over = selection == "Over"
+        total_delta = movement.get("total")
+        if total_delta is not None:
+            against = -float(total_delta) if is_over else float(total_delta)
+            if against >= _knob(policy, "veto_adverse_total_points") - tolerance:
+                return (
+                    f"{ADVERSE_MOVE_REASON}: total "
+                    + _move_text(
+                        opening.get("total"),
+                        latest.get("total"),
+                        float(total_delta),
+                        unit="points",
+                        signed=False,
+                    )
+                    + f" against the {selection} since open"
+                )
+        field = "over_price" if is_over else "under_price"
+        label = f"{selection} price"
+    price_delta = movement.get(field)
+    if price_delta is not None and float(price_delta) >= _knob(
+        policy, "veto_adverse_price_cents"
+    ) - tolerance:
+        return (
+            f"{ADVERSE_MOVE_REASON}: {label} "
+            + _move_text(
+                opening.get(field), latest.get(field), float(price_delta), unit="cents"
+            )
+            + " since open"
+        )
+    return None
 
 
 def apply_policy(
@@ -1229,6 +1396,7 @@ def apply_policy(
 ) -> dict[str, Any]:
     latest = market["latest"]
     fair = market["fair"]
+    movement = _policy_movement(market)
     p_cover_home = cover_probability(
         expected_home_margin, latest["home_spread"], policy["sigma_margin"]
     )
@@ -1246,6 +1414,8 @@ def apply_policy(
 
     def choose(
         candidates: list[tuple[str, float, float, float, Any, float]],
+        *,
+        kind: str,
     ) -> tuple[dict[str, Any], str | None]:
         selection, edge, probability, line, price, fair_probability = max(
             candidates, key=lambda item: item[1]
@@ -1255,8 +1425,31 @@ def apply_policy(
         kelly = _kelly(probability, price, policy)
         if kelly["ev_per_unit"] <= 0:
             return (
-                _pass_leg(edge, probability, fair_probability),
-                "no positive expectation at the posted price",
+                _pass_leg(
+                    edge, probability, fair_probability, NO_EXPECTATION_REASON
+                ),
+                NO_EXPECTATION_REASON,
+            )
+        veto = _adverse_move_note(
+            selection,
+            kind=kind,
+            market=market,
+            movement=movement,
+            policy=policy,
+            home_team=home_team,
+        )
+        if veto:
+            return (
+                _pass_leg(edge, probability, fair_probability, ADVERSE_MOVE_REASON),
+                veto,
+            )
+        floor = _knob(policy, "min_ev_per_unit")
+        if kelly["ev_per_unit"] < floor - 1e-9:
+            label = _leg_label({"selection": selection, "line": line})
+            return (
+                _pass_leg(edge, probability, fair_probability, EV_FLOOR_REASON),
+                f"{EV_FLOOR_REASON}: {label} ({int(price):+d}) ev "
+                f"{kelly['ev_per_unit']:+.3f} under {floor:.3f}",
             )
         return (
             {
@@ -1268,6 +1461,7 @@ def apply_policy(
                 "edge": _round(edge),
                 "confidence_stars": _stars_for_edge(edge, policy),
                 **kelly,
+                "pass_reason": None,
             },
             None,
         )
@@ -1290,7 +1484,8 @@ def apply_policy(
                 latest["away_spread_price"],
                 float(fair["away_cover"]),
             ),
-        ]
+        ],
+        kind="side",
     )
     total, total_note = choose(
         [
@@ -1310,7 +1505,8 @@ def apply_policy(
                 latest["under_price"],
                 float(fair["under"]),
             ),
-        ]
+        ],
+        kind="total",
     )
     return {
         "p_cover_home": _round(p_cover_home),
@@ -1463,6 +1659,23 @@ def _leg_label(leg: dict[str, Any]) -> str:
     return f"{leg['selection']} {float(leg['line']):+g}"
 
 
+def _price_move_texts(
+    movement: dict[str, Any], *, away_team: str, home_team: str
+) -> list[str]:
+    """Non-zero price moves since open, in cents, for the renderings."""
+    labels = (
+        ("home_spread_price", f"{home_team} spread price"),
+        ("away_spread_price", f"{away_team} spread price"),
+        ("over_price", "over price"),
+        ("under_price", "under price"),
+    )
+    return [
+        f"{label} {float(movement[field]):+g} cents"
+        for field, label in labels
+        if movement.get(field) not in (None, 0)
+    ]
+
+
 def normalize_aggregator_opinion(
     response: dict[str, Any],
     input_payload: dict[str, Any],
@@ -1588,13 +1801,20 @@ def normalize_aggregator_opinion(
         f"{float(fair['hold_total']):.1%} on the total."
     )
     movement = market["movement_since_open"]
-    if movement.get("home_spread") not in (None, 0) or movement.get(
-        "total"
-    ) not in (None, 0):
+    price_moves = _price_move_texts(
+        movement, away_team=away_team, home_team=home_team
+    )
+    if (
+        movement.get("home_spread") not in (None, 0)
+        or movement.get("total") not in (None, 0)
+        or price_moves
+    ):
         counter.append(
             "Line movement since open: home spread "
             f"{float(movement.get('home_spread') or 0):+g} points, total "
-            f"{float(movement.get('total') or 0):+g} points."
+            f"{float(movement.get('total') or 0):+g} points"
+            + (f"; {', '.join(price_moves)}" if price_moves else "")
+            + "."
         )
     counter.extend(f"Policy: {note}." for note in legs["notes"])
     scoreboard = input_payload["scoreboard"]
@@ -1740,6 +1960,7 @@ def _render_full_opinion(
         )
 
     movement = market["movement_since_open"]
+    price_moves = _price_move_texts(movement, away_team=away, home_team=home)
     sections = [
         "Market\n"
         f"- BetOnline latest: {home} {float(latest['home_spread']):+g} "
@@ -1753,7 +1974,8 @@ def _render_full_opinion(
         f"p({home} covers) {float(fair['home_cover']):.3f} · p(over) "
         f"{float(fair['over']):.3f}\n"
         f"- Movement since open: home spread {movement.get('home_spread')}, "
-        f"total {movement.get('total')}",
+        f"total {movement.get('total')}"
+        + (f"; {', '.join(price_moves)}" if price_moves else ""),
         f"Voices\n{_bullets(voice_lines)}",
         f"{blend_title}\n- p({home}) {probability:.3f} · margin {margin:+.1f} "
         f"· total {projected_total:.1f}"
