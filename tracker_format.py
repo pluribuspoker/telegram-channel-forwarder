@@ -209,7 +209,35 @@ def strip_label(text: str) -> str:
     return re.sub(r"[\u2705\u274c]", "", text).strip()
 
 
-def _match_pick_line(lines: list[str], pick: dict) -> int | None:
+def _prefer_bet_line(lines: list[str], candidates: list[int], pick: dict) -> int | None:
+    """Tie-break several candidate lines that all match a pick's team terms.
+
+    The pick's own line number is the discriminator ("48" picks the u48 line
+    over the -20.5 line); o/u direction breaks a same-number tie (1H o24.5 vs
+    1H u24.5 team totals). Number matching is exact — guards stop "48" hitting
+    "48.5"/"148" and "-20" hitting "-20.5". Returns None when nothing
+    discriminates, so the caller keeps the historical first-match behavior.
+    """
+    matched = candidates
+    pick_line = pick.get("line")
+    if pick_line is not None:
+        pick_line_f = float(pick_line)
+        line_str = str(int(pick_line_f)) if pick_line_f == int(pick_line_f) else str(pick_line_f)
+        num_re = re.compile(r"(?<![\d.])" + re.escape(line_str) + r"(?![\d.])")
+        matched = [i for i in candidates if num_re.search(lines[i])] or candidates
+        if len(matched) == 1:
+            return matched[0]
+    direction = (pick.get("direction") or "").lower()
+    if direction in ("over", "under"):
+        dir_re = re.compile(rf"\b(?:{direction}|{direction[0]}(?=\d))")
+        by_dir = [i for i in matched if dir_re.search(lines[i].lower())]
+        if len(by_dir) == 1:
+            return by_dir[0]
+    return matched[0] if len(matched) < len(candidates) else None
+
+
+def _match_pick_line(lines: list[str], pick: dict, ignore_emoji: bool = False,
+                     heuristic: bool = True) -> int | None:
     """Find the line index for a pick using cascading fallbacks.
 
     1. Team/player name match (existing logic)
@@ -218,6 +246,18 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
     4. Bet line number (e.g. "-2.5", "236.5")
     5. Bet-line heuristic: odds, units, spread/total patterns — pick the
        best candidate line that looks like a pick line
+
+    ignore_emoji=True matches lines that already carry a verdict emoji — used
+    to ask "where does this pick live, placed or not" rather than "where can I
+    place it", so a re-insert can detect its own earlier placement instead of
+    cascading onto another bet's line.
+
+    heuristic=False stops after pass 4: only identity evidence (team, desc,
+    bet number) may bind the pick to a line. _insert_emojis places all
+    identity matches first and lets the guess-quality pass 5 pick only from
+    the leftovers — otherwise an early pick that identity-matches nothing
+    ("REDSOX" defeats every pass) steals a LATER pick's line by scoring bet
+    indicators, and that pick's own emoji cascades or drops.
     """
     # Pre-compute lines inside <blockquote> (stats/records, never picks)
     bq_lines = _blockquote_lines(lines)
@@ -225,17 +265,29 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
     def _available(i: int) -> bool:
         return (i not in bq_lines
                 and not _is_link_line(lines[i])
-                and not any(ch in lines[i] for ch in _PICK_EMOJI.values()))
+                and (ignore_emoji
+                     or not any(ch in lines[i] for ch in _PICK_EMOJI.values())))
 
     # Pass 1: team/player name. When the pick is a prop, prefer the line that
     # also names the stat — that disambiguates multi-prop messages and BTTS-
     # style team headers. For PLAYER props, fall back to the player-name line
     # without the stat: cappers often never state it ("Snell getting 9" =
     # over 8.5 Ks), and the player's name on a line is already a strong match.
+    #
+    # Several lines can match the team terms when a message holds two bets on
+    # the SAME game ("Notre Dame -20.5" and "Notre Dame / Wisconsin u48"), and
+    # first-match then binds the pick to whichever bet happens to come first.
+    # That order dependence is invisible while every leg grades in one pass
+    # (picks parse in message order, so pick N claims line N before pick N+1
+    # looks) but wrong the moment legs settle in different passes — a total
+    # dying mid-game grades before the spread's final, matches the spread's
+    # line, and the spread's later emoji lands on the total. Tie-break multiple
+    # candidates by the bet's own content (line number, then o/u direction).
     search_terms = _pick_search_terms(pick)
     prop_stat = (pick.get("prop_stat") or "").lower().strip()
     stat_passes = (True, False) if pick.get("player") else (True,)
     for require_stat in stat_passes:
+        candidates = []
         for i, line in enumerate(lines):
             if not _available(i):
                 continue
@@ -246,7 +298,13 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
                 # Only match here if the line also contains the prop_stat.
                 if require_stat and prop_stat and not _prop_stat_in_line(prop_stat, line_lower):
                     continue
-                return i
+                candidates.append(i)
+        if len(candidates) > 1:
+            preferred = _prefer_bet_line(lines, candidates, pick)
+            if preferred is not None:
+                return preferred
+        if candidates:
+            return candidates[0]
 
     # Pass 1b: team-level prop (BTTS, clean sheet, etc.) where the prop keyword
     # sits on its own pick line, separate from the team-name header (common in
@@ -300,6 +358,9 @@ def _match_pick_line(lines: list[str], pick: dict) -> int | None:
                 continue
             if line_str in line:
                 return i
+
+    if not heuristic:
+        return None
 
     # Pass 5: find the best line that looks like a bet line (has odds, units,
     # spread numbers, etc.) but isn't a header/capper-name line.
@@ -364,12 +425,37 @@ def _insert_emojis(text: str, verdicts: list[tuple]) -> str:
     standalone_verdicts = [v for v in verdicts if not v[0].get("is_parlay_leg")]
 
     # ── Standalone picks: per-pick emoji ──────────────────────────────────────
+    # Two phases: every pick that identity-matches a line (team/desc/number)
+    # claims it first; only then may the leftover picks fall back to the pass-5
+    # bet-line heuristic on the leftover lines. A single greedy loop let an
+    # early pick with no identity match steal a later pick's line by bet-line
+    # score, leaving that pick's emoji to cascade onto a wrong line or drop.
     unmatched_standalone: list[tuple] = []
+    deferred: list[tuple] = []
     for pick, verdict, _calc, _sport, *_ in standalone_verdicts:
         emoji = _PICK_EMOJI.get(verdict)
         if not emoji:
             continue  # UNKNOWN / PENDING — leave line alone
 
+        # Re-inserting an already-placed verdict must be a NO-OP. The daemon and
+        # the tracker both re-edit from text the other may have already marked
+        # (a graded-but-unbroadcast leg stays in emoji_verdicts), and a done
+        # line is invisible to the placement match below — so without this
+        # check the cascade fallbacks stamp a DUPLICATE emoji on some other
+        # bet's line, and that bet's real verdict then finds no line at all
+        # (HC's re-inserted ❌ landed on SDSU's line via pass 5 and SDSU's ✅
+        # was dropped: -1002486251914:3755, 2026-09-05).
+        placed = _match_pick_line(lines, pick, ignore_emoji=True)
+        if placed is not None and emoji in lines[placed]:
+            continue
+
+        matched = _match_pick_line(lines, pick, heuristic=False)
+        if matched is not None:
+            lines[matched] = f"{lines[matched].rstrip()}{emoji}"
+        else:
+            deferred.append((pick, emoji, verdict))
+
+    for pick, emoji, verdict in deferred:
         matched = _match_pick_line(lines, pick)
         if matched is not None:
             lines[matched] = f"{lines[matched].rstrip()}{emoji}"
