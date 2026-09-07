@@ -213,7 +213,9 @@ picks.db-wal
 backtest_*.txt
 parse_cache.json
 parse_cache.json.lock
-data/
+data/*
+!data/nfl_lines_history.csv
+!data/nfl_open_close.json
 logs/
 scripts/output/
 accounts.db
