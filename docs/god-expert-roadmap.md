@@ -239,6 +239,20 @@ anywhere; judge runs bill the Claude Code subscription.
   built from 2016–2024 first, then rebuilt on all ten seasons for
   production) before the switch is flipped.
 
+- Built 2026-09-07. Close of record: nflverse (the CSV, 2016–2025), never
+  ESPN. Residuals against the market (margin + home_spread, total − line) in
+  floor-based one-point bins ([k, k+1)), `min_games` 30, half-push
+  convention P(r > t) + ½P(r = t), linear interpolation between half-point
+  lattice points, normal fallback off support. `margin_model` rides in the
+  policy (so in every input hash) and the table's sha256 rides in the input
+  under `margin_table`; the judge request repeats both; legacy inputs derive
+  byte-identical requests. 2025 hold-out (fit 2016–2024): a wash on spreads
+  (Brier 0.21611 vs 0.21606, log loss a hair better, better at −7/−3, worse
+  at +3), slightly worse on totals (0.21947 vs 0.21894) — the switch stays
+  `normal`. Standard library only (no numpy/scipy on the VPS). Table build:
+  `python scripts/build_nfl_margins.py` (idempotent; `--dry-run` prints the
+  check). Tests: `scripts.test_moe_margins`.
+
 ### WP7 — Rating voice (2 d, needs WP4)
 
 - `moe_rating.py`: Elo with home advantage and margin-of-victory update,

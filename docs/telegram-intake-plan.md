@@ -828,6 +828,89 @@ committed data files produced by one idempotent, resumable script.
   `.gitignore` ignores `data/*` except the two data files (and keeps
   `angles/data/` ignored, which the old unanchored `data/` rule covered).
 
+### Completed — 2026-09-07: Empirical margins (WP6)
+
+The margin model behind every cover and over probability is now a policy
+switch, `aggregator_policy.margin_model` (`normal`, the default, or
+`empirical`), shared by both arms like every other knob. It is not a third
+arm and there is no policy versioning. Roadmap WP6.
+
+- `scripts/build_nfl_margins.py` builds `moe/priors/nfl_margins_v1.json`
+  from `data/nfl_lines_history.csv` — nflverse closing lines, the close of
+  record for this table (ESPN's open/close in `data/nfl_open_close.json` is
+  not used) — for seasons 2016–2025, filtered explicitly so a wider CSV
+  changes nothing. Per game `margin_residual = (home − away) + home_spread`
+  (the actual home margin minus the market expectation −home_spread) and
+  `total_residual = (home + away) − total`; both sit on the half-point
+  lattice. Bins are one point wide and floor-based: bin k holds closing
+  lines in [k, k+1), so −3.5 and −4 share bin −4 and totals 44 and 44.5
+  share bin 44. Each bin stores n and the residual distribution as sorted
+  `[value, count]` pairs; a bin is supported at ≥ `min_games` = 30 (21 of 41
+  spread bins holding 2,494 of 2,639 games, 94.5%; 20 of 32 total bins
+  holding 2,592, 98.2%). Output is sorted-key JSON with fixed formatting, so
+  a rebuild on the same CSV reproduces the file byte for byte (117 KB).
+  Standard library only: the VPS venv has neither numpy nor scipy.
+- Lookup (`moe_god.parse_margin_table`, `empirical_survival`): P(cover) =
+  P(r > t) + ½·P(r = t) with t = −(expected_home_margin + home_spread) from
+  the bin of the latest home spread; P(over) likewise with t = total_line −
+  projected_total from the bin of the latest total. The half-push mass keeps
+  home + away and over + under at exactly 1, which `apply_policy` assumes.
+  The survival is exact at lattice points and linearly interpolated between
+  them, so an edge moves continuously with the estimate instead of jumping
+  at every half point; it is 1 below a bin's lattice and 0 above it. Outside
+  the table's support (a bin under 30 games, or a line with no bin) the
+  normal model with the policy sigma answers, so every guard fails open to
+  the old arithmetic. `cover_probability`/`over_probability` keep their
+  three-argument normal form; the table arrives through `table=` and every
+  call site (`voice_from_row` derived values, `build_feature_block` pooled
+  values and `edges_if_shrunk`, `apply_policy`) resolves it from the policy
+  through `margin_table_for`. A persisted policy without the key replays as
+  `normal` (DEFAULT_POLICY merge, like the veto and floor knobs).
+- Identity: under `empirical` the input carries a top-level `margin_table`
+  block (path, sha256 of the committed file, schema and version, seasons,
+  games, min_games, bin width) — `None` under `normal` — so the input hash
+  changes with the table the way it does with the knobs; the judge request's
+  policy subset names `margin_model` and repeats the block. Requests derived
+  from inputs persisted before the switch are byte-identical to before (the
+  Week 1 fixtures still reproduce). `normalize_aggregator_opinion` refuses
+  an input whose recorded table hash is not the committed file's, and
+  `moe._source_sha256` hashes the table file for the aggregator experts.
+- Calibration check (stored in the file's `calibration` block and printed
+  by every build): table fitted on 2016–2024 (2,367 games), scored on 2025
+  held out (272 games) at thresholds −10..10 by 0.5, Brier and log loss of
+  P(r > t) + ½P(r = t) against the realized residual, pushes at t skipped;
+  `empirical` falls back to the normal model off support exactly as
+  production would.
+
+  | 2025 hold-out | empirical Brier | normal Brier | diff | empirical log loss | normal log loss | in supported bins |
+  |---|---|---|---|---|---|---|
+  | Spread, all games | 0.21611 | 0.21606 | +0.00005 | 0.62240 | 0.62245 | 244/272 (89.7%) |
+  | Spread, supported bins only | 0.21653 | 0.21648 | +0.00005 | 0.62323 | 0.62328 | — |
+  | Spread t = −7 / −3 / 0 / +3 / +7 | 0.1934 / 0.2348 / 0.2503 / 0.2455 / 0.2060 | 0.1954 / 0.2357 / 0.2500 / 0.2421 / 0.2056 | −0.0021 / −0.0009 / +0.0003 / +0.0034 / +0.0004 | | | |
+  | Total, all games | 0.21947 | 0.21894 | +0.00053 | 0.62982 | 0.62885 | 266/272 (97.8%) |
+  | Total, supported bins only | 0.22026 | 0.21973 | +0.00054 | 0.63150 | 0.63050 | — |
+  | Total t = −3 / 0 / +3 | 0.2391 / 0.2505 / 0.2424 | 0.2377 / 0.2500 / 0.2409 | +0.0014 / +0.0005 / +0.0015 | | | |
+
+  `min_games` sensitivity (grid-mean Brier, all games, empirical vs normal):
+  30 → spread 0.21611 vs 0.21606, total 0.21947 vs 0.21894; 50 → spread
+  0.21554 vs 0.21606 (85.3% coverage), total 0.21915 vs 0.21894 (89.7%);
+  100 → spread 0.21598 vs 0.21606 (58.5%), total 0.21921 vs 0.21894 (77.9%).
+  Reading: on one held-out season the one-point-bin table is a wash on
+  spreads (a tie on Brier, a hair better on log loss, better below the
+  market at −7 and −3, worse at +3) and slightly worse than N(0, 13.5) on
+  totals; every difference sits inside the noise of 272 games. Nothing here
+  argues for flipping the switch, so `margin_model` stays `normal`; the
+  production table (all ten seasons) is committed for when the backtest
+  (WP8) or a second season says otherwise.
+- Week 1 replay under `empirical` (the persisted estimates, the same veto
+  and floor): Seahawks −3.5 stays vetoed on the −110 → +100 move (edge 3.29%
+  → 3.46%); Over 44.5 goes from a floored 3.3% edge to a plain 0.16% pass
+  (p(over) 0.5222 → 0.4908); 49ers +3.5 grows from a 4.42% edge (EV 0.039,
+  1.1u, ★) to 6.74% (EV 0.083, 2.3u, ★★); the Rams total stays a pass.
+- Tests: `scripts/test_moe_margins.py` (build, lookup, switch validation,
+  input identity, generation under `empirical`, the source hash, the Week 1
+  replay, and the committed file recomputed from the CSV inside the test).
+
 ### Implemented locally — 2026-09-04: authoritative NFL week metadata
 
 `nfl_games.week` previously remained blank because `new_game_row()` hardcoded

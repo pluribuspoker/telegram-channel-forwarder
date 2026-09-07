@@ -37,6 +37,10 @@ from moe_ak import (
 
 ROOT = Path(__file__).resolve().parent
 EXPERTS_PATH = ROOT / "moe" / "experts.yaml"
+# The empirical margin table (scripts/build_nfl_margins.py); consulted only
+# when aggregator_policy.margin_model is "empirical".
+MARGINS_TABLE_PATH = ROOT / "moe" / "priors" / "nfl_margins_v1.json"
+MARGIN_MODELS = ("normal", "empirical")
 
 AGGREGATOR_PROFILE = "aggregator"
 JUDGE_REQUEST_PROFILE = "aggregator_judge_request"
@@ -96,6 +100,7 @@ DEFAULT_POLICY: dict[str, Any] = {
     "veto_adverse_total_points": 1.0,
     "veto_adverse_price_cents": 10,
     "min_ev_per_unit": 0.02,
+    "margin_model": "normal",
     "voice_rule": "default_model",
     "voice_fallback": "latest_any_model",
     "hedge_eta": 2.0,
@@ -244,6 +249,10 @@ def aggregator_policy(config: dict[str, Any] | None = None) -> dict[str, Any]:
             raise ValueError(
                 f"aggregator_policy.{key} must be a positive integer"
             )
+    if policy["margin_model"] not in MARGIN_MODELS:
+        raise ValueError(
+            "aggregator_policy.margin_model must be normal or empirical"
+        )
     if policy["voice_rule"] != "default_model":
         raise ValueError("aggregator_policy.voice_rule must be default_model")
     if policy["voice_fallback"] not in {"latest_any_model", "skip"}:
@@ -297,18 +306,208 @@ def normal_cdf(z: float) -> float:
 
 
 def cover_probability(
-    expected_home_margin: float, home_spread: float, sigma: float
+    expected_home_margin: float,
+    home_spread: float,
+    sigma: float,
+    *,
+    table: dict[str, Any] | None = None,
 ) -> float:
-    """P(home covers): the home side wins when actual margin + spread > 0."""
-    return normal_cdf(
-        (float(expected_home_margin) + float(home_spread)) / sigma
-    )
+    """P(home covers): the home side wins when actual margin + spread > 0.
+
+    With ``table`` (a parsed empirical table, see :func:`load_margin_table`)
+    the actual margin is the expectation plus a residual drawn from the bin
+    of ``home_spread``: P(cover) = P(r > t) + P(r = t) / 2 with
+    t = -(expected_home_margin + home_spread). Off the table's support, and
+    without a table, the residual is normal with ``sigma``.
+    """
+    margin, spread = float(expected_home_margin), float(home_spread)
+    if table is not None:
+        value = empirical_survival(table["spread"], spread, -(margin + spread))
+        if value is not None:
+            return value
+    return normal_cdf((margin + spread) / sigma)
 
 
 def over_probability(
-    projected_total: float, total_line: float, sigma: float
+    projected_total: float,
+    total_line: float,
+    sigma: float,
+    *,
+    table: dict[str, Any] | None = None,
 ) -> float:
-    return normal_cdf((float(projected_total) - float(total_line)) / sigma)
+    """P(over): the total residual, from the bin of ``total_line``, exceeds
+    ``total_line - projected_total``; otherwise the normal model."""
+    projected, line = float(projected_total), float(total_line)
+    if table is not None:
+        value = empirical_survival(table["total"], line, line - projected)
+        if value is not None:
+            return value
+    return normal_cdf((projected - line) / sigma)
+
+
+# --------------------------------------------------------------------------
+# Empirical margin table (aggregator_policy.margin_model = "empirical")
+
+_MARGIN_TABLE_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def parse_margin_table(
+    raw: dict[str, Any], *, sha256: str = "", path: str = ""
+) -> dict[str, Any]:
+    """Turn the committed table document into lookup-ready bins.
+
+    Per market only bins with at least ``min_games`` games survive. Each
+    keeps a regular half-point lattice from one step below its smallest
+    residual to one step above its largest, and the survival value at every
+    lattice point, ``H(u) = (count(r > u) + count(r = u) / 2) / n``: 1 at
+    the bottom, 0 at the top. :func:`empirical_survival` interpolates
+    linearly between lattice points.
+    """
+    if not isinstance(raw, dict) or int(raw.get("schema_version") or 0) != 1:
+        raise ValueError("Unsupported margin table schema")
+    min_games = int(raw["min_games"])
+    step = float(raw.get("lattice_step") or 0.5)
+    if step <= 0:
+        raise ValueError("margin table lattice_step must be positive")
+
+    def market(key: str) -> dict[int, dict[str, Any]]:
+        bins: dict[int, dict[str, Any]] = {}
+        for bin_label, entry in raw[key]["bins"].items():
+            n = int(entry["n"])
+            if n < min_games:
+                continue
+            pairs = sorted(
+                (float(value), int(count)) for value, count in entry["residuals"]
+            )
+            if not pairs or sum(count for _value, count in pairs) != n:
+                raise ValueError(
+                    f"margin table bin {key}/{bin_label} is inconsistent"
+                )
+            start = pairs[0][0] - step
+            slots = int(round((pairs[-1][0] + step - start) / step)) + 1
+            counts = [0] * slots
+            for value, count in pairs:
+                index = (value - start) / step
+                if abs(index - round(index)) > 1e-9:
+                    raise ValueError(
+                        f"margin table residual {value} is off the lattice"
+                    )
+                counts[int(round(index))] += count
+            survival = []
+            at_or_above = n
+            for count in counts:
+                survival.append((at_or_above - count + count / 2) / n)
+                at_or_above -= count
+            bins[int(bin_label)] = {
+                "n": n,
+                "lattice_start": start,
+                "step": step,
+                "survival": survival,
+            }
+        return bins
+
+    return {
+        "path": path,
+        "sha256": sha256,
+        "schema_version": 1,
+        "version": str(raw.get("version") or ""),
+        "seasons": list(raw.get("seasons") or []),
+        "games": int(raw.get("games") or 0),
+        "min_games": min_games,
+        "bin_width": raw.get("bin_width"),
+        "spread": market("spread"),
+        "total": market("total"),
+    }
+
+
+def _repo_relative(path: str | Path) -> str:
+    """``moe/priors/nfl_margins_v1.json`` for a file under the repo, else as given."""
+    resolved = Path(path).resolve()
+    if ROOT in resolved.parents:
+        return resolved.relative_to(ROOT).as_posix()
+    return str(path)
+
+
+def load_margin_table(path: str | Path = MARGINS_TABLE_PATH) -> dict[str, Any]:
+    """The committed table, parsed once per path; its sha256 rides in inputs."""
+    key = str(path)
+    table = _MARGIN_TABLE_CACHE.get(key)
+    if table is None:
+        raw_bytes = Path(path).read_bytes()
+        table = parse_margin_table(
+            json.loads(raw_bytes.decode("utf-8")),
+            sha256=hashlib.sha256(raw_bytes).hexdigest(),
+            path=_repo_relative(path),
+        )
+        _MARGIN_TABLE_CACHE[key] = table
+    return table
+
+
+def empirical_survival(
+    bins: dict[int, dict[str, Any]], line: float, t: float
+) -> float | None:
+    """P(r > t) + P(r = t) / 2 from the bin of ``line``; None off support.
+
+    Exact at lattice points, linear in between, 1 below the bin's lattice
+    and 0 above it.
+    """
+    entry = bins.get(int(math.floor(float(line))))
+    if entry is None:
+        return None
+    survival = entry["survival"]
+    position = round((float(t) - entry["lattice_start"]) / entry["step"], 9)
+    if position <= 0:
+        return 1.0
+    if position >= len(survival) - 1:
+        return 0.0
+    index = int(math.floor(position))
+    fraction = position - index
+    return survival[index] + fraction * (survival[index + 1] - survival[index])
+
+
+def margin_table_for(policy: dict[str, Any]) -> dict[str, Any] | None:
+    """The table a policy asks for: loaded when ``empirical``, else None.
+
+    A policy persisted before the switch existed reads as ``normal``.
+    """
+    if str(policy.get("margin_model") or "normal") == "empirical":
+        return load_margin_table()
+    return None
+
+
+def margin_table_descriptor(
+    table: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """What an input records about the table it was built with."""
+    if table is None:
+        return None
+    return {
+        key: table[key]
+        for key in (
+            "path",
+            "sha256",
+            "schema_version",
+            "version",
+            "seasons",
+            "games",
+            "min_games",
+            "bin_width",
+        )
+    }
+
+
+def check_margin_table(input_payload: dict[str, Any]) -> None:
+    """Refuse an input built against a table other than the committed one."""
+    recorded = input_payload.get("margin_table")
+    if not recorded:
+        return
+    current = load_margin_table()
+    if str(recorded.get("sha256") or "") != current["sha256"]:
+        raise ValueError(
+            "The input was built with margin table "
+            f"{str(recorded.get('sha256') or '')[:12]}, not the committed "
+            f"{current['sha256'][:12]}"
+        )
 
 
 def _round(value: float | None, digits: int = 4) -> float | None:
@@ -604,6 +803,7 @@ def voice_from_row(
     latest = market["latest"]
     projected_total = away_score + home_score
     limit, chars = policy["factor_limit"], policy["factor_chars"]
+    table = margin_table_for(policy)
     return {
         "voice_id": expert_id,
         "expert_id": expert_id,
@@ -631,12 +831,18 @@ def voice_from_row(
         "derived": {
             "p_cover_home": _round(
                 cover_probability(
-                    margin, latest["home_spread"], policy["sigma_margin"]
+                    margin,
+                    latest["home_spread"],
+                    policy["sigma_margin"],
+                    table=table,
                 )
             ),
             "p_over": _round(
                 over_probability(
-                    projected_total, latest["total"], policy["sigma_total"]
+                    projected_total,
+                    latest["total"],
+                    policy["sigma_total"],
+                    table=table,
                 )
             ),
         },
@@ -1424,6 +1630,7 @@ def build_feature_block(
     fair = market["fair"]
     latest = market["latest"]
     lam = policy["shrink_lambda"]
+    table = margin_table_for(policy)
     pool_p = pooled("home_win_probability")
     pool_margin = pooled("expected_home_margin")
     pool_total = pooled("projected_total")
@@ -1460,13 +1667,19 @@ def build_feature_block(
             "home_ml": _round(shrunk_p - float(fair["home_ml"])),
             "home_cover": _round(
                 cover_probability(
-                    shrunk_margin, latest["home_spread"], policy["sigma_margin"]
+                    shrunk_margin,
+                    latest["home_spread"],
+                    policy["sigma_margin"],
+                    table=table,
                 )
                 - float(fair["home_cover"])
             ),
             "over": _round(
                 over_probability(
-                    shrunk_total, latest["total"], policy["sigma_total"]
+                    shrunk_total,
+                    latest["total"],
+                    policy["sigma_total"],
+                    table=table,
                 )
                 - float(fair["over"])
             ),
@@ -1579,6 +1792,10 @@ def build_aggregator_input(
         "voices": voices,
         "feature_block": feature_block,
         "scoreboard": scoreboard,
+        # None under the normal model; the table's identity when empirical,
+        # so the input hash changes with the table the way it does with the
+        # policy knobs.
+        "margin_table": margin_table_descriptor(margin_table_for(policy)),
     }
     payload["committee_key"] = committee_key(payload)
     seed = sha256_text(canonical_json(payload))[:16]
@@ -1631,7 +1848,15 @@ def build_judge_request(input_payload: dict[str, Any]) -> dict[str, Any]:
     feature_block["weights"] = {
         label: weights[voice_id] for label, voice_id in labels.items()
     }
-    return {
+    policy_view = {
+        "sigma_margin": policy["sigma_margin"],
+        "sigma_total": policy["sigma_total"],
+        "shrink_lambda": policy["shrink_lambda"],
+        "edge_threshold": policy["edge_threshold"],
+    }
+    if "margin_model" in policy:
+        policy_view["margin_model"] = policy["margin_model"]
+    request = {
         "input_profile": JUDGE_REQUEST_PROFILE,
         "aggregator_input_sha256": sha256_text(canonical_json(input_payload)),
         # A hash of opinion ids and prices leaks nothing; the runner reads it
@@ -1641,12 +1866,7 @@ def build_judge_request(input_payload: dict[str, Any]) -> dict[str, Any]:
             input_payload.get("committee_key") or committee_key(input_payload)
         ),
         "seed": input_payload["judge_view"]["seed"],
-        "policy": {
-            "sigma_margin": policy["sigma_margin"],
-            "sigma_total": policy["sigma_total"],
-            "shrink_lambda": policy["shrink_lambda"],
-            "edge_threshold": policy["edge_threshold"],
-        },
+        "policy": policy_view,
         "game": input_payload["game"],
         "market": input_payload["market"],
         "feature_block": feature_block,
@@ -1656,6 +1876,9 @@ def build_judge_request(input_payload: dict[str, Any]) -> dict[str, Any]:
         },
         "voices": masked_voices,
     }
+    if input_payload.get("margin_table"):
+        request["margin_table"] = input_payload["margin_table"]
+    return request
 
 
 # --------------------------------------------------------------------------
@@ -1813,11 +2036,15 @@ def apply_policy(
     latest = market["latest"]
     fair = market["fair"]
     movement = _policy_movement(market)
+    table = margin_table_for(policy)
     p_cover_home = cover_probability(
-        expected_home_margin, latest["home_spread"], policy["sigma_margin"]
+        expected_home_margin,
+        latest["home_spread"],
+        policy["sigma_margin"],
+        table=table,
     )
     p_over = over_probability(
-        projected_total, latest["total"], policy["sigma_total"]
+        projected_total, latest["total"], policy["sigma_total"], table=table
     )
     edges = {
         "home_ml": home_win_probability - float(fair["home_ml"]),
@@ -2218,6 +2445,7 @@ def normalize_aggregator_opinion(
     if mode not in AGGREGATOR_MODES:
         raise ValueError(f"Not an aggregator expert mode: {mode}")
     judge = mode == JUDGE_MODE
+    check_margin_table(input_payload)
     policy = input_payload["policy"]
     game = input_payload["game"]
     market = input_payload["market"]
