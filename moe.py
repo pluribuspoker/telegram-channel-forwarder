@@ -40,6 +40,14 @@ from moe_god import (
     normalize_aggregator_opinion,
     rules_arm_response,
 )
+from moe_rating import (
+    ELO_PRIOR_PATH,
+    RATING_MODE,
+    RATING_PROFILE,
+    build_rating_input,
+    normalize_rating_opinion,
+    rating_response,
+)
 from moe_win_total import build_win_total_input
 
 ROOT = Path(__file__).resolve().parent
@@ -133,6 +141,16 @@ FORBIDDEN_SCHEDULE_INPUT_KEYS = {
 
 CreateFn = Callable[..., Awaitable[Any]]
 
+# Experts that run arithmetic instead of a model: the rules aggregator and
+# every ``mode: model`` expert. They persist ``model=deterministic`` on the
+# deterministic backend and take no reasoning effort.
+DETERMINISTIC_MODES = {RULES_MODE, RATING_MODE}
+# ``mode: model`` experts by input profile -> the function that writes the
+# opinion JSON from the built input.
+DETERMINISTIC_RESPONDERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    RATING_PROFILE: rating_response,
+}
+
 
 class MoeOpinionStore(Protocol):
     def append(self, row: dict[str, Any]) -> None: ...
@@ -208,6 +226,8 @@ def _source_sha256(expert: dict[str, Any]) -> str:
         paths.append(ROOT / "moe_win_total.py")
     if expert.get("input_profile") == AGGREGATOR_PROFILE:
         paths.extend((ROOT / "moe_god.py", ROOT / "moe_ak.py"))
+    if expert.get("input_profile") == RATING_PROFILE:
+        paths.extend((ROOT / "moe_rating.py", ELO_PRIOR_PATH))
     digest = hashlib.sha256()
     for path in paths:
         digest.update(str(path.relative_to(ROOT)).encode("utf-8"))
@@ -2718,6 +2738,10 @@ async def generate_opinion(
             registry=registry,
             policy=aggregator_policy(registry),
         )
+    elif expert["input_profile"] == RATING_PROFILE:
+        # The prior is read from disk; this season's finals are the only
+        # live data, and an empty list means the preseason ratings.
+        input_payload = build_rating_input(game, current_season_results or [])
     else:
         raise NotImplementedError(
             f"Unsupported input profile: {expert['input_profile']}"
@@ -2756,14 +2780,14 @@ async def generate_opinion(
         raise ValueError(
             f"Unsupported MOE generation backend: {generation_backend}"
         )
-    if expert_mode == RULES_MODE:
+    if expert_mode in DETERMINISTIC_MODES:
         if generation_backend != DETERMINISTIC_BACKEND:
             raise ValueError(
-                "The rules aggregator only runs on the deterministic backend"
+                f"Expert {expert_id} only runs on the deterministic backend"
             )
         if model or generation_effort:
             raise ValueError(
-                "The rules aggregator takes no model or reasoning effort"
+                f"Expert {expert_id} takes no model or reasoning effort"
             )
         selected_model = DETERMINISTIC_MODEL
         reasoning_effort = ""
@@ -2771,7 +2795,8 @@ async def generate_opinion(
     else:
         if generation_backend == DETERMINISTIC_BACKEND:
             raise ValueError(
-                "The deterministic backend is only for the rules aggregator"
+                "The deterministic backend is only for deterministic experts "
+                "(the rules aggregator and mode-model experts)"
             )
         selected_model = (
             model
@@ -2884,6 +2909,16 @@ async def generate_opinion(
     try:
         if expert_mode == RULES_MODE:
             raw_response = _canonical_json(rules_arm_response(input_payload))
+        elif expert_mode == RATING_MODE:
+            responder = DETERMINISTIC_RESPONDERS.get(
+                str(expert["input_profile"])
+            )
+            if responder is None:
+                raise ValueError(
+                    "No deterministic responder for input profile "
+                    f"{expert['input_profile']}"
+                )
+            raw_response = _canonical_json(responder(input_payload))
         else:
             request = (
                 f"Generate the {expert['name']} opinion from this exact "
@@ -2940,6 +2975,8 @@ async def generate_opinion(
                 expert=expert,
                 model=selected_model if expert_mode == JUDGE_MODE else "",
             )
+        elif int(expert["output_schema_version"]) == 9:
+            opinion = normalize_rating_opinion(opinion, input_payload)
         validate_opinion(
             opinion,
             away_team=away,

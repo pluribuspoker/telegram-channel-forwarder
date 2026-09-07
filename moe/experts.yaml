@@ -103,6 +103,22 @@ experts:
       - claude-opus-4-8
     enabled: true
     initial_weight: 1.0
+  rating_elo:
+    name: Rating Expert (Elo)
+    mode: model
+    version: 1
+    prompt_version: 1
+    prompt: prompts/rating_elo/v1.md
+    input_profile: rating
+    output_schema_version: 9
+    default_model: deterministic
+    allowed_backends:
+      - deterministic
+    markets:
+      - side
+      - total
+    enabled: true
+    initial_weight: 1.0
   god_rules:
     name: God Expert (Rules)
     mode: aggregator

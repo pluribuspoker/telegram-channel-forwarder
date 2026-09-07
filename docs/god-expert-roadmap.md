@@ -255,6 +255,24 @@ anywhere; judge runs bill the Claude Code subscription.
   `scripts/review_moe_opinion.py` (`--expert rating_elo --week N`, 0.25 d)
   that prints the week's rating rows as one table and approves them in one
   command after a human has looked at it.
+- Built 2026-09-07. `moe_rating.py` + registry `rating_elo` (mode `model`,
+  profile `rating`, schema 9, `default_model: deterministic`,
+  `markets: [side, total]`, enabled) + spec `moe/prompts/rating_elo/v1.md`;
+  prior `moe/priors/nfl_elo_v1.json` from `scripts/fit_nfl_elo.py` (K 19,
+  hfa 32, regression 1/3, points_per_elo 21.99 by least squares; fit Brier
+  0.2224 on 2023–24). 2025 check: Elo Brier 0.2224 vs closing moneyline
+  0.2116, +0.0108 — the within-0.01 target is missed by 0.0008 and the prior
+  says `target_met: false`; a fit-season probe of the damping constant and
+  the probability scale could not separate the variants (<0.0003), so the
+  plain 538 form stays. The wider CSV IS committed: `data/nfl_lines_history.csv`
+  now spans 1999–2025 (6,967 games; the 2016–2025 rows are byte-identical)
+  and `DEFAULT_SEASONS` is `1999-2025`. Bulk review is
+  `scripts/review_moe_opinion.py --expert rating_elo --week N --reviewed-by
+  <you> [--approve]` after `scripts/generate_rating_week.py --season S --week
+  N`; nothing approves on its own. Deploy note: with `rating_elo` enabled the
+  judge runner's committee requires an approved rating row per game, so the
+  week's rating rows must be generated and approved before the timer judges
+  it (or ship with `enabled: false` until then).
 
 ### WP8 — Backtest harness (2.5 d, needs WP6 and WP7)
 

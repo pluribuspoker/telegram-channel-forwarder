@@ -180,6 +180,21 @@ state, so the judge no longer races the 30-minute lines fetcher:
 6. Review each row with `python scripts/review_moe_opinion.py --opinion-id
    <id> --status approved --reviewed-by <you>`.
 
+### Rating voice
+
+`rating_elo` never uses an agent either: it is Elo arithmetic on the
+committed prior `moe/priors/nfl_elo_v1.json` and this season's finals
+(`moe_rating.py`, spec `moe/prompts/rating_elo/v1.md`). One game:
+`python scripts/generate_moe_opinion.py --event-id <id> --expert rating_elo
+--deterministic` (`--show-input` prints the rating input). The weekly path
+is `python scripts/generate_rating_week.py --season <S> --week <N>` (one
+pending row per upcoming game of the week, deduped on the input hash), then
+`python scripts/review_moe_opinion.py --expert rating_elo --week <N>
+--reviewed-by <you>` to read the week's table and the same command with
+`--approve` to approve it. The judge runner needs the approved rating row
+before it judges a game. Refit the prior each offseason with
+`python scripts/fit_nfl_elo.py --check-season <season just played>`.
+
 ## Runtime notes
 
 ### Claude Code CLI
