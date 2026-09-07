@@ -1,0 +1,825 @@
+{
+ "away_team": "New England Patriots",
+ "calibration_summary_json": {
+  "arm": "rules",
+  "edges": {
+   "away_cover": -0.0329,
+   "away_ml": -0.0016,
+   "home_cover": 0.0329,
+   "home_ml": 0.0016,
+   "over": 0.033,
+   "under": -0.033
+  },
+  "estimate": {
+   "expected_home_margin": 3.88,
+   "home_win_probability": 0.6259,
+   "p_cover_home": 0.5112,
+   "p_over": 0.5222,
+   "projected_total": 45.25
+  },
+  "fair": {
+   "away_cover": 0.5217,
+   "away_ml": 0.3757,
+   "hold_ml": 0.0317,
+   "hold_spread": 0.0455,
+   "hold_total": 0.0471,
+   "home_cover": 0.4783,
+   "home_ml": 0.6243,
+   "over": 0.4892,
+   "under": 0.5108
+  },
+  "judge_labels": null,
+  "policy_version": 1,
+  "pool": {
+   "expected_home_margin": 4.25,
+   "home_win_probability": 0.6275,
+   "p_cover_home": 0.5221,
+   "p_over": 0.5439,
+   "projected_total": 46.0
+  },
+  "scoreboard_resolved_games": 0,
+  "shrunk": {
+   "expected_home_margin": 3.88,
+   "home_win_probability": 0.6259,
+   "lambda": 0.5,
+   "projected_total": 45.25
+  },
+  "voices": {
+   "ak": {
+    "expert_name": "AK Expert",
+    "expert_version": "1",
+    "model": "claude-opus-4-8",
+    "opinion_id": "e5178c80-79d3-44a0-9b18-c2ec4bb22460",
+    "selection_rule": "default_model"
+   },
+   "divisional": {
+    "expert_name": "Divisional Expert",
+    "expert_version": "34",
+    "model": "claude-opus-4-8",
+    "opinion_id": "c7f7ea3e-5b87-489f-b6ac-d297d89fdb99",
+    "selection_rule": "default_model"
+   },
+   "schedule": {
+    "expert_name": "Schedule Expert",
+    "expert_version": "23",
+    "model": "claude-opus-4-8",
+    "opinion_id": "e23a8bdf-5b46-4623-9a2b-f956b9bde254",
+    "selection_rule": "default_model"
+   },
+   "win_total": {
+    "expert_name": "Win Total Expert",
+    "expert_version": "4",
+    "model": "claude-opus-4-8",
+    "opinion_id": "e81d3298-9394-4b08-b0a1-9c0bff893652",
+    "selection_rule": "default_model"
+   }
+  },
+  "weights": {
+   "ak": 1.0,
+   "divisional": 1.0,
+   "schedule": 1.0,
+   "win_total": 1.0
+  },
+  "weights_active": false
+ },
+ "commence_time_et": "2026-09-09T20:20:00-04:00",
+ "commence_time_utc": "2026-09-10T00:20:00+00:00",
+ "confidence_stars": 1,
+ "event_id": "8c94552d022acec4a0458d70c19d3da9",
+ "expected_home_margin": 3.88,
+ "expert_id": "god_rules",
+ "expert_mode": "aggregator",
+ "expert_name": "God Expert (Rules)",
+ "expert_version": 1,
+ "fixture_note": "Persisted Week 1 row read from moe_opinions on 2026-09-07; input_json and raw_response are the parsed persisted strings (canonical JSON round-trips to input_sha256).",
+ "generated_at_utc": "2026-09-07T01:43:45.290969+00:00",
+ "generation_backend": "deterministic",
+ "generation_effort": "",
+ "generation_status": "valid",
+ "git_commit": "fd19e8577db99a34e41115fba8b0d9f8286dcb70",
+ "home_team": "Seattle Seahawks",
+ "home_win_probability": 0.6259,
+ "input_json": {
+  "feature_block": {
+   "dispersion": {
+    "away_winner_votes": 0,
+    "expected_home_margin": {
+     "max": 6.0,
+     "min": 1.0,
+     "range": 5.0
+    },
+    "home_win_probability": {
+     "max": 0.66,
+     "min": 0.57,
+     "range": 0.09
+    },
+    "home_winner_votes": 4,
+    "projected_total": {
+     "max": 48.0,
+     "min": 43.0,
+     "range": 5.0
+    }
+   },
+   "edges_if_shrunk": {
+    "home_cover": 0.0328,
+    "home_ml": 0.0016,
+    "over": 0.033
+   },
+   "n_voices": 4,
+   "pool": {
+    "expected_home_margin": 4.25,
+    "home_win_probability": 0.6275,
+    "p_cover_home": 0.5221,
+    "p_over": 0.5439,
+    "projected_total": 46.0
+   },
+   "shrunk": {
+    "expected_home_margin": 3.88,
+    "home_win_probability": 0.6259,
+    "lambda": 0.5,
+    "projected_total": 45.25
+   },
+   "weights": {
+    "ak": 1.0,
+    "divisional": 1.0,
+    "schedule": 1.0,
+    "win_total": 1.0
+   },
+   "weights_active": false
+  },
+  "game": {
+   "away_team": "New England Patriots",
+   "commence_time_et": "2026-09-09T20:20:00-04:00",
+   "commence_time_utc": "2026-09-10T00:20:00+00:00",
+   "event_id": "8c94552d022acec4a0458d70c19d3da9",
+   "home_team": "Seattle Seahawks",
+   "season": 2026,
+   "week": 1
+  },
+  "input_profile": "aggregator",
+  "judge_view": {
+   "labels": {
+    "Voice A": "win_total",
+    "Voice B": "schedule",
+    "Voice C": "ak",
+    "Voice D": "divisional"
+   },
+   "seed": "6d75e3d0f46be372"
+  },
+  "market": {
+   "bookmaker": "BetOnline.ag",
+   "fair": {
+    "away_cover": 0.5217,
+    "away_ml": 0.3757,
+    "hold_ml": 0.0317,
+    "hold_spread": 0.0455,
+    "hold_total": 0.0471,
+    "home_cover": 0.4783,
+    "home_ml": 0.6243,
+    "over": 0.4892,
+    "under": 0.5108
+   },
+   "implied_totals": {
+    "away": 20.5,
+    "home": 24.0
+   },
+   "latest": {
+    "away_moneyline": 158,
+    "away_spread": 3.5,
+    "away_spread_price": -120,
+    "captured_at": "2026-09-06T20:35:17.635342Z",
+    "home_moneyline": -181,
+    "home_spread": -3.5,
+    "home_spread_price": 100,
+    "over_price": -105,
+    "total": 44.5,
+    "under_price": -115
+   },
+   "market_expectation": {
+    "home_margin": 3.5,
+    "total": 44.5
+   },
+   "movement_since_open": {
+    "fair_home_ml": -0.0102,
+    "home_moneyline": 9.0,
+    "home_spread": 0.0,
+    "total": 0.5
+   },
+   "opening": {
+    "away_moneyline": 165,
+    "away_spread": 3.5,
+    "away_spread_price": -110,
+    "captured_at": "2026-08-04T23:25:37.714411Z",
+    "home_moneyline": -190,
+    "home_spread": -3.5,
+    "home_spread_price": -110,
+    "over_price": -110,
+    "total": 44,
+    "under_price": -110
+   }
+  },
+  "policy": {
+   "edge_threshold": 0.03,
+   "factor_chars": 200,
+   "factor_limit": 5,
+   "hedge_eta": 2.0,
+   "kelly_fraction": 0.25,
+   "max_stake_fraction": 0.05,
+   "reason_chars": 280,
+   "reason_limit": 6,
+   "shrink_lambda": 0.5,
+   "sigma_margin": 13.5,
+   "sigma_total": 13.5,
+   "star_edges": [
+    0.03,
+    0.05,
+    0.08,
+    0.12,
+    0.16
+   ],
+   "version": 1,
+   "voice_fallback": "latest_any_model",
+   "voice_rule": "default_model",
+   "weight_cap": 2.0,
+   "weight_floor": 0.5,
+   "weights_min_resolved": 3
+  },
+  "scoreboard": {
+   "as_of": "2026-09-06T20:35:17.635342Z",
+   "by_expert": {
+    "ak": {
+     "ats": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "brier": null,
+     "clv_legs": 0,
+     "clv_points_mean": null,
+     "legs": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "ou": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "resolved": 0
+    },
+    "divisional": {
+     "ats": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "brier": null,
+     "clv_legs": 0,
+     "clv_points_mean": null,
+     "legs": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "ou": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "resolved": 0
+    },
+    "god_judge": {
+     "ats": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "brier": null,
+     "clv_legs": 0,
+     "clv_points_mean": null,
+     "legs": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "ou": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "resolved": 0
+    },
+    "god_rules": {
+     "ats": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "brier": null,
+     "clv_legs": 0,
+     "clv_points_mean": null,
+     "legs": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "ou": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "resolved": 0
+    },
+    "schedule": {
+     "ats": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "brier": null,
+     "clv_legs": 0,
+     "clv_points_mean": null,
+     "legs": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "ou": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "resolved": 0
+    },
+    "win_total": {
+     "ats": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "brier": null,
+     "clv_legs": 0,
+     "clv_points_mean": null,
+     "legs": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "ou": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "resolved": 0
+    }
+   },
+   "graded_opinions": 0,
+   "resolved_games": 0
+  },
+  "voices": [
+   {
+    "confidence_stars": 1,
+    "counterarguments": {
+     "items": [
+      "Side: Matching NFL side bucket has 0 resolved AK predictions.",
+      "Side: WNBA cross-sport prior: laying more than the market was venue dependent, with road favorites covering 5 of 6 and home favorites covering 2 of 5.",
+      "Total: AK projects 48 total points, +3.5 versus the submission total; bucket plus_3_to_9.",
+      "Total: Matching NFL total bucket has 0 resolved AK predictions."
+     ],
+     "total": 4,
+     "truncated": false
+    },
+    "derived": {
+     "p_cover_home": 0.5735,
+     "p_over": 0.6023
+    },
+    "discarded_considerations": {
+     "items": [
+      "AK's single Seattle projection implies a Seattle spread cover and an Over, but one projection is not calibrated NFL evidence, so it did not justify a side or an Over.",
+      "The WNBA side prior is a capped cross-sport warning that is not permitted as side support, so no spread side was taken.",
+      "No injury, weather, roster, news, current-form, or market-movement conclusions were drawn because none are supplied in the input."
+     ],
+     "total": 3,
+     "truncated": false
+    },
+    "expected_home_margin": 6.0,
+    "expert_id": "ak",
+    "expert_name": "AK Expert",
+    "expert_version": "1",
+    "generated_at_utc": "2026-09-05T05:07:34.022162+00:00",
+    "generation_backend": "agent_runtime",
+    "generation_effort": "max",
+    "home_win_probability": 0.62,
+    "legs": {
+     "side": {
+      "confidence_stars": 1,
+      "line": null,
+      "selection": "PASS"
+     },
+     "total": {
+      "confidence_stars": 1,
+      "line": 44.5,
+      "selection": "Under"
+     }
+    },
+    "lens": "Calibrates one human forecaster's exact score projection against the submission-time market using that forecaster's graded history and a capped cross-sport prior. May pass either leg.",
+    "model": "claude-opus-4-8",
+    "no_signal_factors": {
+     "items": [
+      "Matching NFL side bucket has 0 resolved AK predictions.",
+      "Matching NFL total bucket has 0 resolved AK predictions."
+     ],
+     "total": 2,
+     "truncated": false
+    },
+    "opinion_id": "e5178c80-79d3-44a0-9b18-c2ec4bb22460",
+    "predicted_away_score": 21,
+    "predicted_home_score": 27,
+    "predicted_winner": "Seattle Seahawks",
+    "projected_total": 48,
+    "prompt_version": "1",
+    "selection_rule": "default_model",
+    "supporting_factors": {
+     "items": [
+      "Total: WNBA cross-sport prior: the NFL 3 to <9 band maps to WNBA 6 to <12; the full WNBA sample finished under in 7 of 10 games.",
+      "Total: WNBA calibration is a cross-sport prior capped at 2 side and 2 total equivalent NFL observations; it cannot add more than one confidence star."
+     ],
+     "total": 2,
+     "truncated": false
+    },
+    "thesis": "AK calibration: side PASS ★; total Under 44.5 ★.",
+    "track_record": {
+     "ats": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "brier": null,
+     "clv_legs": 0,
+     "clv_points_mean": null,
+     "legs": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "ou": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "resolved": 0
+    },
+    "voice_id": "ak"
+   },
+   {
+    "confidence_stars": 3,
+    "counterarguments": {
+     "items": [
+      "New England Patriots — divisional baseline (comparison only; current game is non-conference): 9-9, 50.0% win rate, +0.44 average margin (18 games)"
+     ],
+     "total": 1,
+     "truncated": false
+    },
+    "derived": {
+     "p_cover_home": 0.5442,
+     "p_over": 0.4558
+    },
+    "discarded_considerations": {
+     "items": [
+      "divisional venue roles - discarded because a non-conference game does not align with divisional home or away splits",
+      "annual divisional meeting number records - discarded because meeting-one and meeting-two cohorts describe divisional rematches not present here",
+      "season-series sweep and rematch outcomes - discarded because only a single meeting is scheduled and no current-season prior meeting exists",
+      "home-side divisional meeting cohorts - discarded because that field is null and irrelevant to a non-conference matchup"
+     ],
+     "total": 4,
+     "truncated": false
+    },
+    "expected_home_margin": 5.0,
+    "expert_id": "divisional",
+    "expert_name": "Divisional Expert",
+    "expert_version": "34",
+    "generated_at_utc": "2026-09-06T18:02:21.623156+00:00",
+    "generation_backend": "agent_runtime",
+    "generation_effort": "max",
+    "home_win_probability": 0.66,
+    "legs": {
+     "side": null,
+     "total": null
+    },
+    "lens": "Sees division and conference matchup history and matchup tags. No lines, no news.",
+    "model": "claude-opus-4-8",
+    "no_signal_factors": {
+     "items": [
+      "Current-season prior meeting: none",
+      "Seattle Seahawks — home games against the current opponent: no sample (0 games)",
+      "New England Patriots — away games against the current opponent: no sample (0 games)"
+     ],
+     "total": 3,
+     "truncated": false
+    },
+    "opinion_id": "c7f7ea3e-5b87-489f-b6ac-d297d89fdb99",
+    "predicted_away_score": 19,
+    "predicted_home_score": 24,
+    "predicted_winner": "Seattle Seahawks",
+    "projected_total": 43,
+    "prompt_version": "20",
+    "selection_rule": "default_model",
+    "supporting_factors": {
+     "items": [
+      "Seattle Seahawks — non-conference games (current matchup type): 11-4, 73.3% win rate, +0.93 average margin (15 games)",
+      "New England Patriots — non-conference games (current matchup type): 6-9, 40.0% win rate, -2.93 average margin (15 games)",
+      "Seattle Seahawks — non-divisional games (current matchup structure): 23-10, 69.7% win rate, +4.70 average margin (33 games)",
+      "New England Patriots — non-divisional games (current matchup structure): 13-20, 39.4% win rate, -2.91 average margin (33 games)",
+      "Seattle Seahawks — divisional baseline (comparison only; current game is non-conference): 10-8, 55.6% win rate, +0.28 average margin (18 games)"
+     ],
+     "total": 7,
+     "truncated": true
+    },
+    "thesis": "The selected non-conference matchup-structure evidence yields a moderate-confidence lean toward Seattle Seahawks, with conflicting evidence retained as counterarguments.",
+    "track_record": {
+     "ats": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "brier": null,
+     "clv_legs": 0,
+     "clv_points_mean": null,
+     "legs": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "ou": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "resolved": 0
+    },
+    "voice_id": "divisional"
+   },
+   {
+    "confidence_stars": 3,
+    "counterarguments": {
+     "items": [
+      "Seattle's overall home-role record (as_home) is its weaker split at 14-11 (.5600, +1.60 over 25 games), below its overall .6471 and its road split of 19-7 (.7308, +4.62).",
+      "New England's road-role record (as_away) 13-12 (.5200, -1.64 over 25 games) is better than its overall .4314 and much better than its home-role .3462.",
+      "same_week_number (Week 1) cuts against the pick: Seattle 1-2 (.3333, -5.00 over 3 games) and New England also 1-2 (.3333, -2.00 over 3 games); Seattle's tiny same-week sample is negative.",
+      "Head-to-head is a single game won by Seattle 23-20 (+3), which carries very little weight.",
+      "New England's matchup-aligned September away sample (same_month_as_away) is a winning 3-2 (.6000) despite low scoring, so the away side is not empty in the current calendar/venue slot."
+     ],
+     "total": 6,
+     "truncated": true
+    },
+    "derived": {
+     "p_cover_home": 0.5442,
+     "p_over": 0.5442
+    },
+    "discarded_considerations": {
+     "items": [
+      "Calling September broadly strongest for Seattle - discarded; it ranks 1st in margin and points for but 2nd in win rate, so it is not first in every summarized metric.",
+      "Calling September broadly weakest for New England - partially discarded; it is last in win rate and points for but 4th (not last) in average margin, so 'broadly weakest' overstates it.",
+      "Reading distribution/consistency (narrow wins, blowout losses, volatility) from Seattle's or New England's averages - discarded; only aggregate win rate, points, and margin are supplied, not game-lev…",
+      "Treating conference_non_division cohorts as decisive here - discarded; this is a non_conference game, so the aligned matchup-type cohort is non_conference, not conference_non_division.",
+      "Reading the 20:20 ET Wednesday Week 1 kickoff as prime-time, an opener, or unusual - discarded; no such labels are supplied and same_weekday has 0 games."
+     ],
+     "total": 8,
+     "truncated": true
+    },
+    "expected_home_margin": 5.0,
+    "expert_id": "schedule",
+    "expert_name": "Schedule Expert",
+    "expert_version": "23",
+    "generated_at_utc": "2026-09-05T06:17:23.847956+00:00",
+    "generation_backend": "anthropic_api",
+    "generation_effort": "max",
+    "home_win_probability": 0.66,
+    "legs": {
+     "side": null,
+     "total": null
+    },
+    "lens": "Sees three seasons of schedule cohorts for both teams: month, weekday, week number, venue splits, head-to-head. No lines, no news.",
+    "model": "claude-opus-4-8",
+    "no_signal_factors": {
+     "items": [
+      "same_weekday for both teams has 0 games (Wednesday), win_rate and averages null; no weekday signal.",
+      "same_weekday_and_month_matchup_type is an aggregate home-side cohort with 0 games and null records; no usable signal and not attributable to either team.",
+      "Head-to-head is only 1 game, providing minimal signal."
+     ],
+     "total": 3,
+     "truncated": false
+    },
+    "opinion_id": "e23a8bdf-5b46-4623-9a2b-f956b9bde254",
+    "predicted_away_score": 20,
+    "predicted_home_score": 26,
+    "predicted_winner": "Seattle Seahawks",
+    "projected_total": 46,
+    "prompt_version": "14",
+    "selection_rule": "default_model",
+    "supporting_factors": {
+     "items": [
+      "Overall record favors Seattle: home team 33-18 (.6471, avg margin +3.14) vs away team 22-29 (.4314, avg margin -1.73) across 51 games each.",
+      "Current-month (September) rankings favor Seattle: same_month_rankings has Seattle 1st in average margin and average points for and 2nd in win rate out of 5 months, while New England ranks 4th in marg…",
+      "September samples (11 games each) show Seattle 8-3 (.7273, 27.27 for, 21.82 against, +5.45) versus New England 4-7 (.3636, 18.73 for, 20.64 against, -1.91).",
+      "This is a non_conference game and the matchup-aligned non_conference cohorts favor Seattle: home team 11-4 (.7333, +0.93 over 15 games) vs away team 6-9 (.4000, -2.93 over 15 games).",
+      "Broader non_division_games cohort also favors Seattle: 23-10 (.6970, +4.70 over 33 games) vs New England 13-20 (.3939, -2.91 over 33 games)."
+     ],
+     "total": 6,
+     "truncated": true
+    },
+    "thesis": "Seattle's schedule-model profile is stronger across nearly every aligned cohort: better overall record, top-ranked September scoring and margin, and a solid non_conference record. New England ranks last in September win rate and points over five months and carries a losing non_conference cohort. Small same-week and one-game head-to-head samples plus Seattle's weaker home-role numbers temper the edge.",
+    "track_record": {
+     "ats": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "brier": null,
+     "clv_legs": 0,
+     "clv_points_mean": null,
+     "legs": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "ou": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "resolved": 0
+    },
+    "voice_id": "schedule"
+   },
+   {
+    "confidence_stars": 2,
+    "counterarguments": {
+     "items": [
+      "The lone dissenter, forecaster Cee (telegram_user), projected 12 wins for the away Patriots and 11 for the home Seahawks (home_minus_away -1), preferring New England for the season, and their latest …",
+      "Both teams enter off the 2025 prior season with 14 wins apiece, an exact tie in prior-season records, so team_context provides no record-based edge for either side in this matchup.",
+      "matching_prior_win_gap, covering the current prior-win gap of 0 (equal prior-season wins), shows only a slight home edge across 49 games: home teams went 26-23-0 (win_rate 0.5306) with an average_mar…",
+      "matching_prior_win_level, using the current prior-win level pair (12_plus, 12_plus) with both bucket minimums at 12, actually favored the away side across 21 games: home teams went just 9-12-0 (win_r…",
+      "The exact_prior_win_pair analog for the current (14, 14) prior-win pair is a single game (games 1) in which the home side lost (win_rate 0.0, average_margin -6.0, average_total_points 50.0); this sam…"
+     ],
+     "total": 6,
+     "truncated": true
+    },
+    "derived": {
+     "p_cover_home": 0.4265,
+     "p_over": 0.5735
+    },
+    "discarded_considerations": {
+     "items": [
+      "current game market (spreads, moneylines, game totals) - discarded because it is outside this expert",
+      "injuries, rosters, and news - discarded because they are outside the supplied JSON",
+      "power ratings and outside knowledge - discarded because they are outside this expert"
+     ],
+     "total": 3,
+     "truncated": false
+    },
+    "expected_home_margin": 1.0,
+    "expert_id": "win_total",
+    "expert_name": "Win Total Expert",
+    "expert_version": "4",
+    "generated_at_utc": "2026-09-05T07:11:19.716320+00:00",
+    "generation_backend": "anthropic_api",
+    "generation_effort": "max",
+    "home_win_probability": 0.57,
+    "legs": {
+     "side": null,
+     "total": null
+    },
+    "lens": "Sees BetOnline season win totals and several human season projections for both teams. No game lines.",
+    "model": "claude-opus-4-8",
+    "no_signal_factors": {
+     "items": [],
+     "total": 0,
+     "truncated": false
+    },
+    "opinion_id": "e81d3298-9394-4b08-b0a1-9c0bff893652",
+    "predicted_away_score": 23,
+    "predicted_home_score": 24,
+    "predicted_winner": "Seattle Seahawks",
+    "projected_total": 47,
+    "prompt_version": "4",
+    "selection_rule": "default_model",
+    "supporting_factors": {
+     "items": [
+      "BetOnline sets Seattle's win total at 10.5 and New England's at 9.5, identifying Seattle as the higher_total_side by 1.0 win; a one-win difference indicates a modest season-level ordering favoring Se…",
+      "The all-forecaster consensus leans to Seattle: 4 of 5 forecasters gave the home team the higher season win total versus 1 for the away team, with 0 tied, and the higher_average_side is the Seattle Se…",
+      "Forecaster A K (telegram_user) projected 11 wins for the away Patriots and 12 for the home Seahawks (home_minus_away 1), preferring Seattle for the season, and their latest moneyline game pick on the…",
+      "Forecaster Bill Simmons (celebrity) projected 11 wins for the away Patriots and 12 for the home Seahawks (home_minus_away 1), preferring Seattle; no game pick was supplied, so game-pick consistency c…",
+      "Forecaster Cousin Sal (celebrity) projected 10 wins for the away Patriots and 11 for the home Seahawks (home_minus_away 1), preferring Seattle; no game pick was supplied, so game-pick consistency can…"
+     ],
+     "total": 7,
+     "truncated": true
+    },
+    "thesis": "BetOnline gives the home Seattle Seahawks the higher season win total at 10.5 versus 9.5 for the New England Patriots, a one-win edge, and the all-forecaster consensus agrees with a home-higher lead (average home 12.0 wins, average away 10.8 wins, median home 12, median away 11, home-minus-away average 1.2), so Seattle is a slight favorite in a modest, close matchup.",
+    "track_record": {
+     "ats": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "brier": null,
+     "clv_legs": 0,
+     "clv_points_mean": null,
+     "legs": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "ou": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "resolved": 0
+    },
+    "voice_id": "win_total"
+   }
+  ]
+ },
+ "input_profile": "aggregator",
+ "input_sha256": "618ff4cea872a43f5073759fee7513440ef2e463abbebbedb9385e47594c9c16",
+ "model": "deterministic",
+ "opinion_id": "c884d868-3e1e-4b58-abba-4fa3707e08d8",
+ "output_schema_version": 8,
+ "output_sha256": "bbfcce7b3365ab92ffde81628db5a8708cab819f385f15aa89c9cb8e5fe215f4",
+ "pick_market": "side_and_total",
+ "pick_side": "Seattle Seahawks -3.5 | Over 44.5",
+ "predicted_away_score": 21,
+ "predicted_home_score": 25,
+ "predicted_winner": "Seattle Seahawks",
+ "prompt_path": "moe/prompts/god_rules/v1.md",
+ "prompt_sha256": "50cd4a320a0bfe06e9d35759a0695182d250f99a6a18f670fac8bd5ded02ad7a",
+ "prompt_version": 1,
+ "raw_response": {
+  "counterpoints": [
+   {
+    "text": "Voices span p(home) 0.57 to 0.66; the blend averages a disagreement rather than reporting a consensus.",
+    "voice": "market"
+   }
+  ],
+  "discarded_considerations": [],
+  "expected_home_margin": 3.88,
+  "home_win_probability": 0.6259,
+  "key_reasons": [
+   {
+    "text": "Equal-weight pool of 4 voices: p(home) 0.627, margin +4.2, total 46.0.",
+    "voice": "pool"
+   },
+   {
+    "text": "Market fair p(home) 0.624; shrink lambda 0.5 moves the pool toward the market before any edge is measured.",
+    "voice": "market"
+   },
+   {
+    "text": "Seattle Seahawks 21-27, p(home) 0.62, ★, weight 1.",
+    "voice": "ak"
+   },
+   {
+    "text": "Seattle Seahawks 19-24, p(home) 0.66, ★★★, weight 1.",
+    "voice": "divisional"
+   },
+   {
+    "text": "Seattle Seahawks 20-26, p(home) 0.66, ★★★, weight 1.",
+    "voice": "schedule"
+   },
+   {
+    "text": "Seattle Seahawks 23-24, p(home) 0.57, ★★, weight 1.",
+    "voice": "win_total"
+   }
+  ],
+  "projected_total": 45.25
+ },
+ "review_status": "pending",
+ "season": 2026,
+ "side_pick_json": {
+  "confidence_stars": 1,
+  "edge": 0.0329,
+  "ev_per_unit": 0.0225,
+  "fair_probability": 0.4783,
+  "line": -3.5,
+  "price": 100,
+  "probability": 0.5112,
+  "selection": "Seattle Seahawks",
+  "stake_fraction": 0.0056,
+  "stake_units": 0.6
+ },
+ "thesis": "God Expert (rules): side Seattle Seahawks -3.5 ★; total Over 44.5 ★. p(home) 0.63 vs market 0.62; edges home-cover +3.3%, over +3.3%.",
+ "total_pick_json": {
+  "confidence_stars": 1,
+  "edge": 0.033,
+  "ev_per_unit": 0.0194,
+  "fair_probability": 0.4892,
+  "line": 44.5,
+  "price": -105,
+  "probability": 0.5222,
+  "selection": "Over",
+  "stake_fraction": 0.0051,
+  "stake_units": 0.5
+ },
+ "week": 1
+}

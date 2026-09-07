@@ -1,0 +1,641 @@
+{
+ "away_team": "San Francisco 49ers",
+ "calibration_summary_json": {
+  "arm": "judge",
+  "edges": {
+   "away_cover": 0.0148,
+   "away_ml": 0.0245,
+   "home_cover": -0.0148,
+   "home_ml": -0.0245,
+   "over": -0.0108,
+   "under": 0.0108
+  },
+  "estimate": {
+   "expected_home_margin": 3.0,
+   "home_win_probability": 0.61,
+   "p_cover_home": 0.4852,
+   "p_over": 0.5,
+   "projected_total": 48.0
+  },
+  "fair": {
+   "away_cover": 0.5,
+   "away_ml": 0.3655,
+   "hold_ml": 0.0325,
+   "hold_spread": 0.0476,
+   "hold_total": 0.0471,
+   "home_cover": 0.5,
+   "home_ml": 0.6345,
+   "over": 0.5108,
+   "under": 0.4892
+  },
+  "judge_labels": {
+   "Voice A": "win_total",
+   "Voice B": "ak",
+   "Voice C": "schedule",
+   "Voice D": "divisional"
+  },
+  "policy_version": 1,
+  "pool": {
+   "expected_home_margin": 0.5,
+   "home_win_probability": 0.5275,
+   "p_cover_home": 0.4136,
+   "p_over": 0.5075,
+   "projected_total": 48.25
+  },
+  "scoreboard_resolved_games": 0,
+  "shrunk": {
+   "expected_home_margin": 2.0,
+   "home_win_probability": 0.581,
+   "lambda": 0.5,
+   "projected_total": 48.12
+  },
+  "voices": {
+   "ak": {
+    "expert_name": "AK Expert",
+    "expert_version": "1",
+    "model": "claude-opus-4-8",
+    "opinion_id": "759304ae-3b4c-4f70-a5f9-e4149fe4ccc9",
+    "selection_rule": "default_model"
+   },
+   "divisional": {
+    "expert_name": "Divisional Expert",
+    "expert_version": "34",
+    "model": "claude-opus-4-8",
+    "opinion_id": "fd851550-2846-4767-806f-2637d8fbc078",
+    "selection_rule": "default_model"
+   },
+   "schedule": {
+    "expert_name": "Schedule Expert",
+    "expert_version": "22",
+    "model": "claude-opus-4-8",
+    "opinion_id": "4c9d12c8-f5ab-4d19-86ef-babd534b1df0",
+    "selection_rule": "default_model"
+   },
+   "win_total": {
+    "expert_name": "Win Total Expert",
+    "expert_version": "4",
+    "model": "claude-opus-4-8",
+    "opinion_id": "6691de5d-7148-482c-b274-bfe6190a9594",
+    "selection_rule": "default_model"
+   }
+  },
+  "weights": {
+   "ak": 1.0,
+   "divisional": 1.0,
+   "schedule": 1.0,
+   "win_total": 1.0
+  },
+  "weights_active": false
+ },
+ "commence_time_et": "2026-09-10T20:35:00-04:00",
+ "commence_time_utc": "2026-09-11T00:35:00+00:00",
+ "confidence_stars": 1,
+ "event_id": "acc580d74344ea3b31bbcdd057fe6a9c",
+ "expected_home_margin": 3,
+ "expert_id": "god_judge",
+ "expert_mode": "aggregator_judge",
+ "expert_name": "God Expert (Judge)",
+ "expert_version": 1,
+ "fixture_note": "Persisted Week 1 row read from moe_opinions on 2026-09-07; input_json and raw_response are the parsed persisted strings (canonical JSON round-trips to input_sha256).",
+ "generated_at_utc": "2026-09-07T01:47:28.251421+00:00",
+ "generation_backend": "agent_runtime",
+ "generation_effort": "max",
+ "generation_status": "valid",
+ "git_commit": "fd19e8577db99a34e41115fba8b0d9f8286dcb70",
+ "home_team": "Los Angeles Rams",
+ "home_win_probability": 0.61,
+ "input_json": {
+  "aggregator_input_sha256": "98397ce62e01b91b74140d9eeead28273a8eb603582eca39cfce34b969e3cfbc",
+  "feature_block": {
+   "dispersion": {
+    "away_winner_votes": 2,
+    "expected_home_margin": {
+     "max": 4.0,
+     "min": -2.0,
+     "range": 6.0
+    },
+    "home_win_probability": {
+     "max": 0.65,
+     "min": 0.45,
+     "range": 0.2
+    },
+    "home_winner_votes": 2,
+    "projected_total": {
+     "max": 50.0,
+     "min": 45.0,
+     "range": 5.0
+    }
+   },
+   "edges_if_shrunk": {
+    "home_cover": -0.0442,
+    "home_ml": -0.0535,
+    "over": -0.0071
+   },
+   "n_voices": 4,
+   "pool": {
+    "expected_home_margin": 0.5,
+    "home_win_probability": 0.5275,
+    "p_cover_home": 0.4136,
+    "p_over": 0.5075,
+    "projected_total": 48.25
+   },
+   "shrunk": {
+    "expected_home_margin": 2.0,
+    "home_win_probability": 0.581,
+    "lambda": 0.5,
+    "projected_total": 48.12
+   },
+   "weights": {
+    "Voice A": 1.0,
+    "Voice B": 1.0,
+    "Voice C": 1.0,
+    "Voice D": 1.0
+   },
+   "weights_active": false
+  },
+  "game": {
+   "away_team": "San Francisco 49ers",
+   "commence_time_et": "2026-09-10T20:35:00-04:00",
+   "commence_time_utc": "2026-09-11T00:35:00+00:00",
+   "event_id": "acc580d74344ea3b31bbcdd057fe6a9c",
+   "home_team": "Los Angeles Rams",
+   "season": 2026,
+   "week": 1
+  },
+  "input_profile": "aggregator_judge_request",
+  "market": {
+   "bookmaker": "BetOnline.ag",
+   "fair": {
+    "away_cover": 0.5,
+    "away_ml": 0.3655,
+    "hold_ml": 0.0325,
+    "hold_spread": 0.0476,
+    "hold_total": 0.0471,
+    "home_cover": 0.5,
+    "home_ml": 0.6345,
+    "over": 0.5108,
+    "under": 0.4892
+   },
+   "implied_totals": {
+    "away": 22.25,
+    "home": 25.75
+   },
+   "latest": {
+    "away_moneyline": 165,
+    "away_spread": 3.5,
+    "away_spread_price": -110,
+    "captured_at": "2026-09-06T20:35:17.635342Z",
+    "home_moneyline": -190,
+    "home_spread": -3.5,
+    "home_spread_price": -110,
+    "over_price": -115,
+    "total": 48,
+    "under_price": -105
+   },
+   "market_expectation": {
+    "home_margin": 3.5,
+    "total": 48.0
+   },
+   "movement_since_open": {
+    "fair_home_ml": 0.0,
+    "home_moneyline": 0.0,
+    "home_spread": 0.0,
+    "total": -0.5
+   },
+   "opening": {
+    "away_moneyline": 165,
+    "away_spread": 3.5,
+    "away_spread_price": -110,
+    "captured_at": "2026-08-04T23:25:37.714411Z",
+    "home_moneyline": -190,
+    "home_spread": -3.5,
+    "home_spread_price": -110,
+    "over_price": -110,
+    "total": 48.5,
+    "under_price": -110
+   }
+  },
+  "policy": {
+   "edge_threshold": 0.03,
+   "shrink_lambda": 0.5,
+   "sigma_margin": 13.5,
+   "sigma_total": 13.5
+  },
+  "scoreboard": {
+   "as_of": "2026-09-06T20:35:17.635342Z",
+   "resolved_games": 0
+  },
+  "seed": "74f07de3cc22258c",
+  "voices": [
+   {
+    "confidence_stars": 2,
+    "counterarguments": {
+     "items": [
+      "A one-win season-total gap is weak evidence for one game because teams play different schedules; the historical matching_prior_win_gap sample, where both teams entered with equal prior-season win tot…",
+      "By prior-season records this game is actually even, not Rams-favored: team_context lists both the Los Angeles Rams and San Francisco 49ers at 12 prior_season (2025) wins, so the current bookmaker edg…",
+      "The matching_prior_win_level analog for the current prior-win pair (both 12_plus) has the home side just 9-12-0 in 21 games (win_rate 0.4286) with an average_margin of 0.0 and average_total_points of…",
+      "The exact_prior_win_pair analog for the current (12, 12) prior-win pair is only 3 games with the home side 1-2-0 (win_rate 0.3333), an average_margin of -12.67 and average_total_points of 61.33; this…",
+      "Historical preseason bookmaker win totals are unavailable, so all analogs use only records entering the season (method prior_season_wins_only); these proxies are not historical bookmaker totals and t…"
+     ],
+     "total": 5,
+     "truncated": true
+    },
+    "derived": {
+     "p_cover_home": 0.4558,
+     "p_over": 0.5
+    },
+    "discarded_considerations": {
+     "items": [
+      "current game market (spreads, moneylines, totals) - discarded because it is outside this expert",
+      "injuries, rosters, and news - discarded because they are not in the supplied input",
+      "power ratings and outside knowledge - discarded because only the supplied JSON may be used"
+     ],
+     "total": 3,
+     "truncated": false
+    },
+    "expected_home_margin": 2.0,
+    "home_win_probability": 0.56,
+    "label": "Voice A",
+    "legs": {
+     "side": null,
+     "total": null
+    },
+    "lens": "Sees BetOnline season win totals and several human season projections for both teams. No game lines.",
+    "no_signal_factors": {
+     "items": [],
+     "total": 0,
+     "truncated": false
+    },
+    "pool_weight": 1.0,
+    "predicted_away_score": 23,
+    "predicted_home_score": 25,
+    "predicted_winner": "Los Angeles Rams",
+    "projected_total": 48,
+    "selection_rule": "default_model",
+    "supporting_factors": {
+     "items": [
+      "The bookmaker's higher_total_side is the Los Angeles Rams at 11.5 wins against the San Francisco 49ers at 10.5, a home_minus_away of 1.0 win favoring the home team.",
+      "The all-forecaster consensus is unanimous for the home side: home_team_higher_count 5, away_team_higher_count 0, tied_count 0, with average_home_wins 11.6 and average_away_wins 9.2 (median_home_wins …",
+      "A K projected the Rams higher at 10 wins to the 49ers' 9 (home_minus_away 1) and submitted a game moneyline pick on the Los Angeles Rams labeled consistent with that season ordering, so this forecast…",
+      "Bill Simmons projected the Rams higher at 11 wins to the 49ers' 9 (home_minus_away 2); latest_game_pick is unavailable (no_game_pick), so game-pick consistency cannot be evaluated, but the season ord…",
+      "Cee projected the Rams higher at 13 wins to the 49ers' 9 (home_minus_away 4); latest_game_pick is unavailable (no_game_pick), so game-pick consistency cannot be evaluated, but the season ordering fav…"
+     ],
+     "total": 8,
+     "truncated": true
+    },
+    "thesis": "BetOnline sets the Los Angeles Rams at 11.5 season wins versus the San Francisco 49ers at 10.5, a one-win edge (home_minus_away 1.0), and all five forecasters project the Rams higher (home_team_higher_count 5, away_team_higher_count 0, average_home_wins 11.6 vs average_away_wins 9.2), so the Rams are the lean; but a one-win season-level ordering is only modest evidence for a single Week 1 game, capping confidence.",
+    "track_record": {
+     "ats": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "brier": null,
+     "clv_legs": 0,
+     "clv_points_mean": null,
+     "legs": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "ou": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "resolved": 0
+    }
+   },
+   {
+    "confidence_stars": 1,
+    "counterarguments": {
+     "items": [
+      "Side: AK's side-gap bucket is within_1; side margin gap is +0.0 points.",
+      "Side: Matching NFL side bucket has 0 resolved AK predictions.",
+      "Total: Matching NFL total bucket has 0 resolved AK predictions.",
+      "Total: WNBA cross-sport prior: the NFL 0 to <3 band maps to WNBA 0 to <6; the available fresh WNBA sample finished under in 3 of 4 games."
+     ],
+     "total": 4,
+     "truncated": false
+    },
+    "derived": {
+     "p_cover_home": 0.5148,
+     "p_over": 0.5589
+    },
+    "discarded_considerations": {
+     "items": [
+      "AK's rationale calling the Rams possibly the best team and the 49ers mediocre is subjective narrative absent from the evidence catalog, so it carried no weight.",
+      "AK selected the moneyline market, but this task requires independent spread and total decisions, so that market preference was not treated as evidence.",
+      "Injuries, weather, rosters, news, current form, and market movement were not inferred because none are supplied.",
+      "The WNBA cross-sport prior was treated only as a capped warning and never as the sole basis for a recommendation, given zero eligible NFL samples in both matching buckets."
+     ],
+     "total": 4,
+     "truncated": false
+    },
+    "expected_home_margin": 4.0,
+    "home_win_probability": 0.65,
+    "label": "Voice B",
+    "legs": {
+     "side": {
+      "confidence_stars": 1,
+      "line": null,
+      "selection": "PASS"
+     },
+     "total": {
+      "confidence_stars": 1,
+      "line": null,
+      "selection": "PASS"
+     }
+    },
+    "lens": "Calibrates one human forecaster's exact score projection against the submission-time market using that forecaster's graded history and a capped cross-sport prior. May pass either leg.",
+    "no_signal_factors": {
+     "items": [
+      "Matching NFL side bucket has 0 resolved AK predictions.",
+      "Matching NFL total bucket has 0 resolved AK predictions."
+     ],
+     "total": 2,
+     "truncated": false
+    },
+    "pool_weight": 1.0,
+    "predicted_away_score": 23,
+    "predicted_home_score": 27,
+    "predicted_winner": "Los Angeles Rams",
+    "projected_total": 50,
+    "selection_rule": "default_model",
+    "supporting_factors": {
+     "items": [
+      "Both calibrated recommendations are PASS."
+     ],
+     "total": 1,
+     "truncated": false
+    },
+    "thesis": "AK calibration: side PASS ★; total PASS ★.",
+    "track_record": {
+     "ats": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "brier": null,
+     "clv_legs": 0,
+     "clv_points_mean": null,
+     "legs": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "ou": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "resolved": 0
+    }
+   },
+   {
+    "confidence_stars": 2,
+    "counterarguments": {
+     "items": [
+      "Matchup-aligned current-month home split: the Rams are 3-1 (75%, +2.0) over 4 September home games, a higher win rate than the 49ers' aligned road-September rate, though on a smaller sample.",
+      "Broader venue-aligned home role: the Rams are 17-8 (68%, +4.12) across 25 home games, above the 49ers' 61.5% away win rate over a comparable sample.",
+      "Head-to-head: the Rams lead the six meetings 4-2 (66.7%, +2.67 average margin); weighted lightly per method.",
+      "Overall full-history record: the Rams' 32-19 (62.8%) edges the 49ers' 30-21 (58.8%)."
+     ],
+     "total": 4,
+     "truncated": false
+    },
+    "derived": {
+     "p_cover_home": 0.3419,
+     "p_over": 0.4121
+    },
+    "discarded_considerations": {
+     "items": [
+      "Prime-time or late-window characterization rejected - no such label is supplied; only the literal Thursday 20:00 ET kickoff is given.",
+      "Unavailable data: no historical results are split by kickoff time, so the supplied 20:00 ET start cannot be evaluated as a schedule factor; a kickoff-time breakdown could matter if start time affects…",
+      "Distribution claims (blowouts versus narrow wins, consistency, volatility) rejected - only aggregate win rates, scoring, and margins are supplied, not game-level results.",
+      "same_weekday_and_month_matchup_type treated as a home-side aggregate only and not attributed to either team.",
+      "Opposite-venue current-month splits (the Rams' September road record and the 49ers' September home record) set aside as non-aligned context for this matchup."
+     ],
+     "total": 7,
+     "truncated": true
+    },
+    "expected_home_margin": -2.0,
+    "home_win_probability": 0.45,
+    "label": "Voice C",
+    "legs": {
+     "side": null,
+     "total": null
+    },
+    "lens": "Sees three seasons of schedule cohorts for both teams: month, weekday, week number, venue splits, head-to-head. No lines, no news.",
+    "no_signal_factors": {
+     "items": [],
+     "total": 0,
+     "truncated": false
+    },
+    "pool_weight": 1.0,
+    "predicted_away_score": 24,
+    "predicted_home_score": 21,
+    "predicted_winner": "San Francisco 49ers",
+    "projected_total": 45,
+    "selection_rule": "default_model",
+    "supporting_factors": {
+     "items": [
+      "Month comparison (11 games each): September is the 49ers' best of the five supplied months by win rate at 8-3 (72.7%), ranked 1st in win rate, 2nd in average margin (+6.73), and 3rd in points for; fo…",
+      "Matchup-aligned current-month road split: the 49ers are 4-2 (66.7%) with a +5.0 average margin over 6 September away games (small sample).",
+      "Broader venue-aligned road role: the 49ers are 16-10 (61.5%, +4.0) across 26 away games.",
+      "Same weekday (Thursday, 5 games each): 49ers 4-1 (80%, +9.0) versus Rams 3-2 (60%, +4.0).",
+      "Same week number (Week 1, 3 games each, tiny samples): 49ers 3-0 (+13.33) versus Rams 2-1 (+5.33)."
+     ],
+     "total": 6,
+     "truncated": true
+    },
+    "thesis": "Schedule leans to San Francisco: September is the 49ers' best month by win rate (8-3, 1st of 5) but the Rams' weakest, ranking last of five in win rate, margin, and scoring (5-6, -1.27). Thursday and Week 1 splits also tilt to the 49ers. The Rams' home role (17-8), aligned home-September mark (3-1), and 4-2 head-to-head lead keep it close, so confidence stays modest.",
+    "track_record": {
+     "ats": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "brier": null,
+     "clv_legs": 0,
+     "clv_points_mean": null,
+     "legs": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "ou": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "resolved": 0
+    }
+   },
+   {
+    "confidence_stars": 2,
+    "counterarguments": {
+     "items": [
+      "Los Angeles Rams — games against the current opponent: 4-2, 66.7% win rate, +2.67 average margin (6 games)",
+      "San Francisco 49ers — games against the current opponent: 2-4, 33.3% win rate, -2.67 average margin (6 games)",
+      "Los Angeles Rams — first annual divisional meetings: 6-3, 66.7% win rate, +3.56 average margin (9 games)",
+      "Los Angeles Rams — divisional games excluding the current opponent: 9-3, 75.0% win rate, +6.50 average margin (12 games)",
+      "Los Angeles Rams — non-divisional games: 19-14, 57.6% win rate, +2.61 average margin (33 games)"
+     ],
+     "total": 7,
+     "truncated": true
+    },
+    "derived": {
+     "p_cover_home": 0.3419,
+     "p_over": 0.5589
+    },
+    "discarded_considerations": {
+     "items": [
+      "current-season prior meeting - discarded because this is the first annual meeting, so no earlier result exists to weigh",
+      "second-meeting rematch and tie cohorts - discarded because they only describe a rematch after a known first result, which does not apply to this opener",
+      "injuries, rosters, rankings, and betting markets - discarded because they fall outside the supplied historical input"
+     ],
+     "total": 3,
+     "truncated": false
+    },
+    "expected_home_margin": -2.0,
+    "home_win_probability": 0.45,
+    "label": "Voice D",
+    "legs": {
+     "side": null,
+     "total": null
+    },
+    "lens": "Sees division and conference matchup history and matchup tags. No lines, no news.",
+    "no_signal_factors": {
+     "items": [
+      "Current-season prior meeting: none"
+     ],
+     "total": 1,
+     "truncated": false
+    },
+    "pool_weight": 1.0,
+    "predicted_away_score": 26,
+    "predicted_home_score": 24,
+    "predicted_winner": "San Francisco 49ers",
+    "projected_total": 50,
+    "selection_rule": "default_model",
+    "supporting_factors": {
+     "items": [
+      "Opponent-pair home-side meeting 1: 1-2, 33.3% win rate, -2.33 average margin (3 games)",
+      "Los Angeles Rams — home games against the current opponent: 1-2, 33.3% win rate, -2.33 average margin (3 games)",
+      "San Francisco 49ers — away games against the current opponent: 2-1, 66.7% win rate, +2.33 average margin (3 games)",
+      "San Francisco 49ers — first annual divisional meetings: 7-2, 77.8% win rate, +6.67 average margin (9 games)",
+      "San Francisco 49ers — divisional games excluding the current opponent: 8-4, 66.7% win rate, +5.33 average margin (12 games)"
+     ],
+     "total": 8,
+     "truncated": true
+    },
+    "thesis": "The selected divisional evidence yields a low-confidence lean toward San Francisco 49ers, with conflicting evidence retained as counterarguments.",
+    "track_record": {
+     "ats": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "brier": null,
+     "clv_legs": 0,
+     "clv_points_mean": null,
+     "legs": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "ou": {
+      "l": 0,
+      "p": 0,
+      "w": 0
+     },
+     "resolved": 0
+    }
+   }
+  ]
+ },
+ "input_profile": "aggregator",
+ "input_sha256": "7ab5ccc508e14cd81c42caf02a51c7eddb01962562dfbe7ecb6e8e7dfbcf46e5",
+ "model": "claude-fable-5-1",
+ "opinion_id": "c2e4ba63-ab3f-4fe8-8364-ade106c1901b",
+ "output_schema_version": 8,
+ "output_sha256": "1b56aac3f7dd8b243b1b19047e2b5b60a89333a308b87c9f6a64da376292f47e",
+ "pick_market": "side_and_total",
+ "pick_side": "PASS | PASS",
+ "predicted_away_score": 22,
+ "predicted_home_score": 26,
+ "predicted_winner": "Los Angeles Rams",
+ "prompt_path": "moe/prompts/god_judge/v1.md",
+ "prompt_sha256": "14e64d8c7c19ed543d621ff4a1dea7f8f05a57bbf5e7c54b26b6d2fef2f088b2",
+ "prompt_version": 1,
+ "raw_response": {
+  "counterpoints": [
+   {
+    "text": "September is the best month for the away team (8-3) and the worst for the home team (5-6) over 11 games each, the one mid-sized sample in the room that favors the away side.",
+    "voice": "Voice C"
+   },
+   {
+    "text": "The human projection of a 4-point home win comes with zero resolved calibration games, so it is one more uncalibrated voice agreeing with the market rather than independent support for it.",
+    "voice": "Voice B"
+   }
+  ],
+  "discarded_considerations": [
+   "Injuries, weather, rosters, news, and any other book's line are not in the input.",
+   "Thursday and Week 1 splits of three to five games were treated as noise."
+  ],
+  "expected_home_margin": 3.0,
+  "home_win_probability": 0.61,
+  "key_reasons": [
+   {
+    "text": "The away lean rests on Thursday (5 games), Week 1 (3 games) and a 6-game September road split, while its own counterarguments hold the larger samples: home role 17-8 over 25 games, overall 32-19 against 30-21, head-to-head 4-2. Weighted down.",
+    "voice": "Voice C"
+   },
+   {
+    "text": "Its supporting splits are 3-game slices of the series, while its counterarguments (9-3 in divisional games excluding this opponent, 6-3 in first meetings, 4-2 head-to-head) favor the home side; it also repeats Voice C's head-to-head evidence.",
+    "voice": "Voice D"
+   },
+   {
+    "text": "Season ordering is unanimous for the home side (11.5 versus 10.5, five of five forecasters); modest evidence, but consistent with the price rather than against it.",
+    "voice": "Voice A"
+   },
+   {
+    "text": "The side has not moved in a month at -3.5 and -190, while the total drifted from 48.5 to 48 with the over price rising; nothing in the voices predates or explains that pricing.",
+    "voice": "market"
+   },
+   {
+    "text": "The 2-2 split pool at 0.5275 overstates the away case because two of the four voices lean on tiny cohorts; the estimate sits just under the market's fair 0.6345 to credit the September and series-at-home patterns lightly, and the total is held at the number.",
+    "voice": "pool"
+   }
+  ],
+  "projected_total": 48.0
+ },
+ "review_status": "pending",
+ "season": 2026,
+ "side_pick_json": {
+  "confidence_stars": 1,
+  "edge": 0.0148,
+  "ev_per_unit": null,
+  "fair_probability": 0.5,
+  "line": null,
+  "price": null,
+  "probability": 0.5148,
+  "selection": "PASS",
+  "stake_fraction": 0.0,
+  "stake_units": 0.0
+ },
+ "thesis": "God Expert (judge): side PASS ★; total PASS ★. p(home) 0.61 vs market 0.63; edges home-cover -1.5%, over -1.1%.",
+ "total_pick_json": {
+  "confidence_stars": 1,
+  "edge": 0.0108,
+  "ev_per_unit": null,
+  "fair_probability": 0.4892,
+  "line": null,
+  "price": null,
+  "probability": 0.5,
+  "selection": "PASS",
+  "stake_fraction": 0.0,
+  "stake_units": 0.0
+ },
+ "week": 1
+}
