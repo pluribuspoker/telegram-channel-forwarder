@@ -342,12 +342,16 @@ approves them.
   Week 1 rows are fixtures under `scripts/fixtures/god_week1/`. Week 1 replay
   under the new policy: Seahawks −3.5 vetoed (`adverse move`, price −110 →
   +100), Over 44.5 `ev floor` (EV 0.0194), 49ers +3.5 still bets (EV 0.039),
-  Rams total plain pass. Not deployed; not pushed. Deviations recorded next
-  to each WP below. Remaining for the deploy: push, pull as root, restart
-  `telegram-intake` (`moe.py` changed), add `GOD_JUDGE_HEALTHCHECK_URL` to
-  `.env` + `syncenv`, install `god-judge.service`/`.timer`, one cheap
-  `claude -p --safe-mode` auth check as forwarder before the first timer
-  pass.
+  Rams total plain pass. Deviations recorded next to each WP below.
+- 2026-09-07 19:13 EDT — phase 1 deployed: pushed 47b7c8b..cefd0a4, pulled
+  as root, `telegram-intake` restarted, `god-judge.service`/`.timer`
+  installed and enabled (first pass 19:42 EDT), `check_deploy_sync.sh` all
+  in sync. The `--safe-mode` OAuth probe returned `ok` in one turn. The dry
+  run showed the first pass will re-run both Week 1 games (their existing
+  rows predate the committee key), so fresh headless judge rows and
+  veto-aware rules rows arrive for the Seahawks and Rams games; the
+  2026-09-06 rows stay pending until a human decides. Still unset:
+  `GOD_JUDGE_HEALTHCHECK_URL` (`ping_hc` no-ops without it).
 
 ## Session opener (phase 1)
 
