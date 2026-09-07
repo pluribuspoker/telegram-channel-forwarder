@@ -91,7 +91,7 @@ anywhere; judge runs bill the Claude Code subscription.
   needed — the spec file describes the algorithm generically; bump only if
   the wording there becomes wrong.
 
-### WP2 — Judge plumbing (1 d)
+### WP2 — Judge plumbing and automation (2 d)
 
 - `--input-file <path>` on `scripts/generate_moe_opinion.py`, valid with
   `--agent-response` and `--deterministic`: the file's JSON becomes the
@@ -99,16 +99,45 @@ anywhere; judge runs bill the Claude Code subscription.
   when both are given); `generate_opinion` accepts a prebuilt payload. The
   judge stops racing the 30-minute lines fetcher; both arms can be pinned to
   one sheet state.
-- Fresh-session runbook in `.claude/skills/generate-nfl-moe-opinion/SKILL.md`
-  (and the `.github` copy if kept in sync): start a session that has not
-  touched the sheet, run `--show-input`, give it only the prompt and the
-  request, persist with `--agent-response --input-file`.
+- **Judge automation (decided 2026-09-07): judge runs happen only from a
+  fresh headless session, never from an interactive one.**
+  `scripts/god_judge_runner.py`, run by `god-judge.timer` every 30 minutes
+  at :12 and :42 (after the lines fetcher), does the following per upcoming
+  game whose committee is complete (an approved row for every enabled
+  non-aggregator expert):
+  1. Build the aggregator input and the judge request into a fresh temp
+     directory. Compute a **committee key** = SHA-256 of the sorted voice
+     opinion ids plus the latest full-game lines and prices — not the
+     capture timestamp, which changes every fetch. Skip the game when a
+     valid judge row with the same committee key already exists, and stop
+     entirely two hours before kickoff.
+  2. Run the rules arm on the same input file (`--deterministic
+     --input-file`) so both arms share one sheet state.
+  3. Launch `claude -p` with `--model claude-fable-5-1 --effort max`, all
+     tools disallowed, from an empty working directory whose environment
+     holds no sheet credentials, passing exactly the registered prompt plus
+     the request and asking for the JSON object only. Capture stdout.
+  4. Persist with `--agent-response <resp> --input-file <req>
+     --expected-input-sha256 <hash> --model claude-fable-5-1
+     --generation-effort max`, backend `claude_headless` (new enum value,
+     allowed for `god_judge` next to `agent_runtime`, so the row says how it
+     was produced). Delete the temp directory.
+  5. DM the reviewer through the watchdog bot that new pending rows exist
+     for the game. The runner never approves anything.
+  Units live in `deploy/systemd/god-judge.service` + `.timer` with a
+  `run_god_judge.sh` runner (`set -o pipefail`, `TimeoutStartSec` above the
+  worst case, its own healthcheck URL), per the infra rules in CLAUDE.md.
+  Budget note: each trigger is one subscription call at max effort; measure
+  weekly usage for two weeks before WP9 multiplies it.
+- Manual fallback runbook in `.claude/skills/generate-nfl-moe-opinion/SKILL.md`:
+  a fresh interactive session, the same inputs, the same persist command.
 - Reason guard in `moe_god._validate_reasons`: every `W-L` / `W-L-T` record
   and every "N games" count cited in a reason must appear somewhere in the
   request text; otherwise the response fails validation (audit row). Reuse
   the record regex style from `moe._complete_unique_record_paths`.
 - Tests: input-file round trip, hash mismatch refused, reason guard
-  positive/negative.
+  positive/negative, runner committee-key dedupe and kickoff cutoff with a
+  stubbed `claude` invocation.
 
 ### WP3 — Disagreement report (0.5 d)
 
@@ -173,8 +202,11 @@ anywhere; judge runs bill the Claude Code subscription.
   `input_profile: rating`; emits winner, scores (from rating gap and league
   scoring rate), probability, margin, stars from the rating gap. Weekly
   update from finals via the existing ESPN fetchers.
-- Approval: pending decision (auto-approve deterministic voices, or keep
-  the human gate). Default: human gate.
+- Approval (decided 2026-09-07): the human gate stays for every row,
+  including the rating voice's. Add a bulk review mode to
+  `scripts/review_moe_opinion.py` (`--expert rating_elo --week N`, 0.25 d)
+  that prints the week's rating rows as one table and approves them in one
+  command after a human has looked at it.
 
 ### WP8 — Backtest harness (2.5 d, needs WP6 and WP7)
 
@@ -188,11 +220,16 @@ anywhere; judge runs bill the Claude Code subscription.
 - Output: fitted values written into `aggregator_policy` (dated in the
   intake plan) and a result table in the intake plan.
 
-### WP9 — Judge ensemble (1 d, after the runbook is routine)
+### WP9 — Judge ensemble (1 d, after two weeks of runner usage)
 
-- Three seeded runs per game; each persisted as an audit row against the
-  same input hash; the judge's single row is the mean of the three
-  probabilities. Waits for automation of judge runs or a routine runbook.
+- The runner launches three headless calls per trigger instead of one; the
+  three responses persist as audit rows with a `sample` generation status
+  that the review and display paths ignore, and the judge's single row per
+  trigger carries the mean of the three probabilities (reasons from the
+  sample closest to the mean). One row per game reaches the human gate, so
+  the ensemble does not multiply approvals. Starts once two weeks of
+  single-sample runner usage show the subscription carries three times the
+  calls.
 
 ### WP10 — Refit on the ledger (data, ~50 graded games)
 
@@ -200,7 +237,7 @@ anywhere; judge runs bill the Claude Code subscription.
 
 ## Dependencies and parallelism
 
-- Phase 1 = WP1, WP2, WP3, WP4: independent. Run as four worktrees
+- Phase 1 = WP1, WP2, WP3, WP4: independent (about four build days). Run as four worktrees
   (`git worktree add ../telegram-forwarder-<slug> -b god/<slug>`), each with
   its own VPS scratch clone. Merge order into main: WP4, WP1, WP3, WP2
   (WP2 touches `moe.py` and the CLI; WP1 touches `moe_god.py`; low overlap).
@@ -223,19 +260,29 @@ anywhere; judge runs bill the Claude Code subscription.
   grade Thursday morning.
 - Skill runbook updated; docs and this status log updated.
 
-## Decisions and defaults
+## Decisions
 
-Read the Desk artifact's `decisions` collection at the start of every
-implementation session (Artifact `read_db`, collection `decisions`). Defaults
-used when a decision is unanswered:
+Decided 2026-09-07 in chat, recorded here and on the Desk page:
 
-- Veto sizes 0.5 / 1.0 points and 10 cents; EV floor 2% per unit.
-- Rating voice keeps the human approval gate.
-- Judge ensemble from Week 5 at the earliest.
-- Voice selection rule stays "registry default model, one row per expert".
-- Week 1 rows stay pending until a human approves them.
+- Veto 0.5 points on spreads, 1.0 on totals, 10 cents on price; EV floor
+  2% per unit. The backtest (WP8) may refine them.
+- The human gate stays for every row, including the rating voice's (WP7).
+- Judge runs are automated from a fresh headless session (WP2); the
+  ensemble (WP9) follows once runner usage is measured.
+
+Still open on the Desk page — read its `decisions` collection at the start
+of every implementation session (Artifact `read_db`, collection
+`decisions`): the four Week 1 approvals, the two Week 1 bets, the Rams
+committee refresh, the voice selection rule (default stays "registry default
+model, one row per expert"), stake language, grading cadence, the server's
+dirty tree, and the two hidden rows. Week 1 rows stay pending until a human
+approves them.
 
 ## Status log
 
 - 2026-09-07 — plan written from the roadmap page; nothing started. Week 1
   God Expert rows (two rules, two judge) persisted pending on 2026-09-06.
+- 2026-09-07 — three decisions recorded (veto sizes and floor, human gate
+  for every row, headless judge automation); WP2 expanded with the runner
+  and timer, WP7 with the bulk review mode, WP9 with the hidden-sample
+  design. Phase 1 is now about four build days.
