@@ -1107,8 +1107,11 @@ on 2026-09-07 (night) in three worktrees (`god/backtest`, `god/ensemble`,
 orchestrator's fix for two live judge rejections — and merged in that order
 with no conflicts. The suite of record is 335 tests on a fresh VPS scratch
 clone across the ten phase-2 modules plus `scripts.test_moe_backtest`
-(`bash scripts/godbuild_test.sh <slug> <dir>` runs all eleven). **Not
-deployed**: phase 2 and phase 3 deploy together at a week boundary
+(`bash scripts/godbuild_test.sh <slug> <dir>` runs all eleven; 338 with
+`scripts.test_moe_grade` after the merge with the daily grading timer).
+**Not deployed**: phase 2 went live on 2026-09-07 at 21:06 EDT from another
+session (with the daily `moe-grade.timer`, main `7a89d41`; its 17 Week 1
+rating rows are pending approval), and phase 3 deploys on top of it
 (roadmap, "Acceptance for the phase-3 deploy", which also covers the
 server's uncommitted tree and the unit change).
 
@@ -1988,7 +1991,7 @@ lean fields were preserved. VPS deployment remains.
 - Watch for Telegram flood-waits on repeated bot restarts during dev.
 - MOE and God Expert suites are Unix-only (`moe.py` imports `fcntl`): run
   them on the VPS from a scratch clone, never in `~/app`. Protocol and the
-  eleven-module list: `docs/god-expert-roadmap.md`, Ground rules.
+  twelve-module list: `docs/god-expert-roadmap.md`, Ground rules.
 
 ---
 

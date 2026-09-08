@@ -29,7 +29,7 @@ These are settled. Do not relitigate them inside an implementation session.
   # scripts/godbuild_test.sh <slug> <worktree-dir> [extra modules...] does all of this:
   ssh root@209.38.51.86 'su - forwarder -c "git clone -q /home/forwarder/app /tmp/godbuild-<slug>"'
   # tar the files that differ from origin/main over the clone, strip their CRs, chown forwarder, then:
-  su - forwarder -c "cd /tmp/godbuild-<slug> && ~/venv/bin/python -m unittest scripts.test_moe_god scripts.test_moe scripts.test_moe_ak scripts.test_moe_win_total scripts.test_generate_moe_opinion_cli scripts.test_intake_bot scripts.test_god_judge_runner scripts.test_nfl_lines_history scripts.test_moe_margins scripts.test_moe_rating scripts.test_moe_backtest"
+  su - forwarder -c "cd /tmp/godbuild-<slug> && ~/venv/bin/python -m unittest scripts.test_moe_god scripts.test_moe scripts.test_moe_ak scripts.test_moe_win_total scripts.test_generate_moe_opinion_cli scripts.test_intake_bot scripts.test_god_judge_runner scripts.test_nfl_lines_history scripts.test_moe_margins scripts.test_moe_rating scripts.test_moe_backtest scripts.test_moe_grade"
   ```
 
   Each worktree uses its own scratch clone so parallel runs never collide.
@@ -458,12 +458,12 @@ anywhere; judge runs bill the Claude Code subscription.
   and `normalize_aggregator_opinion`), and `god/guard` (the reason-guard
   fix for the evening's two live rejections); merged on an integration
   branch in that order with no conflicts, then fast-forwarded onto main.
-- After each merge: full suite on a fresh scratch clone — eleven modules
+- After each merge: full suite on a fresh scratch clone — twelve modules
   now: `scripts.test_moe_god scripts.test_moe scripts.test_moe_ak
   scripts.test_moe_win_total scripts.test_generate_moe_opinion_cli
   scripts.test_intake_bot scripts.test_god_judge_runner
   scripts.test_nfl_lines_history scripts.test_moe_margins
-  scripts.test_moe_rating scripts.test_moe_backtest`
+  scripts.test_moe_rating scripts.test_moe_backtest scripts.test_moe_grade`
   (`bash scripts/godbuild_test.sh <slug> <dir>` runs them) — then deploy at a week boundary (Tuesday after the Monday
   game is graded is the natural slot).
 
@@ -487,7 +487,13 @@ paired report; the skill runbook is updated). Deploy pending.
 
 Status 2026-09-07: every item below is met on main (296 tests on a fresh
 scratch clone; merge commits 9960ae1, b7834eb, db518b4). Not pushed; deploy
-pending, the user's call at a week boundary.
+pending, the user's call at a week boundary. **Deployed 2026-09-07 at
+21:06 EDT by another session** together with the daily `moe-grade.timer`
+(main `7a89d41`; pushed, pulled as root, `telegram-intake` restarted, the
+timer armed for 05:23 ET). That session generated the 17 Week 1
+`rating_elo` rows, all pending: until a human bulk-approves them the judge
+runner skips every game as "committee incomplete, no approved row for
+rating_elo".
 
 - All ten suites green on the VPS scratch clone.
 - Week 1 replay pinned under the overlap formula as specified (Seahawks pool
@@ -516,11 +522,13 @@ it at a later week boundary.
 
 ## Acceptance for the phase-3 deploy
 
-Status 2026-09-07: every item below is met on main (335 tests on a fresh
-scratch clone, eleven modules). Not pushed; deploy pending, the user's call
-at a week boundary — phase 2 and phase 3 deploy together.
+Status 2026-09-07: every item below is met on main (338 tests on a fresh
+scratch clone, twelve modules, after merging the daily grading timer that
+another session landed on main meanwhile). Not pushed; deploy pending, the
+user's call. Phase 2 is already live (see above), so phase 3 deploys on top
+of it.
 
-- All eleven suites green on the VPS scratch clone.
+- All twelve suites green on the VPS scratch clone.
 - The backtest's selection is printed with its rule and confirmed on 2025
   untouched; the reading (a rating-only committee; λ = 0 not written) is
   recorded next to WP8 and `aggregator_policy` is unchanged.
@@ -548,9 +556,11 @@ Deploy runbook (phase 2 + phase 3 together, when the user says go):
    daemon-reload` (TimeoutStartSec 9000; the oneshot needs no restart),
    then `bash scripts/check_deploy_sync.sh` → all in sync.
 4. `systemctl restart telegram-intake.service` (`moe.py` changed).
-5. Before the next `god-judge.timer` pass: the phase-2 rating rows
-   (`generate_rating_week.py --season 2026 --week <N>`, then the bulk
-   review without and with `--approve`), or `rating_elo.enabled: false`.
+5. Already live since the phase-2 deploy: the runner needs an approved
+   `rating_elo` row per game. The 17 Week 1 rows are pending — read them
+   with `python scripts/review_moe_opinion.py --expert rating_elo --week 1
+   --season 2026 --reviewed-by <you>` and re-run with `--approve`; the
+   judge skips every game until then.
 6. Leave `GOD_JUDGE_SAMPLES` unset (= 1) until the two-week usage read.
 7. The Seahawks committee key stays stalled on its two invalid rows until
    the committee changes (a BetOnline move or a new approved voice row);
@@ -719,8 +729,12 @@ an answer:
   0.5; 2025 0.2121 vs 0.2156), so `aggregator_policy` is unchanged; the
   veto table supports the price veto (−12% at ≥ 10 cents), is within noise
   on the spread veto, and has the wrong sign on the total veto. Ensemble
-  default off (`GOD_JUDGE_SAMPLES` unset). Not pushed, not deployed;
-  phase 2 and phase 3 deploy together at a week boundary.
+  default off (`GOD_JUDGE_SAMPLES` unset). Not pushed, not deployed.
+  Meanwhile another session pushed and deployed phase 2 with the daily
+  `moe-grade.timer` at 21:06 EDT (main `7a89d41`, merged into this branch;
+  338 tests with its `scripts.test_moe_grade`), so phase 3 deploys on
+  top of it; the 17 Week 1 rating rows it generated are pending approval
+  and the judge skips every game until they are approved.
 
 ## Session opener (phase 2)
 

@@ -7,7 +7,7 @@
 #    (committed on the branch or uncommitted) plus untracked files, into a tar.
 # 2. On the VPS: fresh `git clone /home/forwarder/app /tmp/godbuild-<slug>` as
 #    forwarder, overlays the tar, strips CRs from the overlaid files, chowns.
-# 3. Runs the eleven-module God Expert suite plus any extra modules, prints the output,
+# 3. Runs the twelve-module God Expert suite plus any extra modules, prints the output,
 #    removes the clone. Exit status is unittest's.
 #
 # Never touches ~/app, the sheet, or the network beyond ssh/scp.
@@ -20,7 +20,7 @@ EXTRA_MODULES="$*"
 VPS="root@209.38.51.86"
 CLONE="/tmp/godbuild-${SLUG}"
 OVERLAY="/tmp/overlay-${SLUG}.tgz"
-SUITE="scripts.test_moe_god scripts.test_moe scripts.test_moe_ak scripts.test_moe_win_total scripts.test_generate_moe_opinion_cli scripts.test_intake_bot scripts.test_god_judge_runner scripts.test_nfl_lines_history scripts.test_moe_margins scripts.test_moe_rating scripts.test_moe_backtest"
+SUITE="scripts.test_moe_god scripts.test_moe scripts.test_moe_ak scripts.test_moe_win_total scripts.test_generate_moe_opinion_cli scripts.test_intake_bot scripts.test_god_judge_runner scripts.test_nfl_lines_history scripts.test_moe_margins scripts.test_moe_rating scripts.test_moe_backtest scripts.test_moe_grade"
 
 cd "$WORKTREE"
 git fetch -q origin
