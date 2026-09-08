@@ -620,7 +620,9 @@ probability estimate differs between them.
   `--agent-response … --model claude-fable-5-1 --generation-effort max`
   persists it. `scripts/moe_grade.py` prints the scoreboard and, with
   `--write`, appends graded rows to a `moe_grades` tab (one row per graded
-  opinion, skipped when its opinion id is already present).
+  opinion, skipped when its opinion id is already present). Since
+  2026-09-07 `moe-grade.timer` runs it daily with `--write --notify`
+  ("Completed — 2026-09-07: Daily MOE grading timer").
 - Bake-off protocol, pre-registered on the design page: both arms run on
   every game; the primary metric is Brier on the probability estimates,
   secondary is CLV on fired legs, units are reported but not decisive; the
@@ -1409,6 +1411,38 @@ Prototype issue log:
   rendered a total of `35` as `+35` because spread points, American odds, and
   totals shared one formatter. Totals now use unsigned line formatting while
   spreads and prices retain explicit signs.
+
+### Completed — 2026-09-07: Daily MOE grading timer
+
+- `moe-grade.timer` → `moe-grade.service` → `run_moe_grade.sh` →
+  `scripts/moe_grade.py --write --notify`, daily at 05:23 ET (the VPS
+  clock is America/New_York: after the last Thursday/Sunday/Monday night
+  final, before the 06:00 auto-reboot and ~06:31 unattended-upgrade
+  windows). Grading is deterministic — no model call, no Telethon — so
+  one run costs four Sheets reads, two ESPN scoreboard fetches, and one
+  append when there is something new. The ledger dedupes on opinion id,
+  so every run is idempotent and the daily pass is the whole latency
+  budget: finals land three or four nights a week and approvals can lag
+  a game by days, hence daily rather than game days only; an idle run is
+  four reads and an exit. `Persistent=true`, `TimeoutStartSec=1200`
+  (two `_call_with_retry`-wrapped Sheets calls at ~6 min worst case).
+- `--notify` DMs the operator through the watchdog bot
+  (`send_watchdog_dm`, the judge runner's helper) only when rows were
+  appended: the season header with the ledger delta, the finals those
+  rows cover (deduped, capped at 20), and one scoreboard line per expert
+  (`notification_text`, kept under Telegram's 4096 characters). It is a
+  no-op without `--write` or without new rows. A failed DM after a
+  successful append exits non-zero so the healthcheck `/fail` ping
+  carries the log tail — the append never repeats, so the DM is the
+  operator's only signal. `MOE_GRADE_HEALTHCHECK_URL` in `.env`;
+  `ping_hc` no-ops unset.
+- The judge runner recomputes the scoreboard live from finals and
+  snapshots for every input, so this ledger feeds humans and the
+  disagreement report, never the Hedge weights or voice selection.
+- Units in `deploy/systemd/` (the drift check picks them up
+  automatically); the runner lives at the repo root like the others.
+  Tests: `scripts/test_moe_grade.py` (Unix only, like the rest of the
+  suite).
 
 ### Completed — 2026-08-04: VPS collector deployment
 

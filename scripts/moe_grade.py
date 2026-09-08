@@ -9,7 +9,10 @@ with its standard error, the leg agreement rate, and the disagreement
 record. With --write, appends one row per graded opinion to the append-only
 ``moe_grades`` tab, then one ``mean_of_arms`` row per paired game (the
 bake-off's free third row: a ledger row, never an expert), skipping opinion
-ids already present.
+ids already present. With --notify as well, DMs the operator through the
+watchdog bot only when rows were appended (the run ``moe-grade.timer`` makes
+daily); a failed DM after a successful append exits non-zero so the
+healthcheck alerts.
 """
 
 from __future__ import annotations
@@ -52,6 +55,11 @@ from nfl_game_history import (
 from nfl_lines import SNAPSHOT_HEADERS, _call_with_retry, get_gspread_client
 from nfl_win_predictions import ensure_worksheet
 from scripts.generate_moe_opinion import _latest_alignment
+from scripts.god_judge_runner import send_watchdog_dm
+
+# Telegram caps a message at 4096 characters; leave room for the ellipsis.
+NOTIFY_MAX_CHARS = 4000
+NOTIFY_MAX_GAMES = 20
 
 
 def _record_line(expert_id: str, record: dict) -> str:
@@ -72,6 +80,42 @@ def _record_line(expert_id: str, record: dict) -> str:
     )
 
 
+def notification_text(
+    *, season: int, scoreboard: dict, new_rows: list[dict]
+) -> str:
+    """The watchdog DM for a run that appended rows.
+
+    Season header with the ledger delta, the finals those rows cover (in
+    ledger order, deduped, capped at NOTIFY_MAX_GAMES), then one scoreboard
+    line per expert — the same lines the terminal run prints. Always under
+    Telegram's message limit.
+    """
+    mean_count = sum(1 for row in new_rows if row["expert_id"] == MEAN_OF_ARMS_ID)
+    games: list[str] = []
+    for row in new_rows:
+        label = f"{row['away_team']} @ {row['home_team']} {row['final']}"
+        if label not in games:
+            games.append(label)
+    lines = [
+        f"pickbot: MOE grades, season {season}: "
+        f"{scoreboard['resolved_games']} resolved games, "
+        f"{scoreboard['graded_opinions']} graded opinions",
+        f"+{len(new_rows) - mean_count} opinion rows, +{mean_count} mean-of-arms "
+        f"appended to {GRADES_TAB}",
+        "",
+    ]
+    lines.extend(games[:NOTIFY_MAX_GAMES])
+    if len(games) > NOTIFY_MAX_GAMES:
+        lines.append(f"+{len(games) - NOTIFY_MAX_GAMES} more games")
+    lines.append("")
+    for expert_id, record in sorted(scoreboard["by_expert"].items()):
+        lines.append(_record_line(expert_id, record))
+    text = "\n".join(lines)
+    if len(text) > NOTIFY_MAX_CHARS:
+        text = text[: NOTIFY_MAX_CHARS - 1] + "…"
+    return text
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -84,6 +128,15 @@ def main() -> None:
         "--write",
         action="store_true",
         help="Append graded opinions to the moe_grades tab.",
+    )
+    parser.add_argument(
+        "--notify",
+        action="store_true",
+        help=(
+            "After --write appended rows, DM the scoreboard through the "
+            "watchdog bot (WATCHDOG_BOT_TOKEN / WATCHDOG_USER_ID). No-op "
+            "without --write or without new rows; a failed DM exits non-zero."
+        ),
     )
     parser.add_argument(
         "--json",
@@ -193,6 +246,13 @@ def main() -> None:
         f"Appended {len(new_rows)} graded rows to {GRADES_TAB} "
         f"({mean_count} mean-of-arms)."
     )
+    if args.notify and not send_watchdog_dm(
+        notification_text(season=season, scoreboard=scoreboard, new_rows=new_rows)
+    ):
+        # The append succeeded and will not repeat (opinion-id dedupe), so a
+        # lost DM is the operator's only signal — fail the run and let the
+        # healthcheck /fail ping carry the log tail.
+        raise SystemExit("notify: watchdog DM not sent after appending rows")
 
 
 if __name__ == "__main__":

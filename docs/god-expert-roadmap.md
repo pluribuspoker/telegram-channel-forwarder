@@ -567,13 +567,18 @@ Decided 2026-09-07 in chat, recorded here and on the Desk page:
 - The human gate stays for every row, including the rating voice's (WP7).
 - Judge runs are automated from a fresh headless session (WP2); the
   ensemble (WP9) follows once runner usage is measured.
+- Grading cadence (decided 2026-09-07 in chat): `moe-grade.timer` runs
+  `scripts/moe_grade.py --write --notify` daily at 05:23 ET. Grading is
+  deterministic and the ledger dedupes on opinion id, so the daily pass
+  is the whole latency budget; the operator DM arrives only when rows
+  were appended (intake plan, "Daily MOE grading timer").
 
 Still open on the Desk page — read its `decisions` collection at the start
 of every implementation session (Artifact `read_db`, collection
 `decisions`): the four Week 1 approvals, the two Week 1 bets, the Rams
 committee refresh, the voice selection rule (default stays "registry default
-model, one row per expert"), stake language, grading cadence, the server's
-dirty tree, and the two hidden rows. Week 1 rows stay pending until a human
+model, one row per expert"), stake language, the server's dirty tree, and
+the two hidden rows (grading cadence is decided above). Week 1 rows stay pending until a human
 approves them.
 
 Open after phase 1 (2026-09-07) — the user's call, nothing in code assumes
