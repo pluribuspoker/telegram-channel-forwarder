@@ -8,7 +8,7 @@ description: Generate an NFL MOE opinion with an allowed agent-session model, in
 Use this skill when the user asks an agent to generate any registered NFL MOE
 opinion without invoking the application's `ANTHROPIC_API_KEY` path. It is the
 preferred interactive generation workflow for the Schedule, Divisional, Win
-Total, AK, and Cee Experts, and the manual fallback for the God Expert judge
+Total, AK, Cee, and Celebrity Consensus Experts, and the manual fallback for the God Expert judge
 (`god_judge`), whose normal path is the headless timer described under
 "God Expert". The active agent runtime has its own authentication, limits,
 and billing.
@@ -45,7 +45,7 @@ and billing.
 
    ```bash
    python scripts/generate_moe_opinion.py \
-     --event-id <event-id> --expert <schedule|divisional|win_total|ak|cee> \
+     --event-id <event-id> --expert <schedule|divisional|win_total|ak|cee|celebrity> \
      --show-input > <temporary-input.json>
    ```
 
@@ -80,9 +80,9 @@ and billing.
    separate factuality response; path-only schema v7 does not:
 
    ```bash
-   # Schedule, Win Total, AK, or Cee Expert
+   # Schedule, Win Total, AK, Cee, or Celebrity Consensus Expert
    python scripts/generate_moe_opinion.py \
-     --event-id <event-id> --expert <schedule|win_total|ak|cee> \
+     --event-id <event-id> --expert <schedule|win_total|ak|cee|celebrity> \
      --model <selected-model> \
      --generation-effort <actual-agent-effort> \
      --agent-response <temporary-opinion.json>

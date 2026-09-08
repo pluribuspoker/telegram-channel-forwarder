@@ -18,11 +18,14 @@ from intake_bot import (
     SUGGESTION_HEADERS,
     append_celebrity_picks,
     build_celebrity_rows,
+    build_custom_celebrity_submission,
     build_lean_row,
     build_suggestion_row,
     build_win_prediction_row,
     celebrity_user_id,
     command_keyboard,
+    custom_market_buttons,
+    custom_pick_prompt,
     edit_callback,
     game_browser,
     game_celebrity_picker,
@@ -452,6 +455,29 @@ class GameSelectionTest(unittest.TestCase):
         )
         self.assertEqual(buttons[1][0].data.decode(), "back:game")
 
+    def test_celebrity_market_menu_includes_custom_pick(self):
+        standard = [
+            button.data for row in market_buttons() for button in row
+        ]
+        celebrity = [
+            button.data
+            for row in market_buttons(allow_custom=True)
+            for button in row
+        ]
+
+        self.assertNotIn(b"market:custom", standard)
+        self.assertIn(b"market:custom", celebrity)
+        self.assertEqual(
+            [button.data for row in custom_market_buttons() for button in row],
+            [
+                b"custom:player_prop",
+                b"custom:team_prop",
+                b"custom:other",
+                b"back:markets",
+            ],
+        )
+        self.assertIn("Subject:", custom_pick_prompt("player_prop"))
+
     def test_period_summary_shows_all_three_markets(self):
         text = period_market_summary(
             _game("miami", 1),
@@ -493,6 +519,34 @@ class GameSelectionTest(unittest.TestCase):
         self.assertEqual(context["opening_price"], -105)
         self.assertEqual(context["latest_line"], 3.5)
         self.assertEqual(context["latest_price"], -105)
+
+    def test_custom_celebrity_submission_is_structured_and_lossless(self):
+        raw = (
+            "Subject: Drake Maye\n"
+            "Market: Passing touchdowns\n"
+            "Pick: Over 1.5\n"
+            "Odds: -105\n"
+            "Rationale: Red-zone expectation."
+        )
+
+        row = build_custom_celebrity_submission(
+            submitted_at=NOW,
+            user_id=1,
+            username="operator",
+            message_id=99,
+            game=_game("miami", 1),
+            period="game",
+            market_family="player_prop",
+            raw_text=raw,
+        )
+
+        self.assertEqual(row["subject"], "Drake Maye")
+        self.assertEqual(row["stat"], "Passing touchdowns")
+        self.assertEqual(row["direction"], "Over")
+        self.assertEqual(row["line"], 1.5)
+        self.assertEqual(row["price"], -105)
+        self.assertEqual(row["raw_pick_text"], raw)
+        self.assertIn("player_prop", row["canonical_key"])
 
     def test_lean_row_is_compact_and_duplicate_key_is_deterministic(self):
         row = build_lean_row(
@@ -812,6 +866,7 @@ class _FakeWorksheet:
     def __init__(self, values):
         self._values = [list(row) for row in values]
         self.appended: list[list] = []
+        self.resized_cols: int | None = None
 
     def row_values(self, index):
         return list(self._values[index - 1]) if len(self._values) >= index else []
@@ -821,6 +876,9 @@ class _FakeWorksheet:
 
     def update(self, data):
         self._values = [list(row) for row in data] + self._values[1:]
+
+    def resize(self, *, cols):
+        self.resized_cols = cols
 
     def append_rows(self, rows, value_input_option="RAW"):
         for row in rows:
@@ -884,6 +942,19 @@ class CelebrityPickTest(unittest.TestCase):
         self.assertTrue(all(list(r) == CELEBRITY_HEADERS for r in rows))
         self.assertTrue(all(r["away_team"] == "Miami Dolphins" for r in rows))
 
+    def test_legacy_celebrity_header_expands_in_place(self):
+        worksheet = _FakeWorksheet(
+            [intake_bot.LEGACY_CELEBRITY_HEADERS]
+        )
+
+        migrated = intake_bot._celebrity_worksheet(
+            _FakeSpreadsheet(worksheet)
+        )
+
+        self.assertIs(migrated, worksheet)
+        self.assertEqual(worksheet.row_values(1), CELEBRITY_HEADERS)
+        self.assertEqual(worksheet.resized_cols, len(CELEBRITY_HEADERS))
+
     def test_celebrity_user_id_is_stable_negative_and_distinct(self):
         # Same person (any case/spacing) -> one id; negative so it can never
         # collide with a real positive Telegram user id; different people differ.
@@ -927,7 +998,10 @@ class CelebrityPickTest(unittest.TestCase):
 
         self.assertEqual(written, 1)
         self.assertEqual(len(worksheet.appended), 1)
-        self.assertEqual(worksheet.appended[0][-1], "Drake")
+        self.assertEqual(
+            worksheet.appended[0][CELEBRITY_HEADERS.index("celebrity_name")],
+            "Drake",
+        )
 
 
 class CallbackEditTest(unittest.IsolatedAsyncioTestCase):

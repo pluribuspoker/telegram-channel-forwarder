@@ -28,6 +28,15 @@ from telethon.tl.types import (
     ReplyKeyboardMarkup,
 )
 
+from celebrity_picks import (
+    CELEBRITY_HEADERS,
+    CELEBRITY_TAB,
+    CUSTOM_MARKET_FAMILIES,
+    LEGACY_CELEBRITY_HEADERS,
+    build_celebrity_rows,
+    canonical_pick_key,
+    parse_custom_pick_text,
+)
 from nfl_lines import (
     LEAN_HEADERS,
     LATEST_AWAY_COLUMN,
@@ -104,27 +113,6 @@ WIN_TOTALS_CACHE_TTL_SECONDS = 3600
 TEAM_HISTORY_CACHE_TTL_SECONDS = 21600
 WIN_PREDICTIONS_CACHE_TTL_SECONDS = 30
 CELEBRITY_REGISTRY_CACHE_TTL_SECONDS = 300
-CELEBRITY_TAB = "celebrity_picks"
-# One row per (submission, celebrity name). Game context is denormalized onto
-# each row so season-long "who thinks alike on which game types" analysis pivots
-# without joining back to nfl_leans.
-CELEBRITY_HEADERS = [
-    "submission_id",
-    "submitted_at_utc",
-    "submitted_at_et",
-    "telegram_user_id",
-    "telegram_username",
-    "event_id",
-    "season",
-    "week",
-    "commence_time_et",
-    "away_team",
-    "home_team",
-    "period",
-    "market",
-    "side",
-    "celebrity_name",
-]
 # Toggle keyboards get unwieldy past a couple dozen buttons; ➕ New name always
 # stays reachable, so this only caps the prefilled roster shown at once.
 MAX_CELEBRITY_BUTTONS = 30
@@ -547,15 +535,48 @@ def game_detail(
     return "\n\n".join(sections), buttons
 
 
-def market_buttons() -> list[list[Button]]:
-    return [
+def market_buttons(*, allow_custom: bool = False) -> list[list[Button]]:
+    rows = [
         [
             Button.inline("Spread", b"market:spread"),
             Button.inline("Moneyline", b"market:moneyline"),
             Button.inline("Total", b"market:total"),
         ],
-        [Button.inline("← Back to periods", b"back:game")],
     ]
+    if allow_custom:
+        rows.append(
+            [Button.inline("Prop / other", b"market:custom")]
+        )
+    rows.append([Button.inline("← Back to periods", b"back:game")])
+    return rows
+
+
+def custom_market_buttons() -> list[list[Button]]:
+    return [
+        [
+            Button.inline("Player prop", b"custom:player_prop"),
+            Button.inline("Team prop", b"custom:team_prop"),
+        ],
+        [Button.inline("Other", b"custom:other")],
+        [Button.inline("← Back to markets", b"back:markets")],
+    ]
+
+
+def custom_pick_prompt(market_family: str) -> str:
+    label = {
+        "player_prop": "player prop",
+        "team_prop": "team prop",
+        "other": "other market",
+    }[market_family]
+    return (
+        f"Enter the celebrity's {label} using this structure:\n\n"
+        "Subject: player, team, or bet subject\n"
+        "Market: stat or market name\n"
+        "Pick: Over 0.5, Under 250.5, Yes, No, or the exact selection\n"
+        "Odds: -110 (optional)\n"
+        "Rationale: exact explanation (optional)\n\n"
+        "The exact reply is retained alongside the structured fields."
+    )
 
 
 def side_buttons(
@@ -796,6 +817,59 @@ def build_lean_row(
     }
 
 
+def build_custom_celebrity_submission(
+    *,
+    submitted_at: datetime,
+    user_id: int,
+    username: str | None,
+    message_id: int,
+    game: dict[str, Any],
+    period: str,
+    market_family: str,
+    raw_text: str,
+) -> dict[str, Any]:
+    parsed = parse_custom_pick_text(
+        raw_text,
+        market_family=market_family,
+    )
+    submitted_at_utc = submitted_at.astimezone(timezone.utc)
+    submission_id = f"telegram:{user_id}:{message_id}"
+    canonical_key = canonical_pick_key(
+        period=period,
+        market_family=market_family,
+        market=str(parsed["market"]),
+        subject=str(parsed["subject"]),
+        stat=str(parsed["stat"]),
+    )
+    return {
+        "submission_id": submission_id,
+        "submitted_at_utc": submitted_at_utc.isoformat(),
+        "submitted_at_et": submitted_at_utc.astimezone(ET).isoformat(),
+        "telegram_user_id": user_id,
+        "telegram_username": username or "",
+        "event_id": game.get("event_id", ""),
+        "season": game.get("season", ""),
+        "week": game.get("week", ""),
+        "commence_time_utc": game.get("commence_time_utc", ""),
+        "commence_time_et": game.get("commence_time_et", ""),
+        "away_team": game.get("away_team", ""),
+        "home_team": game.get("home_team", ""),
+        "period": period,
+        "market": parsed["market"],
+        "side": parsed["side"],
+        "pick_id": "",
+        "canonical_key": canonical_key,
+        "market_family": market_family,
+        "subject": parsed["subject"],
+        "stat": parsed["stat"],
+        "direction": parsed["direction"],
+        "line": parsed["line"],
+        "price": parsed["price"],
+        "selection_text": parsed["selection_text"],
+        "raw_pick_text": parsed["raw_pick_text"],
+    }
+
+
 def snapshot_lean_submission(
     state: dict[str, Any] | None,
     *,
@@ -812,13 +886,22 @@ def snapshot_lean_submission(
     market = state.get("market")
     side = state.get("side")
     valid_sides = (
-        {"over", "under"} if market == "total" else {"away", "home"}
+        {"over", "under"}
+        if market == "total"
+        else {"custom"}
+        if market == "custom"
+        else {"away", "home"}
     )
     if (
         not isinstance(game, dict)
         or period not in PERIOD_LABELS
-        or market not in {"spread", "moneyline", "total"}
+        or market not in {"spread", "moneyline", "total", "custom"}
         or side not in valid_sides
+        or (
+            market == "custom"
+            and state.get("custom_market_family")
+            not in CUSTOM_MARKET_FAMILIES
+        )
     ):
         return "invalid", None
 
@@ -829,6 +912,7 @@ def snapshot_lean_submission(
             "period": period,
             "market": market,
             "side": side,
+            "custom_market_family": state.get("custom_market_family"),
             "prompt_msg_id": state["prompt_msg_id"],
             "days": int(state.get("days", 10)),
             "page": int(state.get("page", 0)),
@@ -1478,17 +1562,9 @@ def normalize_celebrity_name(raw: str) -> str:
     return " ".join(str(raw).split())[:MAX_CELEBRITY_NAME_LEN].strip()
 
 
-def build_celebrity_rows(
-    *, submission: dict[str, Any], names: list[str]
-) -> list[dict[str, Any]]:
-    """One denormalized row per selected celebrity, sharing the lean's
-    submission context."""
-    return [{**submission, "celebrity_name": name} for name in names]
-
-
 def _celebrity_worksheet(spreadsheet: Any) -> Any:
     """Return the celebrity_picks worksheet, creating it with headers the first
-    time. Refuses to touch a tab whose existing header row disagrees."""
+    time. The one supported legacy header is expanded in place."""
     try:
         worksheet = spreadsheet.worksheet(CELEBRITY_TAB)
     except WorksheetNotFound:
@@ -1499,6 +1575,10 @@ def _celebrity_worksheet(spreadsheet: Any) -> Any:
         return worksheet
     header = worksheet.row_values(1)
     if not header:
+        worksheet.resize(cols=len(CELEBRITY_HEADERS))
+        worksheet.update([CELEBRITY_HEADERS])
+    elif header == LEGACY_CELEBRITY_HEADERS:
+        worksheet.resize(cols=len(CELEBRITY_HEADERS))
         worksheet.update([CELEBRITY_HEADERS])
     elif header != CELEBRITY_HEADERS:
         raise RuntimeError(
@@ -1925,17 +2005,26 @@ async def main() -> None:
             )
             return
         assert submission is not None
-        lean_text = event.raw_text.strip()
+        raw_lean_text = event.raw_text
+        lean_text = raw_lean_text.strip()
         if not lean_text:
             await event.respond(
                 "Your lean cannot be empty. Reply to the prompt with some text."
             )
             return
+        celebrity = submission.get("celebrity")
+        is_custom = submission["market"] == "custom"
+        if is_custom and not isinstance(celebrity, dict):
+            await event.respond(
+                "Custom markets are available only for attributed celebrity "
+                "picks."
+            )
+            return
         prediction = None
-        if requires_ak_projection(
+        if not is_custom and requires_ak_projection(
             event.sender_id,
             ak_user_id,
-            submission.get("celebrity"),
+            celebrity,
         ):
             prediction = parse_ak_projection(
                 lean_text,
@@ -1952,48 +2041,101 @@ async def main() -> None:
                 )
                 return
         sender = await event.get_sender()
-        row = build_lean_row(
-            submitted_at=datetime.now(timezone.utc),
-            user_id=event.sender_id,
-            username=getattr(sender, "username", None),
-            first_name=getattr(sender, "first_name", None),
-            last_name=getattr(sender, "last_name", None),
-            message_id=event.id,
-            game=submission["game"],
-            period=submission["period"],
-            market=submission["market"],
-            side=submission["side"],
-            lean_text=lean_text,
-            prediction=prediction,
-        )
-        appended = await asyncio.to_thread(append_lean, row)
-        celebrity = submission.get("celebrity")
-        if isinstance(celebrity, dict):
+        submitted_at = datetime.now(timezone.utc)
+        if is_custom:
+            try:
+                custom_submission = build_custom_celebrity_submission(
+                    submitted_at=submitted_at,
+                    user_id=event.sender_id,
+                    username=getattr(sender, "username", None),
+                    message_id=event.id,
+                    game=submission["game"],
+                    period=submission["period"],
+                    market_family=str(
+                        submission["custom_market_family"]
+                    ),
+                    raw_text=raw_lean_text,
+                )
+            except ValueError as exc:
+                prompt = await event.respond(
+                    f"{exc}\n\n{custom_pick_prompt(str(submission['custom_market_family']))}",
+                    buttons=Button.force_reply(
+                        single_use=True,
+                        placeholder="Correct the structured celebrity pick",
+                    ),
+                )
+                if guess_states.get(event.sender_id) is state:
+                    state["prompt_msg_id"] = prompt.id
+                return
             celebrity_rows = build_celebrity_rows(
-                submission={
-                    "submission_id": row["submission_id"],
-                    "submitted_at_utc": row["submitted_at_utc"],
-                    "submitted_at_et": row["submitted_at_et"],
-                    "telegram_user_id": event.sender_id,
-                    "telegram_username": getattr(sender, "username", None) or "",
-                    "event_id": row["event_id"],
-                    "season": row["season"],
-                    "week": row["week"],
-                    "commence_time_et": row["commence_time_et"],
-                    "away_team": row["away_team"],
-                    "home_team": row["home_team"],
-                    "period": row["period"],
-                    "market": row["market"],
-                    "side": row["side"],
-                },
+                submission=custom_submission,
                 names=[str(celebrity["name"])],
             )
-            await asyncio.to_thread(append_celebrity_picks, celebrity_rows)
-        summary = (
-            f"{PERIOD_LABELS[submission['period']]} · "
-            f"{submission['market'].title()} · "
-            f"{html.escape(str(row['side']))}"
-        )
+            appended = bool(
+                await asyncio.to_thread(
+                    append_celebrity_picks,
+                    celebrity_rows,
+                )
+            )
+            row = celebrity_rows[0]
+            summary = (
+                f"{PERIOD_LABELS[submission['period']]} · "
+                f"{str(row['market_family']).replace('_', ' ').title()} · "
+                f"{html.escape(str(row['subject']))} · "
+                f"{html.escape(str(row['selection_text']))}"
+            )
+        else:
+            row = build_lean_row(
+                submitted_at=submitted_at,
+                user_id=event.sender_id,
+                username=getattr(sender, "username", None),
+                first_name=getattr(sender, "first_name", None),
+                last_name=getattr(sender, "last_name", None),
+                message_id=event.id,
+                game=submission["game"],
+                period=submission["period"],
+                market=submission["market"],
+                side=submission["side"],
+                lean_text=lean_text,
+                prediction=prediction,
+            )
+            appended = await asyncio.to_thread(append_lean, row)
+            if isinstance(celebrity, dict):
+                celebrity_rows = build_celebrity_rows(
+                    submission={
+                        "submission_id": row["submission_id"],
+                        "submitted_at_utc": row["submitted_at_utc"],
+                        "submitted_at_et": row["submitted_at_et"],
+                        "telegram_user_id": event.sender_id,
+                        "telegram_username": (
+                            getattr(sender, "username", None) or ""
+                        ),
+                        "event_id": row["event_id"],
+                        "season": row["season"],
+                        "week": row["week"],
+                        "commence_time_utc": row["commence_time_utc"],
+                        "commence_time_et": row["commence_time_et"],
+                        "away_team": row["away_team"],
+                        "home_team": row["home_team"],
+                        "period": row["period"],
+                        "market": row["market"],
+                        "side": row["side"],
+                        "latest_selected_line": row["latest_selected_line"],
+                        "latest_selected_price": row["latest_selected_price"],
+                        "raw_pick_text": raw_lean_text,
+                    },
+                    names=[str(celebrity["name"])],
+                )
+                celebrity_written = await asyncio.to_thread(
+                    append_celebrity_picks,
+                    celebrity_rows,
+                )
+                appended = appended or bool(celebrity_written)
+            summary = (
+                f"{PERIOD_LABELS[submission['period']]} · "
+                f"{submission['market'].title()} · "
+                f"{html.escape(str(row['side']))}"
+            )
         status = "✅ Guess saved." if appended else "✅ Guess was already saved."
         saved_summary = f"{status}\n{summary}"
         if isinstance(celebrity, dict):
@@ -2582,6 +2724,7 @@ async def main() -> None:
             state.pop("period", None)
             state.pop("market", None)
             state.pop("side", None)
+            state.pop("custom_market_family", None)
             state.pop("prompt_msg_id", None)
             text, buttons = game_detail(
                 state["game"],
@@ -2605,6 +2748,7 @@ async def main() -> None:
                 return
             state.pop("market", None)
             state.pop("side", None)
+            state.pop("custom_market_family", None)
             state.pop("prompt_msg_id", None)
             text = period_market_summary(
                 state["game"],
@@ -2616,7 +2760,16 @@ async def main() -> None:
                     else None
                 ),
             )
-            await edit_callback(event, text, market_buttons())
+            await edit_callback(
+                event,
+                text,
+                market_buttons(
+                    allow_custom=isinstance(
+                        state.get("celebrity"),
+                        dict,
+                    )
+                ),
+            )
             return
         if data == "back:sides":
             state = guess_states.get(event.sender_id)
@@ -2670,11 +2823,38 @@ async def main() -> None:
                     else None
                 ),
             )
-            await edit_callback(event, text, market_buttons())
+            await edit_callback(
+                event,
+                text,
+                market_buttons(
+                    allow_custom=isinstance(
+                        state.get("celebrity"),
+                        dict,
+                    )
+                ),
+            )
             return
         if data.startswith("market:"):
             state = guess_states.get(event.sender_id)
             market = data.split(":", 1)[1]
+            if (
+                market == "custom"
+                and state is not None
+                and "period" in state
+                and isinstance(state.get("celebrity"), dict)
+            ):
+                state["market"] = "custom"
+                state.pop("side", None)
+                state.pop("custom_market_family", None)
+                await edit_callback(
+                    event,
+                    (
+                        f"🎤 <b>{html.escape(str(state['celebrity']['name']))}"
+                        "</b>\n\nChoose the custom pick type:"
+                    ),
+                    custom_market_buttons(),
+                )
+                return
             if (
                 state is None
                 or "period" not in state
@@ -2706,6 +2886,41 @@ async def main() -> None:
                     str(game["home_team"]),
                 ),
             )
+            return
+        if data.startswith("custom:"):
+            state = guess_states.get(event.sender_id)
+            market_family = data.split(":", 1)[1]
+            if (
+                state is None
+                or state.get("market") != "custom"
+                or market_family not in CUSTOM_MARKET_FAMILIES
+                or not isinstance(state.get("celebrity"), dict)
+            ):
+                await event.answer(
+                    "This guess expired. Choose the game again.", alert=True
+                )
+                return
+            state["custom_market_family"] = market_family
+            state["side"] = "custom"
+            await edit_callback(
+                event,
+                (
+                    f"🎤 <b>{html.escape(str(state['celebrity']['name']))}</b>"
+                    "\n\n"
+                    f"<b>{html.escape(PERIOD_LABELS[state['period']])} · "
+                    f"{html.escape(market_family.replace('_', ' ').title())}"
+                    "</b>"
+                ),
+                [[Button.inline("← Back to markets", b"back:markets")]],
+            )
+            prompt = await event.respond(
+                custom_pick_prompt(market_family),
+                buttons=Button.force_reply(
+                    single_use=True,
+                    placeholder="Enter the structured celebrity pick",
+                ),
+            )
+            state["prompt_msg_id"] = prompt.id
             return
         if data.startswith("side:"):
             state = guess_states.get(event.sender_id)

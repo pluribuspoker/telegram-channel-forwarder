@@ -1401,6 +1401,7 @@ class RegistryTests(unittest.TestCase):
             {
                 "ak": ["side", "total"],
                 "cee": ["side"],
+                "celebrity": ["side", "total"],
                 "divisional": ["side"],
                 # WP7's rating voice: its total is the league scoring rate.
                 "rating_elo": ["side"],
@@ -2114,6 +2115,47 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(len(voice["supporting_factors"]["items"]), policy["factor_limit"])
         self.assertEqual(len(voice["evidence"]["tuples"]), 12)
         self.assertEqual(voice["evidence"]["tuples"][11], [12, 13, 0, 25])
+
+    def test_celebrity_pass_leg_does_not_enter_that_pool(self) -> None:
+        registry = load_registry()
+        policy = aggregator_policy(registry)
+        row = _opinion(
+            "celebrity",
+            model="claude-opus-4-8",
+            probability=0.52,
+            margin=1,
+            away_score=21,
+            home_score=22,
+            side_leg={
+                "selection": "PASS",
+                "line": None,
+                "confidence_stars": 1,
+            },
+            total_leg={
+                "selection": "Under",
+                "line": 47.5,
+                "confidence_stars": 2,
+            },
+        )
+
+        payload = build_aggregator_input(
+            _game(),
+            approved_opinions=[row],
+            finals=[],
+            snapshots=[],
+            registry=registry,
+            policy=policy,
+        )
+
+        self.assertEqual(payload["voices"][0]["markets"], ["total"])
+        self.assertEqual(
+            payload["feature_block"]["markets"]["side"],
+            [],
+        )
+        self.assertEqual(
+            payload["feature_block"]["markets"]["total"],
+            ["celebrity"],
+        )
 
 
 class OverlapWeightTests(unittest.TestCase):

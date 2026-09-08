@@ -45,7 +45,11 @@ from moe_identity import (
 )
 from moe_rating import RATING_MODE, RATING_PROFILE, build_rating_input
 from moe_win_total import build_win_total_input
-from intake_bot import CELEBRITY_HEADERS, CELEBRITY_TAB
+from intake_bot import (
+    CELEBRITY_HEADERS,
+    CELEBRITY_TAB,
+    _celebrity_worksheet,
+)
 from nfl_game_history import (
     GAME_HISTORY_HEADERS,
     GAME_HISTORY_TAB,
@@ -261,6 +265,7 @@ async def main() -> None:
     line_snapshots: list[dict] | None = None
     ak_user_id: str | None = None
     cee_user_id: str | None = None
+    celebrity_picks: list[dict] | None = None
     win_totals: list[dict] | None = None
     win_predictions: list[dict] | None = None
     team_history: list[dict] | None = None
@@ -309,6 +314,14 @@ async def main() -> None:
         win_predictions = spreadsheet.worksheet(
             "nfl_win_predictions"
         ).get_all_records(expected_headers=PREDICTION_HEADERS)
+    elif expert["input_profile"] == "celebrity_consensus":
+        current_results = _current_results()
+        leans = spreadsheet.worksheet("nfl_leans").get_all_records(
+            expected_headers=LEAN_HEADERS
+        )
+        celebrity_picks = _celebrity_worksheet(
+            spreadsheet
+        ).get_all_records(expected_headers=CELEBRITY_HEADERS)
     elif expert["input_profile"] == "win_total":
         win_totals = spreadsheet.worksheet(
             "nfl_win_totals"
@@ -352,6 +365,15 @@ async def main() -> None:
                 leans or [],
                 win_predictions or [],
                 cee_user_id=cee_user_id or "",
+            )
+        elif expert["input_profile"] == "celebrity_consensus":
+            from moe_celebrity import build_celebrity_input
+
+            input_payload = build_celebrity_input(
+                game,
+                [*history, *(current_results or [])],
+                celebrity_picks or [],
+                leans or [],
             )
         elif expert["input_profile"] == "win_total":
             input_payload = build_win_total_input(
@@ -433,13 +455,18 @@ async def main() -> None:
     opinion = await generate_opinion(
         expert_id=args.expert,
         game=game,
-        history=history,
+        history=(
+            [*history, *(current_results or [])]
+            if expert["input_profile"] == "celebrity_consensus"
+            else history
+        ),
         schedule=schedule,
         current_season_results=current_results,
         leans=leans,
         line_snapshots=line_snapshots,
         ak_user_id=ak_user_id,
         cee_user_id=cee_user_id,
+        celebrity_picks=celebrity_picks,
         win_totals=win_totals,
         win_predictions=win_predictions,
         team_history=team_history,

@@ -568,6 +568,40 @@ two teams as they existed when the game pick was submitted.
   Sonnet 4.6, and Haiku 4.5. It is committee-optional, so games without a Cee
   submission do not block the automated God Expert.
 
+### Implemented locally — 2026-09-08: Celebrity Consensus Expert
+
+The Celebrity Consensus Expert is an Opus 4.8-only, committee-optional voice
+whose participant set is rebuilt independently for every game. Missing
+celebrities are absent rather than counted as disagreement, and one participant
+is explicitly an individual signal rather than consensus.
+
+- `celebrity_picks` retains its original attribution columns and adds canonical
+  bet identity, market family, subject, stat, direction, line, price, a
+  deterministic selection label, exact raw input, and UTC kickoff. Existing
+  rows are losslessly expanded in place; standard spread/moneyline/total rows
+  are enriched from their linked `nfl_leans` submission when needed.
+- Standard markets remain available to every intake user. Celebrity mode also
+  offers structured player-prop, team-prop, and other-market entry while
+  retaining the exact reply. All distinct canonical bets remain; the latest
+  revision wins only within the same celebrity, event, period, market family,
+  subject, and stat.
+- The deterministic input separately reports the active picks, side and total
+  participation, individual records, pairwise agreement/disagreement, and the
+  exact active-group record. It also reports historical cohorts matching the
+  current participant-count bucket and consensus label. Only the latest
+  pre-kickoff revision of each bet and results available before the target
+  kickoff enter calibration. Full-game side, total, and team-total bets can
+  settle from final scores; a group record includes an event only when every
+  supporting compatible bet has the same verdict. Partial-game, player-prop,
+  and other picks remain tracked but ungraded until compatible deterministic
+  results exist.
+- The opinion may recommend the current full-game spread side and/or total, or
+  PASS either leg. Props and other markets may be displayed or used as
+  counterevidence but cannot directly support a game side or total. A
+  single-celebrity or zero-calibration input caps confidence at two stars.
+- The approved voice enters only the God pools for non-PASS legs. Games with no
+  celebrity opinion remain eligible for the automated God Expert.
+
 `emergency_migration.txt` now documents the implementation requirements,
 lossless export/import format, one-day service freeze and SQLite cutover,
 verification gates, backups, and rollback with post-cutover delta replay. It

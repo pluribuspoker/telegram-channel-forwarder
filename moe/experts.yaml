@@ -133,6 +133,22 @@ experts:
     committee_optional: true
     initial_weight: 1.0
     markets: [side]
+  celebrity:
+    name: Celebrity Consensus Expert
+    mode: agent
+    version: 1
+    prompt_version: 1
+    prompt: prompts/celebrity/v1.md
+    input_profile: celebrity_consensus
+    output_schema_version: 5
+    default_model: claude-opus-4-8
+    reasoning_effort: max
+    allowed_models:
+      - claude-opus-4-8
+    enabled: true
+    committee_optional: true
+    initial_weight: 1.0
+    markets: [side, total]
   rating_elo:
     name: Rating Expert (Elo)
     mode: model

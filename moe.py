@@ -28,6 +28,7 @@ from nfl_lines import _call_with_retry, get_gspread_client
 from nfl_win_predictions import ensure_worksheet
 from moe_ak import WNBA_PRIOR_PATH, build_ak_input
 from moe_cee import build_cee_input
+from moe_celebrity import build_celebrity_input
 from moe_god import (
     AGGREGATOR_PROFILE,
     DETERMINISTIC_BACKEND,
@@ -226,6 +227,13 @@ def _source_sha256(expert: dict[str, Any]) -> str:
         paths.extend((ROOT / "moe_ak.py", WNBA_PRIOR_PATH))
     if expert.get("input_profile") == "cee_calibration":
         paths.append(ROOT / "moe_cee.py")
+    if expert.get("input_profile") == "celebrity_consensus":
+        paths.extend(
+            (
+                ROOT / "moe_celebrity.py",
+                ROOT / "celebrity_picks.py",
+            )
+        )
     if expert.get("input_profile") == "win_total":
         paths.append(ROOT / "moe_win_total.py")
     if expert.get("input_profile") == AGGREGATOR_PROFILE:
@@ -1999,6 +2007,100 @@ def _normalize_ak_opinion(
 
     side = normalize_pick("side")
     total = normalize_pick("total")
+    if input_payload.get("input_profile") == "celebrity_consensus":
+        confidence_cap = int(input_payload["confidence_cap"])
+        for field, pick in (("side", side), ("total", total)):
+            if pick["confidence_stars"] > confidence_cap:
+                raise ValueError(
+                    f"{field} confidence exceeds the celebrity input cap "
+                    f"of {confidence_cap}"
+                )
+            consensus_id = f"current_{field}_consensus"
+            consensus = input_payload["participation"][f"{field}_consensus"]
+            if (
+                consensus_id in pick["evidence_ids"]
+                and pick["selection"] != consensus["selection"]
+            ):
+                raise ValueError(
+                    f"{field} cannot use current consensus to support the "
+                    "opposite selection"
+                )
+        side_label = (
+            "PASS"
+            if side["selection"] == "PASS"
+            else f"{side['selection']} {float(side['line']):+g}"
+        )
+        total_label = (
+            "PASS"
+            if total["selection"] == "PASS"
+            else f"{total['selection']} {float(total['line']):g}"
+        )
+        normalized["side"] = side
+        normalized["total"] = total
+        normalized["confidence_stars"] = max(
+            side["confidence_stars"],
+            total["confidence_stars"],
+        )
+        normalized["pick_market"] = "side_and_total"
+        normalized["pick_side"] = f"{side_label} | {total_label}"
+        normalized["thesis"] = (
+            f"Celebrity consensus: side {side_label} "
+            f"{'★' * side['confidence_stars']}; total {total_label} "
+            f"{'★' * total['confidence_stars']}."
+        )
+        normalized["supporting_factors"] = (
+            [f"Side: {value}" for value in side["evidence"]]
+            + [f"Total: {value}" for value in total["evidence"]]
+            or ["Both celebrity-informed recommendations are PASS."]
+        )
+        normalized["counterarguments"] = (
+            [f"Side: {value}" for value in side["counterarguments"]]
+            + [f"Total: {value}" for value in total["counterarguments"]]
+        )
+        normalized["no_signal_factors"] = [
+            item["text"]
+            for item in input_payload["evidence_catalog"]
+            if (
+                item["id"].startswith(("individual_", "pair_", "exact_group_"))
+                and (
+                    "across 0 games" in item["text"]
+                    or "in 0 games" in item["text"]
+                )
+            )
+        ]
+        discarded = opinion.get("discarded_considerations")
+        if not isinstance(discarded, list) or not all(
+            isinstance(value, str) and value.strip() for value in discarded
+        ):
+            raise ValueError(
+                "discarded_considerations must contain non-empty strings"
+            )
+        normalized["discarded_considerations"] = discarded
+
+        def bullets(values: list[str]) -> str:
+            return "\n".join(f"- {value}" for value in values) or "- None"
+
+        normalized["full_opinion"] = (
+            f"Pick\n- Side: {side_label} "
+            f"{'★' * side['confidence_stars']}\n"
+            f"- Total: {total_label} "
+            f"{'★' * total['confidence_stars']}\n\n"
+            "Why the picks\n"
+            f"{bullets(normalized['supporting_factors'])}\n\n"
+            "Why they may be wrong\n"
+            f"{bullets(normalized['counterarguments'])}\n\n"
+            "No signal\n"
+            f"{bullets(normalized['no_signal_factors'])}\n\n"
+            "Discarded considerations\n"
+            f"{bullets(discarded)}\n\n"
+            f"Conclusion\n{normalized['thesis']}"
+        )
+        normalized["side_pick_json"] = _canonical_json(side)
+        normalized["total_pick_json"] = _canonical_json(total)
+        normalized["calibration_summary_json"] = _canonical_json(
+            input_payload["nfl_calibration"]
+        )
+        return normalized
     for field, pick in (("side", side), ("total", total)):
         uses_wnba = any(
             evidence_id.startswith("wnba_")
@@ -2840,6 +2942,7 @@ async def generate_opinion(
     line_snapshots: list[dict[str, Any]] | None = None,
     ak_user_id: str | None = None,
     cee_user_id: str | None = None,
+    celebrity_picks: list[dict[str, Any]] | None = None,
     win_totals: list[dict[str, Any]] | None = None,
     win_predictions: list[dict[str, Any]] | None = None,
     team_history: list[dict[str, Any]] | None = None,
@@ -2896,6 +2999,17 @@ async def generate_opinion(
             leans,
             win_predictions,
             cee_user_id=cee_user_id,
+        )
+    elif expert["input_profile"] == "celebrity_consensus":
+        if celebrity_picks is None or leans is None:
+            raise ValueError(
+                "Celebrity expert requires celebrity picks and game leans"
+            )
+        input_payload = build_celebrity_input(
+            game,
+            history,
+            celebrity_picks,
+            leans,
         )
     elif expert["input_profile"] == "win_total":
         if (
@@ -3276,6 +3390,7 @@ async def generate_opinion(
                 line_snapshots=line_snapshots,
                 ak_user_id=ak_user_id,
                 cee_user_id=cee_user_id,
+                celebrity_picks=celebrity_picks,
                 win_totals=win_totals,
                 win_predictions=win_predictions,
                 team_history=team_history,
