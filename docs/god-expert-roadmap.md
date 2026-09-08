@@ -26,12 +26,19 @@ These are settled. Do not relitigate them inside an implementation session.
   scratch clone, never in `~/app`:
 
   ```bash
+  # scripts/godbuild_test.sh <slug> <worktree-dir> [extra modules...] does all of this:
   ssh root@209.38.51.86 'su - forwarder -c "git clone -q /home/forwarder/app /tmp/godbuild-<slug>"'
-  # tar the changed files over the clone, strip CRs, chown forwarder, then:
-  su - forwarder -c "cd /tmp/godbuild-<slug> && ~/venv/bin/python -m unittest scripts.test_moe_god scripts.test_moe scripts.test_moe_ak scripts.test_moe_win_total scripts.test_generate_moe_opinion_cli scripts.test_intake_bot"
+  # tar the files that differ from origin/main over the clone, strip their CRs, chown forwarder, then:
+  su - forwarder -c "cd /tmp/godbuild-<slug> && ~/venv/bin/python -m unittest scripts.test_moe_god scripts.test_moe scripts.test_moe_ak scripts.test_moe_win_total scripts.test_generate_moe_opinion_cli scripts.test_intake_bot scripts.test_god_judge_runner scripts.test_nfl_lines_history scripts.test_moe_margins scripts.test_moe_rating"
   ```
 
   Each worktree uses its own scratch clone so parallel runs never collide.
+  Two pitfalls the helper absorbs (2026-09-07): a space-separated module
+  list must be `printf %q`-quoted for ssh or the remote shell re-splits it
+  (phase 2's first baseline ran two modules and reported them as the
+  suite), and `git` inside the clone must run as forwarder (root trips the
+  dubious-ownership check). The VPS venv has no numpy/scipy: fits are pure
+  stdlib.
 - Deploy: commit on main → push → `git pull` **as root** in
   `/home/forwarder/app` (root owns files there; a pull as `forwarder` fails
   half-way and leaves a partial checkout) → `systemctl restart
@@ -290,7 +297,9 @@ anywhere; judge runs bill the Claude Code subscription.
   command after a human has looked at it.
 - Built 2026-09-07. `moe_rating.py` + registry `rating_elo` (mode `model`,
   profile `rating`, schema 9, `default_model: deterministic`,
-  `markets: [side, total]`, enabled) + spec `moe/prompts/rating_elo/v1.md`;
+  `markets: [side]` — side only, decided at the merge: its total is the
+  league scoring rate and must not dilute the total pool; the WP5 proposal
+  said side+total — enabled) + spec `moe/prompts/rating_elo/v1.md`;
   prior `moe/priors/nfl_elo_v1.json` from `scripts/fit_nfl_elo.py` (K 19,
   hfa 32, regression 1/3, points_per_elo 21.99 by least squares; fit Brier
   0.2224 on 2023–24). 2025 check: Elo Brier 0.2224 vs closing moneyline
@@ -343,22 +352,25 @@ anywhere; judge runs bill the Claude Code subscription.
   -b god/<slug>`), each with its own VPS scratch clone, merged in the order
   WP4, WP1, WP3, WP2; the one merge interaction was WP3's tests meeting
   WP1's veto on the default test market.
-- Phase 2: WP5 can start now (WP1 is merged). WP5 touches `moe_god.py`
-  heavily, so no other `moe_god.py` change runs beside it; WP6 and WP7 can
-  run in parallel with each other and read WP4's files. Merge WP5 first and
-  rebase WP6 on it (WP6 changes `cover_probability`/`over_probability`).
-  Note for WP7: the committed CSV covers 2016–2025; the Elo warm-up on
-  1999–2022 needs `scripts/fetch_nfl_lines_history.py --seasons 1999-2025
-  --skip-espn` (about 7,000 rows) or a direct read of the nflverse file;
-  decide whether the wider CSV is committed.
+- Phase 2 (WP5–WP7) landed on main on 2026-09-07 (status log), not yet
+  deployed. Three worktrees (`god/overlap`, `god/margins`, `god/rating`),
+  one subagent each in parallel, with ownership rules instead of a rebase:
+  WP5 owned every substantive `moe_god.py` change and the prompt bumps, WP6
+  kept to the margin model, WP7 added one lens entry. Merged WP5, WP6, WP7.
+  Two merge interactions: WP6's table lookup meeting WP5's per-market pools
+  in `build_feature_block` and `build_judge_request` (both kept, resolved by
+  hand), and WP5's registry test meeting WP7's `rating_elo` (one
+  expectation). The wider CSV is committed (1999–2025).
 - WP8 needs WP6 and WP7. Its open→close calibration has 543 usable events
   (392 with movement): ESPN BET through 2025 week 12, DraftKings after.
-- After each merge: full suite on a fresh scratch clone — eight modules now:
+- After each merge: full suite on a fresh scratch clone — ten modules now:
   `scripts.test_moe_god scripts.test_moe scripts.test_moe_ak
   scripts.test_moe_win_total scripts.test_generate_moe_opinion_cli
   scripts.test_intake_bot scripts.test_god_judge_runner
-  scripts.test_nfl_lines_history` — then deploy at a week boundary (Tuesday
-  after the Monday game is graded is the natural slot).
+  scripts.test_nfl_lines_history scripts.test_moe_margins
+  scripts.test_moe_rating` (`bash scripts/godbuild_test.sh <slug> <dir>`
+  runs them) — then deploy at a week boundary (Tuesday after the Monday
+  game is graded is the natural slot).
 
 ## Acceptance for the phase-1 deploy
 
@@ -375,6 +387,37 @@ paired report; the skill runbook is updated). Deploy pending.
 - `moe_grade.py` prints the paired report; first finals Wednesday night,
   grade Thursday morning.
 - Skill runbook updated; docs and this status log updated.
+
+## Acceptance for the phase-2 deploy
+
+Status 2026-09-07: every item below is met on main (296 tests on a fresh
+scratch clone; merge commits 9960ae1, b7834eb, db518b4). Not pushed; deploy
+pending, the user's call at a week boundary.
+
+- All ten suites green on the VPS scratch clone.
+- Week 1 replay pinned under the overlap formula as specified (Seahawks pool
+  margin +4.25 → +4.21, Rams side edge 4.42% → 4.38%); the gap to the
+  roadmap's +3.9 and 3.2% is documented next to WP5, not papered over.
+- The 2025 hold-out calibration is read: the table is a wash, so
+  `margin_model` stays `normal`.
+- The Elo check is pinned (2025 Brier 0.2224 vs closing moneyline 0.2116,
+  `target_met: false` in the prior); the miss is 0.0008 past the target.
+- Bulk review prints the week before it approves; nothing approves on its
+  own; the judge never ran in this phase.
+- CLAUDE.md, the skill runbook, the intake plan, and this status log updated.
+
+Deploy runbook (when the user says go): no env change, so no `syncenv`;
+`git push`; on the VPS `git pull` as root in `/home/forwarder/app`;
+`systemctl restart telegram-intake.service` (`moe.py` changed); no systemd
+unit changed, so `bash scripts/check_deploy_sync.sh` should still report in
+sync. **Then, before the next `god-judge.timer` pass**: as forwarder in
+`~/app`, `python scripts/generate_rating_week.py --season 2026 --week <N>`,
+read `python scripts/review_moe_opinion.py --expert rating_elo --week <N>
+--season 2026 --reviewed-by <you>`, and re-run it with `--approve` —
+otherwise every game skips as "committee incomplete, no approved row for
+rating_elo" (a print in the journal, no DM). Alternative: set
+`rating_elo.enabled: false` in `moe/experts.yaml` before pushing and flip
+it at a later week boundary.
 
 ## Decisions
 
@@ -397,8 +440,11 @@ approves them.
 Open after phase 1 (2026-09-07) — the user's call, nothing in code assumes
 an answer:
 
-- `moe/prompts/god_rules/v1.md` step 7 omits the veto and the floor. Bump to
-  v2 (re-hashes `prompt_sha256` on every future rules row) or leave.
+- ~~`moe/prompts/god_rules/v1.md` step 7 omits the veto and the floor.~~
+  Closed 2026-09-07 by WP5: `god_rules/v2.md` (needed anyway for the pool
+  changes) states the veto and the floor in step 7 and, after the merge,
+  the `margin_model` switch in step 3. Rows persisted from the next deploy
+  hash v2.
 - A veto knob of 0 vetoes every leg that has opening data. If 0 should mean
   disabled, the checks need `knob > 0`.
 - The reason guard grounds a cited "N games" through the cohort a cited
@@ -410,11 +456,34 @@ an answer:
   `committee_key` to lines only.
 - `GOD_JUDGE_HEALTHCHECK_URL` is unset; `ping_hc` no-ops until it is added
   to the local `.env` and synced.
-- WP6 must name its close: nflverse (the CSV, 2016–2025) or ESPN (the JSON,
-  2024–2025 open/close). They differ by a point or more on 14% of spreads.
+- ~~WP6 must name its close.~~ Decided 2026-09-07: nflverse (the CSV,
+  2016–2025); the ESPN JSON is reserved for open→close movement (WP8).
 - Rejected judge rows re-run on the same committee key (session decision
   2026-09-07 in `scripts/god_judge_runner.py`); pending and approved rows
   block. Reverse it if a rejection should stay final.
+
+Open after phase 2 (2026-09-07) — the user's call, nothing in code assumes
+an answer:
+
+- Overlap weight rule. As specified (rank-ordered: a voice divides its
+  Hedge weight by one plus its overlap with the voices ranked before it),
+  identical voices pool as 1.0 and 0.5, and the Week 1 pair moves the pool
+  only slightly. The alternative — divide every voice by one plus its
+  overlap with all other voices, so n copies of one table sum to exactly
+  one — is a one-line change in `overlap_adjusted_weights`; neither reaches
+  the roadmap's +3.9/3.2% on these texts (Jaccard 0.25 and 0.11).
+- Elo target: the 2025 Brier is 0.0008 past "within 0.01 of the closing
+  moneyline". Accept (the fit data cannot separate the knobs; recommended),
+  or widen the fit window (2016–2024) — a plan change.
+- `margin_model` stays `normal`; `min_games` 50 scores marginally better on
+  spreads at 85% coverage (a knob in `scripts/build_nfl_margins.py`).
+- `rating_elo` is `enabled: true`: the judge needs an approved rating row
+  per game (deploy runbook above), or ship `enabled: false` first.
+- `god_judge/v2.md` has not judged a live game yet; the first timer pass
+  after the deploy is the check that the new request fields (overlap,
+  markets, hedge weights by label) do not confuse it.
+- The extractor reads a scoreline such as "won 23-20" as a record (pinned as
+  a known limitation); harmless unless two voices cite the same scoreline.
 
 ## Status log
 
@@ -444,6 +513,24 @@ an answer:
   veto-aware rules rows arrive for the Seahawks and Rams games; the
   2026-09-06 rows stay pending until a human decides. Still unset:
   `GOD_JUDGE_HEALTHCHECK_URL` (`ping_hc` no-ops without it).
+- 2026-09-07 (late evening) — phase 2 built: WP5, WP6, WP7 in three
+  worktrees (`god/overlap`, `god/margins`, `god/rating`), one subagent each
+  in parallel from a fresh session, merged into main in the order WP5, WP6,
+  WP7 (merge commits 9960ae1, b7834eb, db518b4) and verified on a fresh VPS
+  scratch clone: `Ran 296 tests … OK` across the eight phase-1 modules plus
+  `scripts.test_moe_margins` and `scripts.test_moe_rating` (238 → 252 → 269
+  → 296 along the way). Numbers: Seahawks pool margin +4.25 → +4.21 and Rams
+  side edge 4.42% → 4.38% under the rank-ordered Jaccard discount (the
+  roadmap's +3.9/3.2% are not reachable by that formula — recorded under
+  WP5); the 2025 hold-out calibration is a wash (spread Brier empirical
+  0.21611 vs normal 0.21606, total 0.21947 vs 0.21894; log loss a hair
+  better on spreads, worse on totals; 89.7%/97.8% of 2025 games in
+  supported bins), so `margin_model` stays `normal`; Elo (K 19, hfa 32,
+  regression ⅓) 2025 Brier 0.2224 vs closing moneyline 0.2116 (+0.0108,
+  target missed by 0.0008). Merge decisions: `rating_elo` informs the side
+  pool only; the orchestrator added the `margin_model` sentence to
+  `god_rules/v2.md` step 3. `scripts/godbuild_test.sh` is the committed
+  test helper. Not pushed, not deployed; the user decides the timing.
 
 ## Session opener (phase 2)
 

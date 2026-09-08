@@ -828,6 +828,22 @@ committed data files produced by one idempotent, resumable script.
   `.gitignore` ignores `data/*` except the two data files (and keeps
   `angles/data/` ignored, which the old unanchored `data/` rule covered).
 
+### Completed — 2026-09-07: God Expert roadmap phase 2 (WP5–WP7)
+
+The three sections below are phase 2 of `docs/god-expert-roadmap.md`, built
+on 2026-09-07 in three worktrees (`god/overlap`, `god/margins`,
+`god/rating`) by one subagent each, in parallel, from a fresh session, and
+merged into main in the order WP5, WP6, WP7. The suite of record is 296
+tests on a fresh VPS scratch clone across the eight phase-1 modules plus
+`scripts.test_moe_margins` and `scripts.test_moe_rating`
+(`bash scripts/godbuild_test.sh <slug> <dir>` runs all ten). Merge decisions:
+`rating_elo` informs the side pool only (its total is the league scoring
+rate); `god_rules/v2.md` step 3 describes the `margin_model` switch; WP5's
+registry test lists the rating voice. **Not deployed** as of this section:
+the user decides the timing at a week boundary, and the deploy must be
+followed by generating and bulk-approving the week's rating rows before the
+judge timer's next pass (roadmap, "Acceptance for the phase-2 deploy").
+
 ### Completed — 2026-09-07: Evidence overlap and per-market relevance (WP5)
 
 Roadmap WP5: the pool no longer counts a table twice when two voices recite
@@ -992,7 +1008,10 @@ every row still passes the human gate — in bulk, one week per command.
 - Registry: `rating_elo` (`Rating Expert (Elo)`, `mode: model`,
   `input_profile: rating`, output schema 9, `default_model: deterministic`
   so the aggregator's default-model rule selects its rows,
-  `allowed_backends: [deterministic]`, `markets: [side, total]`, enabled).
+  `allowed_backends: [deterministic]`, `markets: [side]` — side only,
+  decided at the merge under WP5's relevance masks, because the voice's
+  total is the league scoring rate and must not dilute the total pool; the
+  roadmap proposed side+total — enabled).
   `moe/prompts/rating_elo/v1.md` is the versioned algorithm spec, hashed into
   every row like a prompt; no model reads it. `VOICE_LENSES["rating_elo"]`
   describes the lens for the judge without naming the expert.

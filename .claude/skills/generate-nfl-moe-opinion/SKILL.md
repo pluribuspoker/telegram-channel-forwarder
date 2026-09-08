@@ -123,7 +123,7 @@ and billing.
   fallback below); `--api` is refused. Its `--show-input` output is the
   masked judge request: voices labeled `Voice A…` in a seeded shuffle, lenses
   described without names. Give the agent exactly that document plus
-  `moe/prompts/god_judge/v1.md`. Never tell it which expert or person a voice
+  `moe/prompts/god_judge/v2.md`. Never tell it which expert or person a voice
   belongs to, and never hand it the full aggregator input or the sheet.
 - The judge returns only probabilities and reasons; the application derives
   the side and total legs. Every `W-L` record and "N games" count a reason
@@ -169,7 +169,7 @@ state, so the judge no longer races the 30-minute lines fetcher:
    request's hash, which is what the judge row persists). Nothing is re-read
    from the sheet's opinions, snapshots, or finals.
 4. Run one isolated Fable 5.1 inference at max effort with
-   `moe/prompts/god_judge/v1.md` as the whole prompt and `request.json` as
+   `moe/prompts/god_judge/v2.md` as the whole prompt and `request.json` as
    the only input, and save its exact raw JSON as `response.json`.
 5. `python scripts/generate_moe_opinion.py --event-id <id> --expert
    god_judge --agent-response response.json --input-file input.json
