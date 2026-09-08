@@ -133,6 +133,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # The reports carry star glyphs; a cp1252 console (Windows) must not
+    # crash the run after the arithmetic is done.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = build_parser()
     args = parser.parse_args(argv)
     mode = args.mode or "grid"

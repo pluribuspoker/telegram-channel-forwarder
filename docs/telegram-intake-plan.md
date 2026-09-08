@@ -1097,6 +1097,249 @@ every row still passes the human gate — in bulk, one week per command.
   now carries an approved rating row (a complete committee needs one);
   `scripts/test_nfl_lines_history.py` pins the wider default.
 
+### Completed — 2026-09-07: God Expert roadmap phase 3 (WP8–WP10)
+
+The three sections below are phase 3 of `docs/god-expert-roadmap.md`, built
+on 2026-09-07 (night) in three worktrees (`god/backtest`, `god/ensemble`,
+`god/guard`) — the first two by forked agents in parallel, the third the
+orchestrator's fix for two live judge rejections — and merged in that order
+with no conflicts. The suite of record is 335 tests on a fresh VPS scratch
+clone across the ten phase-2 modules plus `scripts.test_moe_backtest`
+(`bash scripts/godbuild_test.sh <slug> <dir>` runs all eleven). **Not
+deployed**: phase 2 and phase 3 deploy together at a week boundary
+(roadmap, "Acceptance for the phase-3 deploy", which also covers the
+server's uncommitted tree and the unit change).
+
+### Completed — 2026-09-07: Backtest harness (WP8)
+
+`moe_backtest.py` (library, standard library only, no `moe` import so it
+runs on Windows) and `scripts/backtest_god.py` (`grid`, `veto`, `clv`,
+`ledger`; global `--json`) replay the God Expert rules arm over historical
+lines and score it. Nothing here is a copy of the production arithmetic:
+
+- Path. A historical market goes through `moe_god.market_block_from_lines`
+  (the body of `build_market_block`, factored out; `build_market_block`
+  now decodes the packed BetOnline columns and calls it; an absent opening
+  leaves every movement delta `None`, so nothing is ever vetoed), the
+  rating voice through `moe_rating.rating_estimate` (the estimate block of
+  `build_rating_input`, factored out; the input's `estimate` is that
+  function's return) and `moe_god.voice_from_row` on a synthetic
+  `rating_elo` row, the pool and shrink through `build_feature_block` and
+  `rules_arm_response`, the legs through `apply_policy`, the grades through
+  `_leg_result`. A change to any of those changes the backtest with it.
+- Committee. The rating voice alone (the model voices have no history):
+  Elo with the committed prior's parameters (K 19, hfa 32, regression ⅓,
+  21.99 points per Elo), replayed from 1999 so every pregame rating is
+  leak-free; the projected total for a season is the previous season's
+  league scoring rate. The registry says `markets: [side]`, so the total
+  pool is empty and the blend total is the market line: under `normal` no
+  total ever fires, under `empirical` only the bin's own asymmetry at the
+  line can clear a low threshold. `sigma_total` and the total veto are
+  therefore not identifiable from this committee. The Elo parameters were
+  fitted on 2023–2024 (in-sample for the fit window); 2025 is untouched by
+  both fits.
+- Market. `grid`: the nflverse close with juice (`data/nfl_lines_history.csv`),
+  no opening (the veto is inert). `clv`: the ESPN open as the market and
+  the ESPN close as the closing line (`data/nfl_open_close.json`,
+  2024–2025, 543 of 544 events), so every fired leg carries closing-line
+  value. The empirical model is evaluated without leakage: the table for a
+  season is built from 2016 up to the season before it
+  (`scripts.build_nfl_margins.build_table` + `moe_god.parse_margin_table`,
+  applied through the new `moe_god.margin_table_override` context manager,
+  backtests only; `check_margin_table` still refuses a foreign hash on a
+  live row).
+- Scores. ML Brier of the arm's `home_win_probability` against the winner
+  (ties excluded, as `grade_opinion_row` grades) beside the de-vigged
+  market's and the raw Elo's, log loss as a secondary; cover Brier of
+  `p_cover_home` against the ATS result at the close (pushes excluded)
+  beside the fair cover probability's; fired legs W-L-P, flat one unit at
+  the posted price, ROI, mean CLV where a closing line exists, the record
+  per star bucket.
+- Grid and selection. λ {0, 0.25, 0.5, 0.75, 1} × σ_margin {12, 13, 13.5,
+  14, 15} × margin model {normal, empirical} × edge threshold {0.02, 0.03,
+  0.04, 0.05} × EV floor {0, 0.01, 0.02, 0.03} × two star ladders (the
+  default shape and one with even rungs; the first rung is always the
+  edge threshold, as the policy validation requires) = 1,600 policies,
+  each validated through `aggregator_policy`, over 544 games in about 9 s;
+  the estimate is computed once per λ and `apply_policy` once per policy.
+  Selection, printed with its rule: λ by the lowest fit-season ML Brier;
+  σ_margin and the margin model by the lowest cover Brier at that λ; edge
+  threshold and EV floor keep the registry values unless a candidate beats
+  them on ROI (and mean CLV where it exists) with at least 50 fit-season
+  bets; the star ladder keeps the default unless the alternative is
+  monotone in ROI where the default is not. The check seasons then score
+  the chosen policy and the registry policy side by side, untouched by the
+  selection. The script prints the resulting `aggregator_policy` block and
+  never writes `moe/experts.yaml`.
+- Result (fit 2023–2024, 544 games; check 2025, 272 games):
+
+  | λ (fit ML Brier) | 0 | 0.25 | 0.5 | 0.75 | 1 |
+  |---|---|---|---|---|---|
+  | rules arm | 0.20944 (= market) | 0.21086 | 0.21350 | 0.21735 | 0.22242 (= Elo) |
+
+  | Policy | Window | ML Brier arm / market / Elo | Cover Brier arm / fair | Legs | Units (ROI) |
+  |---|---|---|---|---|---|
+  | registry (λ 0.5) | fit 2023–24 | 0.2135 / 0.2094 / 0.2224 | 0.2531 / 0.2505 | 274, 133-134-7 | −10.54 (−3.8%) |
+  | chosen (λ 0) | fit 2023–24 | 0.2094 / 0.2094 / 0.2224 | 0.2500 / 0.2505 | 2, 0-2-0 | −2.00 |
+  | registry (λ 0.5) | 2025 untouched | 0.2156 / 0.2121 / 0.2231 | 0.2564 / 0.2496 | 122, 58-63-1 | −9.04 (−7.4%) |
+  | chosen (λ 0) | 2025 untouched | 0.2122 / 0.2121 / 0.2231 | 0.2499 / 0.2496 | 4, 2-2-0 | +0.10 (+2.5%) |
+  | registry (λ 0.5) | ESPN open 2024–25 (`clv`) | 0.2118 / 0.2099 / 0.2172 | 0.2536 / 0.2510 | 235, 104-127-4 | −29.98 (−12.8%), CLV +0.07 |
+  | chosen (λ 0) | ESPN open 2024–25 (`clv`) | 0.2100 / 0.2099 / 0.2172 | 0.2500 / 0.2510 | 35, 18-17-0 | +1.98 (+5.7%), CLV −0.81 |
+
+  At the registry λ = 0.5 (for reading, no selection): cover Brier prefers
+  a wider σ (12 → 0.2538, 13.5 → 0.2531, 15 → 0.2526; `empirical` ≈ 0.2599
+  at every σ); edge/floor 0.02/0 → 354 legs −17.6u (−5.0%), 0.02/0.03 →
+  242 legs −4.6u (−1.9%), 0.03/0.02 (registry) → 274 legs −10.5u (−3.8%),
+  0.04 → 230 legs −13.0u (−5.7%), 0.05 → 158 legs −4.9u (−3.1%); star
+  buckets ★ 116 legs −4.9%, ★★ 98 −10.2%, ★★★ 48 −0.3%, ★★★★ 8-0,
+  ★★★★★ 1-3 (not monotone; the alternative ladder is monotone and
+  negative everywhere); on 2025 ★ +12.3%, ★★ −15.0%, ★★★ −34.3%.
+- Reading. **`aggregator_policy` is unchanged.** The selection's λ = 0
+  says the Elo voice adds nothing beyond the closing line at any weight —
+  the same fact as WP7's 0.2224 vs 0.2116 — and that the registry policy
+  on a rating-only committee loses units in every window. It says nothing
+  about the live committee's four model voices, which have no history to
+  replay; the roadmap's "fitted values written into `aggregator_policy`"
+  waits for the ledger refit (WP10) on ~50 games of the real committee.
+- Veto calibration (`veto`; ESPN open → close, 2024–2025, 543 events, all
+  of which moved in some field; ESPN totals move in whole points, so the
+  0.5 and 1.0 rows coincide). The side that got cheaper since the open,
+  graded at the close, flat one unit at the close price; negative units
+  mean the veto removes losing legs:
+
+  | Move | ≥ 0.5 | ≥ 1 | ≥ 1.5 | ≥ 2 |
+  |---|---|---|---|---|
+  | spread (points) | 392 legs, 206-186, −2.84u (−0.7%) | 336, 172-164, −10.58u (−3.2%) | 176, 88-88, −9.69u (−5.5%) | 142, 69-73, −11.20u (−7.9%) |
+  | total (points) | 403, 213-190, +2.80u (+0.7%) | same | 189, 107-82, +14.52u (+7.7%) | 187, 106-81, +14.62u (+7.8%) |
+
+  | Price move (cents) | ≥ 5 | ≥ 10 | ≥ 15 | ≥ 20 |
+  |---|---|---|---|---|
+  | adverse side | 831 legs, 386-445, −74.41u (−8.9%) | 394, 175-219, −47.40u (−12.0%) | 149, 63-86, −22.92u (−15.4%) | 54, 23-31, −7.40u (−13.7%) |
+
+  The harness's own rule proposes `veto_adverse_spread_points` 0.5 → 2.0
+  (the 0.5–1 band is net positive for the adverse side) and keeps the
+  other two. Decision: all three stay at the values decided on 2026-09-07
+  — the spread gap is inside one standard error at 142 legs, the total
+  veto's sign is reversed on this sample (no support either way), and the
+  price veto is the one clear signal at its current 10 cents. Recorded as
+  open items in the roadmap.
+- Tests: `scripts/test_moe_backtest.py` (21): `market_block_from_lines`
+  equals `build_market_block` on the test game and rebuilds the Week 1
+  fixture market; `rating_estimate` equals `build_rating_input`'s estimate
+  including the tie-break leans; hand-built scoring cases (Brier, units,
+  CLV, pushes, star buckets); every grid point validates and the ladder
+  rule holds; a season's empirical table holds only earlier seasons; the
+  veto table on synthetic open/close; the ledger mode on the fixtures; the
+  JSON is deterministic; on the real data 2023–2024 = 544 games, 2025 =
+  272, and the raw Elo 2025 Brier reproduces the prior's 0.2224.
+  `scripts/backtest_god.py` reconfigures stdout to UTF-8 (the reports carry
+  star glyphs; a cp1252 console crashed the first Windows run).
+
+### Completed — 2026-09-07: Judge ensemble (WP9)
+
+Roadmap WP9, built default-off because it starts only after two weeks of
+measured single-sample usage.
+
+- Runner: `scripts/god_judge_runner.py --samples N` (`GOD_JUDGE_SAMPLES`,
+  1–5, default 1; `run_once(..., samples=)`). With N = 1 the persisted rows
+  and messages are byte-identical to before (the runs-log line now also
+  carries `sample: 1, samples: 1`). With N ≥ 2, per game after the rules
+  row: N sequential `claude -p` calls in the game's temp directory, each
+  logged with `sample`/`samples`; a `JudgeCallError` is logged and the
+  loop continues. No call returned text → the existing stage-`claude`
+  failure (one DM listing every call error, no row). Otherwise every
+  response persists through `generate_opinion(sample=True)`; the valid ones
+  feed `ensemble_response`, whose JSON persists as the one judge row of the
+  trigger (`claude_headless`, max, Fable 5.1, `expected_input_sha256` =
+  the request hash) → `valid`/`pending`. Zero valid samples → the FIRST
+  response persists as an ordinary invalid judge row (stage
+  `judge_validation`), so the two-invalid-rows stall counts the trigger
+  exactly as before. The dedupe and stall logic is untouched: sample rows
+  are neither `valid` nor `invalid`. The pending DM reads `judge <id> (mean
+  of k of N samples)` plus a `sample failures:` line when a call or sample
+  failed; sample ids never get review commands.
+- `moe.generate_opinion(..., sample=True)`: a validated row persists as
+  `generation_status="sample"`, `review_status="not_applicable"` (output
+  hash set, raw response kept); a failed one persists as
+  `generation_status="sample"` with `generation_error`, review
+  `not_applicable`, and the ValueError propagates as today. Nothing else in
+  the row differs from a normal judge row. `approved_opinions`,
+  `latest_opinions` (the bot's display), `review_moe_opinion.week_rows`,
+  and `GoogleSheetsMoeOpinionStore.review` already ignore anything not
+  `valid`; `SampleRowTests` pins each.
+- `moe_god`: `coherent_estimate(probability, margin, *, fair_home)` is the
+  fence tie-break and sign clamp factored out of `rules_arm_response`
+  (same wording, `FENCE_NOTE`/`SIGN_NOTE`; both Week 1 rules fixtures
+  reproduce numbers and notes exactly). `ensemble_response(samples, *,
+  fair_home, size)`: means of the valid samples' three numbers rounded
+  4/2/2 → `coherent_estimate`; reasons copied from the sample closest to
+  the mean (round-6 |Δp|, then |Δmargin|, |Δtotal|, then call order) with
+  the coherence notes appended to its discarded considerations; an
+  `ensemble` block `{size, valid, samples, estimates, reasons_from, rule}`
+  where `estimates` keeps each sample's own numbers. `_validate_ensemble`
+  (exact key set, positive ints with `valid ≤ size`, `valid` unique
+  non-empty ids, `valid` finite triples, `reasons_from` among the samples,
+  a non-empty rule) runs on judge responses only — the rules arm still
+  rejects the field — and the block lands in
+  `calibration_summary_json["ensemble"]` (that key is now always present,
+  `null` on every row built without a block, both arms); the full
+  opinion's Blend line ends ` · mean of k of N samples`.
+- Deploy: `deploy/systemd/god-judge.service` `TimeoutStartSec` 3600 → 9000
+  (3 games × 3 samples × 900 s), README row updated; `cp` + `daemon-reload`
+  at deploy. Start the ensemble with `GOD_JUDGE_SAMPLES=3` in `.env` +
+  `syncenv` (config present on both machines; `.env.local` also works but
+  is for server-only secrets) at a week boundary. Usage so far in
+  `logs/god_judge_runs.jsonl`: 3 calls on 2026-09-07/08, 76–108 s API time,
+  `total_cost_usd` 0.35–0.63, 6.9–9.5k output tokens (5.6–8.2k thinking),
+  one turn each. The manual fallback in the skill stays single-sample.
+- Tests: `EnsembleTests` and `SampleRowTests` (`scripts/test_moe_god.py`),
+  `EnsembleRunnerTests` (`scripts/test_god_judge_runner.py`; the stub takes
+  a per-call mode list and a `vary` mode answering 0.58/+2/44, 0.64/+4/46,
+  0.61/+3/45): three samples → three sample rows and one valid mean row
+  (0.61/3.0/45, the block naming the three ids, the DM text, three log
+  lines, dedupe on the next pass); one invalid among three → mean of two;
+  all invalid → one invalid judge row per trigger and the stall after two
+  triggers; one crash among three → mean of two with the error in the DM;
+  N = 1 → no sample rows; `--samples 0/6` rejected; the env honored.
+
+### Completed — 2026-09-07: Ledger refit tooling (WP10) and the reason-guard fix
+
+- WP10 waits for data (~50 graded games). Its tool is
+  `scripts/backtest_god.py ledger`: persisted `god_rules` rows (valid and
+  approved, or `--include-pending`) replayed under the WP8 grid on their
+  own persisted market — opening and latest are both there, so the veto
+  fires here — with each row's voices re-pooled under the live registry
+  (`markets` added when the row predates it, as the Week 1 replay tests
+  do) and a policy persisted before a knob taking that knob's default;
+  graded through `_leg_result` against ESPN finals and `closing_market`
+  from the snapshots; the same scores and selection; a per-knob veto sweep
+  that turns one knob on at a time and lists the legs it removes and how
+  they graded; a comparison against WP8's fitted values (`--grid-json`).
+  Inputs from the sheet and ESPN on the VPS (reads only) or from
+  `--rows-json/--finals-json/--snapshots-json`. Below `MIN_REFIT_GAMES`
+  (50) the report is labeled informational. On the Week 1 fixtures with
+  synthetic finals (20-27, 24-20): 2 graded rows, informational; under the
+  registry policy the rows re-pool under WP5 (Seahawks 0.6258 vs the
+  persisted 0.6259), Seahawks −3.5 is vetoed on the price move (the sweep
+  attributes it to the price knob at 5 and 10 cents, never to spread or
+  total), Over 44.5 clears the floor and wins, 49ers +3.5 wins, the Rams
+  total stays under the bar → 2-0-0; the two-game selection is noise by
+  construction.
+- Reason guard (`moe_god`). The first two live headless judge responses
+  (the 19:42 and 20:12 EDT passes) were rejected and stalled the Seahawks
+  committee: "implied totals 24.0-20.5" matched `_RECORD_PATTERN` as the
+  record `0-20`, and the AK voice's 21-27 projection written as "27-21"
+  was not among the derived reference strings. The pattern, shared with
+  the evidence extractor, now refuses a digit-dot before or a dot-digit
+  after a record (`(?<!\d\.)…(?!\.\d)`; "13.5-14" and "0.5-1.0" were the
+  same class of false positive), and `reason_reference_text` derives both
+  score orders. No Week 1 fixture text changes under the tighter pattern,
+  so the pinned evidence sets and overlaps are unchanged. Tests:
+  `test_decimal_fragments_are_not_records`,
+  `test_home_first_projected_score_is_grounded`, and the extractor case in
+  `EvidenceTests`. The stalled key itself stays stalled until the
+  committee changes; the fix applies to the next fresh key.
+
 ### Implemented locally — 2026-09-04: authoritative NFL week metadata
 
 `nfl_games.week` previously remained blank because `new_game_row()` hardcoded
@@ -1711,7 +1954,7 @@ lean fields were preserved. VPS deployment remains.
 - Watch for Telegram flood-waits on repeated bot restarts during dev.
 - MOE and God Expert suites are Unix-only (`moe.py` imports `fcntl`): run
   them on the VPS from a scratch clone, never in `~/app`. Protocol and the
-  eight-module list: `docs/god-expert-roadmap.md`, Ground rules.
+  eleven-module list: `docs/god-expert-roadmap.md`, Ground rules.
 
 ---
 

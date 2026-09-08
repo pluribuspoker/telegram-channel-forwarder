@@ -29,7 +29,7 @@ These are settled. Do not relitigate them inside an implementation session.
   # scripts/godbuild_test.sh <slug> <worktree-dir> [extra modules...] does all of this:
   ssh root@209.38.51.86 'su - forwarder -c "git clone -q /home/forwarder/app /tmp/godbuild-<slug>"'
   # tar the files that differ from origin/main over the clone, strip their CRs, chown forwarder, then:
-  su - forwarder -c "cd /tmp/godbuild-<slug> && ~/venv/bin/python -m unittest scripts.test_moe_god scripts.test_moe scripts.test_moe_ak scripts.test_moe_win_total scripts.test_generate_moe_opinion_cli scripts.test_intake_bot scripts.test_god_judge_runner scripts.test_nfl_lines_history scripts.test_moe_margins scripts.test_moe_rating"
+  su - forwarder -c "cd /tmp/godbuild-<slug> && ~/venv/bin/python -m unittest scripts.test_moe_god scripts.test_moe scripts.test_moe_ak scripts.test_moe_win_total scripts.test_generate_moe_opinion_cli scripts.test_intake_bot scripts.test_god_judge_runner scripts.test_nfl_lines_history scripts.test_moe_margins scripts.test_moe_rating scripts.test_moe_backtest"
   ```
 
   Each worktree uses its own scratch clone so parallel runs never collide.
@@ -327,6 +327,50 @@ anywhere; judge runs bill the Claude Code subscription.
   for 2024–2025.
 - Output: fitted values written into `aggregator_policy` (dated in the
   intake plan) and a result table in the intake plan.
+- Built 2026-09-07. `moe_backtest.py` (library, stdlib, no `moe` import,
+  so it runs on Windows) + `scripts/backtest_god.py` (`grid`, `veto`,
+  `clv`, `ledger`; global `--json`). Every number comes from the production
+  arithmetic, never a copy: `market_block_from_lines` (the body of
+  `build_market_block`, factored out; a missing opening never vetoes) →
+  `rating_estimate` (factored out of `build_rating_input`) →
+  `voice_from_row` → `build_feature_block` → `rules_arm_response` →
+  `apply_policy` → `_leg_result`. Committee = the rating voice alone (Elo
+  with the committed prior's parameters, replayed from 1999 so every
+  pregame rating is leak-free; the previous season's scoring rate as its
+  total; side pool only per the registry, so the total pool is empty and
+  no total ever fires under `normal` — `sigma_total` and the total veto are
+  not identifiable from this committee and keep their values). Market =
+  the nflverse close with juice (no opening, so the veto is inert in
+  `grid`); the empirical model reads an as-of table built from 2016 to the
+  season before the one scored (`moe_god.margin_table_override`, backtests
+  only), never the committed file. Grid: λ {0, .25, .5, .75, 1} ×
+  σ_margin {12, 13, 13.5, 14, 15} × margin model × edge {.02 … .05} × floor
+  {0 … .03} × two star ladders = 1,600 policies over 544 games in 9 s.
+  Result (fit 2023–2024, confirm 2025 untouched): ML Brier is monotone in
+  λ — 0 → 0.2094 (= the market), 0.25 → 0.2109, 0.5 → 0.2135, 0.75 →
+  0.2174, 1 → 0.2224 (= Elo) — so the printed rule picks λ = 0 with every
+  other knob at its registry value; on 2025 λ = 0 scores 0.2122 (market
+  0.2121) against the registry's 0.2156, and the registry policy on this
+  committee bets 274 legs 133-134-7 for −10.5u (−3.8%) in the fit window
+  and 122 legs 58-63-1 for −9.0u (−7.4%) in 2025. CLV (bets at the ESPN
+  open, 2024–2025, 543 games): registry 235 legs, −30.0u (−12.8%), mean
+  CLV +0.07 points. **Reading: nothing was written to `aggregator_policy`.**
+  λ = 0 is a statement about a rating-only committee — the Elo voice adds
+  nothing beyond the closing line, consistent with WP7's 0.2224 vs 0.2116
+  — not about the live five-voice committee, which the backtest never saw;
+  the policy stays until the ledger refit (WP10) has ~50 games of the real
+  committee. Veto calibration (ESPN open → close, 543 events): the side a
+  spread moved away from goes 206-186 (−0.7%) at ≥ 0.5, 172-164 (−3.2%) at
+  ≥ 1, 88-88 (−5.5%) at ≥ 1.5, 69-73 (−7.9%) at ≥ 2 — the harness's rule
+  proposes 2.0, but the gap to 0.5 sits inside one standard error at 142
+  legs, so the decided 0.5 stays; the total veto has the wrong sign (the
+  side a total moved away from wins +7.7% at ≥ 1.5 on 189 legs) and stays
+  at 1.0 as decided; the price veto is the one clear signal (≥ 10 cents:
+  394 legs, −12.0%; ≥ 5: 831 legs, −8.9%) and stays at 10. Full tables in
+  the intake plan. Test: `scripts/test_moe_backtest.py` (21 tests: both
+  refactors pinned against the old arithmetic, hand-built scoring cases,
+  the as-of table, the veto table, the ledger mode on the Week 1 fixtures,
+  the raw Elo 2025 Brier reproducing the prior's 0.2224).
 
 ### WP9 — Judge ensemble (1 d, after two weeks of runner usage)
 
@@ -340,10 +384,53 @@ anywhere; judge runs bill the Claude Code subscription.
   calls. Usage is read from `logs/god_judge_runs.jsonl` (one line per call:
   duration, cost, turns); remember the current committee key already
   re-judges a game on every price move.
+- Built 2026-09-07, default off. `scripts/god_judge_runner.py --samples N`
+  (`GOD_JUDGE_SAMPLES`, 1–5, default 1). N = 1 is byte-identical to the
+  single-sample path. N ≥ 2: N sequential calls per game (each runs-log
+  line carries `sample`/`samples`), every response persists through
+  `generate_opinion(sample=True)` as an audit row — `generation_status`
+  `sample`, `review_status` `not_applicable`, whether or not it validated
+  (a failed sample keeps that status with its `generation_error`) — and the
+  one judge row of the trigger is `moe_god.ensemble_response`: the means of
+  the valid samples' three numbers through `coherent_estimate` (the fence
+  and sign step factored out of `rules_arm_response`, byte-identical on the
+  Week 1 fixtures), the reasons of the sample closest to the mean, and an
+  `ensemble` block (`size`, `valid`, `samples`, `estimates`,
+  `reasons_from`, `rule`) validated by `normalize_aggregator_opinion` (judge
+  only; the rules arm rejects it) and copied into
+  `calibration_summary_json`. No valid sample → the first response persists
+  as an ordinary invalid judge row, so the two-invalid-rows stall is
+  unchanged; sample rows are neither valid nor invalid and never count.
+  `approved_opinions`, the bot's display, `week_rows`, and `store.review`
+  already ignore anything not `valid` (pinned). `deploy/systemd/god-judge.service`
+  `TimeoutStartSec` 3600 → 9000 (3 games × 3 samples × 900 s; `cp` +
+  `daemon-reload` at deploy). Start the ensemble with `GOD_JUDGE_SAMPLES=3`
+  in `.env` + `syncenv` at a week boundary once two weeks of single-sample
+  usage are read from the runs log (3 calls so far: 76–108 s API time,
+  $0.35–0.63, 7–9.5k output tokens each). The manual fallback stays
+  single-sample. Tests: `EnsembleTests` and `SampleRowTests` in
+  `scripts/test_moe_god.py`, `EnsembleRunnerTests` in
+  `scripts/test_god_judge_runner.py` (a stub that varies per call).
 
 ### WP10 — Refit on the ledger (data, ~50 graded games)
 
 - Refit λ and veto sizes on live rows; compare with the backtest's values.
+- Tooling built 2026-09-07; the refit itself waits for data.
+  `scripts/backtest_god.py ledger` replays persisted `god_rules` rows
+  (valid and approved, or `--include-pending`) under the same grid: each
+  row's persisted voices re-pooled on the row's own market (opening and
+  latest are both persisted, so the veto can fire here), graded against
+  ESPN finals and the last snapshot before kickoff, plus a per-knob veto
+  sweep that attributes every vetoed leg to one threshold, and a comparison
+  against the grid's fitted values (`--grid-json`). Reads the sheet on the
+  VPS or `--rows-json/--finals-json/--snapshots-json` offline; nothing is
+  persisted or approved. Under `MIN_REFIT_GAMES` (50) graded games the
+  report says so and is informational. On the two Week 1 fixtures with
+  synthetic finals: the rows re-pool under WP5 (Seahawks 0.6258 vs the
+  persisted 0.6259), Seahawks −3.5 is vetoed on the price move, Over 44.5
+  now clears the floor and wins, 49ers +3.5 wins, the Rams total stays
+  under the bar → 2-0-0. Run it on a Tuesday once `moe_grade.py` has ~50
+  graded games and compare with WP8's table.
 
 ## Dependencies and parallelism
 
@@ -363,13 +450,21 @@ anywhere; judge runs bill the Claude Code subscription.
   expectation). The wider CSV is committed (1999–2025).
 - WP8 needs WP6 and WP7. Its open→close calibration has 543 usable events
   (392 with movement): ESPN BET through 2025 week 12, DraftKings after.
-- After each merge: full suite on a fresh scratch clone — ten modules now:
-  `scripts.test_moe_god scripts.test_moe scripts.test_moe_ak
+- Phase 3 (WP8–WP10) landed on main on 2026-09-07 (status log), not yet
+  deployed. Three worktrees: `god/backtest` (WP8 + WP10's tooling) and
+  `god/ensemble` (WP9) built by forked agents in parallel with disjoint
+  regions of `moe_god.py` (the backtest owned `build_market_block` and
+  `margin_table_for`, the ensemble `rules_arm_response`'s coherence step
+  and `normalize_aggregator_opinion`), and `god/guard` (the reason-guard
+  fix for the evening's two live rejections); merged on an integration
+  branch in that order with no conflicts, then fast-forwarded onto main.
+- After each merge: full suite on a fresh scratch clone — eleven modules
+  now: `scripts.test_moe_god scripts.test_moe scripts.test_moe_ak
   scripts.test_moe_win_total scripts.test_generate_moe_opinion_cli
   scripts.test_intake_bot scripts.test_god_judge_runner
   scripts.test_nfl_lines_history scripts.test_moe_margins
-  scripts.test_moe_rating` (`bash scripts/godbuild_test.sh <slug> <dir>`
-  runs them) — then deploy at a week boundary (Tuesday after the Monday
+  scripts.test_moe_rating scripts.test_moe_backtest`
+  (`bash scripts/godbuild_test.sh <slug> <dir>` runs them) — then deploy at a week boundary (Tuesday after the Monday
   game is graded is the natural slot).
 
 ## Acceptance for the phase-1 deploy
@@ -419,6 +514,50 @@ rating_elo" (a print in the journal, no DM). Alternative: set
 `rating_elo.enabled: false` in `moe/experts.yaml` before pushing and flip
 it at a later week boundary.
 
+## Acceptance for the phase-3 deploy
+
+Status 2026-09-07: every item below is met on main (335 tests on a fresh
+scratch clone, eleven modules). Not pushed; deploy pending, the user's call
+at a week boundary — phase 2 and phase 3 deploy together.
+
+- All eleven suites green on the VPS scratch clone.
+- The backtest's selection is printed with its rule and confirmed on 2025
+  untouched; the reading (a rating-only committee; λ = 0 not written) is
+  recorded next to WP8 and `aggregator_policy` is unchanged.
+- The ensemble is wired and pinned by tests with `GOD_JUDGE_SAMPLES`
+  defaulting to 1; single-sample rows are byte-identical to before.
+- The ledger refit tool runs on the Week 1 fixtures and reports itself
+  informational below 50 games.
+- The reason guard accepts decimal fragments and home-first scores (the two
+  live rejections of 2026-09-07); the Week 1 evidence sets are unchanged.
+- CLAUDE.md, the skill runbook, the intake plan, and this status log updated.
+
+Deploy runbook (phase 2 + phase 3 together, when the user says go):
+
+1. Local: no env change, so no `syncenv`; `git push`.
+2. On the VPS as root in `/home/forwarder/app`: the server tree carries
+   uncommitted work from a VPS session (the nightly ungraded audit: edits
+   to `CLAUDE.md`, `deploy/systemd/README.md`, two hooks, a mode change on
+   `deploy/claude_auth_watchdog.py`, plus untracked
+   `scripts/ungraded_audit.py`, `run_ungraded_audit.sh`,
+   `docs/ungraded-audit.md`, two units and a test). Commit it there first,
+   or `git stash push -m "server wip"` → `git pull` → `git stash pop` and
+   resolve `CLAUDE.md`/README by keeping both sides; the untracked files
+   do not block the pull.
+3. `cp deploy/systemd/god-judge.service /etc/systemd/system/ && systemctl
+   daemon-reload` (TimeoutStartSec 9000; the oneshot needs no restart),
+   then `bash scripts/check_deploy_sync.sh` → all in sync.
+4. `systemctl restart telegram-intake.service` (`moe.py` changed).
+5. Before the next `god-judge.timer` pass: the phase-2 rating rows
+   (`generate_rating_week.py --season 2026 --week <N>`, then the bulk
+   review without and with `--approve`), or `rating_elo.enabled: false`.
+6. Leave `GOD_JUDGE_SAMPLES` unset (= 1) until the two-week usage read.
+7. The Seahawks committee key stays stalled on its two invalid rows until
+   the committee changes (a BetOnline move or a new approved voice row);
+   the guard fix takes effect on the next fresh key. If the Wednesday game
+   needs a judge row before that, the skill's manual fallback on a fresh
+   session is the path.
+
 ## Decisions
 
 Decided 2026-09-07 in chat, recorded here and on the Desk page:
@@ -450,6 +589,12 @@ an answer:
 - The reason guard grounds a cited "N games" through the cohort a cited
   record implies (`17-8` → 25 games); the real Week 1 Rams response needs
   it. Keep, or drop and accept that row as an audit record.
+  Phase 3 (2026-09-07): the first two live headless responses were
+  rejected for `0-20` (inside "implied totals 24.0-20.5") and `27-21` (a
+  voice's 21-27 projection written home-first) — guard false positives,
+  fixed: a digit-dot before or a dot-digit after a record is a decimal
+  fragment, and both score orders are derived. The cohort question above
+  stays open.
 - Judge call volume: the committee key includes the latest prices, so every
   BetOnline price move re-judges the game (cap 3 calls per pass, 144 a
   day). Read `logs/god_judge_runs.jsonl` for a week, or coarsen
@@ -484,6 +629,29 @@ an answer:
   markets, hedge weights by label) do not confuse it.
 - The extractor reads a scoreline such as "won 23-20" as a record (pinned as
   a known limitation); harmless unless two voices cite the same scoreline.
+
+Open after phase 3 (2026-09-07) — the user's call, nothing in code assumes
+an answer:
+
+- Spread veto size. The open→close table (543 events) says the side a
+  spread moved away from loses more the bigger the move (−0.7% at ≥ 0.5,
+  −7.9% at ≥ 2.0) and the harness's rule proposes 2.0; the difference is
+  within one standard error at 142 legs and the 0.5 was decided in chat,
+  so it stays. Revisit with the ledger refit.
+- Total veto. The same table has the wrong sign (the side a total moved
+  away from wins +7.7% at ≥ 1.5 on 189 legs). Keep 1.0 as decided, or
+  disable it — a knob of 0 vetoes every leg, so disabling needs the
+  `knob > 0` change from the phase-1 list.
+- `shrink_lambda`. The rating-only backtest prefers 0 (the market alone);
+  the live committee has four model voices the backtest cannot score.
+  Keep 0.5 until WP10 has ~50 graded games.
+- Ensemble start. Read `logs/god_judge_runs.jsonl` after two weeks of
+  single-sample runs (lines now carry `sample`/`samples`); each trigger
+  then costs three calls (~100 s and about $0.5 each today).
+- Stalled Seahawks committee (two invalid judge rows on key `1c6f9789…`).
+  Only a committee change or a manual fallback run produces a judge row.
+- `calibration_summary_json` now always carries an `ensemble` key (null
+  outside the ensemble); persisted rows are untouched.
 
 ## Status log
 
@@ -531,6 +699,23 @@ an answer:
   pool only; the orchestrator added the `margin_model` sentence to
   `god_rules/v2.md` step 3. `scripts/godbuild_test.sh` is the committed
   test helper. Not pushed, not deployed; the user decides the timing.
+- 2026-09-07 (night) — phase 3 built: WP8 and WP9 in two worktrees
+  (`god/backtest`, `god/ensemble`) by forked agents in parallel, WP10's
+  tooling inside WP8's harness, and a reason-guard fix (`god/guard`) for
+  the evening's two live headless rejections (the 19:42 and 20:12 EDT
+  passes judged the Rams — valid row `da0f43da` — and rejected the
+  Seahawks twice, `0-20` and `27-21`, stalling that committee key);
+  merged on an integration branch in the order backtest, ensemble, guard
+  with no conflicts and fast-forwarded onto main; verified on a fresh VPS
+  scratch clone: `Ran 335 tests … OK` across the ten phase-2 modules plus
+  `scripts.test_moe_backtest` (per branch 317, 312, 298 → 335). Backtest
+  reading: the rating-only rules arm cannot beat the closing line at any
+  λ > 0 (fit ML Brier 0.2094 at λ 0 = the market, 0.2135 at the registry's
+  0.5; 2025 0.2121 vs 0.2156), so `aggregator_policy` is unchanged; the
+  veto table supports the price veto (−12% at ≥ 10 cents), is within noise
+  on the spread veto, and has the wrong sign on the total veto. Ensemble
+  default off (`GOD_JUDGE_SAMPLES` unset). Not pushed, not deployed;
+  phase 2 and phase 3 deploy together at a week boundary.
 
 ## Session opener (phase 2)
 
