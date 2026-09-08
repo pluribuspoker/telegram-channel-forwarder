@@ -183,8 +183,11 @@ MARKETS = ("side", "total")
 
 # The record style of moe._complete_unique_record_paths: W-L or W-L-T. Shared
 # by the evidence extractor (what two voices cite in common) and the judge's
-# reason guard (what a reason may cite at all).
-_RECORD_PATTERN = re.compile(r"\b(\d+)-(\d+)(?:-(\d+))?\b")
+# reason guard (what a reason may cite at all). A digit-dot before or a
+# dot-digit after is a decimal fragment, not a record: "24.0-20.5" (implied
+# totals), "13.5-14" and "0.5-1.0" once read as 0-20, 5-14 and 5-1 and had the
+# guard reject a live judge response (2026-09-07).
+_RECORD_PATTERN = re.compile(r"(?<!\d\.)\b(\d+)-(\d+)(?:-(\d+))?\b(?!\.\d)")
 _GAME_COUNT_PATTERN = re.compile(r"\b(\d+)[\s-]games?\b")
 _COUNT_KEY_WORDS = ("games", "count", "sample", "resolved")
 
@@ -2551,17 +2554,22 @@ def reason_reference_text(request: dict[str, Any]) -> str:
     """The judge request plus the numbers it carries in structured form.
 
     The reason guard rejects invented numbers, never numbers the request
-    holds somewhere: a voice's projected score ("21-27"), the winner-vote
-    split of the pool ("2-2"), a track-record tally, a count stored under a
-    numeric key, or the cohort size a cited record implies ("17-8" is 25
-    games). Those are rendered the way a reason would write them and
-    appended to the request text.
+    holds somewhere: a voice's projected score ("21-27", and "27-21" with the
+    home team first), the winner-vote split of the pool ("2-2"), a
+    track-record tally, a count stored under a numeric key, or the cohort
+    size a cited record implies ("17-8" is 25 games). Those are rendered the
+    way a reason would write them and appended to the request text.
     """
     text = canonical_json(request)
     derived: list[str] = []
     for voice in request.get("voices", []):
+        # Both orders: "21-27" as the request writes it and "27-21" as a
+        # reason may write the home team first (a live response did).
         derived.append(
             f"{voice['predicted_away_score']}-{voice['predicted_home_score']}"
+        )
+        derived.append(
+            f"{voice['predicted_home_score']}-{voice['predicted_away_score']}"
         )
         record = voice.get("track_record") or {}
         for kind in ("legs", "ats", "ou"):

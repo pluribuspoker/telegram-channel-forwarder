@@ -1253,6 +1253,40 @@ class ReasonGuardTests(unittest.TestCase):
         self.assertIn("4-0", derived)
         self.assertIn("0-0-0", derived)
 
+    def test_decimal_fragments_are_not_records(self) -> None:
+        # The first live headless response cited the implied totals as
+        # "24.0-20.5" and was rejected for a record "0-20" (2026-09-07).
+        response, full_input = self._sea()
+        response["counterpoints"] = [
+            {"voice": "market", "text": "Fair home ML 0.6197 and implied totals 24.0-20.5 anchor the estimate."},
+            {"voice": "pool", "text": "A 0.5-1.0 point move and a 13.5-14 sigma band change nothing; 44.5-45 is the total range."},
+        ]
+        normalize_aggregator_opinion(response, full_input, expert=load_expert("god_judge"))
+        # A record next to a decimal is still a record.
+        response["counterpoints"] = [{"voice": "market", "text": "Went 11-4 (.733) at home."}]
+        normalize_aggregator_opinion(response, full_input, expert=load_expert("god_judge"))
+        response["counterpoints"] = [{"voice": "market", "text": "Went 12-4 (.750) at home."}]
+        with self.assertRaises(ValueError):
+            normalize_aggregator_opinion(response, full_input, expert=load_expert("god_judge"))
+
+    def test_home_first_projected_score_is_grounded(self) -> None:
+        # The second live response wrote the AK voice's 21-27 projection as
+        # "27-21" and was rejected (2026-09-07); both orders are derived now.
+        response, full_input = self._sea()
+        labels = full_input["judge_view"]["labels"]
+        ak_label = next(label for label, voice_id in labels.items() if voice_id == "ak")
+        response["counterpoints"] = [
+            {"voice": ak_label, "text": "Chose Under 44.5 despite a 27-21 projection implying 48."},
+        ]
+        normalize_aggregator_opinion(response, full_input, expert=load_expert("god_judge"))
+        derived = reason_reference_text(build_judge_request(full_input)).split("\n")[-1].split()
+        self.assertIn("27-21", derived)
+        self.assertIn("21-27", derived)
+        # A score no voice projected is still invented.
+        response["counterpoints"] = [{"voice": ak_label, "text": "A 27-22 projection."}]
+        with self.assertRaises(ValueError):
+            normalize_aggregator_opinion(response, full_input, expert=load_expert("god_judge"))
+
     def test_rams_response_needs_the_vote_split_and_the_record_cohort(self) -> None:
         # "The 2-2 split pool" is the winner-vote split, and "17-8 over 25
         # games" is the cohort the 17-8 record implies ("across 25 home games"
@@ -2077,6 +2111,12 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["cohorts"][4], "home teams went just")
         self.assertEqual(extract_evidence([]), {"tuples": [], "cohorts": []})
         self.assertEqual(extract_evidence(["nothing numeric"])["tuples"], [])
+        # Decimal fragments are not records: "24.0-20.5" is two implied
+        # totals, "0.5-1.0" a range; the record beside them still counts.
+        self.assertEqual(
+            extract_evidence(["implied totals 24.0-20.5; a 0.5-1.0 move; went 11-4 (15 games)"])["tuples"],
+            [[11, 4, 0, 15]],
+        )
         json.dumps(evidence)
 
     def test_overlap_of_voices_without_records_is_zero(self) -> None:
