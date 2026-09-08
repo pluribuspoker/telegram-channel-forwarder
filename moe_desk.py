@@ -332,7 +332,13 @@ def actionable_pending(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     voices oldest first."""
     latest = latest_valid_by_expert_model(rows)
     pending = [row for row in latest.values() if review_status(row) == "pending"]
-    return sorted(pending, key=lambda row: (0 if is_arm_row(row) else 1, row_key(row)))
+    def order(row: dict[str, Any]) -> tuple[int, int, tuple[str, str]]:
+        expert_id = str(row.get("expert_id") or "")
+        if expert_id in ARM_IDS:
+            return (0, ARM_IDS.index(expert_id), row_key(row))
+        return (1, 0, row_key(row))
+
+    return sorted(pending, key=order)
 
 
 def committee_rows(

@@ -336,6 +336,7 @@ class ModelTests(unittest.TestCase):
             row("odd", "401", "schedule", status="not_applicable"),  # never reviewable either
             row("pend", "401", "win_total"),
             row("rej", "401", "divisional", status="rejected"),
+            arm_row("j-only", "401", "god_judge", PASS_PLAIN, PASS_PLAIN, generated="2026-09-10T00:00:00+00:00"),
             arm_row("r-old", "401", "god_rules", PASS_PLAIN, PASS_PLAIN, generated="2026-09-11T00:00:00+00:00"),
             arm_row("r-new", "401", "god_rules", PASS_PLAIN, PASS_PLAIN, generated="2026-09-12T00:00:00+00:00"),
         ]
@@ -346,7 +347,8 @@ class ModelTests(unittest.TestCase):
             REGISTRY,
             now=NOW,
         )[0]
-        self.assertEqual([r["opinion_id"] for r in desk.pending], ["r-new", "newer", "pend"])
+        # rules before judge whatever their generation order, then voices oldest first
+        self.assertEqual([r["opinion_id"] for r in desk.pending], ["r-new", "j-only", "newer", "pend"])
         # committee: one row per expert — latest approved on any model without a
         # registry default (hk is newer than old), the rejected divisional row
         self.assertEqual([r["opinion_id"] for r in desk.reviewed], ["rej", "hk"])
@@ -359,7 +361,7 @@ class ModelTests(unittest.TestCase):
             now=NOW,
         )[0]
         self.assertEqual([r["opinion_id"] for r in desk.reviewed], ["rej", "old"])
-        self.assertEqual([r["opinion_id"] for r in desk.review_rows][:3], ["r-new", "newer", "pend"])
+        self.assertEqual([r["opinion_id"] for r in desk.review_rows][:4], ["r-new", "j-only", "newer", "pend"])
 
 
 class RenderTests(unittest.TestCase):
