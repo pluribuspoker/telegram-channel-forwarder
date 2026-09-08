@@ -132,8 +132,9 @@ anywhere; judge runs bill the Claude Code subscription.
   fresh headless session, never from an interactive one.**
   `scripts/god_judge_runner.py`, run by `god-judge.timer` every 30 minutes
   at :12 and :42 (after the lines fetcher), does the following per upcoming
-  game whose committee is complete (an approved row for every enabled
-  non-aggregator expert):
+  game whose committee is complete (an approved row for every enabled,
+  non-aggregator expert not marked `committee_optional`; optional voices join
+  the input whenever an approved row exists):
   1. Build the aggregator input and the judge request into a fresh temp
      directory. Compute a **committee key** = SHA-256 of the sorted voice
      opinion ids plus the latest full-game lines and prices — not the

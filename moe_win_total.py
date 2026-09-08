@@ -97,6 +97,10 @@ def _latest_game_pick(
     for row in leans:
         if str(row.get("event_id") or "") != event_id:
             continue
+        if str(row.get("period") or "").casefold() != "game":
+            continue
+        if str(row.get("market") or "").casefold() != "moneyline":
+            continue
         if user_id.startswith("-"):
             matches = (
                 str(row.get("celebrity_name") or "").strip().casefold()

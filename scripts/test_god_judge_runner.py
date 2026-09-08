@@ -32,6 +32,7 @@ from scripts.god_judge_runner import (
     ClaudeHeadlessInvoker,
     JudgeCallError,
     build_parser,
+    committee_experts,
     main,
     row_committee_key,
     run_once,
@@ -193,7 +194,6 @@ class RunnerHarness:
             for line in self.runs_log.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-
     async def run(self, games: list[dict], rows: list[dict], **kwargs) -> dict:
         kwargs.setdefault("now", _parse_time(KICKOFF) - timedelta(days=2))
         self.output = io.StringIO()
@@ -216,6 +216,15 @@ class RunnerHarness:
 
     def cleanup(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)
+
+
+class CommitteeConfigurationTests(unittest.TestCase):
+    def test_cee_is_optional_but_available_to_the_aggregator(self) -> None:
+        registry = load_registry()
+
+        self.assertNotIn("cee", committee_experts(registry))
+        self.assertTrue(registry["experts"]["cee"]["enabled"])
+        self.assertTrue(registry["experts"]["cee"]["committee_optional"])
 
 
 class _HarnessCase(unittest.IsolatedAsyncioTestCase):
@@ -367,6 +376,12 @@ class RunnerTests(_HarnessCase):
         self.assertEqual(len(self.harness.calls()), 2)
         keys = {json.loads(row["input_json"])["committee_key"] for row in self.harness.store.rows}
         self.assertEqual(len(keys), 2)
+
+    async def test_pending_dm_can_be_silenced_for_the_desk_group(self) -> None:
+        summary = await self.harness.run([_game()], _committee(), pending_dm=False)
+        self.assertEqual(len(summary["attempted"]), 1)
+        self.assertEqual(summary["failed"], [])
+        self.assertEqual(self.harness.notifications, [])
 
     async def test_kickoff_cutoff_skips_the_game(self) -> None:
         summary = await self.harness.run(

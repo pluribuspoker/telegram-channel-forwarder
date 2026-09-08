@@ -28,6 +28,15 @@ from telethon.tl.types import (
     ReplyKeyboardMarkup,
 )
 
+from celebrity_picks import (
+    CELEBRITY_HEADERS,
+    CELEBRITY_TAB,
+    CUSTOM_MARKET_FAMILIES,
+    LEGACY_CELEBRITY_HEADERS,
+    build_celebrity_rows,
+    canonical_pick_key,
+    parse_custom_pick_text,
+)
 from nfl_lines import (
     LEAN_HEADERS,
     LATEST_AWAY_COLUMN,
@@ -56,8 +65,24 @@ from moe import (
     opinion_summary as moe_opinion_summary,
 )
 from moe_ak import parse_ak_projection
+from moe_desk import (
+    BotApi as DeskBotApi,
+    build_desks as build_desk_model,
+    desk_config_from_env,
+    load_state as load_desk_state,
+    parse_callback as parse_desk_callback,
+    desk_ids_report,
+    parse_start_param,
+    review_targets as desk_review_targets,
+    topic_id_from_reply,
+    save_state as save_desk_state,
+    sync_desk,
+)
+from moe_god import load_registry as load_moe_registry
 from moe_identity import (
+    REVIEWER_ROLE,
     resolve_moe_expert_user_id_from_spreadsheet,
+    resolve_role_user_ids_from_spreadsheet,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -100,31 +125,12 @@ _MOE_STORE: Any | None = None
 GAMES_CACHE_TTL_SECONDS = 60
 TEAM_EMOJI_CACHE_TTL_SECONDS = 600
 MOE_CACHE_TTL_SECONDS = 30
+DESK_REVIEWERS_CACHE_TTL_SECONDS = 300
+_DESK_SYNC_LOCK = threading.Lock()
 WIN_TOTALS_CACHE_TTL_SECONDS = 3600
 TEAM_HISTORY_CACHE_TTL_SECONDS = 21600
 WIN_PREDICTIONS_CACHE_TTL_SECONDS = 30
 CELEBRITY_REGISTRY_CACHE_TTL_SECONDS = 300
-CELEBRITY_TAB = "celebrity_picks"
-# One row per (submission, celebrity name). Game context is denormalized onto
-# each row so season-long "who thinks alike on which game types" analysis pivots
-# without joining back to nfl_leans.
-CELEBRITY_HEADERS = [
-    "submission_id",
-    "submitted_at_utc",
-    "submitted_at_et",
-    "telegram_user_id",
-    "telegram_username",
-    "event_id",
-    "season",
-    "week",
-    "commence_time_et",
-    "away_team",
-    "home_team",
-    "period",
-    "market",
-    "side",
-    "celebrity_name",
-]
 # Toggle keyboards get unwieldy past a couple dozen buttons; ➕ New name always
 # stays reachable, so this only caps the prefilled roster shown at once.
 MAX_CELEBRITY_BUTTONS = 30
@@ -547,15 +553,48 @@ def game_detail(
     return "\n\n".join(sections), buttons
 
 
-def market_buttons() -> list[list[Button]]:
-    return [
+def market_buttons(*, allow_custom: bool = False) -> list[list[Button]]:
+    rows = [
         [
             Button.inline("Spread", b"market:spread"),
             Button.inline("Moneyline", b"market:moneyline"),
             Button.inline("Total", b"market:total"),
         ],
-        [Button.inline("← Back to periods", b"back:game")],
     ]
+    if allow_custom:
+        rows.append(
+            [Button.inline("Prop / other", b"market:custom")]
+        )
+    rows.append([Button.inline("← Back to periods", b"back:game")])
+    return rows
+
+
+def custom_market_buttons() -> list[list[Button]]:
+    return [
+        [
+            Button.inline("Player prop", b"custom:player_prop"),
+            Button.inline("Team prop", b"custom:team_prop"),
+        ],
+        [Button.inline("Other", b"custom:other")],
+        [Button.inline("← Back to markets", b"back:markets")],
+    ]
+
+
+def custom_pick_prompt(market_family: str) -> str:
+    label = {
+        "player_prop": "player prop",
+        "team_prop": "team prop",
+        "other": "other market",
+    }[market_family]
+    return (
+        f"Enter the celebrity's {label} using this structure:\n\n"
+        "Subject: player, team, or bet subject\n"
+        "Market: stat or market name\n"
+        "Pick: Over 0.5, Under 250.5, Yes, No, or the exact selection\n"
+        "Odds: -110 (optional)\n"
+        "Rationale: exact explanation (optional)\n\n"
+        "The exact reply is retained alongside the structured fields."
+    )
 
 
 def side_buttons(
@@ -796,6 +835,59 @@ def build_lean_row(
     }
 
 
+def build_custom_celebrity_submission(
+    *,
+    submitted_at: datetime,
+    user_id: int,
+    username: str | None,
+    message_id: int,
+    game: dict[str, Any],
+    period: str,
+    market_family: str,
+    raw_text: str,
+) -> dict[str, Any]:
+    parsed = parse_custom_pick_text(
+        raw_text,
+        market_family=market_family,
+    )
+    submitted_at_utc = submitted_at.astimezone(timezone.utc)
+    submission_id = f"telegram:{user_id}:{message_id}"
+    canonical_key = canonical_pick_key(
+        period=period,
+        market_family=market_family,
+        market=str(parsed["market"]),
+        subject=str(parsed["subject"]),
+        stat=str(parsed["stat"]),
+    )
+    return {
+        "submission_id": submission_id,
+        "submitted_at_utc": submitted_at_utc.isoformat(),
+        "submitted_at_et": submitted_at_utc.astimezone(ET).isoformat(),
+        "telegram_user_id": user_id,
+        "telegram_username": username or "",
+        "event_id": game.get("event_id", ""),
+        "season": game.get("season", ""),
+        "week": game.get("week", ""),
+        "commence_time_utc": game.get("commence_time_utc", ""),
+        "commence_time_et": game.get("commence_time_et", ""),
+        "away_team": game.get("away_team", ""),
+        "home_team": game.get("home_team", ""),
+        "period": period,
+        "market": parsed["market"],
+        "side": parsed["side"],
+        "pick_id": "",
+        "canonical_key": canonical_key,
+        "market_family": market_family,
+        "subject": parsed["subject"],
+        "stat": parsed["stat"],
+        "direction": parsed["direction"],
+        "line": parsed["line"],
+        "price": parsed["price"],
+        "selection_text": parsed["selection_text"],
+        "raw_pick_text": parsed["raw_pick_text"],
+    }
+
+
 def snapshot_lean_submission(
     state: dict[str, Any] | None,
     *,
@@ -812,13 +904,22 @@ def snapshot_lean_submission(
     market = state.get("market")
     side = state.get("side")
     valid_sides = (
-        {"over", "under"} if market == "total" else {"away", "home"}
+        {"over", "under"}
+        if market == "total"
+        else {"custom"}
+        if market == "custom"
+        else {"away", "home"}
     )
     if (
         not isinstance(game, dict)
         or period not in PERIOD_LABELS
-        or market not in {"spread", "moneyline", "total"}
+        or market not in {"spread", "moneyline", "total", "custom"}
         or side not in valid_sides
+        or (
+            market == "custom"
+            and state.get("custom_market_family")
+            not in CUSTOM_MARKET_FAMILIES
+        )
     ):
         return "invalid", None
 
@@ -829,6 +930,7 @@ def snapshot_lean_submission(
             "period": period,
             "market": market,
             "side": side,
+            "custom_market_family": state.get("custom_market_family"),
             "prompt_msg_id": state["prompt_msg_id"],
             "days": int(state.get("days", 10)),
             "page": int(state.get("page", 0)),
@@ -1384,6 +1486,100 @@ def load_cached_moe_opinions(
     ]
 
 
+def invalidate_sheet_cache(key: str) -> None:
+    with _SHEET_CACHE_LOCK:
+        _SHEET_CACHE.pop(key, None)
+
+
+def load_desk_reviewers() -> dict[int, str]:
+    """Telegram id -> display name for every ``reviewer`` row in
+    ``allowed_users`` (the desk group's approve/reject buttons and the
+    pending-opinion deep links are open to exactly these people)."""
+    return _cached_sheet_value(
+        "desk_reviewers",
+        DESK_REVIEWERS_CACHE_TTL_SECONDS,
+        lambda: resolve_role_user_ids_from_spreadsheet(
+            _intake_spreadsheet(), REVIEWER_ROLE
+        ),
+    )
+
+
+def game_stub(row: dict[str, Any]) -> dict[str, Any]:
+    """Enough of a game record for the MOE views when the opinion's game
+    has left the slate; the line views refuse it gracefully."""
+    return {
+        "event_id": str(row.get("event_id") or ""),
+        "away_team": str(row.get("away_team") or ""),
+        "home_team": str(row.get("home_team") or ""),
+        "commence_time_utc": str(row.get("commence_time_utc") or ""),
+        "status": "past",
+    }
+
+
+def desk_sync_once(config: Any, api: Any, *, now: datetime | None = None) -> Any:
+    """One reconcile pass over the desk group (moe_desk.sync_desk): the
+    sheet's opinions and games in, silent posts and edits out, loud
+    replies for new bet legs and near locks. Serialised so the periodic
+    loop and a button tap never race on the state file."""
+    now = now or datetime.now(timezone.utc)
+    with _DESK_SYNC_LOCK:
+        rows = load_cached_moe_opinions()
+        games, _, team_abbrevs = load_intake_data()
+        registry = load_moe_registry()
+        desks = build_desk_model(
+            games, rows, approved_moe_opinions(rows), registry, now=now
+        )
+        state = load_desk_state(config.state_path)
+        try:
+            summary = sync_desk(
+                config=config,
+                api=api,
+                state=state,
+                desks=desks,
+                now=now,
+                team_abbrevs=team_abbrevs,
+            )
+        finally:
+            save_desk_state(config.state_path, state)
+    if any(
+        (summary.posted, summary.edited, summary.alerts, summary.deferred, summary.errors)
+    ):
+        print(
+            f"desk: posted {summary.posted} edited {summary.edited} "
+            f"alerts {summary.alerts} deferred {summary.deferred} "
+            f"errors {summary.errors}"
+        )
+    return summary
+
+
+def desk_review(action: str, target: str, *, reviewer: str) -> tuple[str, bool]:
+    """Apply a desk button. Re-reads the sheet first (a write never
+    trusts the 30 s cache), refuses anything that is not pending, then
+    runs the store's hash-checked review signed with the reviewer's
+    display name. Returns the toast text and whether it succeeded."""
+    invalidate_sheet_cache("moe_opinions")
+    rows = load_cached_moe_opinions()
+    targets, error = desk_review_targets(action, target, rows)
+    if error:
+        return error, False
+    status = "rejected" if action == "no" else "approved"
+    store = _moe_store()
+    done: list[str] = []
+    try:
+        for row in targets:
+            store.review(
+                str(row["opinion_id"]),
+                status=status,
+                reviewed_by=reviewer,
+                note="",
+            )
+            done.append(str(row.get("expert_name") or row.get("expert_id")))
+    finally:
+        invalidate_sheet_cache("moe_opinions")
+    verb = "Rejected" if status == "rejected" else "Approved"
+    return f"{verb} {', '.join(done)} as {reviewer}.", True
+
+
 def load_intake_data() -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
     spreadsheet = _intake_spreadsheet()
     games = _cached_sheet_value(
@@ -1478,17 +1674,9 @@ def normalize_celebrity_name(raw: str) -> str:
     return " ".join(str(raw).split())[:MAX_CELEBRITY_NAME_LEN].strip()
 
 
-def build_celebrity_rows(
-    *, submission: dict[str, Any], names: list[str]
-) -> list[dict[str, Any]]:
-    """One denormalized row per selected celebrity, sharing the lean's
-    submission context."""
-    return [{**submission, "celebrity_name": name} for name in names]
-
-
 def _celebrity_worksheet(spreadsheet: Any) -> Any:
     """Return the celebrity_picks worksheet, creating it with headers the first
-    time. Refuses to touch a tab whose existing header row disagrees."""
+    time. The one supported legacy header is expanded in place."""
     try:
         worksheet = spreadsheet.worksheet(CELEBRITY_TAB)
     except WorksheetNotFound:
@@ -1499,6 +1687,10 @@ def _celebrity_worksheet(spreadsheet: Any) -> Any:
         return worksheet
     header = worksheet.row_values(1)
     if not header:
+        worksheet.resize(cols=len(CELEBRITY_HEADERS))
+        worksheet.update([CELEBRITY_HEADERS])
+    elif header == LEGACY_CELEBRITY_HEADERS:
+        worksheet.resize(cols=len(CELEBRITY_HEADERS))
         worksheet.update([CELEBRITY_HEADERS])
     elif header != CELEBRITY_HEADERS:
         raise RuntimeError(
@@ -1726,6 +1918,51 @@ async def main() -> None:
     guess_states: dict[int, dict[str, Any]] = {}
     game_celeb_states: dict[int, dict[str, Any]] = {}
     win_guess_states: dict[int, dict[str, Any]] = {}
+    # The desk group (moe_desk.py); filled after client.start() once the
+    # bot's username is known, read by the callback and deep-link handlers.
+    desk: dict[str, Any] = {"config": None, "api": None, "task": None}
+
+    def open_game_state(user_id: int, game: dict[str, Any]) -> None:
+        game_celeb_states.pop(user_id, None)
+        win_guess_states.pop(user_id, None)
+        guess_states[user_id] = {
+            "game": game,
+            "days": 10,
+            "page": 0,
+            "celebrity": None,
+        }
+
+    async def resync_desk() -> None:
+        if desk["config"] is None or desk["api"] is None:
+            return
+        try:
+            await asyncio.to_thread(desk_sync_once, desk["config"], desk["api"])
+        except Exception as exc:  # noqa: BLE001 - the loop retries
+            print(f"desk: sync after a review failed: {type(exc).__name__}: {exc}")
+
+    async def handle_desk_callback(event, data: str) -> None:
+        parsed = parse_desk_callback(data)
+        if parsed is None:
+            await event.answer("Unknown desk action.", alert=True)
+            return
+        reviewers = await asyncio.to_thread(load_desk_reviewers)
+        reviewer = reviewers.get(event.sender_id)
+        if reviewer is None:
+            await event.answer(
+                "Reviewers only. Add the reviewer role to your allowed_users row.",
+                alert=True,
+            )
+            return
+        action, target = parsed
+        try:
+            text, ok = await asyncio.to_thread(
+                desk_review, action, target, reviewer=reviewer
+            )
+        except Exception as exc:  # noqa: BLE001 - shown to the tapper
+            text, ok = f"Review refused: {exc}"[:200], False
+        await event.answer(text, alert=not ok)
+        if ok:
+            await resync_desk()
 
     @client.on(
         events.NewMessage(
@@ -1768,6 +2005,95 @@ async def main() -> None:
             team_abbrevs=team_abbrevs,
         )
         await event.respond(text, buttons=buttons)
+
+    @client.on(
+        events.NewMessage(
+            pattern=r"^/start(?:@\w+)?\s+\S+",
+            incoming=True,
+            func=lambda event: event.is_private,
+        )
+    )
+    async def open_deep_link(event):
+        """``/start op_<opinion>`` and ``/start game_<event>`` — the desk
+        group's 👁 buttons land here, in the tapper's own DM."""
+        if event.sender_id not in allowed:
+            await event.respond("Not authorized.")
+            return
+        parsed = parse_start_param(event.raw_text)
+        if parsed is None:
+            await event.respond(
+                "Tap /guess_nfl_game to browse games.",
+                buttons=command_keyboard(),
+            )
+            return
+        kind, value = parsed
+        records, _, _ = await _intake_data()
+        rows = await asyncio.to_thread(load_cached_moe_opinions)
+        if kind == "game":
+            game = next(
+                (g for g in records if str(g.get("event_id")) == value), None
+            )
+            if game is None:
+                await event.respond("That game is not in the current slate.")
+                return
+            open_game_state(event.sender_id, game)
+            text, buttons = moe_opinion_summary(
+                game,
+                [r for r in rows if str(r.get("event_id")) == value],
+                event_id=value,
+            )
+            await event.respond(text, buttons=buttons, parse_mode="html")
+            return
+        opinion = next(
+            (r for r in rows if str(r.get("opinion_id")) == value), None
+        )
+        if opinion is None or str(
+            opinion.get("generation_status") or "valid"
+        ) != "valid":
+            await event.respond("That opinion is not available.")
+            return
+        if str(opinion.get("review_status") or "") != "approved":
+            reviewers = await asyncio.to_thread(load_desk_reviewers)
+            if event.sender_id not in reviewers:
+                await event.respond(
+                    "That opinion is available once it is approved."
+                )
+                return
+        elif not approved_moe_opinions([opinion]):
+            await event.respond("That opinion is no longer available.")
+            return
+        event_id = str(opinion.get("event_id") or "")
+        game = next(
+            (g for g in records if str(g.get("event_id")) == event_id), None
+        )
+        open_game_state(event.sender_id, game or game_stub(opinion))
+        text, buttons = moe_opinion_detail(opinion, event_id=event_id)
+        await event.respond(text, buttons=buttons, parse_mode="html")
+
+    @client.on(
+        events.NewMessage(
+            pattern=r"^/desk(?:@\w+)?$",
+            incoming=True,
+            func=lambda event: not event.is_private,
+        )
+    )
+    async def report_desk_ids(event):
+        """Sent inside the group: answer with the chat id (and the topic id
+        when sent inside a topic) the desk needs, and whether the group is
+        a supergroup with Topics yet. Commands reach the bot in groups even
+        with privacy mode on."""
+        if event.sender_id not in allowed:
+            return
+        chat = await event.get_chat()
+        text = desk_ids_report(
+            event.chat_id,
+            title=str(getattr(chat, "title", "") or ""),
+            supergroup=bool(getattr(chat, "megagroup", False)),
+            topics=bool(getattr(chat, "forum", False)),
+            topic_id=topic_id_from_reply(getattr(event.message, "reply_to", None)),
+        )
+        print("desk: " + text.replace("\n", " · "))
+        await event.reply(text)
 
     @client.on(
         events.NewMessage(
@@ -1925,17 +2251,26 @@ async def main() -> None:
             )
             return
         assert submission is not None
-        lean_text = event.raw_text.strip()
+        raw_lean_text = event.raw_text
+        lean_text = raw_lean_text.strip()
         if not lean_text:
             await event.respond(
                 "Your lean cannot be empty. Reply to the prompt with some text."
             )
             return
+        celebrity = submission.get("celebrity")
+        is_custom = submission["market"] == "custom"
+        if is_custom and not isinstance(celebrity, dict):
+            await event.respond(
+                "Custom markets are available only for attributed celebrity "
+                "picks."
+            )
+            return
         prediction = None
-        if requires_ak_projection(
+        if not is_custom and requires_ak_projection(
             event.sender_id,
             ak_user_id,
-            submission.get("celebrity"),
+            celebrity,
         ):
             prediction = parse_ak_projection(
                 lean_text,
@@ -1952,48 +2287,101 @@ async def main() -> None:
                 )
                 return
         sender = await event.get_sender()
-        row = build_lean_row(
-            submitted_at=datetime.now(timezone.utc),
-            user_id=event.sender_id,
-            username=getattr(sender, "username", None),
-            first_name=getattr(sender, "first_name", None),
-            last_name=getattr(sender, "last_name", None),
-            message_id=event.id,
-            game=submission["game"],
-            period=submission["period"],
-            market=submission["market"],
-            side=submission["side"],
-            lean_text=lean_text,
-            prediction=prediction,
-        )
-        appended = await asyncio.to_thread(append_lean, row)
-        celebrity = submission.get("celebrity")
-        if isinstance(celebrity, dict):
+        submitted_at = datetime.now(timezone.utc)
+        if is_custom:
+            try:
+                custom_submission = build_custom_celebrity_submission(
+                    submitted_at=submitted_at,
+                    user_id=event.sender_id,
+                    username=getattr(sender, "username", None),
+                    message_id=event.id,
+                    game=submission["game"],
+                    period=submission["period"],
+                    market_family=str(
+                        submission["custom_market_family"]
+                    ),
+                    raw_text=raw_lean_text,
+                )
+            except ValueError as exc:
+                prompt = await event.respond(
+                    f"{exc}\n\n{custom_pick_prompt(str(submission['custom_market_family']))}",
+                    buttons=Button.force_reply(
+                        single_use=True,
+                        placeholder="Correct the structured celebrity pick",
+                    ),
+                )
+                if guess_states.get(event.sender_id) is state:
+                    state["prompt_msg_id"] = prompt.id
+                return
             celebrity_rows = build_celebrity_rows(
-                submission={
-                    "submission_id": row["submission_id"],
-                    "submitted_at_utc": row["submitted_at_utc"],
-                    "submitted_at_et": row["submitted_at_et"],
-                    "telegram_user_id": event.sender_id,
-                    "telegram_username": getattr(sender, "username", None) or "",
-                    "event_id": row["event_id"],
-                    "season": row["season"],
-                    "week": row["week"],
-                    "commence_time_et": row["commence_time_et"],
-                    "away_team": row["away_team"],
-                    "home_team": row["home_team"],
-                    "period": row["period"],
-                    "market": row["market"],
-                    "side": row["side"],
-                },
+                submission=custom_submission,
                 names=[str(celebrity["name"])],
             )
-            await asyncio.to_thread(append_celebrity_picks, celebrity_rows)
-        summary = (
-            f"{PERIOD_LABELS[submission['period']]} · "
-            f"{submission['market'].title()} · "
-            f"{html.escape(str(row['side']))}"
-        )
+            appended = bool(
+                await asyncio.to_thread(
+                    append_celebrity_picks,
+                    celebrity_rows,
+                )
+            )
+            row = celebrity_rows[0]
+            summary = (
+                f"{PERIOD_LABELS[submission['period']]} · "
+                f"{str(row['market_family']).replace('_', ' ').title()} · "
+                f"{html.escape(str(row['subject']))} · "
+                f"{html.escape(str(row['selection_text']))}"
+            )
+        else:
+            row = build_lean_row(
+                submitted_at=submitted_at,
+                user_id=event.sender_id,
+                username=getattr(sender, "username", None),
+                first_name=getattr(sender, "first_name", None),
+                last_name=getattr(sender, "last_name", None),
+                message_id=event.id,
+                game=submission["game"],
+                period=submission["period"],
+                market=submission["market"],
+                side=submission["side"],
+                lean_text=lean_text,
+                prediction=prediction,
+            )
+            appended = await asyncio.to_thread(append_lean, row)
+            if isinstance(celebrity, dict):
+                celebrity_rows = build_celebrity_rows(
+                    submission={
+                        "submission_id": row["submission_id"],
+                        "submitted_at_utc": row["submitted_at_utc"],
+                        "submitted_at_et": row["submitted_at_et"],
+                        "telegram_user_id": event.sender_id,
+                        "telegram_username": (
+                            getattr(sender, "username", None) or ""
+                        ),
+                        "event_id": row["event_id"],
+                        "season": row["season"],
+                        "week": row["week"],
+                        "commence_time_utc": row["commence_time_utc"],
+                        "commence_time_et": row["commence_time_et"],
+                        "away_team": row["away_team"],
+                        "home_team": row["home_team"],
+                        "period": row["period"],
+                        "market": row["market"],
+                        "side": row["side"],
+                        "latest_selected_line": row["latest_selected_line"],
+                        "latest_selected_price": row["latest_selected_price"],
+                        "raw_pick_text": raw_lean_text,
+                    },
+                    names=[str(celebrity["name"])],
+                )
+                celebrity_written = await asyncio.to_thread(
+                    append_celebrity_picks,
+                    celebrity_rows,
+                )
+                appended = appended or bool(celebrity_written)
+            summary = (
+                f"{PERIOD_LABELS[submission['period']]} · "
+                f"{submission['market'].title()} · "
+                f"{html.escape(str(row['side']))}"
+            )
         status = "✅ Guess saved." if appended else "✅ Guess was already saved."
         saved_summary = f"{status}\n{summary}"
         if isinstance(celebrity, dict):
@@ -2037,6 +2425,9 @@ async def main() -> None:
             await event.answer("Not authorized.", alert=True)
             return
         data = event.data.decode()
+        if data.startswith("desk:"):
+            await handle_desk_callback(event, data)
+            return
         if data.startswith("celebwin:"):
             state = win_guess_states.setdefault(event.sender_id, {})
             if data == "celebwin:start":
@@ -2356,10 +2747,20 @@ async def main() -> None:
                 opinions = await asyncio.to_thread(
                     load_cached_moe_opinions, event_id
                 )
+                candidates = approved_moe_opinions(opinions)
+                if event.sender_id in await asyncio.to_thread(load_desk_reviewers):
+                    # Reviewers page through pending and rejected rows too
+                    # (the desk group's 👁 deep link lands on them).
+                    candidates = candidates + [
+                        row
+                        for row in opinions
+                        if str(row.get("generation_status") or "valid") == "valid"
+                        and str(row.get("review_status") or "") != "approved"
+                    ]
                 opinion = next(
                     (
                         row
-                        for row in approved_moe_opinions(opinions)
+                        for row in candidates
                         if str(row.get("opinion_id")) == opinion_id
                     ),
                     None,
@@ -2582,18 +2983,27 @@ async def main() -> None:
             state.pop("period", None)
             state.pop("market", None)
             state.pop("side", None)
+            state.pop("custom_market_family", None)
             state.pop("prompt_msg_id", None)
-            text, buttons = game_detail(
-                state["game"],
-                days=state["days"],
-                page=state["page"],
-                team_emojis=team_emojis,
-                celebrity_name=(
-                    str(state["celebrity"]["name"])
-                    if isinstance(state.get("celebrity"), dict)
-                    else None
-                ),
-            )
+            try:
+                text, buttons = game_detail(
+                    state["game"],
+                    days=state["days"],
+                    page=state["page"],
+                    team_emojis=team_emojis,
+                    celebrity_name=(
+                        str(state["celebrity"]["name"])
+                        if isinstance(state.get("celebrity"), dict)
+                        else None
+                    ),
+                )
+            except (KeyError, TypeError, ValueError):
+                # A deep-linked opinion whose game has left the slate.
+                await event.answer(
+                    "That game has left the slate. Open /guess_nfl_game.",
+                    alert=True,
+                )
+                return
             await edit_callback(event, text, buttons)
             return
         if data == "back:markets":
@@ -2605,6 +3015,7 @@ async def main() -> None:
                 return
             state.pop("market", None)
             state.pop("side", None)
+            state.pop("custom_market_family", None)
             state.pop("prompt_msg_id", None)
             text = period_market_summary(
                 state["game"],
@@ -2616,7 +3027,16 @@ async def main() -> None:
                     else None
                 ),
             )
-            await edit_callback(event, text, market_buttons())
+            await edit_callback(
+                event,
+                text,
+                market_buttons(
+                    allow_custom=isinstance(
+                        state.get("celebrity"),
+                        dict,
+                    )
+                ),
+            )
             return
         if data == "back:sides":
             state = guess_states.get(event.sender_id)
@@ -2670,11 +3090,38 @@ async def main() -> None:
                     else None
                 ),
             )
-            await edit_callback(event, text, market_buttons())
+            await edit_callback(
+                event,
+                text,
+                market_buttons(
+                    allow_custom=isinstance(
+                        state.get("celebrity"),
+                        dict,
+                    )
+                ),
+            )
             return
         if data.startswith("market:"):
             state = guess_states.get(event.sender_id)
             market = data.split(":", 1)[1]
+            if (
+                market == "custom"
+                and state is not None
+                and "period" in state
+                and isinstance(state.get("celebrity"), dict)
+            ):
+                state["market"] = "custom"
+                state.pop("side", None)
+                state.pop("custom_market_family", None)
+                await edit_callback(
+                    event,
+                    (
+                        f"🎤 <b>{html.escape(str(state['celebrity']['name']))}"
+                        "</b>\n\nChoose the custom pick type:"
+                    ),
+                    custom_market_buttons(),
+                )
+                return
             if (
                 state is None
                 or "period" not in state
@@ -2706,6 +3153,41 @@ async def main() -> None:
                     str(game["home_team"]),
                 ),
             )
+            return
+        if data.startswith("custom:"):
+            state = guess_states.get(event.sender_id)
+            market_family = data.split(":", 1)[1]
+            if (
+                state is None
+                or state.get("market") != "custom"
+                or market_family not in CUSTOM_MARKET_FAMILIES
+                or not isinstance(state.get("celebrity"), dict)
+            ):
+                await event.answer(
+                    "This guess expired. Choose the game again.", alert=True
+                )
+                return
+            state["custom_market_family"] = market_family
+            state["side"] = "custom"
+            await edit_callback(
+                event,
+                (
+                    f"🎤 <b>{html.escape(str(state['celebrity']['name']))}</b>"
+                    "\n\n"
+                    f"<b>{html.escape(PERIOD_LABELS[state['period']])} · "
+                    f"{html.escape(market_family.replace('_', ' ').title())}"
+                    "</b>"
+                ),
+                [[Button.inline("← Back to markets", b"back:markets")]],
+            )
+            prompt = await event.respond(
+                custom_pick_prompt(market_family),
+                buttons=Button.force_reply(
+                    single_use=True,
+                    placeholder="Enter the structured celebrity pick",
+                ),
+            )
+            state["prompt_msg_id"] = prompt.id
             return
         if data.startswith("side:"):
             state = guess_states.get(event.sender_id)
@@ -2811,6 +3293,30 @@ async def main() -> None:
     )
     identity = await client.get_me()
     print(f"Intake bot running as @{identity.username}")
+    desk_config = desk_config_from_env()
+    if desk_config is None:
+        print("Desk group disabled (MOE_DESK_CHAT_ID / topic ids unset)")
+    else:
+        desk["config"] = desk_config.with_username(identity.username or "")
+        desk["api"] = DeskBotApi(desk_config.bot_token)
+        print(
+            f"Desk group enabled: chat {desk_config.chat_id}, review topic "
+            f"{desk_config.review_topic}, picks topic {desk_config.picks_topic}, "
+            f"scores topic {desk_config.scores_topic}, sync every "
+            f"{desk_config.sync_seconds}s"
+        )
+
+        async def desk_loop() -> None:
+            while True:
+                try:
+                    await asyncio.to_thread(
+                        desk_sync_once, desk["config"], desk["api"]
+                    )
+                except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                    print(f"desk: sync failed: {type(exc).__name__}: {exc}")
+                await asyncio.sleep(desk["config"].sync_seconds)
+
+        desk["task"] = asyncio.create_task(desk_loop())
     await client.run_until_disconnected()
 
 

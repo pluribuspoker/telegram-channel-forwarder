@@ -591,7 +591,7 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(
             ValueError,
-            "record or one-game scoreline 23-20",
+            "one-game scoreline, or integer-band overlap 23-20",
         ):
             _normalize_cited_claim(
                 {
@@ -599,6 +599,65 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
                     "evidence_paths": [
                         "historical_data.home_team.against_current_opponent"
                     ],
+                },
+                input_payload,
+                role="test",
+            )
+
+    def test_cited_claim_accepts_exact_integer_band_overlap(self) -> None:
+        input_payload = {
+            "game": {
+                "away_team": "New England Patriots",
+                "home_team": "Seattle Seahawks",
+            },
+            "historical_analogs": {
+                "bookmaker_projection_band_matchup": {
+                        "away_allowed_prior_wins": [8, 9, 10, 11],
+                        "home_allowed_prior_wins": [9, 10, 11, 12],
+                }
+            }
+        }
+
+        normalized = _normalize_cited_claim(
+            {
+                "claim": "The two integer bands overlap on 9-11.",
+                "evidence_paths": [
+                        "historical_analogs.bookmaker_projection_band_matchup"
+                ],
+            },
+            input_payload,
+            role="test",
+        )
+
+        self.assertEqual(
+            normalized["evidence"][0]["path"],
+            "historical_analogs.bookmaker_projection_band_matchup",
+        )
+
+    def test_cited_claim_does_not_treat_record_as_band_overlap(self) -> None:
+        input_payload = {
+            "game": {
+                "away_team": "New England Patriots",
+                "home_team": "Seattle Seahawks",
+            },
+            "historical_analogs": {
+                "bookmaker_projection_band_matchup": {
+                        "away_allowed_prior_wins": [8, 9, 10, 11],
+                        "home_allowed_prior_wins": [9, 10, 11, 12],
+                }
+            }
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "integer-band overlap 9-11",
+        ):
+            _normalize_cited_claim(
+                {
+                        "claim": "The historical home-side record was 9-11.",
+                        "evidence_paths": [
+                            "historical_analogs.bookmaker_projection_band_matchup"
+                        ],
                 },
                 input_payload,
                 role="test",

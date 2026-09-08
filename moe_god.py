@@ -136,6 +136,18 @@ VOICE_LENSES: dict[str, str] = {
         "the submission-time market using that forecaster's graded history "
         "and a capped cross-sport prior. May pass either leg."
     ),
+    "cee": (
+        "Interprets one human forecaster's full-game moneyline rationale "
+        "alongside that forecaster's season-win ordering and resolved NFL "
+        "pick history. Side only."
+    ),
+    "celebrity": (
+        "Compares the celebrities who actually picked this game, including "
+        "individual records, each person's results when a pair disagrees, "
+        "and exact identity-specific home/away or Over/Under permutations. "
+        "Props and other markets are tracked but do not directly inform the "
+        "game side or total pools."
+    ),
     "rating_elo": (
         "Sees one Elo rating per team built from every regular-season final "
         "since 1999 with home advantage and margin of victory, updated "
@@ -942,7 +954,7 @@ def _voice_markets(voice: dict[str, Any]) -> list[str]:
     """The markets a voice informs; a voice persisted without the field
     informs both, which is what every registry entry did before it existed."""
     markets = voice.get("markets")
-    if not markets:
+    if markets is None:
         return list(MARKETS)
     return [market for market in MARKETS if market in markets]
 
@@ -1100,6 +1112,20 @@ def voice_from_row(
     projected_total = away_score + home_score
     limit, chars = policy["factor_limit"], policy["factor_chars"]
     table = margin_table_for(policy)
+    legs = {
+        "side": _leg_from_json(row.get("side_pick_json")),
+        "total": _leg_from_json(row.get("total_pick_json")),
+    }
+    markets = voice_markets(config)
+    if expert_id == "celebrity":
+        markets = [
+            market_name
+            for market_name in markets
+            if (
+                legs[market_name] is not None
+                and legs[market_name].get("selection") != "PASS"
+            )
+        ]
     return {
         "voice_id": expert_id,
         "expert_id": expert_id,
@@ -1142,11 +1168,8 @@ def voice_from_row(
                 )
             ),
         },
-        "legs": {
-            "side": _leg_from_json(row.get("side_pick_json")),
-            "total": _leg_from_json(row.get("total_pick_json")),
-        },
-        "markets": voice_markets(config),
+        "legs": legs,
+        "markets": markets,
         # Extracted from the full factor lists, before the caps below.
         "evidence": extract_evidence(
             _text_items(row.get("supporting_factors_json"))

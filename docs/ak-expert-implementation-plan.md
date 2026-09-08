@@ -47,7 +47,8 @@ Implemented and live:
 - Independent NFL calibration samples for submission and closing lines.
 - A versioned WNBA cold-start prior with separate side/total decay.
 - Positive NFL total gaps map explicitly to reviewed WNBA ranges:
-  0–<3 → 0–<6, 3–<9 → 6–<12, 9–<12 → 12–<16, and 12+ → 16+.
+  0–<3 → 0–<6, 3–<6 → 6–<9, 6–<9 → 9–<12,
+  9–<12 → 12–<16, and 12+ → 16+.
 - Output schema v5 with independently selectable spread and total opinions.
 - Opus 4.8 with maximum reasoning through either the Anthropic API or the
   shared agent-runtime skill.
@@ -580,14 +581,17 @@ When the projected total materially exceeded the market:
 The repeated direction is that a large positive projection-market total gap is
 more useful as an under warning than an over endorsement.
 
-The decision-facing mappings are:
+The v2 decision-facing mappings are:
 
 - NFL 0–<3 → WNBA 0–<6: under 3/4 in the available fresh sample.
-- NFL 3–<9 → WNBA 6–<12: under 3/4 earlier and 4/6 fresh, or 7/10 combined.
+- NFL 3–<6 → WNBA 6–<9: under 1/3 fresh, so no directional warning.
+- NFL 6–<9 → WNBA 9–<12: under 3/3 fresh, retained as an under warning.
 - NFL 9–<12 → WNBA 12–<16: under 2/2 fresh; the earlier 12+ sample cannot yet
   be separated from 16+.
 - NFL 12+ → WNBA 16+: no isolated reviewed record is available.
 
+The former WNBA 6–<12 aggregate was under 7/10, but the newly separated fresh
+sub-bands move in opposite directions and therefore must not share one prior.
 The cumulative original and fresh counts remain stored for auditability but
 must not be presented as a narrower band than the source supports.
 
@@ -641,10 +645,16 @@ warnings.
 
 ## Versioned WNBA prior file
 
-Add:
+The original implementation added:
 
 ```text
 moe/priors/ak_wnba_v1.json
+```
+
+The split middle bands are versioned separately in:
+
+```text
+moe/priors/ak_wnba_v2.json
 ```
 
 The file should contain structured records, sample sizes, definitions, source

@@ -158,9 +158,18 @@ def _leans() -> list[dict]:
             "event_id": "seahawks-patriots",
             "telegram_user_id": 1,
             "celebrity_name": "",
-            "market": "spread",
+            "market": "moneyline",
             "period": "game",
             "side": "New England Patriots",
+        },
+        {
+            "submission_id": "bill",
+            "submitted_at_utc": "2026-09-02T00:00:00+00:00",
+            "event_id": "seahawks-patriots",
+            "celebrity_name": "Bill Simmons",
+            "market": "moneyline",
+            "period": "game",
+            "side": "Seattle Seahawks",
         },
     ]
 
@@ -260,6 +269,81 @@ class WinTotalInputTest(unittest.TestCase):
             ak["latest_game_pick"]["consistency_with_season_picks"],
             "inconsistent",
         )
+
+    def test_celebrity_moneyline_pick_is_matched_by_name(self) -> None:
+        predictions = [
+            *_predictions(),
+            _prediction(
+                "bill-ne",
+                -123,
+                "Bill Simmons",
+                "New England Patriots",
+                11,
+            ),
+            _prediction(
+                "bill-sea",
+                -123,
+                "Bill Simmons",
+                "Seattle Seahawks",
+                12,
+            ),
+        ]
+        payload = build_win_total_input(
+            _game(),
+            _game_history(),
+            _win_totals(),
+            predictions,
+            _team_history(),
+            _leans(),
+        )
+
+        bill = next(
+            item
+            for item in payload["forecasters"].values()
+            if item["display_name"] == "Bill Simmons"
+        )
+        self.assertEqual(bill["identity_type"], "celebrity")
+        self.assertEqual(
+            bill["latest_game_pick"]["side"], "Seattle Seahawks"
+        )
+        self.assertEqual(
+            bill["latest_game_pick"]["consistency_with_season_picks"],
+            "consistent",
+        )
+
+    def test_non_moneyline_pick_is_not_used_for_consistency(self) -> None:
+        leans = [
+            row
+            for row in _leans()
+            if row["submission_id"] != "cee"
+        ]
+        leans.append(
+            {
+                "submission_id": "cee-spread",
+                "submitted_at_utc": "2026-09-03T00:00:00+00:00",
+                "event_id": "seahawks-patriots",
+                "telegram_user_id": 1,
+                "celebrity_name": "",
+                "market": "spread",
+                "period": "game",
+                "side": "New England Patriots",
+            }
+        )
+        payload = build_win_total_input(
+            _game(),
+            _game_history(),
+            _win_totals(),
+            _predictions(),
+            _team_history(),
+            leans,
+        )
+
+        cee = next(
+            item
+            for item in payload["forecasters"].values()
+            if item["display_name"] == "Cee"
+        )
+        self.assertFalse(cee["latest_game_pick"]["available"])
 
 
 class WinTotalGenerationTest(unittest.IsolatedAsyncioTestCase):
@@ -374,7 +458,7 @@ class WinTotalGenerationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(row["generation_status"], "valid")
         self.assertEqual(row["input_profile"], "win_total")
-        self.assertEqual(row["expert_version"], 4)
+        self.assertEqual(row["expert_version"], 5)
         self.assertIn("A K projects Seattle", row["full_opinion"])
         self.assertEqual(store.rows, [row])
 
@@ -405,11 +489,11 @@ class WinTotalGenerationTest(unittest.IsolatedAsyncioTestCase):
     def test_expert_configuration_is_versioned(self) -> None:
         expert = load_expert("win_total")
 
-        self.assertEqual(expert["version"], 4)
-        self.assertEqual(expert["prompt_version"], 4)
+        self.assertEqual(expert["version"], 5)
+        self.assertEqual(expert["prompt_version"], 5)
         self.assertEqual(expert["output_schema_version"], 3)
         self.assertEqual(
-            expert["prompt_path"], "moe/prompts/win_total/v4.md"
+            expert["prompt_path"], "moe/prompts/win_total/v5.md"
         )
         self.assertEqual(expert["default_model"], "claude-opus-4-8")
         self.assertEqual(expert["reasoning_effort"], "max")

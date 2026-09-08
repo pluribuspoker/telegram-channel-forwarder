@@ -319,12 +319,14 @@ Authoritative configuration lives under `moe/`:
   output schema version, exact input JSON, input SHA-256, raw response, whether
   the source tree was dirty, and a SHA-256 over the generation source files
   (including the AI transport and Sheets helpers).
-- `moe/prompts/win_total/v1.md` defines the Opus-only Win Total Expert. Its
+- `moe/prompts/win_total/v5.md` defines the Opus-only Win Total Expert. Its
   whitelisted input compares the two current BetOnline season totals, every
   forecaster's latest season-win predictions with equal weighting, and each
-  person's latest saved game pick against their own season ordering. Each
-  forecaster is cited separately, so an inconsistent game pick cannot be
-  hidden inside consensus. Historical analogs use prior-season wins only:
+  person's latest full-game moneyline pick against their own season ordering.
+  Game picks include both direct `nfl_leans` rows and celebrity attribution
+  from `celebrity_picks`. Each forecaster is cited separately, so an
+  inconsistent moneyline pick cannot be hidden inside consensus. Historical
+  analogs use prior-season wins only:
   exact away/home prior-win pairs, matching win-gap cohorts, and matching
   prior-win level buckets. They are explicitly not presented as historical
   bookmaker totals, because those are not stored. The expert reuses existing
@@ -515,14 +517,17 @@ opinion; either may be `PASS`.
 - Side and total history are independently eligible. Missing spread data does
   not erase total evidence, and missing total data does not erase side
   evidence. Submission-line and closing-line records remain separate.
-- `moe/priors/ak_wnba_v1.json` provides the reviewed WNBA cold-start prior.
+- `moe/priors/ak_wnba_v2.json` provides the reviewed WNBA cold-start prior.
   Side and total weights decay independently, are capped at two equivalent NFL
   observations, and expire at eight matching resolved NFL predictions. The
   source's provisional WNBA `±6` threshold is not copied as six NFL points:
-  positive NFL gaps map as 0–<3 → WNBA 0–<6, 3–<9 → WNBA 6–<12,
-  9–<12 → WNBA 12–<16, and 12+ → WNBA 16+. The supported records are
-  Under 3/4 for the first band, 7/10 for the second, and 2/2 fresh for the
-  third; the last band has no isolated reviewed sample.
+  positive NFL gaps map as 0–<3 → WNBA 0–<6, 3–<6 → WNBA 6–<9,
+  6–<9 → WNBA 9–<12, 9–<12 → WNBA 12–<16, and 12+ → WNBA 16+.
+  Splitting the former middle band reveals materially different fresh results:
+  WNBA 6–<9 finished Under 1/3 and supplies no directional warning, while
+  WNBA 9–<12 finished Under 3/3 and retains the under warning. The neighboring
+  supported records are Under 3/4 for WNBA 0–<6 and 2/2 fresh for WNBA
+  12–<16; WNBA 16+ has no isolated reviewed sample.
 - `moe/prompts/ak/v1.md` selects exact deterministic evidence IDs. Application
   code renders all factual cards, the combined thesis, and the complete detail
   text. A zero-NFL-sample recommendation using WNBA evidence is capped at one
@@ -544,11 +549,157 @@ a +2 total gap. No resolved AK NFL calibration observations exist yet; the
 matching WNBA side prior is 4-2, while the total maps to the WNBA 0–<6 band
 that finished Under in 3/4 fresh games.
 
+### Implemented locally — 2026-09-08: Cee expert
+
+The Cee Expert is a separate human-interpretation voice rather than an AK
+variant. It produces a side-only opinion from Cee's latest full-game moneyline
+pick and exact rationale, compared with Cee's season-win predictions for the
+two teams as they existed when the game pick was submitted.
+
+- The input is whitelisted and hash-bound. It carries the selected side,
+  rationale, time-frozen season predictions, submission-time market snapshot,
+  and deterministic NFL calibration.
+- Rationale premises such as injuries or roster strength remain attributed to
+  Cee and are never presented as independently verified facts.
+- Calibration uses only resolved, pre-kickoff Cee NFL moneyline picks. It
+  reports the overall record plus matching season-order consistency and
+  season-win-gap buckets. There is no cross-sport prior.
+- Zero resolved calibration games cap confidence at two stars; one or two cap
+  it at three.
+- The expert uses output schema v3, participates only in the God Expert's side
+  pool when an approved row is available, and supports Opus 4.8, Fable 5,
+  Sonnet 4.6, and Haiku 4.5. It is committee-optional, so games without a Cee
+  submission do not block the automated God Expert.
+
+### Implemented — 2026-09-08: Celebrity Expert
+
+The Celebrity Expert is an Opus 4.8-only, committee-optional voice
+whose participant set is rebuilt independently for every game. Missing
+celebrities are absent rather than counted as disagreement, and one participant
+is explicitly an individual signal. Its objective is to find predictive
+identity-specific agreement and disagreement permutations; the vote
+distribution is descriptive context, not the goal.
+
+- `celebrity_picks` retains its original attribution columns and adds canonical
+  bet identity, market family, subject, stat, direction, line, price, a
+  deterministic selection label, exact raw input, and UTC kickoff. Existing
+  rows are losslessly expanded in place; standard spread/moneyline/total rows
+  are enriched from their linked `nfl_leans` submission when needed.
+- Standard markets remain available to every intake user. Celebrity mode also
+  offers structured player-prop, team-prop, and other-market entry while
+  retaining the exact reply. All distinct canonical bets remain; the latest
+  revision wins only within the same celebrity, event, period, market family,
+  subject, and stat.
+- The deterministic input separately reports the active picks, side and total
+  distributions, individual records, pairwise agreement records, and each
+  celebrity's record specifically when a pair disagreed. Exact-permutation
+  history matches celebrity identity plus home/away or Over/Under roles, rather
+  than merely matching the number of participants or the majority label. Only
+  the latest pre-kickoff revision of each bet and results available before the
+  target kickoff enter calibration. Full-game side, total, and team-total bets
+  can settle from final scores. Partial-game, player-prop, and other picks
+  remain tracked but ungraded until compatible deterministic results exist.
+- The opinion may recommend the current full-game spread side and/or total, or
+  PASS either leg. Props and other markets may be displayed or used as
+  counterevidence but cannot directly support a game side or total. A
+  single-celebrity or zero-calibration input caps confidence at two stars.
+- The approved voice enters only the God pools for non-PASS legs. Games with no
+  celebrity opinion remain eligible for the automated God Expert.
+
 `emergency_migration.txt` now documents the implementation requirements,
 lossless export/import format, one-day service freeze and SQLite cutover,
 verification gates, backups, and rollback with post-cutover delta replay. It
 must be reconciled with the final script names after the backend implementation
 and rehearsed against a production export before use.
+
+### Implemented locally — 2026-09-08: Desk group (Option B)
+
+The Telegram surface for operating the committee: one private supergroup
+with forum topics, the intake bot as admin, SS and AK as members with
+identical rights. Design record: the "MOE on Telegram" options page
+(`https://claude.ai/code/artifact/83938fa2-fc51-4fb0-b968-72fbda733c94`).
+Option B was chosen on 2026-09-08 with two corrections from review: SS and
+AK are peers on every surface, and "AK" the person is distinct from the AK
+Expert voice — a committee member whose input is AK's projected scores, the
+way the rating voice's input is finals. Nothing in the desk limits what
+either person sees or does.
+
+- `moe_desk.py` owns the model (`build_desks`), the renderers, the
+  idempotent sync (`sync_desk`) and a thin Bot API transport (`BotApi`,
+  `urllib`, one 429 honoured). It imports nothing from `moe` (`fcntl`), so
+  `scripts/test_moe_desk.py` runs on Windows; the caller passes the
+  hash-verified approved rows (`moe.approved_opinions`) in. `intake_bot.py`
+  wires it: a sync task inside the bot process every
+  `MOE_DESK_SYNC_SECONDS` (default 120, floor 15), the `desk:` callback
+  branch, the `/start op_<opinion>` and `/start game_<event>` deep links,
+  and reviewers paging through pending rows in the DM detail view.
+- Topics and cards. 📥 Review: one card per upcoming game (inside ten days)
+  listing every pending valid row, oldest first, then the latest reviewed
+  row per expert and model (re-judges do not pile up; invalid audit rows and
+  ensemble sample rows never appear), each pending row with ✅ ❌ callbacks
+  and a 👁 deep link into the tapper's own DM. A pinned queue card shows
+  every game's committee — approved / pending / rejected / missing per
+  required voice, optional voices only when they have a row — the God arms'
+  state, and the count of games each required voice has no row for.
+  🏈 Picks: one card per game once an arm row is approved: both arms' legs
+  with pass reasons and units, the committee count, generation times, and a
+  collapsed `<blockquote expandable>` "Why" (thesis plus up to three
+  supporting factors and two counterarguments per arm) that each viewer
+  opens on their own screen; 👁 All opinions deep-links to the game's MOE
+  view. A pinned week card lists the legs per game. 📊 Scores:
+  `scripts/moe_grade.py --notify` posts the digest there (`<pre>`, silent)
+  when `MOE_DESK_SCORES_TOPIC` is set and falls back to the watchdog DM.
+- Shared-message rules: a button acts or deep-links, never navigates the
+  message both people see. ✅ ❌ are checked against the `reviewer` role in
+  `allowed_users` (`moe_identity.resolve_role_user_ids`; both reviewers hold
+  it, granted with `scripts/desk_setup.py --grant-reviewer`), re-read the
+  sheet (a write never trusts the 30 s cache), refuse anything not pending
+  ("Already approved by AK."), run the store's hash-checked `review` signed
+  with the tapper's display name, and re-sync the card at once. "✅ Approve
+  both arms" appears only when both God arms are pending
+  (`desk:okarms:<event>`, rules then judge) — bulk approval stays per game
+  for the two arms and per row for the voices, as decided on the options
+  page. Pending and rejected rows are visible to both reviewers in the group
+  and, through the deep link, in their DMs; the DM browser
+  (`/guess_nfl_game` → 🧠) stays approved-only.
+- Loud and silent. Every card post and edit is silent. Loud replies: under
+  the picks card once per newly approved bet leg
+  (`bet:<opinion>:<side|total>`), under the review card once per game when
+  the judge lock (kickoff − 2 h, the runner's cutoff) is within
+  `MOE_DESK_LOCK_WARN_HOURS` (default 2) and rows are still pending. The
+  runner's own "rows pending" DM is silenced with `GOD_JUDGE_PENDING_DM=0`
+  (`run_once(pending_dm=False)`); its failure and stall DMs are unchanged.
+- State: `moe_desk_state.json` (gitignored; `MOE_DESK_STATE_PATH` to move
+  it) holds message ids and content hashes per card, announcements and
+  kickoffs; atomic writes; entries pruned three days after kickoff; games
+  are frozen once they kick off. Unchanged content is never edited, a
+  deleted card is re-posted, at most 15 new messages per pass (a first pass
+  over a full slate spreads across a few passes), API errors are collected
+  per card and retried on the next pass.
+- Setup, every step from a shell (the VPS Claude session included): create a
+  private group, convert it to a supergroup with Topics, add the bot as
+  admin with Manage topics + Pin messages, send `/desk` in the group — the
+  bot replies with the chat id (and the topic id when sent inside a
+  topic) and says whether the group is a supergroup with Topics yet;
+  commands reach a bot in groups even with privacy mode on — set
+  `MOE_DESK_CHAT_ID`, then
+  `scripts/desk_setup.py --create-topics` (prints the three topic keys),
+  `--grant-reviewer <telegram_id>` for each reviewer, `--check [--post-test]`,
+  restart `telegram-intake.service` (the journal says "Desk group enabled"
+  or why not). Keys live in `.env` (synced — add them locally first, since
+  `syncenv` deletes server keys absent locally): `MOE_DESK_CHAT_ID`,
+  `MOE_DESK_REVIEW_TOPIC`, `MOE_DESK_PICKS_TOPIC`, `MOE_DESK_SCORES_TOPIC`,
+  `MOE_DESK_SYNC_SECONDS`, `MOE_DESK_LOCK_WARN_HOURS`, `GOD_JUDGE_PENDING_DM`.
+  Empty keys leave the desk disabled.
+- Deferred, per the options page: replies under a card as row notes; a
+  two-signature rule for the arms (one tap decides a row today); a
+  `/scoreboard` command; the voice generation timer and the committee-key
+  coarsening are separate work packages and the reason the desk is quiet
+  or not.
+- Tests: `scripts/test_moe_desk.py` (model, renderers, sync, state,
+  transport; Windows), `ReviewerRoleTests` in `scripts/test_moe_identity.py`,
+  `DeskReviewTest` in `scripts/test_intake_bot.py`, the pending-DM gate in
+  `scripts/test_god_judge_runner.py`.
 
 ### Implemented locally — 2026-09-06: God Expert aggregator (rules + judge)
 

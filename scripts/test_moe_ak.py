@@ -179,11 +179,15 @@ class AkProjectionTest(unittest.TestCase):
         self.assertEqual(payload["market_gaps"]["total_gap"], 4.5)
         self.assertEqual(
             payload["market_gaps"]["total_gap_bucket"],
-            "plus_3_to_9",
+            "plus_3_to_6",
         )
         self.assertEqual(
             payload["cross_sport_prior"]["total"]["wnba_mapping_band"],
-            "wnba_6_to_12",
+            "wnba_6_to_9",
+        )
+        self.assertEqual(
+            payload["cross_sport_prior"]["total"]["interpretation"],
+            "no_direction",
         )
         self.assertEqual(
             payload["cross_sport_prior"][
@@ -202,9 +206,37 @@ class AkProjectionTest(unittest.TestCase):
             payload["ak_submission"],
         )
 
+    def test_celebrity_attribution_does_not_replace_ak_projection(self) -> None:
+        celebrity_row = {
+            **_lean(),
+            "submission_id": "telegram:123:later-celebrity",
+            "submitted_at_utc": "2026-09-07T07:51:52+00:00",
+            "lean_text": "Expecting the Rams to win as -4 favorites",
+            "prediction_parse_status": "not_applicable",
+            "predicted_away_score": "",
+            "predicted_home_score": "",
+        }
+
+        payload = build_ak_input(
+            _game(),
+            [],
+            [_lean(), celebrity_row],
+            ak_user_id="123",
+        )
+
+        self.assertEqual(
+            payload["ak_submission"]["projection"]["away_score"],
+            23,
+        )
+        self.assertEqual(
+            payload["ak_submission"]["projection"]["home_score"],
+            27,
+        )
+
     def test_uses_reviewed_nfl_to_wnba_total_bands(self) -> None:
         self.assertEqual(_total_gap_bucket(2), "plus_0_to_3")
-        self.assertEqual(_total_gap_bucket(3.5), "plus_3_to_9")
+        self.assertEqual(_total_gap_bucket(3.5), "plus_3_to_6")
+        self.assertEqual(_total_gap_bucket(6), "plus_6_to_9")
         self.assertEqual(_total_gap_bucket(9), "plus_9_to_12")
         self.assertEqual(_total_gap_bucket(12), "plus_12_or_more")
         band, summary = _wnba_total_prior(
@@ -214,6 +246,18 @@ class AkProjectionTest(unittest.TestCase):
 
         self.assertEqual(band, "wnba_0_to_6")
         self.assertIn("3 of 4", summary)
+        band, summary = _wnba_total_prior(
+            4.5,
+            load_wnba_prior(),
+        )
+        self.assertEqual(band, "wnba_6_to_9")
+        self.assertIn("1 of 3", summary)
+        band, summary = _wnba_total_prior(
+            7,
+            load_wnba_prior(),
+        )
+        self.assertEqual(band, "wnba_9_to_12")
+        self.assertIn("3 of 3", summary)
 
     def test_unavailable_wnba_band_cannot_support_a_pick(self) -> None:
         lean = {
@@ -409,11 +453,12 @@ class AkGenerationTest(unittest.IsolatedAsyncioTestCase):
             "PASS",
         )
         self.assertIn(
-            "WNBA-only total interpretation: this is an Under warning",
+            "WNBA-only total interpretation: this mapped band supplies no "
+            "directional pick",
             row["full_opinion"],
         )
         self.assertIn(
-            "NFL 3 to <9 -> WNBA 6 to <12",
+            "NFL 3 to <6 -> WNBA 6 to <9",
             row["full_opinion"],
         )
 

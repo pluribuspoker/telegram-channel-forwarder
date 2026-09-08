@@ -276,13 +276,14 @@ def judge_user_message(request: dict[str, Any]) -> str:
 
 
 def committee_experts(registry: dict[str, Any]) -> list[str]:
-    """Every enabled non-aggregator expert; each needs an approved row."""
+    """Enabled required voices; optional experts join only when available."""
     experts = registry["experts"]
     return [
         expert_id
         for expert_id in sorted(experts)
         if isinstance(experts[expert_id], dict)
         and experts[expert_id].get("enabled")
+        and not experts[expert_id].get("committee_optional")
         and str(experts[expert_id].get("mode") or "") not in AGGREGATOR_MODES
     ]
 
@@ -426,12 +427,15 @@ async def run_once(
     work_root: str | Path | None = None,
     runs_log_path: str | Path | None = None,
     samples: int = DEFAULT_SAMPLES,
+    pending_dm: bool = True,
 ) -> dict[str, list[dict[str, Any]]]:
     """One pass over the upcoming slate. Every side effect arrives as an argument.
 
     ``samples`` is the number of claude calls per game: 1 (the default) is
     the single-sample path, 2 to ``MAX_SAMPLES`` the judge ensemble described
-    in the module docstring.
+    in the module docstring. ``pending_dm=False`` keeps the "rows pending"
+    DM quiet (the desk group's review card carries the same rows with
+    buttons); failure and stall DMs are unaffected.
     """
     if not 1 <= int(samples) <= MAX_SAMPLES:
         raise ValueError(f"samples must be between 1 and {MAX_SAMPLES}")
@@ -736,16 +740,17 @@ async def run_once(
                     else ""
                 )
             )
-            notify(
-                pending_message(
-                    game,
-                    rules_id=rules_id,
-                    judge_id=judge_id,
-                    samples=samples,
-                    valid_samples=len(valid_samples),
-                    failures=sample_failures,
+            if pending_dm:
+                notify(
+                    pending_message(
+                        game,
+                        rules_id=rules_id,
+                        judge_id=judge_id,
+                        samples=samples,
+                        valid_samples=len(valid_samples),
+                        failures=sample_failures,
+                    )
                 )
-            )
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
     if summary["stalled"]:
@@ -896,6 +901,7 @@ def main(argv: list[str] | None = None) -> int:
             work_root=args.work_root,
             runs_log_path=args.runs_log,
             samples=args.samples,
+            pending_dm=os.environ.get("GOD_JUDGE_PENDING_DM", "1").strip() != "0",
         )
     )
     print(

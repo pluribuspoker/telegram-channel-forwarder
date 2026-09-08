@@ -27,6 +27,8 @@ from ai import _claude_create_with_retry
 from nfl_lines import _call_with_retry, get_gspread_client
 from nfl_win_predictions import ensure_worksheet
 from moe_ak import WNBA_PRIOR_PATH, build_ak_input
+from moe_cee import build_cee_input
+from moe_celebrity import build_celebrity_input
 from moe_god import (
     AGGREGATOR_PROFILE,
     DETERMINISTIC_BACKEND,
@@ -226,6 +228,15 @@ def _source_sha256(expert: dict[str, Any]) -> str:
         paths.append(FACTUALITY_PROMPT_PATH)
     if expert.get("input_profile") == "ak_calibration":
         paths.extend((ROOT / "moe_ak.py", WNBA_PRIOR_PATH))
+    if expert.get("input_profile") == "cee_calibration":
+        paths.append(ROOT / "moe_cee.py")
+    if expert.get("input_profile") == "celebrity_patterns":
+        paths.extend(
+            (
+                ROOT / "moe_celebrity.py",
+                ROOT / "celebrity_picks.py",
+            )
+        )
     if expert.get("input_profile") == "win_total":
         paths.append(ROOT / "moe_win_total.py")
     if expert.get("input_profile") == AGGREGATOR_PROFILE:
@@ -1118,6 +1129,36 @@ def _matches_single_game_scoreline(
     )
 
 
+def _matches_integer_band_overlap(
+    value: Any,
+    integer_range: tuple[int, ...],
+) -> bool:
+    if len(integer_range) != 2 or not isinstance(value, dict):
+        return False
+    start, end = integer_range
+    if start > end:
+        return False
+    lists: list[set[int]] = []
+
+    def collect(candidate: Any) -> None:
+        if isinstance(candidate, dict):
+            for child in candidate.values():
+                collect(child)
+        elif isinstance(candidate, list) and candidate and all(
+            isinstance(item, int) and not isinstance(item, bool)
+            for item in candidate
+        ):
+            lists.append(set(candidate))
+
+    collect(value)
+    expected = set(range(start, end + 1))
+    return any(
+        left & right == expected
+        for index, left in enumerate(lists)
+        for right in lists[index + 1 :]
+    )
+
+
 def _validate_claim_numbers(
     claim: str,
     paths: list[str],
@@ -1150,10 +1191,23 @@ def _validate_claim_numbers(
             _matches_single_game_scoreline(value, record)
             for value in evidence
         )
-        if not record_matches and not scoreline_matches:
+        context = normalized_claim[
+            max(0, match.start() - 40) : min(
+                len(normalized_claim), match.end() + 40
+            )
+        ]
+        overlap_matches = (
+            bool(re.search(r"\b(?:band|overlap)\w*\b", context, re.IGNORECASE))
+            and any(
+                _matches_integer_band_overlap(value, record)
+                for value in evidence
+            )
+        )
+        if not record_matches and not scoreline_matches and not overlap_matches:
             candidates = _matching_record_paths(input_payload, record)
             raise ValueError(
-                f"Claim record or one-game scoreline {match.group(0)} is "
+                f"Claim record, one-game scoreline, or integer-band overlap "
+                f"{match.group(0)} is "
                 "absent from cited evidence; "
                 f"candidate paths: {candidates[:8]}"
             )
@@ -1366,11 +1420,17 @@ def _normalize_cited_claim(
         re.IGNORECASE,
     ) and not any(path.endswith(".all_games") for path in normalized_paths):
         raise ValueError(f"{role} makes an overall-team claim without all_games")
-    if role.startswith("no_signal") and not all(
-        value is None
-        or (
-            isinstance(value, dict)
-            and int(value.get("games", -1)) == 0
+    if role.startswith("no_signal") and any(
+        isinstance(value, dict)
+        and (
+            (
+                "games" in value
+                and int(value["games"]) != 0
+            )
+            or (
+                "eligible_predictions" in value
+                and int(value["eligible_predictions"]) != 0
+            )
         )
         for value in resolved
     ):
@@ -1956,6 +2016,102 @@ def _normalize_ak_opinion(
 
     side = normalize_pick("side")
     total = normalize_pick("total")
+    if input_payload.get("input_profile") == "celebrity_patterns":
+        confidence_cap = int(input_payload["confidence_cap"])
+        for field, pick in (("side", side), ("total", total)):
+            if pick["confidence_stars"] > confidence_cap:
+                raise ValueError(
+                    f"{field} confidence exceeds the celebrity input cap "
+                    f"of {confidence_cap}"
+                )
+            distribution_id = f"current_{field}_distribution"
+            distribution = input_payload["participation"][
+                f"{field}_distribution"
+            ]
+            if (
+                distribution_id in pick["evidence_ids"]
+                and pick["selection"] != distribution["selection"]
+            ):
+                raise ValueError(
+                    f"{field} cannot use the current distribution to support the "
+                    "opposite selection"
+                )
+        side_label = (
+            "PASS"
+            if side["selection"] == "PASS"
+            else f"{side['selection']} {float(side['line']):+g}"
+        )
+        total_label = (
+            "PASS"
+            if total["selection"] == "PASS"
+            else f"{total['selection']} {float(total['line']):g}"
+        )
+        normalized["side"] = side
+        normalized["total"] = total
+        normalized["confidence_stars"] = max(
+            side["confidence_stars"],
+            total["confidence_stars"],
+        )
+        normalized["pick_market"] = "side_and_total"
+        normalized["pick_side"] = f"{side_label} | {total_label}"
+        normalized["thesis"] = (
+            f"Celebrity patterns: side {side_label} "
+            f"{'★' * side['confidence_stars']}; total {total_label} "
+            f"{'★' * total['confidence_stars']}."
+        )
+        normalized["supporting_factors"] = (
+            [f"Side: {value}" for value in side["evidence"]]
+            + [f"Total: {value}" for value in total["evidence"]]
+            or ["Both celebrity-informed recommendations are PASS."]
+        )
+        normalized["counterarguments"] = (
+            [f"Side: {value}" for value in side["counterarguments"]]
+            + [f"Total: {value}" for value in total["counterarguments"]]
+        )
+        normalized["no_signal_factors"] = [
+            item["text"]
+            for item in input_payload["evidence_catalog"]
+            if (
+                item["id"].startswith(("individual_", "pair_", "exact_"))
+                and (
+                    "across 0 games" in item["text"]
+                    or "in 0 games" in item["text"]
+                )
+            )
+        ]
+        discarded = opinion.get("discarded_considerations")
+        if not isinstance(discarded, list) or not all(
+            isinstance(value, str) and value.strip() for value in discarded
+        ):
+            raise ValueError(
+                "discarded_considerations must contain non-empty strings"
+            )
+        normalized["discarded_considerations"] = discarded
+
+        def bullets(values: list[str]) -> str:
+            return "\n".join(f"- {value}" for value in values) or "- None"
+
+        normalized["full_opinion"] = (
+            f"Pick\n- Side: {side_label} "
+            f"{'★' * side['confidence_stars']}\n"
+            f"- Total: {total_label} "
+            f"{'★' * total['confidence_stars']}\n\n"
+            "Why the picks\n"
+            f"{bullets(normalized['supporting_factors'])}\n\n"
+            "Why they may be wrong\n"
+            f"{bullets(normalized['counterarguments'])}\n\n"
+            "No signal\n"
+            f"{bullets(normalized['no_signal_factors'])}\n\n"
+            "Discarded considerations\n"
+            f"{bullets(discarded)}\n\n"
+            f"Conclusion\n{normalized['thesis']}"
+        )
+        normalized["side_pick_json"] = _canonical_json(side)
+        normalized["total_pick_json"] = _canonical_json(total)
+        normalized["calibration_summary_json"] = _canonical_json(
+            input_payload["nfl_calibration"]
+        )
+        return normalized
     for field, pick in (("side", side), ("total", total)):
         uses_wnba = any(
             evidence_id.startswith("wnba_")
@@ -2063,8 +2219,8 @@ def _normalize_ak_opinion(
         total_interpretation,
         (
             "Configured positive mapping: NFL 0 to <3 -> WNBA 0 to <6; "
-            "NFL 3 to <9 -> WNBA 6 to <12; NFL 9 to <12 -> WNBA 12 to "
-            "<16; NFL 12+ -> WNBA 16+."
+            "NFL 3 to <6 -> WNBA 6 to <9; NFL 6 to <9 -> WNBA 9 to "
+            "<12; NFL 9 to <12 -> WNBA 12 to <16; NFL 12+ -> WNBA 16+."
         ),
         (
             "Comparison caveat: the WNBA study used closing totals, while "
@@ -2277,7 +2433,7 @@ def validate_opinion(
     cited_schema = bool(
         schedule_input is not None
         and schedule_input.get("input_profile")
-        in {"schedule_only", "divisional", "win_total"}
+        in {"schedule_only", "divisional", "win_total", "cee_calibration"}
         and isinstance(opinion.get("thesis_citation"), dict)
     )
     if (
@@ -2469,6 +2625,132 @@ def validate_opinion(
         if "prior-season" not in historical_text.casefold():
             raise ValueError(
                 "Win Total historical claims must identify prior-season wins"
+            )
+    if (
+        schedule_input is not None
+        and schedule_input.get("input_profile") == "cee_calibration"
+    ):
+        claims = [
+            opinion["thesis_citation"],
+            *opinion.get("supporting_factors", []),
+            *opinion.get("counterarguments", []),
+            *opinion.get("no_signal_factors", []),
+        ]
+        cited_paths = {
+            str(evidence["path"])
+            for claim in claims
+            for evidence in claim.get("evidence", [])
+        }
+        required_paths = {
+            "cee_submission",
+            "season_predictions_at_submission",
+            "submission_market",
+            "nfl_calibration",
+            "nfl_calibration.overall",
+            "nfl_calibration.matching_consistency",
+            "nfl_calibration.matching_season_gap",
+        }
+        missing = required_paths - cited_paths
+        if missing:
+            raise ValueError(
+                "Cee opinion must cite the submission, season predictions, "
+                "submission market, and every calibration view; missing "
+                f"paths: {sorted(missing)}"
+            )
+        rendered = " ".join(
+            str(claim.get("claim") or "") for claim in claims
+        )
+        season = schedule_input["season_predictions_at_submission"]
+        for value in (
+            season["away_predicted_wins"],
+            season["home_predicted_wins"],
+        ):
+            if not re.search(
+                rf"(?<!\d){re.escape(str(value))}(?!\d)",
+                rendered,
+            ):
+                raise ValueError(
+                    "Cee opinion must state both season-win predictions"
+                )
+        consistency = str(season["consistency_with_game_pick"])
+        if not re.search(
+            rf"\b{re.escape(consistency)}\b",
+            rendered,
+            re.IGNORECASE,
+        ):
+            raise ValueError(
+                f"Cee opinion must state consistency={consistency}"
+            )
+        for required_text, label in (
+            (str(schedule_input["cee_submission"]["selected_side"]), "pick"),
+            (str(season["season_preferred_side"]), "season preferred side"),
+            (str(season["season_gap_bucket"]), "season gap bucket"),
+        ):
+            if required_text.casefold() not in rendered.casefold():
+                raise ValueError(
+                    f"Cee opinion must state the supplied {label}: "
+                    f"{required_text}"
+                )
+        calibration = schedule_input["nfl_calibration"]
+        for path, summary in (
+            ("nfl_calibration.overall", calibration["overall"]),
+            (
+                "nfl_calibration.matching_consistency",
+                calibration["matching_consistency"],
+            ),
+            (
+                "nfl_calibration.matching_season_gap",
+                calibration["matching_season_gap"],
+            ),
+        ):
+            matching_claims = [
+                claim
+                for claim in claims
+                if any(
+                    str(evidence["path"]) == path
+                    for evidence in claim.get("evidence", [])
+                )
+            ]
+            path_text = " ".join(
+                str(claim.get("claim") or "") for claim in matching_claims
+            )
+            games = int(summary["games"])
+            count_pattern = (
+                r"(?:0|zero)"
+                if games == 0
+                else re.escape(str(games))
+            )
+            if not re.search(
+                rf"(?<!\d){count_pattern}(?!\d)"
+                rf"(?:\s+[\w-]+){{0,8}}\s+(?:games?|picks?)\b",
+                path_text,
+                re.IGNORECASE,
+            ):
+                raise ValueError(
+                    f"Cee opinion must state {path} games={games}"
+                )
+            if games:
+                record = f"{int(summary['wins'])}-{int(summary['losses'])}"
+                if int(summary.get("ties") or 0):
+                    record += f"-{int(summary['ties'])}"
+                if not re.search(
+                    rf"\b{re.escape(record)}\b",
+                    path_text,
+                ):
+                    raise ValueError(
+                        f"Cee opinion must state {path} record={record}"
+                    )
+        calibration_games = int(calibration["overall"]["games"])
+        confidence = int(opinion["confidence_stars"])
+        if calibration_games == 0 and confidence > 2:
+            raise ValueError(
+                "Cee opinion confidence cannot exceed two stars without "
+                "resolved NFL calibration"
+            )
+        if calibration_games <= 2 and confidence > 3:
+            raise ValueError(
+                "Cee opinion confidence cannot exceed three stars with at "
+                "most two resolved NFL calibration games"
             )
     winner = str(opinion.get("predicted_winner") or "")
     if winner not in {away_team, home_team}:
@@ -2670,6 +2952,8 @@ async def generate_opinion(
     leans: list[dict[str, Any]] | None = None,
     line_snapshots: list[dict[str, Any]] | None = None,
     ak_user_id: str | None = None,
+    cee_user_id: str | None = None,
+    celebrity_picks: list[dict[str, Any]] | None = None,
     win_totals: list[dict[str, Any]] | None = None,
     win_predictions: list[dict[str, Any]] | None = None,
     team_history: list[dict[str, Any]] | None = None,
@@ -2719,6 +3003,29 @@ async def generate_opinion(
             leans,
             line_snapshots,
             ak_user_id=ak_user_id,
+        )
+    elif expert["input_profile"] == "cee_calibration":
+        if leans is None or win_predictions is None or not cee_user_id:
+            raise ValueError(
+                "Cee expert requires leans, win_predictions, and cee_user_id"
+            )
+        input_payload = build_cee_input(
+            game,
+            history,
+            leans,
+            win_predictions,
+            cee_user_id=cee_user_id,
+        )
+    elif expert["input_profile"] == "celebrity_patterns":
+        if celebrity_picks is None or leans is None:
+            raise ValueError(
+                "Celebrity expert requires celebrity picks and game leans"
+            )
+        input_payload = build_celebrity_input(
+            game,
+            history,
+            celebrity_picks,
+            leans,
         )
     elif expert["input_profile"] == "win_total":
         if (
@@ -3113,6 +3420,8 @@ async def generate_opinion(
                 leans=leans,
                 line_snapshots=line_snapshots,
                 ak_user_id=ak_user_id,
+                cee_user_id=cee_user_id,
+                celebrity_picks=celebrity_picks,
                 win_totals=win_totals,
                 win_predictions=win_predictions,
                 team_history=team_history,

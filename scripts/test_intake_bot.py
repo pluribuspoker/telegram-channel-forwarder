@@ -18,11 +18,14 @@ from intake_bot import (
     SUGGESTION_HEADERS,
     append_celebrity_picks,
     build_celebrity_rows,
+    build_custom_celebrity_submission,
     build_lean_row,
     build_suggestion_row,
     build_win_prediction_row,
     celebrity_user_id,
     command_keyboard,
+    custom_market_buttons,
+    custom_pick_prompt,
     edit_callback,
     game_browser,
     game_celebrity_picker,
@@ -452,6 +455,29 @@ class GameSelectionTest(unittest.TestCase):
         )
         self.assertEqual(buttons[1][0].data.decode(), "back:game")
 
+    def test_celebrity_market_menu_includes_custom_pick(self):
+        standard = [
+            button.data for row in market_buttons() for button in row
+        ]
+        celebrity = [
+            button.data
+            for row in market_buttons(allow_custom=True)
+            for button in row
+        ]
+
+        self.assertNotIn(b"market:custom", standard)
+        self.assertIn(b"market:custom", celebrity)
+        self.assertEqual(
+            [button.data for row in custom_market_buttons() for button in row],
+            [
+                b"custom:player_prop",
+                b"custom:team_prop",
+                b"custom:other",
+                b"back:markets",
+            ],
+        )
+        self.assertIn("Subject:", custom_pick_prompt("player_prop"))
+
     def test_period_summary_shows_all_three_markets(self):
         text = period_market_summary(
             _game("miami", 1),
@@ -493,6 +519,34 @@ class GameSelectionTest(unittest.TestCase):
         self.assertEqual(context["opening_price"], -105)
         self.assertEqual(context["latest_line"], 3.5)
         self.assertEqual(context["latest_price"], -105)
+
+    def test_custom_celebrity_submission_is_structured_and_lossless(self):
+        raw = (
+            "Subject: Drake Maye\n"
+            "Market: Passing touchdowns\n"
+            "Pick: Over 1.5\n"
+            "Odds: -105\n"
+            "Rationale: Red-zone expectation."
+        )
+
+        row = build_custom_celebrity_submission(
+            submitted_at=NOW,
+            user_id=1,
+            username="operator",
+            message_id=99,
+            game=_game("miami", 1),
+            period="game",
+            market_family="player_prop",
+            raw_text=raw,
+        )
+
+        self.assertEqual(row["subject"], "Drake Maye")
+        self.assertEqual(row["stat"], "Passing touchdowns")
+        self.assertEqual(row["direction"], "Over")
+        self.assertEqual(row["line"], 1.5)
+        self.assertEqual(row["price"], -105)
+        self.assertEqual(row["raw_pick_text"], raw)
+        self.assertIn("player_prop", row["canonical_key"])
 
     def test_lean_row_is_compact_and_duplicate_key_is_deterministic(self):
         row = build_lean_row(
@@ -808,10 +862,108 @@ class GameSelectionTest(unittest.TestCase):
         self.assertEqual(row["telegram_display_name"], "LeBron James")
 
 
+class _FakeOpinionStore:
+    def __init__(self, rows):
+        self.rows = [dict(row) for row in rows]
+        self.reviews: list[tuple[str, str, str]] = []
+
+    def list(self, event_id=None):
+        return [dict(row) for row in self.rows]
+
+    def review(self, opinion_id, *, status, reviewed_by, note):
+        for row in self.rows:
+            if row["opinion_id"] == opinion_id:
+                row["review_status"] = status
+                row["reviewed_by"] = reviewed_by
+                self.reviews.append((opinion_id, status, reviewed_by))
+                return
+        raise ValueError("Expected one opinion_id match, found 0")
+
+
+def _desk_row(opinion_id, expert_id, name, *, status="pending", **extra):
+    row = {
+        "opinion_id": opinion_id,
+        "event_id": "401",
+        "expert_id": expert_id,
+        "expert_name": name,
+        "generated_at_utc": "2026-09-12T12:00:00+00:00",
+        "generation_status": "valid",
+        "review_status": status,
+        "reviewed_by": "SS" if status != "pending" else "",
+    }
+    row.update(extra)
+    return row
+
+
+class DeskReviewTest(unittest.TestCase):
+    """The desk group's buttons: intake_bot.desk_review over a fake store."""
+
+    def setUp(self) -> None:
+        intake_bot._SHEET_CACHE.clear()
+        self.store = _FakeOpinionStore(
+            [
+                _desk_row("p1", "win_total", "Win Total Expert"),
+                _desk_row("a1", "schedule", "Schedule Expert", status="approved"),
+                _desk_row("r1", "god_rules", "God Expert (Rules)"),
+                _desk_row("j1", "god_judge", "God Expert (Judge)"),
+                _desk_row("x1", "schedule", "Schedule Expert", generation_status="invalid"),
+            ]
+        )
+        intake_bot._MOE_STORE = self.store
+
+    def tearDown(self) -> None:
+        intake_bot._SHEET_CACHE.clear()
+        intake_bot._MOE_STORE = None
+
+    def test_approve_and_reject_sign_with_the_reviewer(self) -> None:
+        self.assertEqual(
+            intake_bot.desk_review("ok", "p1", reviewer="AK"),
+            ("Approved Win Total Expert as AK.", True),
+        )
+        self.assertEqual(self.store.reviews, [("p1", "approved", "AK")])
+        # a second tap on the same row is refused, whoever taps
+        self.assertEqual(
+            intake_bot.desk_review("ok", "p1", reviewer="SS"),
+            ("Already approved by AK.", False),
+        )
+        self.assertEqual(
+            intake_bot.desk_review("no", "a1", reviewer="SS"),
+            ("Already approved by SS.", False),
+        )
+        self.assertEqual(intake_bot.desk_review("no", "x1", reviewer="SS")[1], False)
+        self.assertEqual(len(self.store.reviews), 1)
+
+    def test_approve_both_arms_reviews_rules_then_judge(self) -> None:
+        text, ok = intake_bot.desk_review("okarms", "401", reviewer="SS")
+        self.assertTrue(ok)
+        self.assertEqual(text, "Approved God Expert (Rules), God Expert (Judge) as SS.")
+        self.assertEqual(
+            [r[0] for r in self.store.reviews], ["r1", "j1"]
+        )
+        self.assertEqual(
+            intake_bot.desk_review("okarms", "401", reviewer="SS"),
+            ("Both arms are no longer pending.", False),
+        )
+
+    def test_store_refusal_propagates_to_the_tapper(self) -> None:
+        self.store.rows.append(_desk_row("ghost", "schedule", "Schedule Expert"))
+        original = self.store.review
+
+        def refuse(opinion_id, **kwargs):
+            raise ValueError("Opinion content changed after generation; review refused")
+
+        self.store.review = refuse
+        with self.assertRaisesRegex(ValueError, "review refused"):
+            intake_bot.desk_review("ok", "ghost", reviewer="SS")
+        self.store.review = original
+        self.assertEqual(intake_bot.game_stub({"event_id": 7, "away_team": "A"})["event_id"], "7")
+
+
 class _FakeWorksheet:
     def __init__(self, values):
         self._values = [list(row) for row in values]
         self.appended: list[list] = []
+        self.resized_cols: int | None = None
 
     def row_values(self, index):
         return list(self._values[index - 1]) if len(self._values) >= index else []
@@ -821,6 +973,9 @@ class _FakeWorksheet:
 
     def update(self, data):
         self._values = [list(row) for row in data] + self._values[1:]
+
+    def resize(self, *, cols):
+        self.resized_cols = cols
 
     def append_rows(self, rows, value_input_option="RAW"):
         for row in rows:
@@ -884,6 +1039,19 @@ class CelebrityPickTest(unittest.TestCase):
         self.assertTrue(all(list(r) == CELEBRITY_HEADERS for r in rows))
         self.assertTrue(all(r["away_team"] == "Miami Dolphins" for r in rows))
 
+    def test_legacy_celebrity_header_expands_in_place(self):
+        worksheet = _FakeWorksheet(
+            [intake_bot.LEGACY_CELEBRITY_HEADERS]
+        )
+
+        migrated = intake_bot._celebrity_worksheet(
+            _FakeSpreadsheet(worksheet)
+        )
+
+        self.assertIs(migrated, worksheet)
+        self.assertEqual(worksheet.row_values(1), CELEBRITY_HEADERS)
+        self.assertEqual(worksheet.resized_cols, len(CELEBRITY_HEADERS))
+
     def test_celebrity_user_id_is_stable_negative_and_distinct(self):
         # Same person (any case/spacing) -> one id; negative so it can never
         # collide with a real positive Telegram user id; different people differ.
@@ -927,7 +1095,10 @@ class CelebrityPickTest(unittest.TestCase):
 
         self.assertEqual(written, 1)
         self.assertEqual(len(worksheet.appended), 1)
-        self.assertEqual(worksheet.appended[0][-1], "Drake")
+        self.assertEqual(
+            worksheet.appended[0][CELEBRITY_HEADERS.index("celebrity_name")],
+            "Drake",
+        )
 
 
 class CallbackEditTest(unittest.IsolatedAsyncioTestCase):

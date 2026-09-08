@@ -9,10 +9,11 @@ with its standard error, the leg agreement rate, and the disagreement
 record. With --write, appends one row per graded opinion to the append-only
 ``moe_grades`` tab, then one ``mean_of_arms`` row per paired game (the
 bake-off's free third row: a ledger row, never an expert), skipping opinion
-ids already present. With --notify as well, DMs the operator through the
-watchdog bot only when rows were appended (the run ``moe-grade.timer`` makes
-daily); a failed DM after a successful append exits non-zero so the
-healthcheck alerts.
+ids already present. With --notify as well, posts the digest to the desk
+group's Scores topic when one is configured (moe_desk.py), else DMs the
+operator through the watchdog bot, only when rows were appended (the run
+``moe-grade.timer`` makes daily); a digest that reaches neither after a
+successful append exits non-zero so the healthcheck alerts.
 """
 
 from __future__ import annotations
@@ -56,6 +57,16 @@ from nfl_lines import SNAPSHOT_HEADERS, _call_with_retry, get_gspread_client
 from nfl_win_predictions import ensure_worksheet
 from scripts.generate_moe_opinion import _latest_alignment
 from scripts.god_judge_runner import send_watchdog_dm
+
+
+def deliver_notification(text: str) -> bool:
+    """The desk group's Scores topic when configured, else the watchdog DM."""
+    from moe_desk import post_scores_notice
+
+    if post_scores_notice(text):
+        return True
+    return send_watchdog_dm(text)
+
 
 # Telegram caps a message at 4096 characters; leave room for the ellipsis.
 NOTIFY_MAX_CHARS = 4000
@@ -246,13 +257,13 @@ def main() -> None:
         f"Appended {len(new_rows)} graded rows to {GRADES_TAB} "
         f"({mean_count} mean-of-arms)."
     )
-    if args.notify and not send_watchdog_dm(
+    if args.notify and not deliver_notification(
         notification_text(season=season, scoreboard=scoreboard, new_rows=new_rows)
     ):
         # The append succeeded and will not repeat (opinion-id dedupe), so a
         # lost DM is the operator's only signal — fail the run and let the
         # healthcheck /fail ping carry the log tail.
-        raise SystemExit("notify: watchdog DM not sent after appending rows")
+        raise SystemExit("notify: digest not delivered after appending rows")
 
 
 if __name__ == "__main__":

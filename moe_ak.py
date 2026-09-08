@@ -26,7 +26,7 @@ from nfl_lines import (
 from nfl_win_predictions import TEAM_ABBREVIATIONS
 
 ROOT = Path(__file__).resolve().parent
-WNBA_PRIOR_PATH = ROOT / "moe" / "priors" / "ak_wnba_v1.json"
+WNBA_PRIOR_PATH = ROOT / "moe" / "priors" / "ak_wnba_v2.json"
 
 
 def _parse_time(value: Any) -> datetime:
@@ -230,8 +230,10 @@ def _total_gap_bucket(gap: float) -> str:
         return "minus_3_to_0"
     if gap < 3:
         return "plus_0_to_3"
+    if gap < 6:
+        return "plus_3_to_6"
     if gap < 9:
-        return "plus_3_to_9"
+        return "plus_6_to_9"
     if gap < 12:
         return "plus_9_to_12"
     return "plus_12_or_more"
@@ -254,11 +256,18 @@ def _wnba_total_prior(
             "<6; the available fresh WNBA sample finished under in 3 of 4 "
             "games.",
         )
+    if total_gap < 6:
+        return (
+            "wnba_6_to_9",
+            "WNBA cross-sport prior: the NFL 3 to <6 band maps to WNBA 6 to "
+            "<9; the fresh WNBA sample finished under in 1 of 3 games, so "
+            "this band supplies no directional warning.",
+        )
     if total_gap < 9:
         return (
-            "wnba_6_to_12",
-            "WNBA cross-sport prior: the NFL 3 to <9 band maps to WNBA 6 to "
-            "<12; the full WNBA sample finished under in 7 of 10 games.",
+            "wnba_9_to_12",
+            "WNBA cross-sport prior: the NFL 6 to <9 band maps to WNBA 9 to "
+            "<12; the fresh WNBA sample finished under in 3 of 3 games.",
         )
     if total_gap < 12:
         return (
@@ -527,6 +536,7 @@ def build_ak_input(
         if str(row.get("telegram_user_id")) == str(ak_user_id)
         and str(row.get("event_id")) == str(game["event_id"])
         and str(row.get("period")) == "game"
+        and str(row.get("prediction_parse_status") or "") != "not_applicable"
     ]
     if not matching:
         raise ValueError("AK has no full-game prediction for this event")
@@ -597,7 +607,7 @@ def build_ak_input(
     )
     total_prior_supported = total_prior_band in {
         "wnba_0_to_6",
-        "wnba_6_to_12",
+        "wnba_9_to_12",
         "wnba_12_to_16",
     }
     total_gap_fraction = total_gap / float(market_total)
