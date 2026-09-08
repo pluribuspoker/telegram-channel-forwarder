@@ -178,6 +178,20 @@ ADVERSE_MOVE_REASON = "adverse move"
 EV_FLOOR_REASON = "ev floor"
 NO_EXPECTATION_REASON = "no positive expectation at the posted price"
 
+# The judge runner's ensemble (roadmap WP9): one judge row per trigger whose
+# numbers are the means of the valid sampled responses and whose reasons come
+# from one sample; the sampled rows persist as generation_status "sample".
+ENSEMBLE_RULE = (
+    "mean of the valid samples; reasons from the sample closest to the mean"
+)
+ENSEMBLE_KEYS = ("size", "valid", "samples", "estimates", "reasons_from", "rule")
+# Coherence notes, shared by the rules arm and the ensemble.
+FENCE_NOTE = "Blend sat exactly on the fence; the market favorite breaks the tie."
+SIGN_NOTE = (
+    "Pooled probability and pooled margin disagreed in sign; the "
+    "margin was clamped to follow the probability."
+)
+
 # The markets a voice can inform (registry ``markets``); the side pool
 # averages side-informed voices, the total pool total-informed ones.
 MARKETS = ("side", "total")
@@ -2483,27 +2497,40 @@ def apply_policy(
 # The rules arm's response (same shape as the judge's)
 
 
+def coherent_estimate(
+    probability: float, margin: float, *, fair_home: float
+) -> tuple[float, float, list[str]]:
+    """The coherence step shared by the rules arm and the judge ensemble.
+
+    An estimate exactly on the fence (probability 0.5 or margin 0) leans the
+    market favorite's way (0.505 and +0.5, or 0.495 and -0.5); a probability
+    and a margin that disagree in sign keep the probability and clamp the
+    margin to +/-0.5. Either case adds one note for the discarded
+    considerations. A coherent estimate passes through untouched.
+    """
+    probability, margin = float(probability), float(margin)
+    notes: list[str] = []
+    if abs(probability - 0.5) < 1e-9 or abs(margin) < 1e-9:
+        lean_home = float(fair_home) >= 0.5
+        probability = 0.505 if lean_home else 0.495
+        margin = 0.5 if lean_home else -0.5
+        notes.append(FENCE_NOTE)
+    elif (probability > 0.5) != (margin > 0):
+        margin = 0.5 if probability > 0.5 else -0.5
+        notes.append(SIGN_NOTE)
+    return probability, margin, notes
+
+
 def rules_arm_response(input_payload: dict[str, Any]) -> dict[str, Any]:
     feature = input_payload["feature_block"]
     market = input_payload["market"]
     shrunk = feature["shrunk"]
-    probability = float(shrunk["home_win_probability"])
-    margin = float(shrunk["expected_home_margin"])
     total = float(shrunk["projected_total"])
-    notes: list[str] = []
-    if abs(probability - 0.5) < 1e-9 or abs(margin) < 1e-9:
-        lean_home = float(market["fair"]["home_ml"]) >= 0.5
-        probability = 0.505 if lean_home else 0.495
-        margin = 0.5 if lean_home else -0.5
-        notes.append(
-            "Blend sat exactly on the fence; the market favorite breaks the tie."
-        )
-    elif (probability > 0.5) != (margin > 0):
-        margin = 0.5 if probability > 0.5 else -0.5
-        notes.append(
-            "Pooled probability and pooled margin disagreed in sign; the "
-            "margin was clamped to follow the probability."
-        )
+    probability, margin, notes = coherent_estimate(
+        float(shrunk["home_win_probability"]),
+        float(shrunk["expected_home_margin"]),
+        fair_home=float(market["fair"]["home_ml"]),
+    )
     pool = feature["pool"]
     weighted = "Hedge-weighted" if feature["weights_active"] else "Equal-weight"
     reasons = [
@@ -2590,6 +2617,81 @@ def _largest_overlap_text(input_payload: dict[str, Any]) -> str | None:
         f"(overlap {value:.2f}); {names.get(b, b)} pools at weight "
         f"{float(weight):g} after the discount."
     )
+
+
+# --------------------------------------------------------------------------
+# The judge ensemble: one row from several sampled responses (WP9)
+
+
+def ensemble_response(
+    samples: list[dict[str, Any]], *, fair_home: float, size: int
+) -> dict[str, Any]:
+    """One judge response from the valid sampled responses of one trigger.
+
+    ``samples`` holds ``{"opinion_id", "response"}`` for every sample that
+    validated, in call order; ``size`` is how many calls the trigger made.
+    The three numbers are the means over the valid samples, rounded like a
+    response (4, 2, 2 decimals) and passed through :func:`coherent_estimate`;
+    the reasons are copied from the sample closest to the mean (the smallest
+    |dp|, then |dmargin|, then |dtotal|, then call order), with the coherence
+    notes appended to its discarded considerations. The ``ensemble`` block
+    records how the row was made; :func:`normalize_aggregator_opinion`
+    validates it with the rest of the response and copies it into the
+    calibration summary.
+    """
+    if not samples:
+        raise ValueError("An ensemble needs at least one valid sample")
+    size = int(size)
+    if size < len(samples):
+        raise ValueError("An ensemble cannot hold more samples than calls")
+    estimates = [
+        [
+            float(sample["response"]["home_win_probability"]),
+            float(sample["response"]["expected_home_margin"]),
+            float(sample["response"]["projected_total"]),
+        ]
+        for sample in samples
+    ]
+    count = len(estimates)
+    mean_probability = round(sum(item[0] for item in estimates) / count, 4)
+    mean_margin = round(sum(item[1] for item in estimates) / count, 2)
+    mean_total = round(sum(item[2] for item in estimates) / count, 2)
+    probability, margin, notes = coherent_estimate(
+        mean_probability, mean_margin, fair_home=fair_home
+    )
+    # Distances are rounded so float noise never decides a tie; call order does.
+    closest = min(
+        range(count),
+        key=lambda index: (
+            round(abs(estimates[index][0] - mean_probability), 6),
+            round(abs(estimates[index][1] - mean_margin), 6),
+            round(abs(estimates[index][2] - mean_total), 6),
+            index,
+        ),
+    )
+    chosen = samples[closest]
+    response = chosen["response"]
+    return {
+        "home_win_probability": round(probability, 4),
+        "expected_home_margin": round(margin, 2),
+        "projected_total": mean_total,
+        "key_reasons": [dict(item) for item in response.get("key_reasons", [])],
+        "counterpoints": [
+            dict(item) for item in response.get("counterpoints", [])
+        ],
+        "discarded_considerations": list(
+            response.get("discarded_considerations", [])
+        )
+        + notes,
+        "ensemble": {
+            "size": size,
+            "valid": count,
+            "samples": [str(sample["opinion_id"]) for sample in samples],
+            "estimates": estimates,
+            "reasons_from": str(chosen["opinion_id"]),
+            "rule": ENSEMBLE_RULE,
+        },
+    }
 
 
 # --------------------------------------------------------------------------
@@ -2724,6 +2826,73 @@ def _validate_reasons(
     return normalized
 
 
+def _validate_ensemble(value: Any) -> dict[str, Any] | None:
+    """The ensemble block of a judge row built from sampled responses.
+
+    None when absent. ``size`` calls were made and ``valid`` of them
+    validated; ``samples`` names those rows in call order, ``estimates``
+    holds each one's three numbers, ``reasons_from`` names the sample whose
+    reasons the row carries, and ``rule`` says how the numbers were combined.
+    Anything else is a malformed block and fails validation.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("ensemble must be an object")
+    if set(value) != set(ENSEMBLE_KEYS):
+        raise ValueError(f"ensemble keys must be {list(ENSEMBLE_KEYS)}")
+    size, valid = value["size"], value["valid"]
+    for name, item in (("size", size), ("valid", valid)):
+        if isinstance(item, bool) or not isinstance(item, int) or item < 1:
+            raise ValueError(f"ensemble.{name} must be a positive integer")
+    if valid > size:
+        raise ValueError("ensemble.valid cannot exceed ensemble.size")
+    samples = value["samples"]
+    if (
+        not isinstance(samples, list)
+        or len(samples) != valid
+        or any(
+            not isinstance(item, str) or not item.strip() for item in samples
+        )
+        or len(set(samples)) != len(samples)
+    ):
+        raise ValueError("ensemble.samples must name each valid sample once")
+    estimates = value["estimates"]
+    if not isinstance(estimates, list) or len(estimates) != valid:
+        raise ValueError(
+            "ensemble.estimates must hold one triple per valid sample"
+        )
+    normalized_estimates = []
+    for triple in estimates:
+        if (
+            not isinstance(triple, (list, tuple))
+            or len(triple) != 3
+            or any(
+                isinstance(item, bool)
+                or not isinstance(item, (int, float))
+                or not math.isfinite(float(item))
+                for item in triple
+            )
+        ):
+            raise ValueError(
+                "ensemble.estimates items must be [probability, margin, total]"
+            )
+        normalized_estimates.append([float(item) for item in triple])
+    if value["reasons_from"] not in samples:
+        raise ValueError("ensemble.reasons_from must name one of the samples")
+    rule = value["rule"]
+    if not isinstance(rule, str) or not rule.strip():
+        raise ValueError("ensemble.rule must be a non-empty string")
+    return {
+        "size": int(size),
+        "valid": int(valid),
+        "samples": [str(item) for item in samples],
+        "estimates": normalized_estimates,
+        "reasons_from": str(value["reasons_from"]),
+        "rule": rule.strip(),
+    }
+
+
 def _display_label(
     label: str, input_payload: dict[str, Any], *, judge: bool
 ) -> str:
@@ -2809,6 +2978,9 @@ def normalize_aggregator_opinion(
         "counterpoints",
         "discarded_considerations",
     }
+    if judge:
+        # Only a judge row built by the runner's ensemble carries the block.
+        unknown.discard("ensemble")
     if unknown:
         raise ValueError(f"Response has unexpected fields: {sorted(unknown)}")
     for field in ("home_win_probability", "expected_home_margin", "projected_total"):
@@ -2867,6 +3039,7 @@ def normalize_aggregator_opinion(
         raise ValueError(
             "discarded_considerations must contain non-empty strings"
         )
+    ensemble = _validate_ensemble(response.get("ensemble")) if judge else None
 
     away_score, home_score = _scores_from_estimate(
         probability, margin, projected_total
@@ -2963,6 +3136,7 @@ def normalize_aggregator_opinion(
         discarded=list(discarded),
         thesis=thesis,
         model=model,
+        ensemble=ensemble,
     )
     voice_key = {
         voice["voice_id"]: {
@@ -2996,6 +3170,8 @@ def normalize_aggregator_opinion(
         "voices": voice_key,
         "judge_labels": input_payload["judge_view"]["labels"] if judge else None,
         "scoreboard_resolved_games": scoreboard.get("resolved_games"),
+        # The runner's ensemble block for a judge row built from samples.
+        "ensemble": ensemble,
     }
     return {
         "predicted_winner": winner,
@@ -3038,6 +3214,7 @@ def _render_full_opinion(
     discarded: list[str],
     thesis: str,
     model: str,
+    ensemble: dict[str, Any] | None = None,
 ) -> str:
     game = input_payload["game"]
     market = input_payload["market"]
@@ -3113,6 +3290,12 @@ def _render_full_opinion(
         f"{blend_title}\n- p({home}) {probability:.3f} · margin {margin:+.1f} "
         f"· total {projected_total:.1f}"
         + (f" · model {model}" if model else "")
+        + (
+            f" · mean of {int(ensemble['valid'])} of {int(ensemble['size'])} "
+            "samples"
+            if ensemble
+            else ""
+        )
         + f"\n- Pool before shrink: p({home}) "
         f"{_fmt(feature['pool']['home_win_probability'], '.3f')} · margin "
         f"{_fmt(feature['pool']['expected_home_margin'], '+.1f')} · total "

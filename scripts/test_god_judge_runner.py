@@ -18,16 +18,20 @@ from unittest.mock import patch
 from moe import approved_opinions, load_expert, opinion_output_sha256
 from moe_ak import _parse_time
 from moe_god import (
+    ENSEMBLE_RULE,
     aggregator_policy,
     build_aggregator_input,
     build_judge_request,
+    canonical_json,
     load_registry,
+    sha256_text,
 )
 from nfl_lines import LATEST_HOME_COLUMN
 from scripts.god_judge_runner import (
     RESPONSE_INSTRUCTION,
     ClaudeHeadlessInvoker,
     JudgeCallError,
+    build_parser,
     main,
     row_committee_key,
     run_once,
@@ -60,14 +64,18 @@ def _committee() -> list[dict]:
 
 # A stand-in for the claude binary: records argv, env, cwd and stdin next to
 # itself, then answers with a print-mode JSON envelope. A "mode" file beside
-# it selects the failure to simulate.
+# it selects the behavior to simulate, one mode per call (comma-separated,
+# cycling by the call index) when a trigger makes several calls.
 STUB_SOURCE = '''#!{python}
 import json, os, sys
 
 here = os.path.dirname(os.path.abspath(__file__))
 stdin_text = sys.stdin.read()
 mode_path = os.path.join(here, "mode")
-mode = open(mode_path).read().strip() if os.path.exists(mode_path) else "valid"
+modes = open(mode_path).read().strip().split(",") if os.path.exists(mode_path) else ["valid"]
+calls_path = os.path.join(here, "calls.jsonl")
+call_index = sum(1 for _line in open(calls_path, encoding="utf-8")) if os.path.exists(calls_path) else 0
+mode = modes[call_index % len(modes)].strip() or "valid"
 record = {{
     "argv": sys.argv,
     "env": dict(os.environ),
@@ -75,21 +83,25 @@ record = {{
     "cwd_entries": sorted(os.listdir(os.getcwd())),
     "stdin": stdin_text,
     "mode": mode,
+    "call_index": call_index + 1,
 }}
-with open(os.path.join(here, "calls.jsonl"), "a", encoding="utf-8") as handle:
+with open(calls_path, "a", encoding="utf-8") as handle:
     handle.write(json.dumps(record) + "\\n")
 if mode == "crash":
     sys.stderr.write("stub crashed\\n")
     sys.exit(3)
 request = json.loads(stdin_text[: stdin_text.rindex("}}") + 1])
 labels = [voice["label"] for voice in request["voices"]]
+# "vary" answers a different estimate per call, so an ensemble has a mean.
+variants = [(0.58, 2.0, 44.0), (0.64, 4.0, 46.0), (0.61, 3.0, 45.0)]
 if mode == "invalid":
     response = {{"home_win_probability": 0.5}}
 else:
+    probability, margin, total = variants[call_index % 3] if mode == "vary" else (0.61, 3.0, 45.0)
     response = {{
-        "home_win_probability": 0.61,
-        "expected_home_margin": 3.0,
-        "projected_total": 45.0,
+        "home_win_probability": probability,
+        "expected_home_margin": margin,
+        "projected_total": total,
         "key_reasons": [
             {{"voice": labels[0], "text": "Broad cohort, no single-game claims."}},
             {{"voice": "pool", "text": "The pool already sits close to the market."}},
@@ -206,7 +218,10 @@ class RunnerHarness:
         shutil.rmtree(self.root, ignore_errors=True)
 
 
-class RunnerTests(unittest.IsolatedAsyncioTestCase):
+class _HarnessCase(unittest.IsolatedAsyncioTestCase):
+    """A stub claude, a memory store, and an environment holding secrets
+    the call must not see; the test classes below add the cases."""
+
     def setUp(self) -> None:
         self.harness = RunnerHarness()
         self.addCleanup(self.harness.cleanup)
@@ -231,6 +246,10 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             registry=self.harness.registry,
             policy=self.harness.policy,
         )
+
+
+class RunnerTests(_HarnessCase):
+    """The single-sample path (--samples 1, the default)."""
 
     async def test_first_pass_persists_both_arms_through_the_stub(self) -> None:
         summary = await self.harness.run([_game()], _committee())
@@ -496,6 +515,207 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
                     main(["--max-games", "1"])
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("CLAUDE_CODE_OAUTH_TOKEN", stderr.getvalue())
+
+
+class EnsembleRunnerTests(_HarnessCase):
+    """--samples N >= 2 (WP9): sampled audit rows and one mean judge row per trigger."""
+
+    def _statuses(self) -> list[tuple[str, str]]:
+        return [(row["expert_id"], row["generation_status"]) for row in self.harness.store.rows]
+
+    async def test_three_samples_form_one_judge_row(self) -> None:
+        self.harness.set_mode("vary")
+        summary = await self.harness.run([_game()], _committee(), samples=3)
+
+        self.assertEqual(
+            self._statuses(),
+            [("god_rules", "valid"), ("god_judge", "sample"), ("god_judge", "sample"), ("god_judge", "sample"), ("god_judge", "valid")],
+        )
+        rows = self.harness.store.rows
+        samples, judge = rows[1:4], rows[4]
+        payload = self._payload()
+        request = build_judge_request(payload)
+        request_sha256 = sha256_text(canonical_json(request))
+        for index, row in enumerate(samples):
+            self.assertEqual(row["review_status"], "not_applicable")
+            self.assertEqual(row["generation_backend"], "claude_headless")
+            self.assertEqual(row["model"], "claude-fable-5-1")
+            self.assertEqual(row["generation_effort"], "max")
+            self.assertEqual(row["generation_error"], "")
+            self.assertEqual(row["input_json"], canonical_json(request))
+            self.assertEqual(row["input_sha256"], request_sha256)
+            self.assertEqual(row["output_sha256"], opinion_output_sha256(row))
+            self.assertEqual(row["home_win_probability"], [0.58, 0.64, 0.61][index])
+            self.assertEqual(json.loads(row["raw_response"])["expected_home_margin"], [2.0, 4.0, 3.0][index])
+        sample_ids = [row["opinion_id"] for row in samples]
+        self.assertEqual(len(set(sample_ids)), 3)
+        self.assertEqual((judge["generation_status"], judge["review_status"]), ("valid", "pending"))
+        self.assertEqual((judge["home_win_probability"], judge["expected_home_margin"]), (0.61, 3.0))
+        self.assertEqual(judge["predicted_away_score"] + judge["predicted_home_score"], 45)
+        self.assertEqual(judge["input_json"], canonical_json(request))
+        self.assertEqual(judge["input_sha256"], request_sha256)
+        raw = json.loads(judge["raw_response"])
+        self.assertEqual(
+            raw["ensemble"],
+            {
+                "size": 3,
+                "valid": 3,
+                "samples": sample_ids,
+                "estimates": [[0.58, 2.0, 44.0], [0.64, 4.0, 46.0], [0.61, 3.0, 45.0]],
+                "reasons_from": sample_ids[2],
+                "rule": ENSEMBLE_RULE,
+            },
+        )
+        self.assertEqual(raw["key_reasons"], json.loads(samples[2]["raw_response"])["key_reasons"])
+        self.assertEqual(json.loads(judge["calibration_summary_json"])["ensemble"], raw["ensemble"])
+        self.assertIn("mean of 3 of 3 samples", judge["full_opinion"])
+
+        self.assertEqual(len(self.harness.calls()), 3)
+        runs = self.harness.runs()
+        self.assertEqual([(run["sample"], run["samples"], run["status"]) for run in runs], [(1, 3, "ok"), (2, 3, "ok"), (3, 3, "ok")])
+        self.assertTrue(all(run["committee_key"] == payload["committee_key"] for run in runs))
+        attempt = summary["attempted"][0]
+        self.assertEqual(
+            (attempt["samples"], attempt["valid_samples"], attempt["sample_opinion_ids"], attempt["judge_opinion_id"]),
+            (3, 3, sample_ids, judge["opinion_id"]),
+        )
+        self.assertEqual(summary["failed"], [])
+        self.assertEqual(len(self.harness.notifications), 1)
+        message = self.harness.notifications[0]
+        self.assertIn(f"judge {judge['opinion_id']} (mean of 3 of 3 samples)", message)
+        self.assertNotIn("sample failures", message)
+        for sample_id in sample_ids:
+            self.assertNotIn(sample_id, message)
+        self.assertIn(f"--opinion-id {judge['opinion_id']} --status approved", message)
+        self.assertEqual(list(self.harness.work_root.iterdir()), [])
+
+        # The next pass finds the valid judge row on the same committee.
+        summary = await self.harness.run([_game()], _committee(), samples=3)
+        self.assertEqual(summary["attempted"], [])
+        self.assertIn("valid judge row already carries", summary["skipped"][0]["reason"])
+        self.assertEqual(len(self.harness.calls()), 3)
+        self.assertEqual(len(self.harness.store.rows), 5)
+
+    async def test_one_invalid_sample_leaves_a_mean_of_two(self) -> None:
+        self.harness.set_mode("vary,invalid,vary")
+        summary = await self.harness.run([_game()], _committee(), samples=3)
+
+        self.assertEqual(
+            self._statuses(),
+            [("god_rules", "valid"), ("god_judge", "sample"), ("god_judge", "sample"), ("god_judge", "sample"), ("god_judge", "valid")],
+        )
+        rows = self.harness.store.rows
+        failed = rows[2]
+        self.assertEqual(failed["review_status"], "not_applicable")
+        self.assertTrue(failed["generation_error"].startswith("ValueError: "))
+        self.assertEqual(failed["raw_response"], json.dumps({"home_win_probability": 0.5}))
+        self.assertEqual(failed["output_sha256"], "")
+        judge = rows[4]
+        self.assertEqual((judge["home_win_probability"], judge["expected_home_margin"]), (0.595, 2.5))
+        ensemble = json.loads(judge["calibration_summary_json"])["ensemble"]
+        self.assertEqual((ensemble["size"], ensemble["valid"]), (3, 2))
+        self.assertEqual(ensemble["samples"], [rows[1]["opinion_id"], rows[3]["opinion_id"]])
+        self.assertEqual(ensemble["estimates"], [[0.58, 2.0, 44.0], [0.61, 3.0, 45.0]])
+        self.assertEqual(ensemble["reasons_from"], rows[1]["opinion_id"])  # equidistant: call order
+        attempt = summary["attempted"][0]
+        self.assertEqual(attempt["valid_samples"], 2)
+        self.assertEqual(attempt["sample_opinion_ids"], [row["opinion_id"] for row in rows[1:4]])
+        self.assertEqual(summary["failed"], [])
+        message = self.harness.notifications[0]
+        self.assertIn("(mean of 2 of 3 samples)", message)
+        self.assertIn("sample failures: sample 2/3 invalid: ", message)
+        self.assertIn("mean of 2 of 3 samples", judge["full_opinion"])
+
+    async def test_all_samples_invalid_persists_one_invalid_judge_row(self) -> None:
+        self.harness.set_mode("invalid")
+        summary = await self.harness.run([_game()], _committee(), samples=3)
+
+        self.assertEqual(
+            self._statuses(),
+            [("god_rules", "valid"), ("god_judge", "sample"), ("god_judge", "sample"), ("god_judge", "sample"), ("god_judge", "invalid")],
+        )
+        invalid = self.harness.store.rows[4]
+        self.assertEqual(invalid["review_status"], "not_applicable")
+        self.assertEqual(invalid["raw_response"], json.dumps({"home_win_probability": 0.5}))
+        self.assertEqual(summary["failed"][0]["stage"], "judge_validation")
+        attempt = summary["attempted"][0]
+        self.assertEqual((attempt["valid_samples"], len(attempt["sample_opinion_ids"])), (0, 3))
+        self.assertEqual(self.harness.notifications, [])
+        self.assertEqual(len(self.harness.calls()), 3)
+        # A second trigger stalls the committee exactly as two single-sample triggers would.
+        await self.harness.run([_game()], _committee(), samples=3)
+        self.assertEqual(len(self.harness.calls()), 6)
+        self.assertEqual([status for _expert, status in self._statuses()].count("invalid"), 2)
+        summary = await self.harness.run([_game()], _committee(), samples=3)
+        self.assertEqual(len(self.harness.calls()), 6)
+        self.assertEqual(summary["attempted"], [])
+        self.assertEqual(len(summary["stalled"]), 1)
+        self.assertIn("failed validation 2 times", summary["skipped"][0]["reason"])
+        self.assertEqual(len(self.harness.notifications), 1)
+        self.assertIn("failed validation twice", self.harness.notifications[0])
+
+    async def test_crashed_call_among_three_leaves_a_mean_of_two(self) -> None:
+        self.harness.set_mode("vary,crash,vary")
+        summary = await self.harness.run([_game()], _committee(), samples=3)
+
+        self.assertEqual(
+            self._statuses(),
+            [("god_rules", "valid"), ("god_judge", "sample"), ("god_judge", "sample"), ("god_judge", "valid")],
+        )
+        runs = self.harness.runs()
+        self.assertEqual([(run["sample"], run["status"]) for run in runs], [(1, "ok"), (2, "error"), (3, "ok")])
+        self.assertEqual(runs[1]["exit_code"], 3)
+        judge = self.harness.store.rows[3]
+        ensemble = json.loads(judge["calibration_summary_json"])["ensemble"]
+        self.assertEqual((ensemble["size"], ensemble["valid"]), (3, 2))
+        self.assertEqual(summary["attempted"][0]["valid_samples"], 2)
+        self.assertEqual(summary["failed"], [])
+        message = self.harness.notifications[0]
+        self.assertIn("(mean of 2 of 3 samples)", message)
+        self.assertIn("sample failures: call 2/3: JudgeCallError: claude exited 3", message)
+
+    async def test_every_call_crashing_is_one_failure_without_a_row(self) -> None:
+        self.harness.set_mode("crash")
+        summary = await self.harness.run([_game()], _committee(), samples=3)
+
+        self.assertEqual(self._statuses(), [("god_rules", "valid")])
+        self.assertEqual(len(self.harness.calls()), 3)
+        self.assertEqual(summary["failed"][0]["stage"], "claude")
+        self.assertIn("call 1/3: JudgeCallError", summary["failed"][0]["error"])
+        self.assertIn("call 3/3: JudgeCallError", summary["failed"][0]["error"])
+        self.assertEqual(len(self.harness.notifications), 1)
+        self.assertTrue(self.harness.notifications[0].startswith("pickbot: God Expert judge call failed"))
+        self.assertEqual([run["status"] for run in self.harness.runs()], ["error"] * 3)
+
+    async def test_single_sample_persists_no_sample_rows(self) -> None:
+        summary = await self.harness.run([_game()], _committee())
+
+        self.assertEqual(self._statuses(), [("god_rules", "valid"), ("god_judge", "valid")])
+        judge = self.harness.store.rows[1]
+        self.assertNotIn("ensemble", json.loads(judge["raw_response"]))
+        self.assertIsNone(json.loads(judge["calibration_summary_json"])["ensemble"])
+        run = self.harness.runs()[0]
+        self.assertEqual((run["sample"], run["samples"]), (1, 1))
+        attempt = summary["attempted"][0]
+        self.assertEqual((attempt["samples"], attempt["valid_samples"], attempt["sample_opinion_ids"]), (1, 0, []))
+        self.assertNotIn("samples", self.harness.notifications[0])
+        with self.assertRaises(ValueError):
+            await self.harness.run([_game()], _committee(), samples=0)
+
+    def test_samples_argument_and_environment(self) -> None:
+        with patch.dict(os.environ, {"GOD_JUDGE_SAMPLES": "3"}):
+            self.assertEqual(build_parser().parse_args([]).samples, 3)
+        with patch.dict(os.environ, {"GOD_JUDGE_SAMPLES": ""}):
+            self.assertEqual(build_parser().parse_args([]).samples, 1)
+            self.assertEqual(build_parser().parse_args(["--samples", "2"]).samples, 2)
+        for bad in ("0", "6"):
+            with self.subTest(samples=bad):
+                with patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "token"}):
+                    with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                        with self.assertRaises(SystemExit) as caught:
+                            main(["--samples", bad])
+                self.assertEqual(caught.exception.code, 2)
+                self.assertIn("--samples", stderr.getvalue())
 
 
 if __name__ == "__main__":

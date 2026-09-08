@@ -13,7 +13,7 @@ is reviewable in git.
 | `telegram-tracker.service` + `.timer` | Pick grader, every 5 min (timer-triggered). |
 | `grade-daemon.service` | Grade daemon (persistent). Grades + broadcasts every 10s. Hang-hardened via `WatchdogSec`. |
 | `trent-monitor.service` + `.timer` | @BookitWithTrent poller, every 15 min. |
-| `god-judge.service` + `.timer` | God Expert judge runner (`scripts/god_judge_runner.py` via `run_god_judge.sh`), every 30 min at :12/:42. One headless `claude -p` call per game with a complete committee, single attempt, `TimeoutStartSec=3600`. Also loads `~/.claude/auth.env` for the subscription token. |
+| `god-judge.service` + `.timer` | God Expert judge runner (`scripts/god_judge_runner.py` via `run_god_judge.sh`), every 30 min at :12/:42. `GOD_JUDGE_SAMPLES` headless `claude -p` calls per game with a complete committee (default 1; 2–5 is the judge ensemble: every sampled response persists as an audit row with `generation_status=sample`, one mean judge row reaches review), single attempt per call, `TimeoutStartSec=9000` (3 games × 3 samples × 900 s). Also loads `~/.claude/auth.env` for the subscription token. |
 
 None of these contain secrets — they load config via `EnvironmentFile=`
 (`.env` + `.env.local`), which are not in git.

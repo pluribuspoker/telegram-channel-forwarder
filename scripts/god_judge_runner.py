@@ -10,13 +10,22 @@ for every enabled non-aggregator expert -- it:
    temp directory (``input.json``, ``request.json``, and an EMPTY ``cwd``);
 2. persists the rules arm on that exact input, unless a valid ``god_rules``
    row already carries the same committee key;
-3. runs one ``claude -p`` call: Fable 5.1 at max effort, every tool
-   disabled, the registered judge prompt as the whole system prompt, the
-   request on stdin, from the empty directory, in an environment that holds
-   no sheet credentials and no API key; the JSON result envelope is captured;
+3. runs ``--samples`` ``claude -p`` calls (``GOD_JUDGE_SAMPLES``, default
+   1): Fable 5.1 at max effort, every tool disabled, the registered judge
+   prompt as the whole system prompt, the request on stdin, from the empty
+   directory, in an environment that holds no sheet credentials and no API
+   key; each JSON result envelope is captured;
 4. persists the judge row through ``generate_opinion`` on the same input
    (backend ``claude_headless``); a response that fails validation persists
-   as an invalid audit row like any other response;
+   as an invalid audit row like any other response. With two or more
+   samples (the judge ensemble, roadmap WP9) every sampled response first
+   persists as an audit row with ``generation_status`` ``sample`` (review
+   ``not_applicable``, whether or not it validated), and the one judge row
+   of the trigger carries the mean of the valid samples' three numbers with
+   the reasons of the sample closest to the mean
+   (``moe_god.ensemble_response``); when no sample validated the first
+   response persists as an ordinary invalid judge row, so the stall cap
+   below counts the trigger exactly as a single-sample one;
 5. deletes the temp directory and DMs the reviewer through the watchdog bot
    that new pending rows exist. The runner never approves anything.
 
@@ -34,8 +43,9 @@ timer slot tries again.
 
 Each call appends one JSON line to ``logs/god_judge_runs.jsonl``
 (``GOD_JUDGE_RUNS_LOG``) carrying the envelope's ``duration_ms``,
-``total_cost_usd``, ``usage`` and ``num_turns``, so weekly subscription
-usage can be measured.
+``total_cost_usd``, ``usage`` and ``num_turns``, plus ``sample`` (1-based)
+and ``samples`` (the trigger's call count), so weekly subscription usage can
+be measured per trigger.
 
 ``--dry-run`` does everything except the two persists, the claude call and
 the DM, and prints what it would do. The exit status is 0 when there was
@@ -71,6 +81,7 @@ load_dotenv(ROOT / ".env")
 
 from moe import (
     MoeOpinionStore,
+    _parse_response,
     approved_opinions,
     configured_opinion_store,
     generate_opinion,
@@ -84,6 +95,7 @@ from moe_god import (
     build_aggregator_input,
     build_judge_request,
     canonical_json,
+    ensemble_response,
     load_registry,
     select_voice_rows,
     sha256_text,
@@ -101,6 +113,9 @@ JUDGE_BACKEND = "claude_headless"
 KICKOFF_CUTOFF = timedelta(hours=2)
 DEFAULT_MAX_GAMES = 3
 INVALID_ATTEMPT_CAP = 2
+# claude calls per game: 1 is the single-sample path, 2..MAX the ensemble.
+DEFAULT_SAMPLES = 1
+MAX_SAMPLES = 5
 CLAUDE_TIMEOUT_SECONDS = 900
 DEFAULT_CLAUDE_BIN = "/home/forwarder/.npm-global/bin/claude"
 DEFAULT_RUNS_LOG = ROOT / "logs" / "god_judge_runs.jsonl"
@@ -302,12 +317,27 @@ def describe_game(game: dict[str, Any]) -> str:
 
 
 def pending_message(
-    game: dict[str, Any], *, rules_id: str, judge_id: str
+    game: dict[str, Any],
+    *,
+    rules_id: str,
+    judge_id: str,
+    samples: int = 1,
+    valid_samples: int = 0,
+    failures: Iterable[str] = (),
 ) -> str:
+    """The reviewer's DM. With an ensemble the judge row is named as the
+    mean of its valid samples and every failed call or sample is listed;
+    the sample rows are audit rows and get no review command."""
+    judge_text = f"judge {judge_id}"
+    if samples > 1:
+        judge_text += f" (mean of {valid_samples} of {samples} samples)"
     lines = [
         f"pickbot: new God Expert rows pending for {describe_game(game)}: "
-        f"rules {rules_id}, judge {judge_id}"
+        f"rules {rules_id}, {judge_text}"
     ]
+    failures = list(failures)
+    if failures:
+        lines.append("sample failures: " + "; ".join(failures))
     for opinion_id in (rules_id, judge_id):
         if opinion_id != "existing":
             lines.append(
@@ -323,6 +353,41 @@ def append_runs_log(path: str | Path, record: dict[str, Any]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
+
+
+def _text_create_fn(text: str) -> Callable[..., Any]:
+    """A ``generate_opinion`` create_fn that answers with captured text."""
+
+    async def create_fn(**_kwargs: Any) -> Any:
+        return SimpleNamespace(content=[SimpleNamespace(text=text)])
+
+    return create_fn
+
+
+class _RecordingStore:
+    """The store plus a record of what was appended through it, so a sample
+    that fails validation can still be named by its audit row's id."""
+
+    def __init__(self, store: MoeOpinionStore) -> None:
+        self._store = store
+        self.appended: list[dict[str, Any]] = []
+
+    def append(self, row: dict[str, Any]) -> None:
+        self._store.append(row)
+        self.appended.append(row)
+
+    def list(self, event_id: str | None = None) -> list[dict[str, Any]]:
+        return self._store.list(event_id)
+
+    def review(
+        self, opinion_id: str, *, status: str, reviewed_by: str, note: str
+    ) -> None:
+        self._store.review(
+            opinion_id, status=status, reviewed_by=reviewed_by, note=note
+        )
+
+    def last_opinion_id(self) -> str:
+        return str(self.appended[-1]["opinion_id"]) if self.appended else ""
 
 
 def send_watchdog_dm(text: str) -> bool:
@@ -360,8 +425,17 @@ async def run_once(
     dry_run: bool = False,
     work_root: str | Path | None = None,
     runs_log_path: str | Path | None = None,
+    samples: int = DEFAULT_SAMPLES,
 ) -> dict[str, list[dict[str, Any]]]:
-    """One pass over the upcoming slate. Every side effect arrives as an argument."""
+    """One pass over the upcoming slate. Every side effect arrives as an argument.
+
+    ``samples`` is the number of claude calls per game: 1 (the default) is
+    the single-sample path, 2 to ``MAX_SAMPLES`` the judge ensemble described
+    in the module docstring.
+    """
+    if not 1 <= int(samples) <= MAX_SAMPLES:
+        raise ValueError(f"samples must be between 1 and {MAX_SAMPLES}")
+    samples = int(samples)
     opinion_rows = list(opinion_rows)
     finals = list(finals)
     snapshots = list(snapshots)
@@ -491,7 +565,8 @@ async def run_once(
                 print(
                     f"dry run: {describe_game(game)} event {event_id} committee "
                     f"{key}: would persist the rules row ({rules_state}), call "
-                    "claude, persist the judge row, and DM the reviewer"
+                    f"claude{'' if samples == 1 else f' {samples} times'}, "
+                    "persist the judge row, and DM the reviewer"
                 )
                 continue
             if existing_rules:
@@ -518,45 +593,114 @@ async def run_once(
                     continue
                 rules_id = str(rules_row["opinion_id"])
                 attempt["rules_opinion_id"] = rules_id
-            record: dict[str, Any] = {
-                "logged_at_utc": datetime.now(timezone.utc).isoformat(),
-                "kind": "claude_call",
-                "event_id": event_id,
-                "away_team": str(game["away_team"]),
-                "home_team": str(game["home_team"]),
-                "committee_key": key,
-            }
-            started = time.monotonic()
-            try:
-                response_text: str | None = claude_invoker(
-                    judge_prompt, judge_user_message(request), str(call_cwd)
-                )
-                record["status"] = "ok"
-            except Exception as exc:
-                response_text = None
-                record["status"] = "error"
-                record["error"] = f"{type(exc).__name__}: {exc}"
-            record["wall_ms"] = int((time.monotonic() - started) * 1000)
-            record.update(getattr(claude_invoker, "last_call", None) or {})
-            append_runs_log(runs_log, record)
-            if response_text is None:
+            request_sha256 = sha256_text(canonical_json(request))
+            responses: list[tuple[int, str]] = []
+            call_errors: list[str] = []
+            for index in range(1, samples + 1):
+                record: dict[str, Any] = {
+                    "logged_at_utc": datetime.now(timezone.utc).isoformat(),
+                    "kind": "claude_call",
+                    "event_id": event_id,
+                    "away_team": str(game["away_team"]),
+                    "home_team": str(game["home_team"]),
+                    "committee_key": key,
+                    "sample": index,
+                    "samples": samples,
+                }
+                started = time.monotonic()
+                try:
+                    text = claude_invoker(
+                        judge_prompt, judge_user_message(request), str(call_cwd)
+                    )
+                    record["status"] = "ok"
+                    responses.append((index, text))
+                except Exception as exc:
+                    record["status"] = "error"
+                    record["error"] = f"{type(exc).__name__}: {exc}"
+                    call_errors.append(
+                        f"call {index}/{samples}: {record['error']}"
+                        if samples > 1
+                        else record["error"]
+                    )
+                record["wall_ms"] = int((time.monotonic() - started) * 1000)
+                record.update(getattr(claude_invoker, "last_call", None) or {})
+                append_runs_log(runs_log, record)
+            if not responses:
+                error_text = "; ".join(call_errors)
                 print(
                     f"{describe_game(game)}: judge call failed "
-                    f"({record['error']}); no row persisted"
+                    f"({error_text}); no row persisted"
                 )
                 notify(
                     "pickbot: God Expert judge call failed for "
-                    f"{describe_game(game)}: {record['error']}"
+                    f"{describe_game(game)}: {error_text}"
                 )
                 summary["failed"].append(
-                    {**attempt, "stage": "claude", "error": record["error"]}
+                    {**attempt, "stage": "claude", "error": error_text}
                 )
                 continue
 
-            async def create_fn(**_kwargs: Any) -> Any:
-                return SimpleNamespace(
-                    content=[SimpleNamespace(text=response_text)]
-                )
+            attempt["samples"] = samples
+            attempt["valid_samples"] = 0
+            attempt["sample_opinion_ids"] = []
+            sample_failures = list(call_errors)
+            valid_samples: list[dict[str, Any]] = []
+            if samples > 1:
+                # The ensemble: every response persists as a sample row first
+                # (an audit row whether or not it validates); the valid ones
+                # combine into the one judge row of the trigger.
+                recorder = _RecordingStore(store)
+                for index, text in responses:
+                    try:
+                        sample_row = await generate_opinion(
+                            expert_id=JUDGE_EXPERT_ID,
+                            game=game,
+                            history=[],
+                            input_payload=payload,
+                            opinions=opinion_rows,
+                            store=recorder,
+                            create_fn=_text_create_fn(text),
+                            generation_backend=JUDGE_BACKEND,
+                            generation_effort=JUDGE_EFFORT,
+                            model=JUDGE_MODEL,
+                            expected_input_sha256=request_sha256,
+                            sample=True,
+                        )
+                    except ValueError as exc:
+                        sample_id = recorder.last_opinion_id()
+                        print(
+                            f"{describe_game(game)}: sample {index}/{samples} "
+                            f"failed validation ({exc}); audit row "
+                            f"{sample_id or 'not persisted'}"
+                        )
+                        sample_failures.append(
+                            f"sample {index}/{samples} invalid: {exc}"
+                        )
+                        if sample_id:
+                            attempt["sample_opinion_ids"].append(sample_id)
+                        continue
+                    sample_id = str(sample_row["opinion_id"])
+                    attempt["sample_opinion_ids"].append(sample_id)
+                    valid_samples.append(
+                        {"opinion_id": sample_id, "response": _parse_response(text)}
+                    )
+                attempt["valid_samples"] = len(valid_samples)
+                if valid_samples:
+                    response_text = json.dumps(
+                        ensemble_response(
+                            valid_samples,
+                            fair_home=float(payload["market"]["fair"]["home_ml"]),
+                            size=samples,
+                        ),
+                        sort_keys=True,
+                    )
+                else:
+                    # Nothing validated: the first response persists as an
+                    # ordinary invalid judge row, so the stall cap counts the
+                    # trigger exactly as it would a single-sample one.
+                    response_text = responses[0][1]
+            else:
+                response_text = responses[0][1]
 
             try:
                 judge_row = await generate_opinion(
@@ -566,11 +710,11 @@ async def run_once(
                     input_payload=payload,
                     opinions=opinion_rows,
                     store=store,
-                    create_fn=create_fn,
+                    create_fn=_text_create_fn(response_text),
                     generation_backend=JUDGE_BACKEND,
                     generation_effort=JUDGE_EFFORT,
                     model=JUDGE_MODEL,
-                    expected_input_sha256=sha256_text(canonical_json(request)),
+                    expected_input_sha256=request_sha256,
                 )
             except ValueError as exc:
                 print(
@@ -586,8 +730,22 @@ async def run_once(
             print(
                 f"{describe_game(game)}: persisted rules {rules_id}, judge "
                 f"{judge_id} (committee {key[:12]})"
+                + (
+                    f"; {len(valid_samples)} of {samples} samples valid"
+                    if samples > 1
+                    else ""
+                )
             )
-            notify(pending_message(game, rules_id=rules_id, judge_id=judge_id))
+            notify(
+                pending_message(
+                    game,
+                    rules_id=rules_id,
+                    judge_id=judge_id,
+                    samples=samples,
+                    valid_samples=len(valid_samples),
+                    failures=sample_failures,
+                )
+            )
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
     if summary["stalled"]:
@@ -607,7 +765,7 @@ async def run_once(
     return summary
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -652,9 +810,27 @@ def main(argv: list[str] | None = None) -> int:
         ),
         help="Parent of the per-game temp directories (default: system temp).",
     )
+    parser.add_argument(
+        "--samples",
+        type=int,
+        default=int(os.environ.get("GOD_JUDGE_SAMPLES") or DEFAULT_SAMPLES),
+        help=(
+            "claude calls per game (GOD_JUDGE_SAMPLES; default 1). Two to "
+            f"{MAX_SAMPLES} is the judge ensemble: every sampled response "
+            "persists as an audit row with generation_status sample and the "
+            "one judge row carries their mean."
+        ),
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     if args.max_games < 1:
         parser.error("--max-games must be at least 1")
+    if not 1 <= args.samples <= MAX_SAMPLES:
+        parser.error(f"--samples must be between 1 and {MAX_SAMPLES}")
     oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
     if not args.dry_run and not oauth_token:
         parser.error(
@@ -719,6 +895,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             work_root=args.work_root,
             runs_log_path=args.runs_log,
+            samples=args.samples,
         )
     )
     print(
