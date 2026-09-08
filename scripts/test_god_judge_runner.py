@@ -358,6 +358,12 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         keys = {json.loads(row["input_json"])["committee_key"] for row in self.harness.store.rows}
         self.assertEqual(len(keys), 2)
 
+    async def test_pending_dm_can_be_silenced_for_the_desk_group(self) -> None:
+        summary = await self.harness.run([_game()], _committee(), pending_dm=False)
+        self.assertEqual(len(summary["attempted"]), 1)
+        self.assertEqual(summary["failed"], [])
+        self.assertEqual(self.harness.notifications, [])
+
     async def test_kickoff_cutoff_skips_the_game(self) -> None:
         summary = await self.harness.run(
             [_game()], _committee(), now=_parse_time(KICKOFF) - timedelta(hours=1, minutes=59)

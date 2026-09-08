@@ -230,3 +230,6 @@ __marimo__/
 
 # angles/data/ was covered by the old unanchored "data/" rule; keep it ignored
 angles/data/
+
+# Desk group (moe_desk.py): message ids and announcements, one slate at a time
+moe_desk_state.json

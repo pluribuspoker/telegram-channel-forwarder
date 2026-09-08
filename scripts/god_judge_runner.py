@@ -361,8 +361,12 @@ async def run_once(
     dry_run: bool = False,
     work_root: str | Path | None = None,
     runs_log_path: str | Path | None = None,
+    pending_dm: bool = True,
 ) -> dict[str, list[dict[str, Any]]]:
-    """One pass over the upcoming slate. Every side effect arrives as an argument."""
+    """One pass over the upcoming slate. Every side effect arrives as an
+    argument. ``pending_dm=False`` keeps the "rows pending" DM quiet (the
+    desk group's review card carries the same rows with buttons); failure
+    and stall DMs are unaffected."""
     opinion_rows = list(opinion_rows)
     finals = list(finals)
     snapshots = list(snapshots)
@@ -588,7 +592,8 @@ async def run_once(
                 f"{describe_game(game)}: persisted rules {rules_id}, judge "
                 f"{judge_id} (committee {key[:12]})"
             )
-            notify(pending_message(game, rules_id=rules_id, judge_id=judge_id))
+            if pending_dm:
+                notify(pending_message(game, rules_id=rules_id, judge_id=judge_id))
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
     if summary["stalled"]:
@@ -720,6 +725,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             work_root=args.work_root,
             runs_log_path=args.runs_log,
+            pending_dm=os.environ.get("GOD_JUDGE_PENDING_DM", "1").strip() != "0",
         )
     )
     print(

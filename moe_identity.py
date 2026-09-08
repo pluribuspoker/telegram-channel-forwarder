@@ -58,6 +58,52 @@ def resolve_moe_expert_user_id(
     return str(user_id)
 
 
+REVIEWER_ROLE = "reviewer"
+
+
+def resolve_role_user_ids(
+    rows: Iterable[Mapping[str, Any]],
+    role: str,
+) -> dict[int, str]:
+    """Every ``allowed_users`` row carrying ``role`` in ``moe_expert_ids``, as
+    ``{telegram_id: display_name}``. Unlike an expert role, several people may
+    hold one (the desk group's reviewers); a row with the role but an invalid
+    Telegram ID fails closed."""
+    normalized_role = role.strip().lower()
+    if not normalized_role:
+        raise ValueError("role cannot be empty")
+    holders: dict[int, str] = {}
+    for row in rows:
+        if normalized_role not in _expert_ids(row.get(MOE_EXPERT_IDS_COLUMN)):
+            continue
+        raw_user_id = str(row.get("telegram_id") or "").strip()
+        try:
+            user_id = int(raw_user_id)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"{ALLOWED_USERS_TAB} row with role {normalized_role!r} has an "
+                "invalid Telegram ID"
+            ) from exc
+        if user_id <= 0:
+            raise RuntimeError(
+                f"{ALLOWED_USERS_TAB} row with role {normalized_role!r} has an "
+                "invalid Telegram ID"
+            )
+        display_name = str(row.get("display_name") or "").strip()
+        holders[user_id] = display_name or str(user_id)
+    return holders
+
+
+def resolve_role_user_ids_from_spreadsheet(
+    spreadsheet: Any,
+    role: str,
+) -> dict[int, str]:
+    rows = spreadsheet.worksheet(ALLOWED_USERS_TAB).get_all_records(
+        expected_headers=ALLOWED_USER_HEADERS
+    )
+    return resolve_role_user_ids(rows, role)
+
+
 def resolve_moe_expert_user_id_from_spreadsheet(
     spreadsheet: Any,
     expert_id: str,

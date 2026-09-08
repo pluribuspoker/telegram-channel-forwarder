@@ -612,6 +612,91 @@ verification gates, backups, and rollback with post-cutover delta replay. It
 must be reconciled with the final script names after the backend implementation
 and rehearsed against a production export before use.
 
+### Implemented locally — 2026-09-08: Desk group (Option B)
+
+The Telegram surface for operating the committee: one private supergroup
+with forum topics, the intake bot as admin, SS and AK as members with
+identical rights. Design record: the "MOE on Telegram" options page
+(`https://claude.ai/code/artifact/83938fa2-fc51-4fb0-b968-72fbda733c94`).
+Option B was chosen on 2026-09-08 with two corrections from review: SS and
+AK are peers on every surface, and "AK" the person is distinct from the AK
+Expert voice — a committee member whose input is AK's projected scores, the
+way the rating voice's input is finals. Nothing in the desk limits what
+either person sees or does.
+
+- `moe_desk.py` owns the model (`build_desks`), the renderers, the
+  idempotent sync (`sync_desk`) and a thin Bot API transport (`BotApi`,
+  `urllib`, one 429 honoured). It imports nothing from `moe` (`fcntl`), so
+  `scripts/test_moe_desk.py` runs on Windows; the caller passes the
+  hash-verified approved rows (`moe.approved_opinions`) in. `intake_bot.py`
+  wires it: a sync task inside the bot process every
+  `MOE_DESK_SYNC_SECONDS` (default 120, floor 15), the `desk:` callback
+  branch, the `/start op_<opinion>` and `/start game_<event>` deep links,
+  and reviewers paging through pending rows in the DM detail view.
+- Topics and cards. 📥 Review: one card per upcoming game (inside ten days)
+  listing every pending valid row, oldest first, then the latest reviewed
+  row per expert and model (re-judges do not pile up; invalid audit rows and
+  ensemble sample rows never appear), each pending row with ✅ ❌ callbacks
+  and a 👁 deep link into the tapper's own DM. A pinned queue card shows
+  every game's committee — approved / pending / rejected / missing per
+  required voice, optional voices only when they have a row — the God arms'
+  state, and the count of games each required voice has no row for.
+  🏈 Picks: one card per game once an arm row is approved: both arms' legs
+  with pass reasons and units, the committee count, generation times, and a
+  collapsed `<blockquote expandable>` "Why" (thesis plus up to three
+  supporting factors and two counterarguments per arm) that each viewer
+  opens on their own screen; 👁 All opinions deep-links to the game's MOE
+  view. A pinned week card lists the legs per game. 📊 Scores:
+  `scripts/moe_grade.py --notify` posts the digest there (`<pre>`, silent)
+  when `MOE_DESK_SCORES_TOPIC` is set and falls back to the watchdog DM.
+- Shared-message rules: a button acts or deep-links, never navigates the
+  message both people see. ✅ ❌ are checked against the `reviewer` role in
+  `allowed_users` (`moe_identity.resolve_role_user_ids`; both reviewers hold
+  it, granted with `scripts/desk_setup.py --grant-reviewer`), re-read the
+  sheet (a write never trusts the 30 s cache), refuse anything not pending
+  ("Already approved by AK."), run the store's hash-checked `review` signed
+  with the tapper's display name, and re-sync the card at once. "✅ Approve
+  both arms" appears only when both God arms are pending
+  (`desk:okarms:<event>`, rules then judge) — bulk approval stays per game
+  for the two arms and per row for the voices, as decided on the options
+  page. Pending and rejected rows are visible to both reviewers in the group
+  and, through the deep link, in their DMs; the DM browser
+  (`/guess_nfl_game` → 🧠) stays approved-only.
+- Loud and silent. Every card post and edit is silent. Loud replies: under
+  the picks card once per newly approved bet leg
+  (`bet:<opinion>:<side|total>`), under the review card once per game when
+  the judge lock (kickoff − 2 h, the runner's cutoff) is within
+  `MOE_DESK_LOCK_WARN_HOURS` (default 2) and rows are still pending. The
+  runner's own "rows pending" DM is silenced with `GOD_JUDGE_PENDING_DM=0`
+  (`run_once(pending_dm=False)`); its failure and stall DMs are unchanged.
+- State: `moe_desk_state.json` (gitignored; `MOE_DESK_STATE_PATH` to move
+  it) holds message ids and content hashes per card, announcements and
+  kickoffs; atomic writes; entries pruned three days after kickoff; games
+  are frozen once they kick off. Unchanged content is never edited, a
+  deleted card is re-posted, at most 15 new messages per pass (a first pass
+  over a full slate spreads across a few passes), API errors are collected
+  per card and retried on the next pass.
+- Setup, every step from a shell (the VPS Claude session included): create a
+  private group, convert it to a supergroup with Topics, add the bot as
+  admin with Manage topics + Pin messages, set `MOE_DESK_CHAT_ID`, then
+  `scripts/desk_setup.py --create-topics` (prints the three topic keys),
+  `--grant-reviewer <telegram_id>` for each reviewer, `--check [--post-test]`,
+  restart `telegram-intake.service` (the journal says "Desk group enabled"
+  or why not). Keys live in `.env` (synced — add them locally first, since
+  `syncenv` deletes server keys absent locally): `MOE_DESK_CHAT_ID`,
+  `MOE_DESK_REVIEW_TOPIC`, `MOE_DESK_PICKS_TOPIC`, `MOE_DESK_SCORES_TOPIC`,
+  `MOE_DESK_SYNC_SECONDS`, `MOE_DESK_LOCK_WARN_HOURS`, `GOD_JUDGE_PENDING_DM`.
+  Empty keys leave the desk disabled.
+- Deferred, per the options page: replies under a card as row notes; a
+  two-signature rule for the arms (one tap decides a row today); a
+  `/scoreboard` command; the voice generation timer and the committee-key
+  coarsening are separate work packages and the reason the desk is quiet
+  or not.
+- Tests: `scripts/test_moe_desk.py` (model, renderers, sync, state,
+  transport; Windows), `ReviewerRoleTests` in `scripts/test_moe_identity.py`,
+  `DeskReviewTest` in `scripts/test_intake_bot.py`, the pending-DM gate in
+  `scripts/test_god_judge_runner.py`.
+
 ### Implemented locally — 2026-09-06: God Expert aggregator (rules + judge)
 
 Two aggregator experts sit on top of the committee and ride the identical

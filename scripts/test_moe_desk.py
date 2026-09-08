@@ -1,0 +1,812 @@
+#!/usr/bin/env python3
+"""Tests for the desk group (moe_desk.py): model, renderers, sync, transport.
+
+Pure Python — no Telethon, no ``moe`` (fcntl) — so it runs on Windows too:
+``python -m unittest scripts.test_moe_desk``.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import sys
+import tempfile
+import unittest
+import urllib.error
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import moe_desk
+from moe_desk import (
+    BotApi,
+    DeskApiError,
+    DeskConfig,
+    build_desks,
+    committee_experts,
+    content_hash,
+    desk_config_from_env,
+    empty_state,
+    leg_label,
+    load_state,
+    lock_warning_due,
+    parse_callback,
+    parse_start_param,
+    post_scores_notice,
+    prune_state,
+    render_picks_card,
+    render_queue_card,
+    render_review_card,
+    render_week_card,
+    review_targets,
+    save_state,
+    sync_desk,
+)
+
+NOW = datetime(2026, 9, 12, 13, 0, tzinfo=timezone.utc)  # Saturday, 9 AM ET
+SEA_KICKOFF = "2026-09-13T20:05:00+00:00"  # Sunday 4:05 PM ET
+LAR_KICKOFF = "2026-09-13T20:25:00+00:00"
+REGISTRY = {
+    "experts": {
+        "schedule": {"enabled": True, "mode": "agent", "name": "Schedule Expert"},
+        "divisional": {"enabled": True, "mode": "agent", "name": "Divisional Expert"},
+        "win_total": {"enabled": True, "mode": "agent", "name": "Win Total Expert"},
+        "ak": {"enabled": True, "mode": "human_calibration", "name": "AK Expert"},
+        "rating_elo": {"enabled": True, "mode": "model", "name": "Rating Expert (Elo)"},
+        "cee": {
+            "enabled": True,
+            "mode": "agent",
+            "committee_optional": True,
+            "name": "Cee Expert",
+        },
+        "disabled": {"enabled": False, "mode": "agent"},
+        "god_rules": {"enabled": True, "mode": "aggregator"},
+        "god_judge": {"enabled": True, "mode": "aggregator_judge"},
+    }
+}
+CONFIG = DeskConfig(
+    bot_token="token",
+    chat_id="-1001",
+    review_topic=11,
+    picks_topic=22,
+    scores_topic=33,
+    bot_username="nflguesser_bot",
+)
+SEA_SIDE = {
+    "confidence_stars": 1,
+    "edge": 0.0329,
+    "ev_per_unit": 0.0225,
+    "fair_probability": 0.4783,
+    "line": -3.5,
+    "price": 100,
+    "probability": 0.5112,
+    "selection": "Seattle Seahawks",
+    "stake_fraction": 0.0056,
+    "stake_units": 0.6,
+}
+OVER = {
+    "confidence_stars": 1,
+    "edge": 0.033,
+    "line": 44.5,
+    "price": -105,
+    "probability": 0.5222,
+    "selection": "Over",
+    "stake_units": 0.5,
+}
+PASS_ADVERSE = {
+    "selection": "PASS",
+    "line": None,
+    "price": None,
+    "probability": 0.51,
+    "edge": 0.03,
+    "confidence_stars": 1,
+    "stake_units": 0.0,
+    "pass_reason": "adverse move",
+}
+PASS_PLAIN = {**PASS_ADVERSE, "pass_reason": None}
+
+
+def game(event_id, away, home, kickoff, *, week=1, status="upcoming"):
+    return {
+        "event_id": event_id,
+        "season": 2026,
+        "week": week,
+        "status": status,
+        "commence_time_utc": kickoff,
+        "away_team": away,
+        "home_team": home,
+    }
+
+
+def row(
+    opinion_id,
+    event_id,
+    expert_id,
+    *,
+    status="pending",
+    model="claude-opus-4-8",
+    generated="2026-09-12T12:00:00+00:00",
+    generation_status="valid",
+    **extra,
+):
+    names = {
+        "schedule": "Schedule Expert",
+        "divisional": "Divisional Expert",
+        "win_total": "Win Total Expert",
+        "ak": "AK Expert",
+        "rating_elo": "Rating Expert (Elo)",
+        "cee": "Cee Expert",
+        "god_rules": "God Expert (Rules)",
+        "god_judge": "God Expert (Judge)",
+    }
+    base = {
+        "opinion_id": opinion_id,
+        "event_id": event_id,
+        "expert_id": expert_id,
+        "expert_name": names[expert_id],
+        "model": model,
+        "generated_at_utc": generated,
+        "generation_status": generation_status,
+        "review_status": status,
+        "reviewed_by": "SS" if status in {"approved", "rejected"} else "",
+        "reviewed_at_utc": "2026-09-12T12:41:00+00:00" if status != "pending" else "",
+        "review_note": "",
+        "away_team": "New England Patriots",
+        "home_team": "Seattle Seahawks",
+        "predicted_winner": "Seattle Seahawks",
+        "home_win_probability": 0.61,
+        "predicted_away_score": 20,
+        "predicted_home_score": 24,
+        "confidence_stars": 2,
+        "thesis": "Seattle's 10.5 season total vs New England's 7.5; both forecasters agree.",
+        "pick_market": "side",
+        "side_pick_json": "",
+        "total_pick_json": "",
+        "supporting_factors_json": "",
+        "counterarguments_json": "",
+        "generation_backend": "agent_runtime",
+    }
+    base.update(extra)
+    return base
+
+
+def arm_row(opinion_id, event_id, expert_id, side, total, **extra):
+    extra.setdefault(
+        "thesis",
+        "God Expert (rules): side Seattle Seahawks -3.5 ★; total Over 44.5 ★.",
+    )
+    return row(
+        opinion_id,
+        event_id,
+        expert_id,
+        model="deterministic" if expert_id == "god_rules" else "claude-fable-5-1",
+        pick_market="side_and_total",
+        side_pick_json=json.dumps(side),
+        total_pick_json=json.dumps(total),
+        **extra,
+    )
+
+
+def committee(event_id="401", *, arms_status="pending"):
+    return [
+        row("a1", event_id, "schedule", status="approved"),
+        row("a2", event_id, "divisional", status="approved"),
+        row("p1", event_id, "win_total"),
+        row("a3", event_id, "ak", status="approved"),
+        row("a4", event_id, "rating_elo", status="approved", model="deterministic"),
+        arm_row(
+            "c884d868-0000",
+            event_id,
+            "god_rules",
+            PASS_ADVERSE,
+            {**PASS_PLAIN, "pass_reason": "ev floor"},
+            status=arms_status,
+            generated="2026-09-12T12:30:00+00:00",
+        ),
+        arm_row(
+            "444bf3de-0000",
+            event_id,
+            "god_judge",
+            PASS_PLAIN,
+            PASS_PLAIN,
+            status=arms_status,
+            generated="2026-09-12T12:31:00+00:00",
+            generation_backend="claude_headless",
+        ),
+    ]
+
+
+def approved_of(rows):
+    """Stand-in for moe.approved_opinions: the caller's hash-verified rows."""
+    return [
+        r
+        for r in rows
+        if r.get("generation_status", "valid") == "valid"
+        and r.get("review_status") == "approved"
+    ]
+
+
+class FakeApi(BotApi):
+    def __init__(self):  # noqa: D401 - no token, no network
+        self.sent: list[dict] = []
+        self.edits: list[dict] = []
+        self.pins: list[int] = []
+        self.missing: set[int] = set()
+        self.next_id = 100
+
+    def send(self, chat_id, thread_id, text, *, keyboard=None, silent=True, reply_to=None):
+        self.next_id += 1
+        self.sent.append(
+            {
+                "id": self.next_id,
+                "chat": chat_id,
+                "topic": thread_id,
+                "text": text,
+                "keyboard": keyboard,
+                "silent": silent,
+                "reply_to": reply_to,
+            }
+        )
+        return self.next_id
+
+    def edit(self, chat_id, message_id, text, *, keyboard=None):
+        if message_id in self.missing:
+            return False
+        self.edits.append({"id": message_id, "text": text, "keyboard": keyboard})
+        return True
+
+    def pin(self, chat_id, message_id):
+        self.pins.append(message_id)
+        return True
+
+
+class ModelTests(unittest.TestCase):
+    def test_committee_experts_mirror_the_runner_rule(self) -> None:
+        self.assertEqual(
+            committee_experts(REGISTRY),
+            ["ak", "divisional", "rating_elo", "schedule", "win_total"],
+        )
+
+    def test_voice_status_and_arms(self) -> None:
+        rows = committee()
+        desk = build_desks(
+            [game("401", "New England Patriots", "Seattle Seahawks", SEA_KICKOFF)],
+            rows,
+            approved_of(rows),
+            REGISTRY,
+            now=NOW,
+        )[0]
+        statuses = {expert_id: status for expert_id, status, _ in desk.voices}
+        self.assertEqual(
+            statuses,
+            {
+                "ak": "approved",
+                "divisional": "approved",
+                "rating_elo": "approved",
+                "schedule": "approved",
+                "win_total": "pending",
+            },
+        )
+        self.assertNotIn("cee", statuses)  # optional and absent
+        self.assertEqual((desk.required_approved, desk.required_total), (4, 5))
+        self.assertEqual([r["opinion_id"] for r in desk.pending], ["p1", "c884d868-0000", "444bf3de-0000"])
+        self.assertIsNone(desk.rules)
+        self.assertFalse(desk.started)
+
+    def test_optional_voice_shows_only_when_it_has_a_row(self) -> None:
+        rows = committee() + [row("o1", "401", "cee", status="rejected")]
+        desk = build_desks(
+            [game("401", "New England Patriots", "Seattle Seahawks", SEA_KICKOFF)],
+            rows,
+            approved_of(rows),
+            REGISTRY,
+            now=NOW,
+        )[0]
+        self.assertIn(("cee", "rejected", False), desk.voices)
+        self.assertEqual(desk.missing_required, [])
+
+    def test_horizon_status_and_started_games(self) -> None:
+        far = game("9", "A B", "C D", (NOW + timedelta(days=20)).isoformat())
+        done = game("8", "A B", "C D", (NOW - timedelta(hours=1)).isoformat())
+        old = game("7", "A B", "C D", (NOW - timedelta(days=5)).isoformat())
+        final = game("6", "A B", "C D", SEA_KICKOFF, status="final")
+        desks = build_desks([far, done, old, final], [], [], REGISTRY, now=NOW)
+        self.assertEqual([d.event_id for d in desks], ["8"])
+        self.assertTrue(desks[0].started)
+
+    def test_review_rows_keep_latest_reviewed_per_expert_and_model(self) -> None:
+        rows = [
+            row("old", "401", "schedule", status="approved", generated="2026-09-10T00:00:00+00:00"),
+            row("new", "401", "schedule", status="rejected", generated="2026-09-11T00:00:00+00:00"),
+            row("hk", "401", "schedule", status="approved", model="claude-haiku-4-5"),
+            row("bad", "401", "schedule", generation_status="invalid"),
+            row("sample", "401", "schedule", status="not_applicable"),
+            row("pend", "401", "win_total"),
+        ]
+        desk = build_desks(
+            [game("401", "New England Patriots", "Seattle Seahawks", SEA_KICKOFF)],
+            rows,
+            approved_of(rows),
+            REGISTRY,
+            now=NOW,
+        )[0]
+        self.assertEqual([r["opinion_id"] for r in desk.review_rows], ["pend", "hk", "new"])
+
+
+class RenderTests(unittest.TestCase):
+    def desk(self, rows, event_id="401", kickoff=SEA_KICKOFF, now=NOW):
+        return build_desks(
+            [game(event_id, "New England Patriots", "Seattle Seahawks", kickoff)],
+            rows,
+            approved_of(rows),
+            REGISTRY,
+            now=now,
+        )[0]
+
+    def test_leg_labels(self) -> None:
+        self.assertEqual(leg_label(SEA_SIDE, kind="side"), "Seahawks -3.5 (+100) ★ 0.6u")
+        self.assertEqual(leg_label(OVER, kind="total"), "Over 44.5 (-105) ★ 0.5u")
+        self.assertEqual(leg_label(PASS_ADVERSE, kind="side"), "PASS (adverse move)")
+        self.assertEqual(leg_label(PASS_ADVERSE, kind="side", short_pass=True), "pass")
+        self.assertEqual(leg_label(None, kind="side"), "—")
+        self.assertEqual(
+            leg_label(OVER, kind="total", with_stars=False), "Over 44.5 (-105)"
+        )
+
+    def test_review_card_lists_pending_first_with_buttons(self) -> None:
+        rows = committee()
+        rows[0]["reviewed_at_utc"] = "2026-09-12T13:41:00+00:00"
+        text, keyboard = render_review_card(self.desk(rows), config=CONFIG)
+        self.assertIn("📥 <b>Patriots @ Seahawks</b> · Sun Sep 13 · 4:05 PM ET", text)
+        self.assertIn("judge locks 2:05 PM ET · committee 4 of 5 approved · 3 pending", text)
+        # pending rows come first, numbered; reviewed rows carry the reviewer
+        self.assertLess(text.index("Win Total Expert"), text.index("Schedule Expert"))
+        self.assertIn("1 · <b>Win Total Expert</b> · <code>opus-4-8</code>", text)
+        self.assertIn("Seahawks 61% ★★ · 20-24 · “Seattle", text)
+        self.assertIn("<code>c884d868</code>", text)
+        self.assertIn("<code>444bf3de</code> · headless", text)
+        self.assertIn("Side PASS (adverse move) · Total PASS (ev floor) · p home .61", text)
+        self.assertIn("<b>Schedule Expert</b> · <code>opus-4-8</code> · ✅ SS 9:41 AM", text)
+        # three pending rows -> three button rows, then "approve both arms"
+        self.assertEqual(len(keyboard), 4)
+        self.assertEqual(
+            [b["text"] for b in keyboard[0]], ["✅ 1", "❌ 1", "👁 1"]
+        )
+        self.assertEqual(keyboard[0][0]["callback_data"], "desk:ok:p1")
+        self.assertEqual(keyboard[0][1]["callback_data"], "desk:no:p1")
+        self.assertEqual(
+            keyboard[0][2]["url"], "https://t.me/nflguesser_bot?start=op_p1"
+        )
+        self.assertEqual(keyboard[3][0]["callback_data"], "desk:okarms:401")
+        # every callback fits Telegram's 64-byte limit
+        for row_buttons in keyboard:
+            for button in row_buttons:
+                if "callback_data" in button:
+                    self.assertLessEqual(len(button["callback_data"].encode()), 64)
+
+    def test_review_card_without_username_has_no_read_links(self) -> None:
+        rows = committee()
+        _, keyboard = render_review_card(
+            self.desk(rows), config=DeskConfig("t", "-1", 1, 2)
+        )
+        self.assertEqual([b["text"] for b in keyboard[0]], ["✅ 1", "❌ 1"])
+
+    def test_approve_both_arms_needs_both_pending(self) -> None:
+        rows = committee()
+        rows[-1]["review_status"] = "approved"
+        _, keyboard = render_review_card(self.desk(rows), config=CONFIG)
+        self.assertNotIn(
+            "desk:okarms:401", [b.get("callback_data") for r in keyboard for b in r]
+        )
+
+    def test_rejected_row_shows_note_and_escapes_html(self) -> None:
+        rows = committee()
+        rows[2]["review_status"] = "rejected"
+        rows[2]["reviewed_by"] = "AK"
+        rows[2]["review_note"] = "reason 2 says <three> voices"
+        rows[2]["reviewed_at_utc"] = "2026-09-12T12:41:00+00:00"
+        text, keyboard = render_review_card(self.desk(rows), config=CONFIG)
+        self.assertIn("❌ AK 8:41 AM · “reason 2 says &lt;three&gt; voices”", text)
+        self.assertEqual(len(keyboard), 3)  # two arms + approve-both
+
+    def test_picks_card_has_legs_committee_and_expandable_why(self) -> None:
+        rows = committee(arms_status="approved")
+        rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
+        rows[5]["total_pick_json"] = json.dumps(OVER)
+        rows[5]["supporting_factors_json"] = json.dumps(
+            ["Pool p(home) .56 vs market .58", {"text": "Voices split 3-2"}]
+        )
+        text, keyboard = render_picks_card(self.desk(rows), config=CONFIG)
+        self.assertIn("🏈 <b>Patriots @ Seahawks</b>", text)
+        self.assertIn(
+            "<b>Rules</b>  Seahawks -3.5 (+100) ★ 0.6u · total Over 44.5 (-105) ★ 0.5u · p home .61",
+            text,
+        )
+        self.assertIn("<b>Judge</b>  PASS · total PASS · p home .61", text)
+        self.assertIn("committee 4/5 · rules 8:30 AM · judge 8:31 AM", text)
+        self.assertIn("<blockquote expandable><b>Rules</b> · God Expert (rules)", text)
+        self.assertIn("• Pool p(home) .56 vs market .58\n• Voices split 3-2\n<b>Judge</b>", text)
+        self.assertTrue(text.endswith("</blockquote>"))
+        self.assertEqual(
+            keyboard, [[{"text": "👁 All opinions", "url": "https://t.me/nflguesser_bot?start=game_401"}]]
+        )
+
+    def test_picks_card_with_one_arm(self) -> None:
+        rows = committee(arms_status="approved")
+        rows[6]["review_status"] = "pending"
+        text, _ = render_picks_card(self.desk(rows), config=CONFIG)
+        self.assertIn("<b>Judge</b>  —", text)
+        self.assertIn("committee 4/5 · rules 8:30 AM\n", text)
+
+    def test_queue_and_week_cards(self) -> None:
+        rows = committee("401") + [
+            arm_row("r2", "402", "god_rules", SEA_SIDE, PASS_PLAIN, status="approved"),
+        ]
+        desks = build_desks(
+            [
+                game("401", "New England Patriots", "Seattle Seahawks", SEA_KICKOFF),
+                game("402", "San Francisco 49ers", "Los Angeles Rams", LAR_KICKOFF),
+                game("403", "Dallas Cowboys", "Philadelphia Eagles", LAR_KICKOFF, week=2),
+            ],
+            rows,
+            approved_of(rows),
+            REGISTRY,
+            now=NOW,
+        )
+        abbrevs = {"Seattle Seahawks": "SEA", "New England Patriots": "NE"}
+        text, keyboard = render_queue_card(desks, team_abbrevs=abbrevs)
+        self.assertEqual(keyboard, [])
+        self.assertIn("📥 <b>Review queue</b> · Weeks 1–2 · 3 pending in 1 game", text)
+        self.assertIn(
+            "<b>NE @ SEA</b> Sun 4:05 PM · AK ✓ Div ✓ Elo ✓ Sch ✓ WT ⏳ · God ⏳/⏳", text
+        )
+        self.assertIn("<b>49ers @ Rams</b> Sun 4:25 PM · AK — Div — Elo — Sch — WT — · God ✓/—", text)
+        self.assertIn("no row yet · AK 2 · Div 2 · Elo 2 · Sch 2 · WT 2", text)
+        text, _ = render_week_card(desks, team_abbrevs=abbrevs)
+        self.assertIn("🧠 <b>God Expert</b> · Weeks 1–2 · 1 of 3 committees complete", text)
+        self.assertIn("<b>NE @ SEA</b> Sun 4:05 PM · waiting on committee (4/5)", text)
+        self.assertIn("<b>49ers @ Rams</b> Sun 4:25 PM · Seahawks -3.5 (+100) ★ 0.6u · pass · judge —", text)
+
+    def test_empty_slate_cards(self) -> None:
+        text, _ = render_queue_card([])
+        self.assertIn("0 pending in 0 games", text)
+        self.assertIn("No upcoming games inside ten days.", text)
+        text, _ = render_week_card([])
+        self.assertIn("0 of 0 committees complete", text)
+
+
+class SyncTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.api = FakeApi()
+        self.state = empty_state()
+        self.games = [
+            game("401", "New England Patriots", "Seattle Seahawks", SEA_KICKOFF),
+            game("402", "San Francisco 49ers", "Los Angeles Rams", LAR_KICKOFF),
+        ]
+
+    def desks(self, rows, now=NOW):
+        return build_desks(self.games, rows, approved_of(rows), REGISTRY, now=now)
+
+    def sync(self, rows, now=NOW, **kwargs):
+        return sync_desk(
+            config=CONFIG,
+            api=self.api,
+            state=self.state,
+            desks=self.desks(rows, now),
+            now=now,
+            **kwargs,
+        )
+
+    def test_first_pass_posts_cards_and_pins_queue_and_week(self) -> None:
+        rows = committee("401")
+        summary = self.sync(rows)
+        self.assertEqual(summary.posted, ["review:401", "queue", "week"])
+        self.assertEqual(summary.alerts, [])
+        topics = [m["topic"] for m in self.api.sent]
+        self.assertEqual(topics, [11, 11, 22])
+        self.assertTrue(all(m["silent"] for m in self.api.sent))
+        self.assertEqual(self.api.pins, [102, 103])
+        self.assertEqual(self.state["cards"]["review:401"]["message_id"], 101)
+        self.assertEqual(self.state["kickoffs"]["401"], SEA_KICKOFF)
+        self.assertIn("402", self.state["kickoffs"])
+
+    def test_second_pass_with_the_same_model_is_a_no_op(self) -> None:
+        rows = committee("401")
+        self.sync(rows)
+        sent = len(self.api.sent)
+        summary = self.sync(rows)
+        self.assertEqual((summary.posted, summary.edited, summary.alerts), ([], [], []))
+        self.assertEqual(len(self.api.sent), sent)
+        self.assertEqual(self.api.edits, [])
+
+    def test_a_review_edits_only_the_affected_cards(self) -> None:
+        rows = committee("401")
+        self.sync(rows)
+        rows[2]["review_status"] = "approved"
+        rows[2]["reviewed_by"] = "AK"
+        summary = self.sync(rows)
+        self.assertEqual(summary.posted, [])
+        self.assertEqual(summary.edited, ["review:401", "queue", "week"])
+        self.assertIn("✅ AK", self.api.edits[0]["text"])
+
+    def test_approved_arm_posts_the_picks_card_and_one_loud_bet_alert(self) -> None:
+        rows = committee("401", arms_status="approved")
+        rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
+        summary = self.sync(rows)
+        self.assertEqual(
+            summary.posted, ["review:401", "picks:401", "queue", "week"]
+        )
+        self.assertEqual(summary.alerts, ["bet:c884d868-0000:side"])
+        alert = next(m for m in self.api.sent if not m["silent"])
+        self.assertEqual(alert["topic"], 22)
+        self.assertEqual(alert["reply_to"], self.state["cards"]["picks:401"]["message_id"])
+        self.assertEqual(
+            alert["text"], "🔔 Bet · Seahawks -3.5 (+100) ★ 0.6u · rules arm\njudge arm: PASS"
+        )
+        summary = self.sync(rows)
+        self.assertEqual(summary.alerts, [])
+        self.assertEqual(sum(1 for m in self.api.sent if not m["silent"]), 1)
+
+    def test_lock_warning_fires_once_inside_the_window(self) -> None:
+        rows = committee("401")
+        kickoff = datetime.fromisoformat(SEA_KICKOFF)
+        before = kickoff - timedelta(hours=4, minutes=1)
+        inside = kickoff - timedelta(hours=3, minutes=30)
+        self.sync(rows, now=before)
+        self.assertEqual(sum(1 for m in self.api.sent if not m["silent"]), 0)
+        summary = self.sync(rows, now=inside)
+        self.assertEqual(summary.alerts, ["lock:401"])
+        alert = next(m for m in self.api.sent if not m["silent"])
+        self.assertEqual(alert["topic"], 11)
+        self.assertEqual(alert["reply_to"], self.state["cards"]["review:401"]["message_id"])
+        self.assertEqual(
+            alert["text"], "🔔 Patriots @ Seahawks locks for the judge in 1h 30m · 3 pending"
+        )
+        self.sync(rows, now=inside + timedelta(minutes=10))
+        self.assertEqual(sum(1 for m in self.api.sent if not m["silent"]), 1)
+        # no pending rows, no warning
+        quiet = [r for r in committee("402", arms_status="approved") if r["opinion_id"] != "p1"]
+        desk = self.desks(quiet, now=inside)[1]
+        self.assertFalse(lock_warning_due(desk, config=CONFIG, now=inside))
+
+    def test_started_games_are_frozen_and_later_pruned(self) -> None:
+        rows = committee("401")
+        self.sync(rows)
+        kickoff = datetime.fromisoformat(SEA_KICKOFF)
+        rows[2]["review_status"] = "approved"
+        summary = self.sync(rows, now=kickoff + timedelta(minutes=5))
+        self.assertNotIn("review:401", summary.edited)
+        self.assertIn("review:401", self.state["cards"])
+        self.sync(rows, now=kickoff + timedelta(days=4))
+        self.assertNotIn("review:401", self.state["cards"])
+        self.assertNotIn("401", self.state["kickoffs"])
+
+    def test_a_deleted_card_is_reposted(self) -> None:
+        rows = committee("401")
+        self.sync(rows)
+        self.api.missing.add(self.state["cards"]["review:401"]["message_id"])
+        rows[2]["review_status"] = "rejected"
+        summary = self.sync(rows)
+        self.assertEqual(summary.posted, ["review:401"])
+        self.assertEqual(self.state["cards"]["review:401"]["message_id"], self.api.sent[-1]["id"])
+
+    def test_post_budget_defers_the_rest_to_the_next_pass(self) -> None:
+        rows = committee("401") + committee("402")
+        summary = self.sync(rows, max_posts=2)
+        self.assertEqual(summary.posted, ["review:401", "review:402"])
+        self.assertEqual(summary.deferred, ["queue", "week"])
+        summary = self.sync(rows, max_posts=2)
+        self.assertEqual(summary.posted, ["queue", "week"])
+
+    def test_api_errors_are_collected_not_raised(self) -> None:
+        class Broken(FakeApi):
+            def send(self, *args, **kwargs):
+                raise DeskApiError("sendMessage: chat not found")
+
+        self.api = Broken()
+        summary = self.sync(committee("401"))
+        self.assertEqual(summary.posted, [])
+        self.assertEqual(len(summary.errors), 3)
+        self.assertEqual(self.state["cards"], {})
+
+
+class StateTests(unittest.TestCase):
+    def test_round_trip_and_bad_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "nested" / "state.json"
+            state = empty_state()
+            state["cards"]["queue"] = {"message_id": 5, "hash": "h", "topic": 1}
+            save_state(path, state)
+            self.assertEqual(load_state(path), state)
+            path.write_text("{not json", encoding="utf-8")
+            self.assertEqual(load_state(path), empty_state())
+            path.write_text(json.dumps({"version": 99}), encoding="utf-8")
+            self.assertEqual(load_state(path), empty_state())
+            self.assertEqual(load_state(Path(tmp) / "absent.json"), empty_state())
+
+    def test_prune_keeps_recent_and_global_cards(self) -> None:
+        state = empty_state()
+        state["kickoffs"] = {
+            "old": (NOW - timedelta(days=4)).isoformat(),
+            "new": (NOW - timedelta(days=1)).isoformat(),
+        }
+        state["cards"] = {
+            "review:old": {"message_id": 1},
+            "picks:new": {"message_id": 2},
+            "queue": {"message_id": 3},
+        }
+        state["announced"] = {
+            "bet:x:side": {"at": "", "event_id": "old"},
+            "lock:new": {"at": "", "event_id": "new"},
+        }
+        prune_state(state, now=NOW)
+        self.assertEqual(sorted(state["cards"]), ["picks:new", "queue"])
+        self.assertEqual(list(state["announced"]), ["lock:new"])
+        self.assertEqual(list(state["kickoffs"]), ["new"])
+
+    def test_content_hash_covers_topic_text_and_keyboard(self) -> None:
+        base = content_hash("t", [], 1)
+        self.assertNotEqual(base, content_hash("t", [], 2))
+        self.assertNotEqual(base, content_hash("t", [[{"text": "x", "callback_data": "y"}]], 1))
+        self.assertEqual(base, content_hash("t", [], 1))
+
+
+class ConfigAndCallbackTests(unittest.TestCase):
+    def test_config_from_env_requires_chat_and_both_topics(self) -> None:
+        env = {
+            "INTAKE_BOT_TOKEN": "t",
+            "MOE_DESK_CHAT_ID": "-100123",
+            "MOE_DESK_REVIEW_TOPIC": "2",
+            "MOE_DESK_PICKS_TOPIC": "3",
+            "MOE_DESK_SCORES_TOPIC": "4",
+            "MOE_DESK_SYNC_SECONDS": "5",
+            "MOE_DESK_LOCK_WARN_HOURS": "1.5",
+        }
+        config = desk_config_from_env(env)
+        self.assertEqual(
+            (config.chat_id, config.review_topic, config.picks_topic, config.scores_topic),
+            ("-100123", 2, 3, 4),
+        )
+        self.assertEqual(config.sync_seconds, 15)  # floor
+        self.assertEqual(config.lock_warn_hours, 1.5)
+        self.assertEqual(config.with_username("@nflguesser_bot").bot_username, "nflguesser_bot")
+        for missing in ("INTAKE_BOT_TOKEN", "MOE_DESK_CHAT_ID", "MOE_DESK_REVIEW_TOPIC", "MOE_DESK_PICKS_TOPIC"):
+            partial = {k: v for k, v in env.items() if k != missing}
+            self.assertIsNone(desk_config_from_env(partial), missing)
+        self.assertIsNone(desk_config_from_env({**env, "MOE_DESK_PICKS_TOPIC": "x"}))
+        self.assertIsNone(desk_config_from_env({**env, "MOE_DESK_SCORES_TOPIC": ""}).scores_topic)
+
+    def test_parse_start_param(self) -> None:
+        self.assertEqual(parse_start_param("/start op_c884d868-1"), ("op", "c884d868-1"))
+        self.assertEqual(parse_start_param("/start@nflguesser_bot game_401"), ("game", "401"))
+        self.assertIsNone(parse_start_param("/start"))
+        self.assertIsNone(parse_start_param("/start hello"))
+        self.assertIsNone(parse_start_param("/start op_../x"))
+
+    def test_parse_callback(self) -> None:
+        self.assertEqual(parse_callback("desk:ok:abc"), ("ok", "abc"))
+        self.assertEqual(parse_callback("desk:no:abc"), ("no", "abc"))
+        self.assertEqual(parse_callback("desk:okarms:401"), ("okarms", "401"))
+        self.assertIsNone(parse_callback("desk:zap:401"))
+        self.assertIsNone(parse_callback("desk:ok:"))
+        self.assertIsNone(parse_callback("moe:view:401:0"))
+
+    def test_review_targets(self) -> None:
+        rows = committee("401")
+        self.assertEqual(review_targets("ok", "p1", rows), ([rows[2]], None))
+        self.assertEqual(review_targets("no", "zzz", rows)[1], "That row is no longer in the sheet.")
+        self.assertEqual(review_targets("ok", "a1", rows)[1], "Already approved by SS.")
+        rows.append(row("bad", "401", "schedule", generation_status="invalid"))
+        self.assertIn("audit row", review_targets("ok", "bad", rows)[1])
+        arms, error = review_targets("okarms", "401", rows)
+        self.assertIsNone(error)
+        self.assertEqual([r["expert_id"] for r in arms], ["god_rules", "god_judge"])
+        rows[6]["review_status"] = "approved"
+        self.assertEqual(review_targets("okarms", "401", rows)[1], "Both arms are no longer pending.")
+
+
+class _Response:
+    def __init__(self, payload):
+        self._payload = json.dumps(payload).encode("utf-8")
+
+    def read(self):
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _http_error(code, payload):
+    return urllib.error.HTTPError(
+        "https://api.telegram.org", code, "err", {}, io.BytesIO(json.dumps(payload).encode())
+    )
+
+
+class BotApiTests(unittest.TestCase):
+    def test_send_encodes_the_keyboard_and_returns_the_message_id(self) -> None:
+        calls = []
+
+        def opener(request, timeout):
+            calls.append((request.full_url, request.data.decode()))
+            return _Response({"ok": True, "result": {"message_id": 77}})
+
+        api = BotApi("tok", opener=opener)
+        message_id = api.send(
+            "-1", 11, "<b>x</b>", keyboard=[[{"text": "a", "callback_data": "b"}]], silent=True, reply_to=5
+        )
+        self.assertEqual(message_id, 77)
+        url, data = calls[0]
+        self.assertEqual(url, "https://api.telegram.org/bottok/sendMessage")
+        self.assertIn("message_thread_id=11", data)
+        self.assertIn("disable_notification=True", data)
+        self.assertIn("reply_to_message_id=5", data)
+        self.assertIn("parse_mode=HTML", data)
+        self.assertIn("inline_keyboard", data)
+
+    def test_edit_distinguishes_unchanged_missing_and_other_errors(self) -> None:
+        answers = iter(
+            [
+                _http_error(400, {"ok": False, "description": "Bad Request: message is not modified"}),
+                _http_error(400, {"ok": False, "description": "Bad Request: message to edit not found"}),
+                _http_error(400, {"ok": False, "description": "Bad Request: can't parse entities"}),
+            ]
+        )
+
+        def opener(request, timeout):
+            raise next(answers)
+
+        api = BotApi("tok", opener=opener)
+        self.assertTrue(api.edit("-1", 1, "t"))
+        self.assertFalse(api.edit("-1", 1, "t"))
+        with self.assertRaisesRegex(DeskApiError, "parse entities"):
+            api.edit("-1", 1, "t")
+
+    def test_rate_limit_is_retried_once_after_retry_after(self) -> None:
+        sleeps = []
+        answers = iter(
+            [
+                _http_error(429, {"ok": False, "parameters": {"retry_after": 7}}),
+                _Response({"ok": True, "result": {"message_id": 1}}),
+            ]
+        )
+
+        def opener(request, timeout):
+            answer = next(answers)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        api = BotApi("tok", opener=opener, sleep=sleeps.append)
+        self.assertEqual(api.send("-1", None, "t"), 1)
+        self.assertEqual(sleeps, [7.0])
+
+    def test_network_failure_is_a_desk_error(self) -> None:
+        def opener(request, timeout):
+            raise urllib.error.URLError("down")
+
+        with self.assertRaisesRegex(DeskApiError, "down"):
+            BotApi("tok", opener=opener).get_me()
+
+    def test_scores_notice_posts_pre_block_or_declines(self) -> None:
+        api = FakeApi()
+        env = {
+            "INTAKE_BOT_TOKEN": "t",
+            "MOE_DESK_CHAT_ID": "-1",
+            "MOE_DESK_REVIEW_TOPIC": "1",
+            "MOE_DESK_PICKS_TOPIC": "2",
+            "MOE_DESK_SCORES_TOPIC": "3",
+        }
+        self.assertTrue(post_scores_notice("a <b> c", environ=env, api=api))
+        self.assertEqual(api.sent[0]["topic"], 3)
+        self.assertEqual(api.sent[0]["text"], "<pre>a &lt;b&gt; c</pre>")
+        self.assertTrue(api.sent[0]["silent"])
+        self.assertFalse(post_scores_notice("x", environ={**env, "MOE_DESK_SCORES_TOPIC": ""}, api=api))
+        self.assertFalse(post_scores_notice("x", environ={}, api=api))
+
+
+if __name__ == "__main__":
+    unittest.main()
