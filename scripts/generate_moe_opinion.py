@@ -44,6 +44,7 @@ from moe_identity import (
 )
 from moe_rating import RATING_MODE, RATING_PROFILE, build_rating_input
 from moe_win_total import build_win_total_input
+from intake_bot import CELEBRITY_HEADERS, CELEBRITY_TAB
 from nfl_game_history import (
     GAME_HISTORY_HEADERS,
     GAME_HISTORY_TAB,
@@ -306,6 +307,11 @@ async def main() -> None:
         ).get_all_records(expected_headers=TEAM_HISTORY_HEADERS)
         leans = spreadsheet.worksheet("nfl_leans").get_all_records(
             expected_headers=LEAN_HEADERS
+        )
+        leans.extend(
+            spreadsheet.worksheet(CELEBRITY_TAB).get_all_records(
+                expected_headers=CELEBRITY_HEADERS
+            )
         )
     if args.show_input:
         if expert["input_profile"] == "schedule_only":
