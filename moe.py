@@ -1109,6 +1109,36 @@ def _matches_single_game_scoreline(
     )
 
 
+def _matches_integer_band_overlap(
+    value: Any,
+    integer_range: tuple[int, ...],
+) -> bool:
+    if len(integer_range) != 2 or not isinstance(value, dict):
+        return False
+    start, end = integer_range
+    if start > end:
+        return False
+    lists: list[set[int]] = []
+
+    def collect(candidate: Any) -> None:
+        if isinstance(candidate, dict):
+            for child in candidate.values():
+                collect(child)
+        elif isinstance(candidate, list) and candidate and all(
+            isinstance(item, int) and not isinstance(item, bool)
+            for item in candidate
+        ):
+            lists.append(set(candidate))
+
+    collect(value)
+    expected = set(range(start, end + 1))
+    return any(
+        left & right == expected
+        for index, left in enumerate(lists)
+        for right in lists[index + 1 :]
+    )
+
+
 def _validate_claim_numbers(
     claim: str,
     paths: list[str],
@@ -1141,10 +1171,23 @@ def _validate_claim_numbers(
             _matches_single_game_scoreline(value, record)
             for value in evidence
         )
-        if not record_matches and not scoreline_matches:
+        context = normalized_claim[
+            max(0, match.start() - 40) : min(
+                len(normalized_claim), match.end() + 40
+            )
+        ]
+        overlap_matches = (
+            bool(re.search(r"\b(?:band|overlap)\w*\b", context, re.IGNORECASE))
+            and any(
+                _matches_integer_band_overlap(value, record)
+                for value in evidence
+            )
+        )
+        if not record_matches and not scoreline_matches and not overlap_matches:
             candidates = _matching_record_paths(input_payload, record)
             raise ValueError(
-                f"Claim record or one-game scoreline {match.group(0)} is "
+                f"Claim record, one-game scoreline, or integer-band overlap "
+                f"{match.group(0)} is "
                 "absent from cited evidence; "
                 f"candidate paths: {candidates[:8]}"
             )
