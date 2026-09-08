@@ -507,7 +507,7 @@ class RegistryTests(unittest.TestCase):
         registry = load_registry()
         self.assertEqual(
             {expert_id: review_policy(config) for expert_id, config in registry["experts"].items()},
-            {"ak": "human", "divisional": "human", "god_judge": "human", "god_rules": "human", "rating_elo": "validation", "schedule": "human", "win_total": "human"},
+            {"ak": "human", "cee": "human", "celebrity": "human", "divisional": "human", "god_judge": "human", "god_rules": "human", "rating_elo": "validation", "schedule": "human", "win_total": "human"},
         )
 
     def test_review_policy_is_deterministic_only(self) -> None:
