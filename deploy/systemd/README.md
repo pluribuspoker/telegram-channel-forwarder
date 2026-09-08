@@ -14,6 +14,7 @@ is reviewable in git.
 | `grade-daemon.service` | Grade daemon (persistent). Grades + broadcasts every 10s. Hang-hardened via `WatchdogSec`. |
 | `trent-monitor.service` + `.timer` | @BookitWithTrent poller, every 15 min. |
 | `god-judge.service` + `.timer` | God Expert judge runner (`scripts/god_judge_runner.py` via `run_god_judge.sh`), every 30 min at :12/:42. One headless `claude -p` call per game with a complete committee, single attempt, `TimeoutStartSec=3600`. Also loads `~/.claude/auth.env` for the subscription token. |
+| `moe-grade.service` + `.timer` | MOE opinion grader (`scripts/moe_grade.py --write --notify` via `run_moe_grade.sh`), daily at 05:23 ET. Deterministic (no Claude call, no Telethon), idempotent ledger append, DMs only when rows were appended, `TimeoutStartSec=1200`. |
 
 None of these contain secrets — they load config via `EnvironmentFile=`
 (`.env` + `.env.local`), which are not in git.

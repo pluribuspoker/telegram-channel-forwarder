@@ -1,0 +1,18 @@
+# Once a day at 05:23 ET (the VPS clock is America/New_York): after the last
+# Thursday / Sunday / Monday night final, before the 06:00 auto-reboot window
+# and the ~06:31 unattended-upgrade bounce, off the tracker's :20 slot.
+# Grading is deterministic and the ledger dedupes on opinion id, so this
+# daily pass is the whole latency budget. It runs every day rather than only
+# after game days because approvals can lag a game by days; an idle run is
+# four Sheets reads and an exit. Persistent=true catches up after a reboot.
+[Unit]
+Description=Grade approved MOE opinions into the moe_grades ledger daily
+
+[Timer]
+OnCalendar=*-*-* 05:23:00
+AccuracySec=1min
+Persistent=true
+Unit=moe-grade.service
+
+[Install]
+WantedBy=timers.target

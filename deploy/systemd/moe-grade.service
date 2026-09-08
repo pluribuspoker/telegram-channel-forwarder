@@ -1,0 +1,31 @@
+# MOE opinion grader: scripts/moe_grade.py --write --notify via
+# run_moe_grade.sh. Deterministic — no Claude call, no Telethon session:
+# four Sheets reads (nfl_game_history, moe_opinions, nfl_line_snapshots, the
+# moe_grades opinion-id column), two ESPN scoreboard fetches, one append when
+# there is something new. The ledger dedupes on opinion id, so re-runs are
+# free. DMs the operator only when rows were appended.
+#
+# TimeoutStartSec=1200: nfl_lines._call_with_retry backs off 15 → 120 s over
+# six attempts on a 429 (~6 min worst case per wrapped call), and the run
+# wraps two calls plus the reads and the ESPN fetches.
+#
+# Environment: .env (sheet + watchdog config), .env.local (server-only
+# values). No ~/.claude/auth.env — the grader never touches Claude.
+[Unit]
+Description=MOE opinion grader (moe_grades ledger)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+Environment=HOME=/home/forwarder
+ExecStart=/home/forwarder/app/run_moe_grade.sh
+TimeoutStartSec=1200
+SyslogIdentifier=moe-grade
+StandardOutput=journal
+StandardError=journal
