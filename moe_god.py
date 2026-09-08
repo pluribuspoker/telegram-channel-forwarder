@@ -18,13 +18,14 @@ Everything with a right answer is computed here. A model only estimates.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import math
 import random
 import re
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 import yaml
 
@@ -517,12 +518,39 @@ def empirical_survival(
     return survival[index] + fraction * (survival[index + 1] - survival[index])
 
 
+# For backtests only (moe_backtest): the parsed table that margin_table_for
+# answers with instead of the committed file while the context is active.
+_MARGIN_TABLE_OVERRIDE: dict[str, Any] | None = None
+
+
+@contextlib.contextmanager
+def margin_table_override(table: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """Evaluate ``empirical`` policies against ``table`` (a parsed table).
+
+    For backtests only: a table built from the seasons before the one under
+    test replaces the committed file inside the block, so a replay never
+    reads a distribution that contains the games it is scoring. Live rows
+    are untouched: :func:`check_margin_table` still compares a persisted
+    input against the committed file, never the override.
+    """
+    global _MARGIN_TABLE_OVERRIDE
+    previous = _MARGIN_TABLE_OVERRIDE
+    _MARGIN_TABLE_OVERRIDE = table
+    try:
+        yield table
+    finally:
+        _MARGIN_TABLE_OVERRIDE = previous
+
+
 def margin_table_for(policy: dict[str, Any]) -> dict[str, Any] | None:
     """The table a policy asks for: loaded when ``empirical``, else None.
 
-    A policy persisted before the switch existed reads as ``normal``.
+    A policy persisted before the switch existed reads as ``normal``. Inside
+    :func:`margin_table_override` the override answers instead of the file.
     """
     if str(policy.get("margin_model") or "normal") == "empirical":
+        if _MARGIN_TABLE_OVERRIDE is not None:
+            return _MARGIN_TABLE_OVERRIDE
         return load_margin_table()
     return None
 
@@ -630,8 +658,33 @@ def movement_since_open(
 
 
 def build_market_block(game: dict[str, Any]) -> dict[str, Any]:
-    opening = _market_from_packed(game, prefix="opening")
-    latest = _market_from_packed(game, prefix="latest")
+    """The market block of an ``nfl_games`` row (packed BetOnline columns)."""
+    return market_block_from_lines(
+        _market_from_packed(game, prefix="opening"),
+        _market_from_packed(game, prefix="latest"),
+        bookmaker=str(game.get("bookmaker") or ""),
+        opening_captured_at=str(game.get("opening_captured_at") or ""),
+        latest_captured_at=str(game.get("latest_captured_at") or ""),
+    )
+
+
+def market_block_from_lines(
+    opening: dict[str, Any] | None,
+    latest: dict[str, Any],
+    *,
+    bookmaker: str = "",
+    opening_captured_at: str = "",
+    latest_captured_at: str = "",
+) -> dict[str, Any]:
+    """The market block from decoded full-game markets (``MARKET_FIELDS``).
+
+    ``latest`` must carry every field; ``opening`` may be missing fields, or
+    be None altogether, in which case every movement delta is None and
+    nothing is ever vetoed (a missing opening never vetoes). The backtest
+    builds its markets from historical closes through this function, so a
+    replayed market is shaped exactly like a live one.
+    """
+    opening = dict(opening or {})
     missing = [field for field in MARKET_FIELDS if latest.get(field) is None]
     if missing:
         raise ValueError(f"Latest full-game market is missing {missing}")
@@ -649,14 +702,14 @@ def build_market_block(game: dict[str, Any]) -> dict[str, Any]:
     home_spread = float(latest["home_spread"])
     total_line = float(latest["total"])
     return {
-        "bookmaker": str(game.get("bookmaker") or ""),
+        "bookmaker": bookmaker,
         "opening": {
             **{field: opening.get(field) for field in MARKET_FIELDS},
-            "captured_at": str(game.get("opening_captured_at") or ""),
+            "captured_at": opening_captured_at,
         },
         "latest": {
             **{field: latest[field] for field in MARKET_FIELDS},
-            "captured_at": str(game.get("latest_captured_at") or ""),
+            "captured_at": latest_captured_at,
         },
         "fair": {
             "home_ml": _round(fair_home_ml),

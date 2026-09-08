@@ -217,6 +217,10 @@ def replay_games(
                     "week": int(row["week"]),
                     "away_team": away,
                     "home_team": home,
+                    # Pregame ratings, unrounded; the backtest feeds them to
+                    # rating_estimate the way build_rating_input does.
+                    "home_rating": home_rating,
+                    "away_rating": away_rating,
                     "adjusted_gap": adjusted_gap,
                     "home_win_probability": p_home,
                     "expected_home_margin": adjusted_gap / ppe,
@@ -523,21 +527,14 @@ def build_rating_input(
         current_season_results, season=season, kickoff=kickoff
     )
     current, records = apply_finals(preseason, finals, params, base=base)
-    away_rating = round(current[away], 2)
-    home_rating = round(current[home], 2)
-    gap = round(home_rating - away_rating, 2)
-    adjusted_gap = round(gap + params["hfa"], 2)
-    probability = round(win_probability(adjusted_gap), 4)
-    tie_break = None
-    if probability == 0.5:
-        # Only an exactly offsetting gap lands here; the home side breaks it.
-        probability = 0.5001
-        tie_break = "adjusted gap of exactly 0; the home side breaks the tie"
-    margin = round(expected_margin(adjusted_gap, params["points_per_elo"]), 2)
-    if margin == 0 or (margin > 0) != (probability > 0.5):
-        margin = 0.01 if probability > 0.5 else -0.01
-    total = float(prior["league_scoring_rate"]["mean_total"])
-    away_score, home_score = _scores_from_estimate(probability, margin, total)
+    estimate = rating_estimate(
+        away_team=away,
+        home_team=home,
+        away_rating=current[away],
+        home_rating=current[home],
+        params=params,
+        total=float(prior["league_scoring_rate"]["mean_total"]),
+    )
     week = game.get("week")
     empty = {"games": 0, "wins": 0, "losses": 0, "ties": 0}
 
@@ -586,19 +583,56 @@ def build_rating_input(
             ),
         },
         "ratings": {"away": side(away), "home": side(home)},
-        "estimate": {
-            "rating_gap": gap,
-            "home_field_advantage": params["hfa"],
-            "adjusted_gap": adjusted_gap,
-            "home_win_probability": probability,
-            "expected_home_margin": margin,
-            "projected_total": total,
-            "predicted_away_score": int(away_score),
-            "predicted_home_score": int(home_score),
-            "confidence_stars": stars_for_margin(margin),
-            "predicted_winner": home if probability > 0.5 else away,
-            "tie_break": tie_break,
-        },
+        "estimate": estimate,
+    }
+
+
+def rating_estimate(
+    *,
+    away_team: str,
+    home_team: str,
+    away_rating: float,
+    home_rating: float,
+    params: dict[str, float],
+    total: float,
+) -> dict[str, Any]:
+    """The voice's estimate from two pregame ratings, as the input records it.
+
+    Ratings are used as written to two decimals, so the numbers in the input
+    reproduce the estimate exactly; an adjusted gap of exactly 0 leans home
+    (0.5001) and a margin of 0, or one whose sign disagrees with the
+    probability, leans 0.01 the probability's way. ``total`` is the league
+    scoring rate (the voice carries no total signal). Shared by
+    :func:`build_rating_input` and the backtest (``moe_backtest``), so both
+    run one arithmetic.
+    """
+    away_rating = round(float(away_rating), 2)
+    home_rating = round(float(home_rating), 2)
+    gap = round(home_rating - away_rating, 2)
+    adjusted_gap = round(gap + params["hfa"], 2)
+    probability = round(win_probability(adjusted_gap), 4)
+    tie_break = None
+    if probability == 0.5:
+        # Only an exactly offsetting gap lands here; the home side breaks it.
+        probability = 0.5001
+        tie_break = "adjusted gap of exactly 0; the home side breaks the tie"
+    margin = round(expected_margin(adjusted_gap, params["points_per_elo"]), 2)
+    if margin == 0 or (margin > 0) != (probability > 0.5):
+        margin = 0.01 if probability > 0.5 else -0.01
+    total = float(total)
+    away_score, home_score = _scores_from_estimate(probability, margin, total)
+    return {
+        "rating_gap": gap,
+        "home_field_advantage": params["hfa"],
+        "adjusted_gap": adjusted_gap,
+        "home_win_probability": probability,
+        "expected_home_margin": margin,
+        "projected_total": total,
+        "predicted_away_score": int(away_score),
+        "predicted_home_score": int(home_score),
+        "confidence_stars": stars_for_margin(margin),
+        "predicted_winner": home_team if probability > 0.5 else away_team,
+        "tie_break": tie_break,
     }
 
 
