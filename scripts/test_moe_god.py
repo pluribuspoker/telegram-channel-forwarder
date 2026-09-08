@@ -1400,6 +1400,7 @@ class RegistryTests(unittest.TestCase):
             },
             {
                 "ak": ["side", "total"],
+                "cee": ["side"],
                 "divisional": ["side"],
                 # WP7's rating voice: its total is the league scoring rate.
                 "rating_elo": ["side"],

@@ -27,6 +27,7 @@ from ai import _claude_create_with_retry
 from nfl_lines import _call_with_retry, get_gspread_client
 from nfl_win_predictions import ensure_worksheet
 from moe_ak import WNBA_PRIOR_PATH, build_ak_input
+from moe_cee import build_cee_input
 from moe_god import (
     AGGREGATOR_PROFILE,
     DETERMINISTIC_BACKEND,
@@ -223,6 +224,8 @@ def _source_sha256(expert: dict[str, Any]) -> str:
         paths.append(FACTUALITY_PROMPT_PATH)
     if expert.get("input_profile") == "ak_calibration":
         paths.extend((ROOT / "moe_ak.py", WNBA_PRIOR_PATH))
+    if expert.get("input_profile") == "cee_calibration":
+        paths.append(ROOT / "moe_cee.py")
     if expert.get("input_profile") == "win_total":
         paths.append(ROOT / "moe_win_total.py")
     if expert.get("input_profile") == AGGREGATOR_PROFILE:
@@ -2311,7 +2314,7 @@ def validate_opinion(
     cited_schema = bool(
         schedule_input is not None
         and schedule_input.get("input_profile")
-        in {"schedule_only", "divisional", "win_total"}
+        in {"schedule_only", "divisional", "win_total", "cee_calibration"}
         and isinstance(opinion.get("thesis_citation"), dict)
     )
     if (
@@ -2503,6 +2506,126 @@ def validate_opinion(
         if "prior-season" not in historical_text.casefold():
             raise ValueError(
                 "Win Total historical claims must identify prior-season wins"
+            )
+    if (
+        schedule_input is not None
+        and schedule_input.get("input_profile") == "cee_calibration"
+    ):
+        claims = [
+            opinion["thesis_citation"],
+            *opinion.get("supporting_factors", []),
+            *opinion.get("counterarguments", []),
+            *opinion.get("no_signal_factors", []),
+        ]
+        cited_paths = {
+            str(evidence["path"])
+            for claim in claims
+            for evidence in claim.get("evidence", [])
+        }
+        required_paths = {
+            "cee_submission",
+            "season_predictions_at_submission",
+            "submission_market",
+            "nfl_calibration",
+            "nfl_calibration.overall",
+            "nfl_calibration.matching_consistency",
+            "nfl_calibration.matching_season_gap",
+        }
+        missing = required_paths - cited_paths
+        if missing:
+            raise ValueError(
+                "Cee opinion must cite the submission, season predictions, "
+                "submission market, and every calibration view; missing "
+                f"paths: {sorted(missing)}"
+            )
+        rendered = " ".join(
+            str(claim.get("claim") or "") for claim in claims
+        )
+        season = schedule_input["season_predictions_at_submission"]
+        for value in (
+            season["away_predicted_wins"],
+            season["home_predicted_wins"],
+        ):
+            if not re.search(
+                rf"(?<!\d){re.escape(str(value))}(?!\d)",
+                rendered,
+            ):
+                raise ValueError(
+                    "Cee opinion must state both season-win predictions"
+                )
+        consistency = str(season["consistency_with_game_pick"])
+        if not re.search(
+            rf"\b{re.escape(consistency)}\b",
+            rendered,
+            re.IGNORECASE,
+        ):
+            raise ValueError(
+                f"Cee opinion must state consistency={consistency}"
+            )
+        for required_text, label in (
+            (str(schedule_input["cee_submission"]["selected_side"]), "pick"),
+            (str(season["season_preferred_side"]), "season preferred side"),
+            (str(season["season_gap_bucket"]), "season gap bucket"),
+        ):
+            if required_text.casefold() not in rendered.casefold():
+                raise ValueError(
+                    f"Cee opinion must state the supplied {label}: "
+                    f"{required_text}"
+                )
+        calibration = schedule_input["nfl_calibration"]
+        for path, summary in (
+            ("nfl_calibration.overall", calibration["overall"]),
+            (
+                "nfl_calibration.matching_consistency",
+                calibration["matching_consistency"],
+            ),
+            (
+                "nfl_calibration.matching_season_gap",
+                calibration["matching_season_gap"],
+            ),
+        ):
+            matching_claims = [
+                claim
+                for claim in claims
+                if any(
+                    str(evidence["path"]) == path
+                    for evidence in claim.get("evidence", [])
+                )
+            ]
+            path_text = " ".join(
+                str(claim.get("claim") or "") for claim in matching_claims
+            )
+            games = int(summary["games"])
+            if not re.search(
+                rf"(?<!\d){games}(?!\d)\s+(?:eligible\s+)?games?\b",
+                path_text,
+                re.IGNORECASE,
+            ):
+                raise ValueError(
+                    f"Cee opinion must state {path} games={games}"
+                )
+            if games:
+                record = f"{int(summary['wins'])}-{int(summary['losses'])}"
+                if int(summary.get("ties") or 0):
+                    record += f"-{int(summary['ties'])}"
+                if not re.search(
+                    rf"\b{re.escape(record)}\b",
+                    path_text,
+                ):
+                    raise ValueError(
+                        f"Cee opinion must state {path} record={record}"
+                    )
+        calibration_games = int(calibration["overall"]["games"])
+        confidence = int(opinion["confidence_stars"])
+        if calibration_games == 0 and confidence > 2:
+            raise ValueError(
+                "Cee opinion confidence cannot exceed two stars without "
+                "resolved NFL calibration"
+            )
+        if calibration_games <= 2 and confidence > 3:
+            raise ValueError(
+                "Cee opinion confidence cannot exceed three stars with at "
+                "most two resolved NFL calibration games"
             )
     winner = str(opinion.get("predicted_winner") or "")
     if winner not in {away_team, home_team}:
@@ -2704,6 +2827,7 @@ async def generate_opinion(
     leans: list[dict[str, Any]] | None = None,
     line_snapshots: list[dict[str, Any]] | None = None,
     ak_user_id: str | None = None,
+    cee_user_id: str | None = None,
     win_totals: list[dict[str, Any]] | None = None,
     win_predictions: list[dict[str, Any]] | None = None,
     team_history: list[dict[str, Any]] | None = None,
@@ -2748,6 +2872,18 @@ async def generate_opinion(
             leans,
             line_snapshots,
             ak_user_id=ak_user_id,
+        )
+    elif expert["input_profile"] == "cee_calibration":
+        if leans is None or win_predictions is None or not cee_user_id:
+            raise ValueError(
+                "Cee expert requires leans, win_predictions, and cee_user_id"
+            )
+        input_payload = build_cee_input(
+            game,
+            history,
+            leans,
+            win_predictions,
+            cee_user_id=cee_user_id,
         )
     elif expert["input_profile"] == "win_total":
         if (
@@ -3127,6 +3263,7 @@ async def generate_opinion(
                 leans=leans,
                 line_snapshots=line_snapshots,
                 ak_user_id=ak_user_id,
+                cee_user_id=cee_user_id,
                 win_totals=win_totals,
                 win_predictions=win_predictions,
                 team_history=team_history,

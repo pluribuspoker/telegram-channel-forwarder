@@ -21,11 +21,12 @@ class MoeIdentityTests(unittest.TestCase):
                 "display_name": "Cee",
                 "telegram_id": 456,
                 "telegram_username": "",
-                "moe_expert_ids": "",
+                "moe_expert_ids": "cee",
             },
         ]
 
         self.assertEqual(resolve_moe_expert_user_id(rows, "AK"), "123")
+        self.assertEqual(resolve_moe_expert_user_id(rows, "cee"), "456")
 
     def test_rejects_missing_or_duplicate_role(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "found 0"):

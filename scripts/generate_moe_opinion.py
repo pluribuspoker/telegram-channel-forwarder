@@ -27,6 +27,7 @@ from moe import (
     load_expert,
 )
 from moe_ak import build_ak_input
+from moe_cee import build_cee_input
 from moe_god import (
     AGGREGATOR_PROFILE,
     DETERMINISTIC_BACKEND,
@@ -259,6 +260,7 @@ async def main() -> None:
     leans: list[dict] | None = None
     line_snapshots: list[dict] | None = None
     ak_user_id: str | None = None
+    cee_user_id: str | None = None
     win_totals: list[dict] | None = None
     win_predictions: list[dict] | None = None
     team_history: list[dict] | None = None
@@ -295,6 +297,18 @@ async def main() -> None:
         line_snapshots = spreadsheet.worksheet(
             "nfl_line_snapshots"
         ).get_all_records(expected_headers=SNAPSHOT_HEADERS)
+    elif expert["input_profile"] == "cee_calibration":
+        current_results = _current_results()
+        cee_user_id = resolve_moe_expert_user_id_from_spreadsheet(
+            spreadsheet,
+            "cee",
+        )
+        leans = spreadsheet.worksheet("nfl_leans").get_all_records(
+            expected_headers=LEAN_HEADERS
+        )
+        win_predictions = spreadsheet.worksheet(
+            "nfl_win_predictions"
+        ).get_all_records(expected_headers=PREDICTION_HEADERS)
     elif expert["input_profile"] == "win_total":
         win_totals = spreadsheet.worksheet(
             "nfl_win_totals"
@@ -330,6 +344,14 @@ async def main() -> None:
                 leans or [],
                 line_snapshots,
                 ak_user_id=ak_user_id or "",
+            )
+        elif expert["input_profile"] == "cee_calibration":
+            input_payload = build_cee_input(
+                game,
+                [*history, *(current_results or [])],
+                leans or [],
+                win_predictions or [],
+                cee_user_id=cee_user_id or "",
             )
         elif expert["input_profile"] == "win_total":
             input_payload = build_win_total_input(
@@ -417,6 +439,7 @@ async def main() -> None:
         leans=leans,
         line_snapshots=line_snapshots,
         ak_user_id=ak_user_id,
+        cee_user_id=cee_user_id,
         win_totals=win_totals,
         win_predictions=win_predictions,
         team_history=team_history,

@@ -546,6 +546,28 @@ a +2 total gap. No resolved AK NFL calibration observations exist yet; the
 matching WNBA side prior is 4-2, while the total maps to the WNBA 0–<6 band
 that finished Under in 3/4 fresh games.
 
+### Implemented locally — 2026-09-08: Cee expert
+
+The Cee Expert is a separate human-interpretation voice rather than an AK
+variant. It produces a side-only opinion from Cee's latest full-game moneyline
+pick and exact rationale, compared with Cee's season-win predictions for the
+two teams as they existed when the game pick was submitted.
+
+- The input is whitelisted and hash-bound. It carries the selected side,
+  rationale, time-frozen season predictions, submission-time market snapshot,
+  and deterministic NFL calibration.
+- Rationale premises such as injuries or roster strength remain attributed to
+  Cee and are never presented as independently verified facts.
+- Calibration uses only resolved, pre-kickoff Cee NFL moneyline picks. It
+  reports the overall record plus matching season-order consistency and
+  season-win-gap buckets. There is no cross-sport prior.
+- Zero resolved calibration games cap confidence at two stars; one or two cap
+  it at three.
+- The expert uses output schema v3, participates only in the God Expert's side
+  pool when an approved row is available, and supports Opus 4.8, Fable 5,
+  Sonnet 4.6, and Haiku 4.5. It is committee-optional, so games without a Cee
+  submission do not block the automated God Expert.
+
 `emergency_migration.txt` now documents the implementation requirements,
 lossless export/import format, one-day service freeze and SQLite cutover,
 verification gates, backups, and rollback with post-cutover delta replay. It

@@ -261,13 +261,14 @@ def judge_user_message(request: dict[str, Any]) -> str:
 
 
 def committee_experts(registry: dict[str, Any]) -> list[str]:
-    """Every enabled non-aggregator expert; each needs an approved row."""
+    """Enabled required voices; optional experts join only when available."""
     experts = registry["experts"]
     return [
         expert_id
         for expert_id in sorted(experts)
         if isinstance(experts[expert_id], dict)
         and experts[expert_id].get("enabled")
+        and not experts[expert_id].get("committee_optional")
         and str(experts[expert_id].get("mode") or "") not in AGGREGATOR_MODES
     ]
 

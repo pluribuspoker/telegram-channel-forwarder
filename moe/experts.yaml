@@ -110,6 +110,29 @@ experts:
     enabled: true
     initial_weight: 1.0
     markets: [side, total]
+  cee:
+    name: Cee Expert
+    mode: agent
+    version: 1
+    prompt_version: 1
+    prompt: prompts/cee/v1.md
+    input_profile: cee_calibration
+    output_schema_version: 3
+    default_model: claude-opus-4-8
+    reasoning_effort: max
+    model_reasoning_effort:
+      claude-fable-5: medium
+      claude-sonnet-4-6: max
+      claude-haiku-4-5: max
+    allowed_models:
+      - claude-opus-4-8
+      - claude-fable-5
+      - claude-sonnet-4-6
+      - claude-haiku-4-5
+    enabled: true
+    committee_optional: true
+    initial_weight: 1.0
+    markets: [side]
   rating_elo:
     name: Rating Expert (Elo)
     mode: model

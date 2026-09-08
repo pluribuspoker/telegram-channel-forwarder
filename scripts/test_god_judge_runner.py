@@ -28,6 +28,7 @@ from scripts.god_judge_runner import (
     RESPONSE_INSTRUCTION,
     ClaudeHeadlessInvoker,
     JudgeCallError,
+    committee_experts,
     main,
     row_committee_key,
     run_once,
@@ -181,7 +182,6 @@ class RunnerHarness:
             for line in self.runs_log.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-
     async def run(self, games: list[dict], rows: list[dict], **kwargs) -> dict:
         kwargs.setdefault("now", _parse_time(KICKOFF) - timedelta(days=2))
         self.output = io.StringIO()
@@ -204,6 +204,15 @@ class RunnerHarness:
 
     def cleanup(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)
+
+
+class CommitteeConfigurationTests(unittest.TestCase):
+    def test_cee_is_optional_but_available_to_the_aggregator(self) -> None:
+        registry = load_registry()
+
+        self.assertNotIn("cee", committee_experts(registry))
+        self.assertTrue(registry["experts"]["cee"]["enabled"])
+        self.assertTrue(registry["experts"]["cee"]["committee_optional"])
 
 
 class RunnerTests(unittest.IsolatedAsyncioTestCase):

@@ -135,6 +135,11 @@ VOICE_LENSES: dict[str, str] = {
         "the submission-time market using that forecaster's graded history "
         "and a capped cross-sport prior. May pass either leg."
     ),
+    "cee": (
+        "Interprets one human forecaster's full-game moneyline rationale "
+        "alongside that forecaster's season-win ordering and resolved NFL "
+        "pick history. Side only."
+    ),
     "rating_elo": (
         "Sees one Elo rating per team built from every regular-season final "
         "since 1999 with home advantage and margin of victory, updated "
