@@ -2608,8 +2608,8 @@ def validate_opinion(
                 else re.escape(str(games))
             )
             if not re.search(
-                rf"(?<!\d){count_pattern}(?!\d)\s+"
-                rf"(?:(?:eligible|resolved)\s+)*(?:games?|picks?)\b",
+                rf"(?<!\d){count_pattern}(?!\d)"
+                rf"(?:\s+[\w-]+){{0,8}}\s+(?:games?|picks?)\b",
                 path_text,
                 re.IGNORECASE,
             ):

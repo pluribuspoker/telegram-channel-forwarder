@@ -365,8 +365,8 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
     async def test_accepts_spelled_zero_calibration_counts(self) -> None:
         output = self._output()
         output["supporting_factors"][1]["claim"] = (
-            "Cee's resolved NFL moneyline record is 0-0-0 across zero "
-            "eligible resolved picks."
+            "Cee's NFL calibration contains zero resolved pre-kickoff "
+            "full-game moneyline picks."
         )
         output["supporting_factors"][2]["claim"] = (
             "The matching consistent-pick bucket is 0-0-0 across zero games."
