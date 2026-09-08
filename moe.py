@@ -2673,6 +2673,11 @@ async def generate_opinion(
     expected_input_sha256: str | None = None,
     repair_attempts: int = 0,
     input_payload: dict[str, Any] | None = None,
+    # One sampled judge response of the runner's ensemble (roadmap WP9): the
+    # row persists as generation_status "sample" (review "not_applicable")
+    # whether or not it validates, so it never reaches approval, voice
+    # selection, or display; the ensemble's mean row is the judge row.
+    sample: bool = False,
     _repair_response: str = "",
     _repair_error: str = "",
 ) -> dict[str, Any]:
@@ -3056,7 +3061,8 @@ async def generate_opinion(
                 "calibration_summary_json": str(
                     opinion.get("calibration_summary_json") or ""
                 ),
-                "generation_status": "valid",
+                "generation_status": "sample" if sample else "valid",
+                "review_status": "not_applicable" if sample else "pending",
             }
         )
         if row["nondeterministic_analysis_usable"]:
@@ -3066,7 +3072,7 @@ async def generate_opinion(
             )
         row["output_sha256"] = opinion_output_sha256(row)
     except Exception as exc:
-        row["generation_status"] = "invalid"
+        row["generation_status"] = "sample" if sample else "invalid"
         row["generation_error"] = f"{type(exc).__name__}: {exc}"
         row["review_status"] = "not_applicable"
         _persist_attempt(store, row)
@@ -3096,6 +3102,7 @@ async def generate_opinion(
                 expected_input_sha256=expected_input_sha256,
                 repair_attempts=repair_attempts - 1,
                 input_payload=prebuilt_input,
+                sample=sample,
                 _repair_response=row["raw_response"],
                 _repair_error=row["generation_error"],
             )

@@ -151,6 +151,19 @@ kickoff, gives up on a committee after two invalid judge rows, and never
 approves anything. `python scripts/god_judge_runner.py --dry-run` prints the
 plan without persisting or calling anything.
 
+With `GOD_JUDGE_SAMPLES=N` (`--samples`, 1–5, default 1) the runner makes N
+calls per game — the judge ensemble of roadmap WP9. Every sampled response
+persists as an audit row with `generation_status=sample` and
+`review_status=not_applicable` (never approvable, never displayed, never a
+voice; a sample that fails validation keeps that status with its
+`generation_error`), and the one judge row that reaches review carries the
+mean of the valid samples' three numbers, the reasons of the sample closest to
+the mean, and an `ensemble` block (`size`, `valid`, `samples`, `estimates`,
+`reasons_from`, `rule`) in its `calibration_summary_json` and raw response.
+When no sample validates, the first response persists as an ordinary invalid
+judge row, so the two-invalid-rows stall counts the trigger like a
+single-sample one. The manual fallback below stays single-sample.
+
 ### Manual fallback: a fresh interactive session
 
 Use this only when the timer cannot run, from a session that has never

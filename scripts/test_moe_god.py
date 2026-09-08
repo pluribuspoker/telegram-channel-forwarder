@@ -13,8 +13,10 @@ from types import SimpleNamespace
 
 from moe import (
     OPINION_HEADERS,
+    GoogleSheetsMoeOpinionStore,
     approved_opinions,
     generate_opinion,
+    latest_opinions,
     load_expert,
     opinion_output_sha256,
     validate_opinion,
@@ -25,12 +27,15 @@ from moe_god import (
     DEFAULT_POLICY,
     DETERMINISTIC_BACKEND,
     DETERMINISTIC_MODEL,
+    ENSEMBLE_RULE,
     EV_FLOOR_REASON,
+    FENCE_NOTE,
     GRADE_HEADERS,
     JUDGE_REQUEST_PROFILE,
     MARKETS,
     MEAN_OF_ARMS_ID,
     NO_EXPECTATION_REASON,
+    SIGN_NOTE,
     aggregator_policy,
     american_to_implied,
     apply_policy,
@@ -41,10 +46,12 @@ from moe_god import (
     build_market_block,
     build_scoreboard,
     canonical_json,
+    coherent_estimate,
     committee_key,
     compare_legs,
     cover_probability,
     disagreement_report,
+    ensemble_response,
     evidence_overlap,
     extract_evidence,
     fair_pair,
@@ -78,6 +85,7 @@ from nfl_lines import (
     OPENING_TOTALS_COLUMN,
     TOTALS_SNAPSHOT_COLUMN,
 )
+from scripts.review_moe_opinion import week_rows
 
 EVENT_ID = "8c94552d022acec4a0458d70c19d3da9"
 AWAY = "New England Patriots"
@@ -2317,6 +2325,278 @@ class Week1OverlapReplayTests(unittest.TestCase):
         self.assertLess(abs(feature["edges_if_shrunk"]["home_cover"]), abs(persisted["edges_if_shrunk"]["home_cover"]))
         self.assertEqual(feature["pool"]["projected_total"], 47.63)  # ak 50 and schedule 45 at 0.9
         self.assertEqual(feature["edges_if_shrunk"]["over"], -0.0162)
+
+
+class EnsembleTests(unittest.TestCase):
+    """The judge ensemble (WP9): the shared coherence step, the mean row, its block."""
+
+    def setUp(self) -> None:
+        registry = load_registry()
+        self.policy = aggregator_policy(registry)
+        self.payload = build_aggregator_input(
+            _game(), approved_opinions=_committee(), finals=[], snapshots=[], registry=registry, policy=self.policy
+        )
+        self.request = build_judge_request(self.payload)
+        self.labels = [voice["label"] for voice in self.request["voices"]]
+        self.fair_home = float(self.payload["market"]["fair"]["home_ml"])
+        self.expert = load_expert("god_judge")
+
+    def _sample(self, opinion_id: str, probability: float, margin: float, total: float) -> dict:
+        return {
+            "opinion_id": opinion_id,
+            "response": {
+                "home_win_probability": probability,
+                "expected_home_margin": margin,
+                "projected_total": total,
+                "key_reasons": [
+                    {"voice": self.labels[0], "text": f"Sample {opinion_id} rests on a broad cohort."},
+                    {"voice": "market", "text": "The pool sits close to fair."},
+                ],
+                "counterpoints": [{"voice": self.labels[1], "text": f"Sample {opinion_id} leans on one meeting."}],
+                "discarded_considerations": [f"Sample {opinion_id}: injuries are not in the input."],
+            },
+        }
+
+    def _three(self) -> list[dict]:
+        return [self._sample("s1", 0.58, 2.0, 44.0), self._sample("s2", 0.64, 4.0, 46.0), self._sample("s3", 0.61, 3.0, 45.0)]
+
+    def test_coherent_estimate(self) -> None:
+        self.assertEqual(coherent_estimate(0.61, 3.0, fair_home=0.62), (0.61, 3.0, []))
+        self.assertEqual(coherent_estimate(0.5, 2.0, fair_home=0.62), (0.505, 0.5, [FENCE_NOTE]))
+        self.assertEqual(coherent_estimate(0.6, 0.0, fair_home=0.4), (0.495, -0.5, [FENCE_NOTE]))
+        self.assertEqual(coherent_estimate(0.6, -2.0, fair_home=0.62), (0.6, 0.5, [SIGN_NOTE]))
+        self.assertEqual(coherent_estimate(0.4, 2.0, fair_home=0.62), (0.4, -0.5, [SIGN_NOTE]))
+        self.assertEqual(FENCE_NOTE, "Blend sat exactly on the fence; the market favorite breaks the tie.")
+        self.assertTrue(SIGN_NOTE.startswith("Pooled probability and pooled margin disagreed in sign"))
+        # The rules arm runs through it: the persisted Week 1 numbers and notes reproduce.
+        for name in ("sea_rules", "lar_rules"):
+            with self.subTest(name=name):
+                row = _fixture(name)
+                response = rules_arm_response(row["input_json"])
+                for key in ("home_win_probability", "expected_home_margin", "projected_total", "discarded_considerations"):
+                    self.assertEqual(response[key], row["raw_response"][key])
+        clamped = json.loads(json.dumps(self.payload))
+        clamped["feature_block"]["shrunk"]["expected_home_margin"] = -2.0
+        self.assertEqual(rules_arm_response(clamped)["discarded_considerations"], [SIGN_NOTE])
+
+    def test_ensemble_means_and_closest_sample(self) -> None:
+        samples = self._three()
+        response = ensemble_response(samples, fair_home=self.fair_home, size=3)
+        self.assertEqual((response["home_win_probability"], response["expected_home_margin"], response["projected_total"]), (0.61, 3.0, 45.0))
+        self.assertEqual(response["key_reasons"], samples[2]["response"]["key_reasons"])
+        self.assertEqual(response["counterpoints"], samples[2]["response"]["counterpoints"])
+        self.assertEqual(response["discarded_considerations"], ["Sample s3: injuries are not in the input."])
+        self.assertEqual(
+            response["ensemble"],
+            {
+                "size": 3,
+                "valid": 3,
+                "samples": ["s1", "s2", "s3"],
+                "estimates": [[0.58, 2.0, 44.0], [0.64, 4.0, 46.0], [0.61, 3.0, 45.0]],
+                "reasons_from": "s3",
+                "rule": ENSEMBLE_RULE,
+            },
+        )
+        self.assertEqual(
+            set(response),
+            {"home_win_probability", "expected_home_margin", "projected_total", "key_reasons", "counterpoints", "discarded_considerations", "ensemble"},
+        )
+        # Copies, not the sample's own lists.
+        response["key_reasons"][0]["text"] = "edited"
+        self.assertNotEqual(samples[2]["response"]["key_reasons"][0]["text"], "edited")
+        # The means round like a response: 4, 2, 2 decimals.
+        response = ensemble_response([self._sample("a", 0.6123, 2.333, 44.333), self._sample("b", 0.6001, 2.111, 44.111)], fair_home=0.6, size=2)
+        self.assertEqual((response["home_win_probability"], response["expected_home_margin"], response["projected_total"]), (0.6062, 2.22, 44.22))
+
+    def test_closest_sample_tie_breaks(self) -> None:
+        # Two samples sit at equal distance on every number: call order wins.
+        pair = [self._sample("first", 0.58, 2.0, 44.0), self._sample("second", 0.62, 2.0, 44.0)]
+        self.assertEqual(ensemble_response(pair, fair_home=0.6, size=2)["ensemble"]["reasons_from"], "first")
+        # |dp| ties between the third and fourth (0.01 each); the margin decides.
+        four = [self._sample("a", 0.58, 2.0, 44.0), self._sample("b", 0.62, 2.0, 44.0), self._sample("third", 0.59, 2.5, 44.0), self._sample("fourth", 0.61, 1.0, 44.0)]
+        self.assertEqual(ensemble_response(four, fair_home=0.6, size=4)["ensemble"]["reasons_from"], "third")
+        # The margins tie too (one point each side of the mean); the total decides.
+        four = [self._sample("a", 0.58, 2.0, 44.0), self._sample("b", 0.62, 2.0, 44.0), self._sample("third", 0.59, 3.0, 45.5), self._sample("fourth", 0.61, 1.0, 44.5)]
+        self.assertEqual(ensemble_response(four, fair_home=0.6, size=4)["ensemble"]["reasons_from"], "fourth")
+
+    def test_ensemble_coherence_and_single_sample(self) -> None:
+        # A fence-sitting mean leans the market favorite's way, with the note.
+        samples = [self._sample("a", 0.55, 2.0, 45.0), self._sample("b", 0.45, -2.0, 45.0)]
+        response = ensemble_response(samples, fair_home=0.62, size=3)
+        self.assertEqual((response["home_win_probability"], response["expected_home_margin"], response["projected_total"]), (0.505, 0.5, 45.0))
+        self.assertEqual(response["discarded_considerations"], ["Sample a: injuries are not in the input.", FENCE_NOTE])
+        self.assertEqual(response["ensemble"]["reasons_from"], "a")
+        self.assertEqual((response["ensemble"]["size"], response["ensemble"]["valid"]), (3, 2))
+        # The estimates keep the samples' own numbers, not the coherent mean.
+        self.assertEqual(response["ensemble"]["estimates"], [[0.55, 2.0, 45.0], [0.45, -2.0, 45.0]])
+        # A sign disagreement keeps the probability and clamps the margin.
+        samples = [self._sample("a", 0.56, -3.0, 45.0), self._sample("b", 0.58, 1.0, 45.0)]
+        response = ensemble_response(samples, fair_home=0.62, size=2)
+        self.assertEqual((response["home_win_probability"], response["expected_home_margin"]), (0.57, 0.5))
+        self.assertEqual(response["discarded_considerations"][-1], SIGN_NOTE)
+        # One valid sample is its own mean.
+        response = ensemble_response([self._sample("only", 0.6, 2.5, 44.0)], fair_home=0.62, size=3)
+        self.assertEqual((response["home_win_probability"], response["expected_home_margin"], response["projected_total"]), (0.6, 2.5, 44.0))
+        self.assertEqual(
+            response["ensemble"],
+            {"size": 3, "valid": 1, "samples": ["only"], "estimates": [[0.6, 2.5, 44.0]], "reasons_from": "only", "rule": ENSEMBLE_RULE},
+        )
+        with self.assertRaises(ValueError):
+            ensemble_response([], fair_home=0.6, size=3)
+        with self.assertRaises(ValueError):
+            ensemble_response(samples, fair_home=0.6, size=1)
+
+    def test_normalize_carries_the_ensemble_block(self) -> None:
+        response = ensemble_response(self._three(), fair_home=self.fair_home, size=3)
+        opinion = normalize_aggregator_opinion(response, self.payload, expert=self.expert, model="claude-fable-5-1")
+        validate_opinion(opinion, away_team=AWAY, home_team=HOME, schedule_input=self.payload)
+        summary = json.loads(opinion["calibration_summary_json"])
+        self.assertEqual(summary["ensemble"], response["ensemble"])
+        self.assertEqual(summary["arm"], "judge")
+        self.assertIn("· model claude-fable-5-1 · mean of 3 of 3 samples", opinion["full_opinion"])
+        self.assertEqual(opinion["home_win_probability"], 0.61)
+        self.assertIn("Sample s3 rests on a broad cohort.", opinion["supporting_factors"][0])
+        # Without the block: None in the summary and no mention.
+        plain = normalize_aggregator_opinion(
+            {key: value for key, value in response.items() if key != "ensemble"}, self.payload, expert=self.expert, model="claude-fable-5-1"
+        )
+        self.assertIsNone(json.loads(plain["calibration_summary_json"])["ensemble"])
+        self.assertNotIn(" · mean of ", plain["full_opinion"])
+        # The rules arm never carries one.
+        rules = rules_arm_response(self.payload)
+        rules["ensemble"] = response["ensemble"]
+        with self.assertRaises(ValueError) as caught:
+            normalize_aggregator_opinion(rules, self.payload, expert=load_expert("god_rules"))
+        self.assertIn("ensemble", str(caught.exception))
+        rules_opinion = normalize_aggregator_opinion(rules_arm_response(self.payload), self.payload, expert=load_expert("god_rules"))
+        self.assertIsNone(json.loads(rules_opinion["calibration_summary_json"])["ensemble"])
+
+    def test_malformed_ensemble_blocks_are_rejected(self) -> None:
+        response = ensemble_response(self._three(), fair_home=self.fair_home, size=3)
+        good = response["ensemble"]
+        bad_blocks = [
+            "not an object",
+            [],
+            {**good, "extra": 1},
+            {key: value for key, value in good.items() if key != "rule"},
+            {**good, "size": 0},
+            {**good, "size": True},
+            {**good, "size": "3"},
+            {**good, "valid": 4},
+            {**good, "valid": 0},
+            {**good, "samples": ["s1", "s2"]},
+            {**good, "samples": ["s1", "s1", "s1"]},
+            {**good, "samples": ["s1", "", "s3"]},
+            {**good, "samples": "s1,s2,s3"},
+            {**good, "estimates": good["estimates"][:2]},
+            {**good, "estimates": [[0.6, 2.0], [0.6, 2.0, 44.0], [0.6, 2.0, 44.0]]},
+            {**good, "estimates": [[0.6, 2.0, float("inf")], [0.6, 2.0, 44.0], [0.6, 2.0, 44.0]]},
+            {**good, "estimates": [[True, 2.0, 44.0], [0.6, 2.0, 44.0], [0.6, 2.0, 44.0]]},
+            {**good, "reasons_from": "s9"},
+            {**good, "rule": ""},
+            {**good, "rule": 3},
+        ]
+        for block in bad_blocks:
+            with self.subTest(block=block):
+                with self.assertRaises(ValueError):
+                    normalize_aggregator_opinion({**response, "ensemble": block}, self.payload, expert=self.expert)
+        # Tuples and integers normalize to float triples.
+        loose = {**good, "estimates": [(1, 2, 44), [0.64, 4, 46.0], [0.61, 3.0, 45.0]]}
+        summary = json.loads(normalize_aggregator_opinion({**response, "ensemble": loose}, self.payload, expert=self.expert)["calibration_summary_json"])
+        self.assertEqual(summary["ensemble"]["estimates"][0], [1.0, 2.0, 44.0])
+
+
+class SampleRowTests(unittest.IsolatedAsyncioTestCase):
+    """generate_opinion(sample=True): audit rows every downstream path ignores."""
+
+    def setUp(self) -> None:
+        registry = load_registry()
+        self.payload = build_aggregator_input(
+            _game(), approved_opinions=approved_opinions(_committee()), finals=[], snapshots=[], registry=registry, policy=aggregator_policy(registry)
+        )
+        self.request = build_judge_request(self.payload)
+        labels = [voice["label"] for voice in self.request["voices"]]
+        self.response = {
+            "home_win_probability": 0.61,
+            "expected_home_margin": 3.0,
+            "projected_total": 45.0,
+            "key_reasons": [
+                {"voice": labels[0], "text": "Broad cohort, no single-game claims."},
+                {"voice": "pool", "text": "The pool already sits close to the market."},
+            ],
+            "counterpoints": [{"voice": labels[1], "text": "Leans on one meeting."}],
+            "discarded_considerations": [],
+        }
+
+    async def _persist(self, text: str, store: MemoryStore) -> dict:
+        async def create_fn(**_kwargs):
+            return SimpleNamespace(content=[SimpleNamespace(text=text)])
+
+        return await generate_opinion(
+            expert_id="god_judge",
+            game=_game(),
+            history=[],
+            input_payload=self.payload,
+            opinions=_committee(),
+            store=store,
+            create_fn=create_fn,
+            generation_backend="claude_headless",
+            generation_effort="max",
+            model="claude-fable-5-1",
+            expected_input_sha256=sha256_text(canonical_json(self.request)),
+            sample=True,
+        )
+
+    async def test_valid_sample_is_an_audit_row_the_pipeline_ignores(self) -> None:
+        store = MemoryStore()
+        row = await self._persist(json.dumps(self.response), store)
+        self.assertEqual(store.rows, [row])
+        self.assertEqual(row["generation_status"], "sample")
+        self.assertEqual(row["review_status"], "not_applicable")
+        self.assertEqual(row["generation_error"], "")
+        self.assertEqual(row["generation_backend"], "claude_headless")
+        self.assertEqual(row["home_win_probability"], 0.61)
+        self.assertEqual(row["raw_response"], json.dumps(self.response))
+        self.assertEqual(row["input_json"], canonical_json(self.request))
+        self.assertEqual(row["output_sha256"], opinion_output_sha256(row))
+        self.assertIsNone(json.loads(row["calibration_summary_json"])["ensemble"])
+        # Even stamped as approved it is neither a voice, a display row, nor a bulk-review row.
+        stamped = dict(row, review_status="approved", approved_output_sha256=row["output_sha256"])
+        self.assertEqual(approved_opinions([stamped]), [])
+        self.assertEqual(latest_opinions([stamped]), [])
+        self.assertEqual(week_rows([stamped], expert_id="god_judge", week=1, review_status=""), [])
+        # A valid judge row on the same input is untouched by the flag.
+        judge = dict(row, generation_status="valid", review_status="approved", approved_output_sha256=row["output_sha256"])
+        self.assertEqual(approved_opinions([stamped, judge]), [judge])
+
+    async def test_failed_sample_keeps_its_status_and_error(self) -> None:
+        store = MemoryStore()
+        with self.assertRaises(ValueError) as caught:
+            await self._persist(json.dumps({"home_win_probability": 0.5}), store)
+        self.assertEqual(len(store.rows), 1)
+        row = store.rows[0]
+        self.assertEqual(row["generation_status"], "sample")
+        self.assertEqual(row["review_status"], "not_applicable")
+        self.assertTrue(row["generation_error"].startswith("ValueError: "))
+        self.assertIn(str(caught.exception), row["generation_error"])
+        self.assertEqual(row["raw_response"], json.dumps({"home_win_probability": 0.5}))
+        self.assertEqual(row["output_sha256"], "")
+        self.assertEqual(approved_opinions([row]), [])
+
+    def test_store_review_refuses_a_sample_row(self) -> None:
+        store = GoogleSheetsMoeOpinionStore("credentials", "sheet-id")
+        row = {header: "" for header in OPINION_HEADERS}
+        row.update({"opinion_id": "sample-1", "generation_status": "sample", "review_status": "not_applicable"})
+        values = [row[header] for header in OPINION_HEADERS]
+        worksheet = SimpleNamespace(
+            col_values=lambda column: ["opinion_id", "sample-1"],
+            row_values=lambda number: values,
+            update=lambda *args, **kwargs: self.fail("a sample row was updated"),
+        )
+        store._spreadsheet_instance = SimpleNamespace(worksheet=lambda name: worksheet)
+        with self.assertRaises(ValueError) as caught:
+            store.review("sample-1", status="approved", reviewed_by="tester", note="")
+        self.assertIn("Only valid opinions", str(caught.exception))
 
 
 if __name__ == "__main__":
