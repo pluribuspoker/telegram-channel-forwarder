@@ -2602,8 +2602,13 @@ def validate_opinion(
                 str(claim.get("claim") or "") for claim in matching_claims
             )
             games = int(summary["games"])
+            count_pattern = (
+                r"(?:0|zero)"
+                if games == 0
+                else re.escape(str(games))
+            )
             if not re.search(
-                rf"(?<!\d){games}(?!\d)\s+"
+                rf"(?<!\d){count_pattern}(?!\d)\s+"
                 rf"(?:(?:eligible|resolved)\s+)*(?:games?|picks?)\b",
                 path_text,
                 re.IGNORECASE,
