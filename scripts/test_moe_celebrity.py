@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the NFL Celebrity Consensus Expert."""
+"""Tests for the NFL Celebrity Expert."""
 
 from __future__ import annotations
 
@@ -141,7 +141,7 @@ class MemoryStore:
 
 
 class CelebrityInputTest(unittest.TestCase):
-    def test_tracks_props_and_compatible_consensus(self) -> None:
+    def test_tracks_props_and_side_distribution(self) -> None:
         payload = build_celebrity_input(
             _game(),
             [],
@@ -153,15 +153,15 @@ class CelebrityInputTest(unittest.TestCase):
         self.assertEqual(participation["celebrity_count"], 2)
         self.assertEqual(participation["active_bet_count"], 4)
         self.assertEqual(
-            participation["side_consensus"]["label"],
+            participation["side_distribution"]["label"],
             "unanimous",
         )
         self.assertEqual(
-            participation["side_consensus"]["selection"],
+            participation["side_distribution"]["selection"],
             "Seattle Seahawks",
         )
         self.assertEqual(
-            participation["total_consensus"]["label"],
+            participation["total_distribution"]["label"],
             "single",
         )
         prop = next(
@@ -189,11 +189,11 @@ class CelebrityInputTest(unittest.TestCase):
         payload = build_celebrity_input(_game(), [], rows, [])
 
         self.assertEqual(
-            payload["participation"]["side_consensus"]["label"],
+            payload["participation"]["side_distribution"]["label"],
             "split",
         )
         self.assertIsNone(
-            payload["participation"]["side_consensus"]["selection"]
+            payload["participation"]["side_distribution"]["selection"]
         )
 
     def test_post_kickoff_revision_does_not_erase_pregame_pick(self) -> None:
@@ -212,15 +212,15 @@ class CelebrityInputTest(unittest.TestCase):
         payload = build_celebrity_input(_game(), [], rows, [])
 
         self.assertEqual(
-            payload["participation"]["side_consensus"]["label"],
+            payload["participation"]["side_distribution"]["label"],
             "unanimous",
         )
         self.assertEqual(
-            payload["participation"]["side_consensus"]["selection"],
+            payload["participation"]["side_distribution"]["selection"],
             "Seattle Seahawks",
         )
 
-    def test_calibrates_matching_participation_and_consensus(self) -> None:
+    def test_calibrates_exact_identity_permutation(self) -> None:
         past_rows = []
         for row in _current_rows():
             past = dict(row)
@@ -246,18 +246,28 @@ class CelebrityInputTest(unittest.TestCase):
             [],
         )
 
-        cohorts = payload["nfl_calibration"][
-            "matching_participation_consensus"
+        permutations = payload["nfl_calibration"][
+            "exact_current_permutation"
         ]
-        self.assertEqual(cohorts["side"]["participant_bucket"], "2")
-        self.assertEqual(cohorts["side"]["consensus_label"], "unanimous")
-        self.assertEqual(cohorts["side"]["wins"], 1)
-        self.assertEqual(cohorts["side"]["games"], 1)
-        self.assertEqual(cohorts["total"]["consensus_label"], "single")
-        self.assertEqual(cohorts["total"]["wins"], 1)
-        self.assertEqual(cohorts["total"]["games"], 1)
+        self.assertEqual(
+            permutations["side"]["pattern"],
+            {"Bill Simmons": "home", "Cousin Sal": "home"},
+        )
+        self.assertEqual(permutations["side"]["matching_games"], 1)
+        self.assertEqual(
+            permutations["side"]["records_by_celebrity"]["Bill Simmons"][
+                "wins"
+            ],
+            1,
+        )
+        self.assertEqual(
+            permutations["total"]["records_by_celebrity"]["Cousin Sal"][
+                "wins"
+            ],
+            1,
+        )
 
-    def test_mixed_side_markets_need_same_verdict_for_group_record(self) -> None:
+    def test_exact_permutation_keeps_market_specific_verdicts(self) -> None:
         past_rows = []
         for row in _current_rows():
             past = dict(row)
@@ -283,11 +293,60 @@ class CelebrityInputTest(unittest.TestCase):
             [],
         )
 
-        cohorts = payload["nfl_calibration"][
-            "matching_participation_consensus"
+        side = payload["nfl_calibration"]["exact_current_permutation"][
+            "side"
         ]
-        self.assertEqual(cohorts["side"]["games"], 0)
-        self.assertEqual(cohorts["total"]["wins"], 1)
+        self.assertEqual(
+            side["records_by_celebrity"]["Bill Simmons"]["wins"],
+            1,
+        )
+        self.assertEqual(
+            side["records_by_celebrity"]["Cousin Sal"]["losses"],
+            1,
+        )
+
+    def test_pairwise_disagreement_tracks_each_celebrity(self) -> None:
+        current = _current_rows()
+        current.append(
+            _standard(
+                submission_id="bill-away",
+                celebrity="Bill Simmons",
+                submitted_at="2026-09-07T20:00:00+00:00",
+                market="moneyline",
+                side="New England Patriots",
+                line="",
+            )
+        )
+        past_rows = []
+        for row in current:
+            past = dict(row)
+            past["event_id"] = "patriots-seahawks-disagreement"
+            past["commence_time_utc"] = "2026-09-08T00:20:00+00:00"
+            past_rows.append(past)
+        history = [
+            {
+                "event_id": "patriots-seahawks-disagreement",
+                "kickoff_utc": "2026-09-08T00:20:00+00:00",
+                "away_team": _game()["away_team"],
+                "home_team": _game()["home_team"],
+                "away_score": 17,
+                "home_score": 24,
+                "completed": True,
+            }
+        ]
+
+        payload = build_celebrity_input(
+            _game(),
+            history,
+            current + past_rows,
+            [],
+        )
+
+        pair = payload["nfl_calibration"]["pairwise"][0]["side"]
+        self.assertEqual(pair["current_relation"], "disagreement")
+        self.assertEqual(pair["disagreement_games"], 1)
+        self.assertEqual(pair["first_record_when_disagreeing"]["losses"], 1)
+        self.assertEqual(pair["second_record_when_disagreeing"]["wins"], 1)
 
 
 class CelebrityGenerationTest(unittest.IsolatedAsyncioTestCase):
@@ -302,14 +361,14 @@ class CelebrityGenerationTest(unittest.IsolatedAsyncioTestCase):
                 "selection": "Seattle Seahawks",
                 "line": -3.5,
                 "confidence_stars": 2,
-                "evidence_ids": ["current_side_consensus"],
+                "evidence_ids": ["current_pick_02"],
                 "counterargument_ids": ["current_participation"],
             },
             "total": {
                 "selection": "Under",
                 "line": 44.5,
                 "confidence_stars": 2,
-                "evidence_ids": ["current_total_consensus"],
+                "evidence_ids": ["current_pick_04"],
                 "counterargument_ids": ["current_participation"],
             },
             "discarded_considerations": [
@@ -347,7 +406,10 @@ class CelebrityGenerationTest(unittest.IsolatedAsyncioTestCase):
     def test_expert_configuration(self) -> None:
         expert = load_expert("celebrity")
 
-        self.assertEqual(expert["input_profile"], "celebrity_consensus")
+        self.assertEqual(expert["name"], "Celebrity Expert")
+        self.assertEqual(expert["version"], 2)
+        self.assertEqual(expert["prompt_version"], 2)
+        self.assertEqual(expert["input_profile"], "celebrity_patterns")
         self.assertEqual(expert["allowed_models"], ["claude-opus-4-8"])
         self.assertTrue(expert["committee_optional"])
         self.assertEqual(expert["markets"], ["side", "total"])

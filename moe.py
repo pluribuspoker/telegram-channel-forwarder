@@ -227,7 +227,7 @@ def _source_sha256(expert: dict[str, Any]) -> str:
         paths.extend((ROOT / "moe_ak.py", WNBA_PRIOR_PATH))
     if expert.get("input_profile") == "cee_calibration":
         paths.append(ROOT / "moe_cee.py")
-    if expert.get("input_profile") == "celebrity_consensus":
+    if expert.get("input_profile") == "celebrity_patterns":
         paths.extend(
             (
                 ROOT / "moe_celebrity.py",
@@ -2007,7 +2007,7 @@ def _normalize_ak_opinion(
 
     side = normalize_pick("side")
     total = normalize_pick("total")
-    if input_payload.get("input_profile") == "celebrity_consensus":
+    if input_payload.get("input_profile") == "celebrity_patterns":
         confidence_cap = int(input_payload["confidence_cap"])
         for field, pick in (("side", side), ("total", total)):
             if pick["confidence_stars"] > confidence_cap:
@@ -2015,14 +2015,16 @@ def _normalize_ak_opinion(
                     f"{field} confidence exceeds the celebrity input cap "
                     f"of {confidence_cap}"
                 )
-            consensus_id = f"current_{field}_consensus"
-            consensus = input_payload["participation"][f"{field}_consensus"]
+            distribution_id = f"current_{field}_distribution"
+            distribution = input_payload["participation"][
+                f"{field}_distribution"
+            ]
             if (
-                consensus_id in pick["evidence_ids"]
-                and pick["selection"] != consensus["selection"]
+                distribution_id in pick["evidence_ids"]
+                and pick["selection"] != distribution["selection"]
             ):
                 raise ValueError(
-                    f"{field} cannot use current consensus to support the "
+                    f"{field} cannot use the current distribution to support the "
                     "opposite selection"
                 )
         side_label = (
@@ -2044,7 +2046,7 @@ def _normalize_ak_opinion(
         normalized["pick_market"] = "side_and_total"
         normalized["pick_side"] = f"{side_label} | {total_label}"
         normalized["thesis"] = (
-            f"Celebrity consensus: side {side_label} "
+            f"Celebrity patterns: side {side_label} "
             f"{'★' * side['confidence_stars']}; total {total_label} "
             f"{'★' * total['confidence_stars']}."
         )
@@ -2061,7 +2063,7 @@ def _normalize_ak_opinion(
             item["text"]
             for item in input_payload["evidence_catalog"]
             if (
-                item["id"].startswith(("individual_", "pair_", "exact_group_"))
+                item["id"].startswith(("individual_", "pair_", "exact_"))
                 and (
                     "across 0 games" in item["text"]
                     or "in 0 games" in item["text"]
@@ -3000,7 +3002,7 @@ async def generate_opinion(
             win_predictions,
             cee_user_id=cee_user_id,
         )
-    elif expert["input_profile"] == "celebrity_consensus":
+    elif expert["input_profile"] == "celebrity_patterns":
         if celebrity_picks is None or leans is None:
             raise ValueError(
                 "Celebrity expert requires celebrity picks and game leans"

@@ -314,7 +314,7 @@ async def main() -> None:
         win_predictions = spreadsheet.worksheet(
             "nfl_win_predictions"
         ).get_all_records(expected_headers=PREDICTION_HEADERS)
-    elif expert["input_profile"] == "celebrity_consensus":
+    elif expert["input_profile"] == "celebrity_patterns":
         current_results = _current_results()
         leans = spreadsheet.worksheet("nfl_leans").get_all_records(
             expected_headers=LEAN_HEADERS
@@ -366,7 +366,7 @@ async def main() -> None:
                 win_predictions or [],
                 cee_user_id=cee_user_id or "",
             )
-        elif expert["input_profile"] == "celebrity_consensus":
+        elif expert["input_profile"] == "celebrity_patterns":
             from moe_celebrity import build_celebrity_input
 
             input_payload = build_celebrity_input(
@@ -457,7 +457,7 @@ async def main() -> None:
         game=game,
         history=(
             [*history, *(current_results or [])]
-            if expert["input_profile"] == "celebrity_consensus"
+            if expert["input_profile"] == "celebrity_patterns"
             else history
         ),
         schedule=schedule,

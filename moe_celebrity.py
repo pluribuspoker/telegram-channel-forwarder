@@ -1,4 +1,4 @@
-"""Deterministic input construction for the Celebrity Consensus Expert."""
+"""Deterministic input construction for the Celebrity Expert."""
 
 from __future__ import annotations
 
@@ -256,15 +256,51 @@ def _consensus_verdict(
     return next(iter(verdicts)) if len(verdicts) == 1 else None
 
 
+def _participant_verdict(
+    rows: Iterable[dict[str, Any]],
+    *,
+    celebrity: str,
+    selection: str,
+    market: str,
+    result: dict[str, Any],
+) -> str | None:
+    verdicts = {
+        verdict
+        for row in rows
+        if _name(row.get("celebrity_name")) == celebrity
+        and str(row.get("direction") or row.get("side") or "") == selection
+        and (
+            str(row.get("market") or "") in {"moneyline", "spread"}
+            if market == "side"
+            else str(row.get("market") or "") == "total"
+        )
+        for verdict in [_grade(row, result)]
+        if verdict is not None
+    }
+    return next(iter(verdicts)) if len(verdicts) == 1 else None
+
+
+def _relative_signals(
+    signals: dict[str, str],
+    *,
+    market: str,
+    away_team: str,
+    home_team: str,
+) -> dict[str, str]:
+    if market == "total":
+        return dict(sorted(signals.items()))
+    roles = {away_team: "away", home_team: "home"}
+    return {
+        name: roles[selection]
+        for name, selection in sorted(signals.items())
+    }
+
+
 def _record_text(record: dict[str, Any]) -> str:
     return (
         f"{record['wins']}-{record['losses']}-{record['pushes']} across "
         f"{record['games']} games"
     )
-
-
-def _participant_bucket(count: int) -> str:
-    return str(count) if count < 4 else "4_plus"
 
 
 def _calibration(
@@ -274,8 +310,8 @@ def _calibration(
     current_event_id: str,
     current_kickoff: datetime,
     current_names: list[str],
-    current_side: dict[str, Any],
-    current_total: dict[str, Any],
+    current_side_signals: dict[str, str],
+    current_total_signals: dict[str, str],
     away_team: str,
     home_team: str,
 ) -> dict[str, Any]:
@@ -318,25 +354,50 @@ def _calibration(
     for first, second in itertools.combinations(current_names, 2):
         summary = {
             "celebrities": [first, second],
-            "side_agreement_games": 0,
-            "side_disagreement_games": 0,
-            "side_agreement_record": _record([]),
-            "total_agreement_games": 0,
-            "total_disagreement_games": 0,
-            "total_agreement_record": _record([]),
+            "side": {
+                "current_relation": "no_comparison",
+                "current_selections": {},
+                "agreement_games": 0,
+                "agreement_record": _record([]),
+                "disagreement_games": 0,
+                "first_record_when_disagreeing": _record([]),
+                "second_record_when_disagreeing": _record([]),
+            },
+            "total": {
+                "current_relation": "no_comparison",
+                "current_selections": {},
+                "agreement_games": 0,
+                "agreement_record": _record([]),
+                "disagreement_games": 0,
+                "first_record_when_disagreeing": _record([]),
+                "second_record_when_disagreeing": _record([]),
+            },
         }
-        side_agreed = []
-        total_agreed = []
+        for market, current_signals in (
+            ("side", current_side_signals),
+            ("total", current_total_signals),
+        ):
+            if first in current_signals and second in current_signals:
+                summary[market]["current_selections"] = {
+                    first: current_signals[first],
+                    second: current_signals[second],
+                }
+                summary[market]["current_relation"] = (
+                    "agreement"
+                    if current_signals[first] == current_signals[second]
+                    else "disagreement"
+                )
+        pair_results = {
+            "side": {"agreement": [], "first": [], "second": []},
+            "total": {"agreement": [], "first": [], "second": []},
+        }
         for event_rows in events.values():
             event_away = str(event_rows[0]["away_team"])
             event_home = str(event_rows[0]["home_team"])
             result = _matching_game(event_rows[0], history)
             if result is None:
                 continue
-            for market, results in (
-                ("side", side_agreed),
-                ("total", total_agreed),
-            ):
+            for market in ("side", "total"):
                 signals = _signals(
                     event_rows,
                     market=market,
@@ -345,9 +406,8 @@ def _calibration(
                 )
                 if first not in signals or second not in signals:
                     continue
-                prefix = f"{market}_"
                 if signals[first] == signals[second]:
-                    summary[prefix + "agreement_games"] += 1
+                    summary[market]["agreement_games"] += 1
                     verdict = _consensus_verdict(
                         event_rows,
                         signals={
@@ -359,110 +419,107 @@ def _calibration(
                         result=result,
                     )
                     if verdict is not None:
-                        results.append(verdict)
+                        pair_results[market]["agreement"].append(verdict)
                 else:
-                    summary[prefix + "disagreement_games"] += 1
-        summary["side_agreement_record"] = _record(side_agreed)
-        summary["total_agreement_record"] = _record(total_agreed)
+                    summary[market]["disagreement_games"] += 1
+                    for name, key in ((first, "first"), (second, "second")):
+                        verdict = _participant_verdict(
+                            event_rows,
+                            celebrity=name,
+                            selection=signals[name],
+                            market=market,
+                            result=result,
+                        )
+                        if verdict is not None:
+                            pair_results[market][key].append(verdict)
+        for market in ("side", "total"):
+            summary[market]["agreement_record"] = _record(
+                pair_results[market]["agreement"]
+            )
+            summary[market]["first_record_when_disagreeing"] = _record(
+                pair_results[market]["first"]
+            )
+            summary[market]["second_record_when_disagreeing"] = _record(
+                pair_results[market]["second"]
+            )
         pairwise.append(summary)
 
-    current_set = set(current_names)
-    exact_side = []
-    exact_total = []
-    cohort_side = []
-    cohort_total = []
+    current_patterns = {
+        "side": _relative_signals(
+            current_side_signals,
+            market="side",
+            away_team=away_team,
+            home_team=home_team,
+        ),
+        "total": _relative_signals(
+            current_total_signals,
+            market="total",
+            away_team=away_team,
+            home_team=home_team,
+        ),
+    }
+    permutation_results = {
+        market: {name: [] for name in pattern}
+        for market, pattern in current_patterns.items()
+    }
+    permutation_matches = {"side": 0, "total": 0}
     for event_rows in events.values():
-        event_names = {
-            _name(row.get("celebrity_name")) for row in event_rows
-        }
         result = _matching_game(event_rows[0], history)
         if result is None:
             continue
         event_away = str(event_rows[0]["away_team"])
         event_home = str(event_rows[0]["home_team"])
-        for market, current_consensus, results in (
-            ("side", current_side, cohort_side),
-            ("total", current_total, cohort_total),
-        ):
+        for market in ("side", "total"):
+            current_pattern = current_patterns[market]
+            if not current_pattern:
+                continue
             signals = _signals(
                 event_rows,
                 market=market,
                 away_team=event_away,
                 home_team=event_home,
             )
-            consensus = _consensus(signals)
-            if (
-                consensus["label"] != current_consensus["label"]
-                or _participant_bucket(consensus["participants"])
-                != _participant_bucket(current_consensus["participants"])
-                or consensus["selection"] is None
-            ):
-                continue
-            verdict = _consensus_verdict(
-                event_rows,
-                signals=signals,
-                selection=consensus["selection"],
-                market=market,
-                result=result,
-            )
-            if verdict is not None:
-                results.append(verdict)
-        if event_names != current_set:
-            continue
-        for market, results in (
-            ("side", exact_side),
-            ("total", exact_total),
-        ):
-            signals = _signals(
-                event_rows,
+            historical_pattern = _relative_signals(
+                signals,
                 market=market,
                 away_team=event_away,
                 home_team=event_home,
             )
-            consensus = _consensus(signals)
-            selection = consensus["selection"]
-            if selection is None:
+            if historical_pattern != current_pattern:
                 continue
-            verdict = _consensus_verdict(
-                event_rows,
-                signals=signals,
-                selection=selection,
-                market=market,
-                result=result,
-            )
-            if verdict is not None:
-                results.append(verdict)
+            permutation_matches[market] += 1
+            for name in current_pattern:
+                verdict = _participant_verdict(
+                    event_rows,
+                    celebrity=name,
+                    selection=signals[name],
+                    market=market,
+                    result=result,
+                )
+                if verdict is not None:
+                    permutation_results[market][name].append(verdict)
     return {
         "method": (
             "Resolved pre-kickoff NFL celebrity picks before this game's "
             "kickoff. Side, total, and team-total bets are graded from final "
             "scores; player props and other markets remain tracked but "
             "ungraded unless a compatible deterministic result exists. "
-            "Group records include only events where every supporting "
-            "compatible bet settled to the same verdict."
+            "Pairwise disagreement records grade each celebrity's own bet. "
+            "Exact permutations match celebrity identity and home/away or "
+            "Over/Under roles, not merely the size of a majority."
         ),
         "individual": individual,
         "pairwise": pairwise,
-        "exact_active_group": {
-            "celebrities": current_names,
-            "side": _record(exact_side),
-            "total": _record(exact_total),
-        },
-        "matching_participation_consensus": {
-            "side": {
-                "participant_bucket": _participant_bucket(
-                    current_side["participants"]
-                ),
-                "consensus_label": current_side["label"],
-                **_record(cohort_side),
-            },
-            "total": {
-                "participant_bucket": _participant_bucket(
-                    current_total["participants"]
-                ),
-                "consensus_label": current_total["label"],
-                **_record(cohort_total),
-            },
+        "exact_current_permutation": {
+            market: {
+                "pattern": current_patterns[market],
+                "matching_games": permutation_matches[market],
+                "records_by_celebrity": {
+                    name: _record(results)
+                    for name, results in permutation_results[market].items()
+                },
+            }
+            for market in ("side", "total")
         },
     }
 
@@ -488,7 +545,7 @@ def build_celebrity_input(
     celebrity_rows: list[dict[str, Any]],
     leans: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Build one whitelisted, time-aligned celebrity consensus input."""
+    """Build one whitelisted, time-aligned celebrity-pattern input."""
     rows = _latest_revisions(
         row
         for row in _enriched_rows(celebrity_rows, leans)
@@ -507,30 +564,28 @@ def build_celebrity_input(
     away = str(game["away_team"])
     home = str(game["home_team"])
     names = sorted({_name(row["celebrity_name"]) for row in current})
-    side = _consensus(
-        _signals(
-            current,
-            market="side",
-            away_team=away,
-            home_team=home,
-        )
+    side_signals = _signals(
+        current,
+        market="side",
+        away_team=away,
+        home_team=home,
     )
-    total = _consensus(
-        _signals(
-            current,
-            market="total",
-            away_team=away,
-            home_team=home,
-        )
+    total_signals = _signals(
+        current,
+        market="total",
+        away_team=away,
+        home_team=home,
     )
+    side = _consensus(side_signals)
+    total = _consensus(total_signals)
     calibration = _calibration(
         rows,
         history,
         current_event_id=event_id,
         current_kickoff=kickoff,
         current_names=names,
-        current_side=side,
-        current_total=total,
+        current_side_signals=side_signals,
+        current_total_signals=total_signals,
         away_team=away,
         home_team=home,
     )
@@ -550,26 +605,57 @@ def build_celebrity_input(
             supporting_allowed=False,
         ),
         _catalog_item(
-            "current_side_consensus",
+            "current_side_distribution",
             "side",
             (
-                f"Current full-game side signals are {side['label']} across "
+                f"Current full-game side distribution is {side['label']} across "
                 f"{side['participants']} celebrities with votes "
                 f"{side['votes']}."
             ),
             supporting_allowed=side["selection"] is not None,
         ),
         _catalog_item(
-            "current_total_consensus",
+            "current_total_distribution",
             "total",
             (
-                f"Current full-game total signals are {total['label']} across "
+                f"Current full-game total distribution is {total['label']} across "
                 f"{total['participants']} celebrities with votes "
                 f"{total['votes']}."
             ),
             supporting_allowed=total["selection"] is not None,
         ),
     ]
+    for index, row in enumerate(
+        sorted(
+            current,
+            key=lambda value: (
+                _name(value["celebrity_name"]),
+                str(value["canonical_key"]),
+            ),
+        ),
+        1,
+    ):
+        market = str(row.get("market") or "")
+        scope = (
+            "side"
+            if market in {"moneyline", "spread"}
+            and str(row.get("period") or "") == "game"
+            else "total"
+            if market == "total" and str(row.get("period") or "") == "game"
+            else "both"
+        )
+        catalog.append(
+            _catalog_item(
+                f"current_pick_{index:02d}",
+                scope,
+                (
+                    f"{_name(row['celebrity_name'])} picked "
+                    f"{row.get('selection_text') or row.get('direction')}. "
+                    f"Exact stored explanation: {row.get('raw_pick_text') or 'none'}"
+                ),
+                supporting_allowed=scope in {"side", "total"},
+            )
+        )
     for index, name in enumerate(names, 1):
         records = calibration["individual"][name]
         catalog.extend(
@@ -592,56 +678,32 @@ def build_celebrity_input(
         )
     for index, pair in enumerate(calibration["pairwise"], 1):
         first, second = pair["celebrities"]
-        catalog.extend(
-            [
+        for market in ("side", "total"):
+            detail = pair[market]
+            catalog.append(
                 _catalog_item(
-                    f"pair_{index:02d}_side",
-                    "side",
+                    f"pair_{index:02d}_{market}",
+                    market,
                     (
-                        f"{first} and {second} agreed on a side in "
-                        f"{pair['side_agreement_games']} games and disagreed "
-                        f"in {pair['side_disagreement_games']}; their agreed "
-                        f"side record is "
-                        f"{_record_text(pair['side_agreement_record'])}."
+                        f"{first} and {second} currently have relation "
+                        f"{detail['current_relation']} with selections "
+                        f"{detail['current_selections']}. Historically they "
+                        f"agreed in {detail['agreement_games']} games with a "
+                        f"shared record of {_record_text(detail['agreement_record'])}; "
+                        f"they disagreed in {detail['disagreement_games']} games, "
+                        f"when {first} went {_record_text(detail['first_record_when_disagreeing'])} "
+                        f"and {second} went {_record_text(detail['second_record_when_disagreeing'])}."
                     ),
                     supporting_allowed=(
-                        pair["side_agreement_record"]["games"] > 0
+                        detail["agreement_record"]["games"] > 0
+                        or detail["first_record_when_disagreeing"]["games"] > 0
+                        or detail["second_record_when_disagreeing"]["games"] > 0
                     ),
-                ),
-                _catalog_item(
-                    f"pair_{index:02d}_total",
-                    "total",
-                    (
-                        f"{first} and {second} agreed on a total in "
-                        f"{pair['total_agreement_games']} games and disagreed "
-                        f"in {pair['total_disagreement_games']}; their agreed "
-                        f"total record is "
-                        f"{_record_text(pair['total_agreement_record'])}."
-                    ),
-                    supporting_allowed=(
-                        pair["total_agreement_record"]["games"] > 0
-                    ),
-                ),
-            ]
-        )
-    exact = calibration["exact_active_group"]
-    cohorts = calibration["matching_participation_consensus"]
+                )
+            )
+    exact = calibration["exact_current_permutation"]
     catalog.extend(
         [
-            _catalog_item(
-                "exact_group_side",
-                "side",
-                "This exact active celebrity group has a resolved side "
-                f"consensus record of {_record_text(exact['side'])}.",
-                supporting_allowed=exact["side"]["games"] > 0,
-            ),
-            _catalog_item(
-                "exact_group_total",
-                "total",
-                "This exact active celebrity group has a resolved total "
-                f"consensus record of {_record_text(exact['total'])}.",
-                supporting_allowed=exact["total"]["games"] > 0,
-            ),
             _catalog_item(
                 "props_and_other",
                 "both",
@@ -653,30 +715,28 @@ def build_celebrity_input(
                 ),
                 supporting_allowed=False,
             ),
-            _catalog_item(
-                "matching_side_participation_consensus",
-                "side",
-                (
-                    "Historical side groups with participant bucket "
-                    f"{cohorts['side']['participant_bucket']} and consensus "
-                    f"label {cohorts['side']['consensus_label']} have a "
-                    f"record of {_record_text(cohorts['side'])}."
-                ),
-                supporting_allowed=cohorts["side"]["games"] > 0,
-            ),
-            _catalog_item(
-                "matching_total_participation_consensus",
-                "total",
-                (
-                    "Historical total groups with participant bucket "
-                    f"{cohorts['total']['participant_bucket']} and consensus "
-                    f"label {cohorts['total']['consensus_label']} have a "
-                    f"record of {_record_text(cohorts['total'])}."
-                ),
-                supporting_allowed=cohorts["total"]["games"] > 0,
-            ),
         ]
     )
+    for market in ("side", "total"):
+        permutation = exact[market]
+        for index, (name, record) in enumerate(
+            permutation["records_by_celebrity"].items(),
+            1,
+        ):
+            catalog.append(
+                _catalog_item(
+                    f"exact_{market}_permutation_{index:02d}",
+                    market,
+                    (
+                        f"The current exact {market} permutation is "
+                        f"{permutation['pattern']} and occurred in "
+                        f"{permutation['matching_games']} historical games; "
+                        f"{name}'s bet in that permutation went "
+                        f"{_record_text(record)}."
+                    ),
+                    supporting_allowed=record["games"] > 0,
+                )
+            )
     relevant_games = max(
         (
             item["games"]
@@ -687,7 +747,7 @@ def build_celebrity_input(
     )
     max_confidence = 2 if len(names) == 1 or relevant_games == 0 else 3
     return {
-        "input_profile": "celebrity_consensus",
+        "input_profile": "celebrity_patterns",
         "game": {
             "event_id": event_id,
             "season": int(game["season"]),
@@ -727,8 +787,8 @@ def build_celebrity_input(
             "celebrities": names,
             "celebrity_count": len(names),
             "active_bet_count": len(current),
-            "side_consensus": side,
-            "total_consensus": total,
+            "side_distribution": side,
+            "total_distribution": total,
         },
         "markets": {"current_latest": latest_market},
         "nfl_calibration": calibration,

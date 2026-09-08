@@ -568,12 +568,14 @@ two teams as they existed when the game pick was submitted.
   Sonnet 4.6, and Haiku 4.5. It is committee-optional, so games without a Cee
   submission do not block the automated God Expert.
 
-### Implemented locally — 2026-09-08: Celebrity Consensus Expert
+### Implemented — 2026-09-08: Celebrity Expert
 
-The Celebrity Consensus Expert is an Opus 4.8-only, committee-optional voice
+The Celebrity Expert is an Opus 4.8-only, committee-optional voice
 whose participant set is rebuilt independently for every game. Missing
 celebrities are absent rather than counted as disagreement, and one participant
-is explicitly an individual signal rather than consensus.
+is explicitly an individual signal. Its objective is to find predictive
+identity-specific agreement and disagreement permutations; the vote
+distribution is descriptive context, not the goal.
 
 - `celebrity_picks` retains its original attribution columns and adds canonical
   bet identity, market family, subject, stat, direction, line, price, a
@@ -586,15 +588,14 @@ is explicitly an individual signal rather than consensus.
   revision wins only within the same celebrity, event, period, market family,
   subject, and stat.
 - The deterministic input separately reports the active picks, side and total
-  participation, individual records, pairwise agreement/disagreement, and the
-  exact active-group record. It also reports historical cohorts matching the
-  current participant-count bucket and consensus label. Only the latest
-  pre-kickoff revision of each bet and results available before the target
-  kickoff enter calibration. Full-game side, total, and team-total bets can
-  settle from final scores; a group record includes an event only when every
-  supporting compatible bet has the same verdict. Partial-game, player-prop,
-  and other picks remain tracked but ungraded until compatible deterministic
-  results exist.
+  distributions, individual records, pairwise agreement records, and each
+  celebrity's record specifically when a pair disagreed. Exact-permutation
+  history matches celebrity identity plus home/away or Over/Under roles, rather
+  than merely matching the number of participants or the majority label. Only
+  the latest pre-kickoff revision of each bet and results available before the
+  target kickoff enter calibration. Full-game side, total, and team-total bets
+  can settle from final scores. Partial-game, player-prop, and other picks
+  remain tracked but ungraded until compatible deterministic results exist.
 - The opinion may recommend the current full-game spread side and/or total, or
   PASS either leg. Props and other markets may be displayed or used as
   counterevidence but cannot directly support a game side or total. A

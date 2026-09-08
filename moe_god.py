@@ -142,9 +142,10 @@ VOICE_LENSES: dict[str, str] = {
     ),
     "celebrity": (
         "Compares the celebrities who actually picked this game, including "
-        "individual records, compatible-bet agreement and disagreement, and "
-        "exact active-group history. Props and other markets are tracked but "
-        "do not directly inform the game side or total pools."
+        "individual records, each person's results when a pair disagrees, "
+        "and exact identity-specific home/away or Over/Under permutations. "
+        "Props and other markets are tracked but do not directly inform the "
+        "game side or total pools."
     ),
     "rating_elo": (
         "Sees one Elo rating per team built from every regular-season final "
