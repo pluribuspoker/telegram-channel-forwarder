@@ -71,8 +71,10 @@ from moe_desk import (
     desk_config_from_env,
     load_state as load_desk_state,
     parse_callback as parse_desk_callback,
+    desk_ids_report,
     parse_start_param,
     review_targets as desk_review_targets,
+    topic_id_from_reply,
     save_state as save_desk_state,
     sync_desk,
 )
@@ -2067,6 +2069,31 @@ async def main() -> None:
         open_game_state(event.sender_id, game or game_stub(opinion))
         text, buttons = moe_opinion_detail(opinion, event_id=event_id)
         await event.respond(text, buttons=buttons, parse_mode="html")
+
+    @client.on(
+        events.NewMessage(
+            pattern=r"^/desk(?:@\w+)?$",
+            incoming=True,
+            func=lambda event: not event.is_private,
+        )
+    )
+    async def report_desk_ids(event):
+        """Sent inside the group: answer with the chat id (and the topic id
+        when sent inside a topic) the desk needs, and whether the group is
+        a supergroup with Topics yet. Commands reach the bot in groups even
+        with privacy mode on."""
+        if event.sender_id not in allowed:
+            return
+        chat = await event.get_chat()
+        text = desk_ids_report(
+            event.chat_id,
+            title=str(getattr(chat, "title", "") or ""),
+            supergroup=bool(getattr(chat, "megagroup", False)),
+            topics=bool(getattr(chat, "forum", False)),
+            topic_id=topic_id_from_reply(getattr(event.message, "reply_to", None)),
+        )
+        print("desk: " + text.replace("\n", " · "))
+        await event.reply(text)
 
     @client.on(
         events.NewMessage(

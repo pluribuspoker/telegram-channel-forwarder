@@ -7,8 +7,8 @@ Order of operations, once, when the group is created:
 1. In Telegram: create a private group, convert it to a supergroup with
    Topics enabled, add the intake bot (@nflguesser_bot) as an admin with
    "Manage topics" and "Pin messages", add both reviewers.
-2. Find the chat id (forward any message from the group to @userinfobot, or
-   read it from the intake bot's journal when the bot is added) and set
+2. Send ``/desk`` inside the group: the bot replies with the chat id (and,
+   inside a topic, that topic's id) and whether Topics are on. Set
    ``MOE_DESK_CHAT_ID=-100…`` in ``.env`` (both machines; it is synced).
 3. ``python scripts/desk_setup.py --create-topics`` — creates the Review,
    Picks and Scores topics and prints the three ``MOE_DESK_*_TOPIC`` lines.

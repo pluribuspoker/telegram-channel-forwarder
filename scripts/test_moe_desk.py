@@ -27,6 +27,7 @@ from moe_desk import (
     committee_experts,
     content_hash,
     desk_config_from_env,
+    desk_ids_report,
     empty_state,
     leg_label,
     load_state,
@@ -42,6 +43,7 @@ from moe_desk import (
     review_targets,
     save_state,
     sync_desk,
+    topic_id_from_reply,
 )
 
 NOW = datetime(2026, 9, 12, 13, 0, tzinfo=timezone.utc)  # Saturday, 9 AM ET
@@ -683,6 +685,33 @@ class ConfigAndCallbackTests(unittest.TestCase):
         self.assertIsNone(parse_start_param("/start"))
         self.assertIsNone(parse_start_param("/start hello"))
         self.assertIsNone(parse_start_param("/start op_../x"))
+
+    def test_desk_ids_report_and_topic_id(self) -> None:
+        class Reply:
+            def __init__(self, forum_topic, top=None, msg=None):
+                self.forum_topic = forum_topic
+                self.reply_to_top_id = top
+                self.reply_to_msg_id = msg
+
+        self.assertIsNone(topic_id_from_reply(None))
+        self.assertIsNone(topic_id_from_reply(Reply(False, msg=5)))
+        self.assertEqual(topic_id_from_reply(Reply(True, msg=7)), 7)
+        self.assertEqual(topic_id_from_reply(Reply(True, top=7, msg=9)), 7)
+        ready = desk_ids_report(-1001, title="MOE", supergroup=True, topics=True, topic_id=7)
+        self.assertEqual(
+            ready.split("\n"),
+            [
+                "desk · MOE",
+                "chat_id: -1001",
+                "supergroup · topics on",
+                "this topic id: 7",
+                "MOE_DESK_CHAT_ID=<chat_id> in .env, then scripts/desk_setup.py --create-topics",
+            ],
+        )
+        basic = desk_ids_report(-42, title="MOE", supergroup=False, topics=False)
+        self.assertIn("basic group · topics off", basic)
+        self.assertIn("Not ready: Edit → Topics on", basic)
+        self.assertNotIn("topic id", basic)
 
     def test_parse_callback(self) -> None:
         self.assertEqual(parse_callback("desk:ok:abc"), ("ok", "abc"))

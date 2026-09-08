@@ -678,7 +678,11 @@ either person sees or does.
   per card and retried on the next pass.
 - Setup, every step from a shell (the VPS Claude session included): create a
   private group, convert it to a supergroup with Topics, add the bot as
-  admin with Manage topics + Pin messages, set `MOE_DESK_CHAT_ID`, then
+  admin with Manage topics + Pin messages, send `/desk` in the group — the
+  bot replies with the chat id (and the topic id when sent inside a
+  topic) and says whether the group is a supergroup with Topics yet;
+  commands reach a bot in groups even with privacy mode on — set
+  `MOE_DESK_CHAT_ID`, then
   `scripts/desk_setup.py --create-topics` (prints the three topic keys),
   `--grant-reviewer <telegram_id>` for each reviewer, `--check [--post-test]`,
   restart `telegram-intake.service` (the journal says "Desk group enabled"

@@ -1337,6 +1337,45 @@ def post_scores_notice(text: str, *, environ: Any = None, api: BotApi | None = N
 
 
 # --------------------------------------------------------------------------
+# the /desk command (sent inside the group)
+
+
+def topic_id_from_reply(reply: Any) -> int | None:
+    """The forum topic a message was posted in, from its Telethon reply
+    header: ``reply_to_top_id`` when replying inside a topic, else
+    ``reply_to_msg_id`` (the topic's root); ``None`` outside topics and in
+    the General topic."""
+    if reply is None or not getattr(reply, "forum_topic", False):
+        return None
+    return getattr(reply, "reply_to_top_id", None) or getattr(reply, "reply_to_msg_id", None)
+
+
+def desk_ids_report(
+    chat_id: Any,
+    *,
+    title: str = "",
+    supergroup: bool = False,
+    topics: bool = False,
+    topic_id: int | None = None,
+) -> str:
+    """What ``/desk`` answers in a group: the ids the desk needs and whether
+    the group is ready for it."""
+    lines = [f"desk · {title}".rstrip(" ·"), f"chat_id: {chat_id}"]
+    kind = "supergroup" if supergroup else "basic group"
+    lines.append(f"{kind} · topics {'on' if topics else 'off'}")
+    if topic_id:
+        lines.append(f"this topic id: {topic_id}")
+    if not supergroup or not topics:
+        lines.append("Not ready: Edit → Topics on (this converts it to a supergroup).")
+    else:
+        lines.append(
+            "MOE_DESK_CHAT_ID=<chat_id> in .env, then "
+            "scripts/desk_setup.py --create-topics"
+        )
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
 # callbacks
 
 
