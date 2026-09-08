@@ -2210,8 +2210,8 @@ def _normalize_ak_opinion(
         total_interpretation,
         (
             "Configured positive mapping: NFL 0 to <3 -> WNBA 0 to <6; "
-            "NFL 3 to <9 -> WNBA 6 to <12; NFL 9 to <12 -> WNBA 12 to "
-            "<16; NFL 12+ -> WNBA 16+."
+            "NFL 3 to <6 -> WNBA 6 to <9; NFL 6 to <9 -> WNBA 9 to "
+            "<12; NFL 9 to <12 -> WNBA 12 to <16; NFL 12+ -> WNBA 16+."
         ),
         (
             "Comparison caveat: the WNBA study used closing totals, while "

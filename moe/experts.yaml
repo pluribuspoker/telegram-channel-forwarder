@@ -98,7 +98,7 @@ experts:
   ak:
     name: AK Expert
     mode: human_calibration
-    version: 1
+    version: 2
     prompt_version: 1
     prompt: prompts/ak/v1.md
     input_profile: ak_calibration

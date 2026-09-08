@@ -517,14 +517,17 @@ opinion; either may be `PASS`.
 - Side and total history are independently eligible. Missing spread data does
   not erase total evidence, and missing total data does not erase side
   evidence. Submission-line and closing-line records remain separate.
-- `moe/priors/ak_wnba_v1.json` provides the reviewed WNBA cold-start prior.
+- `moe/priors/ak_wnba_v2.json` provides the reviewed WNBA cold-start prior.
   Side and total weights decay independently, are capped at two equivalent NFL
   observations, and expire at eight matching resolved NFL predictions. The
   source's provisional WNBA `±6` threshold is not copied as six NFL points:
-  positive NFL gaps map as 0–<3 → WNBA 0–<6, 3–<9 → WNBA 6–<12,
-  9–<12 → WNBA 12–<16, and 12+ → WNBA 16+. The supported records are
-  Under 3/4 for the first band, 7/10 for the second, and 2/2 fresh for the
-  third; the last band has no isolated reviewed sample.
+  positive NFL gaps map as 0–<3 → WNBA 0–<6, 3–<6 → WNBA 6–<9,
+  6–<9 → WNBA 9–<12, 9–<12 → WNBA 12–<16, and 12+ → WNBA 16+.
+  Splitting the former middle band reveals materially different fresh results:
+  WNBA 6–<9 finished Under 1/3 and supplies no directional warning, while
+  WNBA 9–<12 finished Under 3/3 and retains the under warning. The neighboring
+  supported records are Under 3/4 for WNBA 0–<6 and 2/2 fresh for WNBA
+  12–<16; WNBA 16+ has no isolated reviewed sample.
 - `moe/prompts/ak/v1.md` selects exact deterministic evidence IDs. Application
   code renders all factual cards, the combined thesis, and the complete detail
   text. A zero-NFL-sample recommendation using WNBA evidence is capped at one
