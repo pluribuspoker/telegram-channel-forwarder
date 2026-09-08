@@ -217,9 +217,12 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
             {
                 "claim": (
                     "Calibration has 0 eligible predictions, so it provides "
-                    "no signal."
+                    "no signal despite the 12 to 11 season ordering."
                 ),
-                "evidence_paths": ["nfl_calibration"],
+                "evidence_paths": [
+                    "nfl_calibration",
+                    "season_predictions_at_submission",
+                ],
             },
             payload,
             role="no_signal_factors[0]",
@@ -260,7 +263,7 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
                 {
                     "claim": (
                         "Cee's resolved NFL moneyline record is 1-0 across "
-                        "1 eligible game."
+                        "1 eligible resolved pick."
                     ),
                     "evidence_paths": ["nfl_calibration.overall"],
                 },

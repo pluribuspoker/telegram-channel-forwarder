@@ -1403,13 +1403,16 @@ def _normalize_cited_claim(
         re.IGNORECASE,
     ) and not any(path.endswith(".all_games") for path in normalized_paths):
         raise ValueError(f"{role} makes an overall-team claim without all_games")
-    if role.startswith("no_signal") and not all(
-        value is None
-        or (
-            isinstance(value, dict)
-            and (
-                int(value.get("games", -1)) == 0
-                or int(value.get("eligible_predictions", -1)) == 0
+    if role.startswith("no_signal") and any(
+        isinstance(value, dict)
+        and (
+            (
+                "games" in value
+                and int(value["games"]) != 0
+            )
+            or (
+                "eligible_predictions" in value
+                and int(value["eligible_predictions"]) != 0
             )
         )
         for value in resolved
@@ -2600,7 +2603,8 @@ def validate_opinion(
             )
             games = int(summary["games"])
             if not re.search(
-                rf"(?<!\d){games}(?!\d)\s+(?:eligible\s+)?games?\b",
+                rf"(?<!\d){games}(?!\d)\s+"
+                rf"(?:(?:eligible|resolved)\s+)*(?:games?|picks?)\b",
                 path_text,
                 re.IGNORECASE,
             ):
