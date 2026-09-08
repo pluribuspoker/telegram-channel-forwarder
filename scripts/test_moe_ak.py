@@ -206,6 +206,33 @@ class AkProjectionTest(unittest.TestCase):
             payload["ak_submission"],
         )
 
+    def test_celebrity_attribution_does_not_replace_ak_projection(self) -> None:
+        celebrity_row = {
+            **_lean(),
+            "submission_id": "telegram:123:later-celebrity",
+            "submitted_at_utc": "2026-09-07T07:51:52+00:00",
+            "lean_text": "Expecting the Rams to win as -4 favorites",
+            "prediction_parse_status": "not_applicable",
+            "predicted_away_score": "",
+            "predicted_home_score": "",
+        }
+
+        payload = build_ak_input(
+            _game(),
+            [],
+            [_lean(), celebrity_row],
+            ak_user_id="123",
+        )
+
+        self.assertEqual(
+            payload["ak_submission"]["projection"]["away_score"],
+            23,
+        )
+        self.assertEqual(
+            payload["ak_submission"]["projection"]["home_score"],
+            27,
+        )
+
     def test_uses_reviewed_nfl_to_wnba_total_bands(self) -> None:
         self.assertEqual(_total_gap_bucket(2), "plus_0_to_3")
         self.assertEqual(_total_gap_bucket(3.5), "plus_3_to_6")

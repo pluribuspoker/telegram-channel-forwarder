@@ -536,6 +536,7 @@ def build_ak_input(
         if str(row.get("telegram_user_id")) == str(ak_user_id)
         and str(row.get("event_id")) == str(game["event_id"])
         and str(row.get("period")) == "game"
+        and str(row.get("prediction_parse_status") or "") != "not_applicable"
     ]
     if not matching:
         raise ValueError("AK has no full-game prediction for this event")
