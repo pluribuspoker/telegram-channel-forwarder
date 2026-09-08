@@ -586,7 +586,9 @@ class AuditLog:
         `broadcast_results` stays the compact fallback for the rest (parlays,
         mid-game settles, sports ESPN doesn't carry).
 
-        Each item is {channel_id, message_id, capper, pick, verdict, odds}. Bets that
+        Each item is {channel_id, message_id, capper, pick, verdict, odds} — one per
+        resolved LEG, so a multi-pick message whose legs all landed on this game
+        contributes several items sharing one capper and message link. Bets that
         are identical — same verdict, same description, same price — collapse onto a
         single line naming every capper, so three cappers on Cubs ML read as one line
         instead of three near-identical messages. Each name still deep-links to that

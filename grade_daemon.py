@@ -335,20 +335,30 @@ async def _resolve_game_keys(pending: list[dict], espn_cache: _ESPNCache) -> Non
     (sport it doesn't cover, offseason, no match), which is conservative rather than
     wrong. The scoreboard is the same one grading just fetched, so this is normally a
     cache hit, and the event is kept for the header.
+
+    Each item carries one `leg_games` entry per resolved leg (a lone straight pick
+    has exactly one). Legs resolve independently, and the message-level key is set
+    only when every leg landed on the SAME game post-upgrade — a multi-pick spanning
+    games keeps game_key=None and stays on the one-message-per-message path.
     """
     for item in pending:
-        if not item["game_key"] or not item["matchup"]:
-            continue
-        sport, game_date, _ = item["game_key"]
-        try:
-            sb = await espn_cache.get(sport, game_date)
-            event = _find_event_for_pick(sb, item["matchup"]) if sb else None
-        except Exception as exc:
-            print(f"  [group] event lookup failed ({sport} {game_date}): {exc}")
-            continue
-        if event and event.get("id"):
-            item["game_key"] = (sport, game_date, f"espn:{event['id']}")
-            item["event"] = event
+        legs = item.get("leg_games") or []
+        for leg in legs:
+            sport, game_date, _ = leg["key"]
+            try:
+                sb = await espn_cache.get(sport, game_date)
+                event = _find_event_for_pick(sb, leg["matchup"]) if sb else None
+            except Exception as exc:
+                print(f"  [group] event lookup failed ({sport} {game_date}): {exc}")
+                continue
+            if event and event.get("id"):
+                leg["key"] = (sport, game_date, f"espn:{event['id']}")
+                leg["event"] = event
+        if legs and len({leg["key"] for leg in legs}) == 1:
+            item["game_key"] = legs[0]["key"]
+            # Fullest label set wins — only the defensive header fallback reads it.
+            item["matchup"] = max((leg["matchup"] for leg in legs), key=len)
+            item["event"] = next((leg["event"] for leg in legs if leg["event"]), None)
 
 
 def _group_header(group: list[dict]) -> str:
@@ -391,23 +401,32 @@ def _queue_broadcast(
 ) -> None:
     """Queue one message's result for the end-of-cycle flush.
 
-    Only a lone straight pick gets a game key: a parlay spans several games, and a
-    multi-pick message would have to be split across group messages, so both stay on
-    the one-message-per-pick path.
+    Straight picks get a game key per resolved leg, and the flush merges the message
+    into a game group only when EVERY leg landed on the same game (settled in
+    _resolve_game_keys, where name keys upgrade to ESPN event ids — so "FSU +4.5" and
+    "FSU ML" in one message merge, and so does a leg naming one team beside a leg
+    naming both). A parlay never gets one — it is one ticket priced as a whole,
+    usually spanning games — and a multi-pick whose legs are on different games stays
+    on the one-message-per-message path: splitting its legs across group messages
+    would tear one source post's result apart.
     """
-    game_key = None
-    matchup: list[str] = []
-    if (len(bc_results) == 1 and len(leg_indices) == 1
-            and not any(p.get("is_parlay_leg") for p in picks)):
-        i = leg_indices[0]
-        pick = picks[i] if i < len(picks) else bc_results[0][0]
-        lv = leg_verdicts.get(str(i)) or {}
-        matchup = _matchup_labels(pick, odds_by_pick.get(str(i)) or {})
-        game_key = _game_key(
-            lv.get("sport") or pick.get("sport") or sport,
-            lv.get("game_date") or msg_date,
-            matchup,
-        )
+    leg_games: list[dict] = []
+    if not any(p.get("is_parlay_leg") for p in picks):
+        # leg_indices[j] is the parse index of bc_results[j] — both are built off
+        # the same newly-resolved list — so pair them to key each leg's own game.
+        for i, res in zip(leg_indices, bc_results):
+            pick = picks[i] if i < len(picks) else res[0]
+            lv = leg_verdicts.get(str(i)) or {}
+            matchup = _matchup_labels(pick, odds_by_pick.get(str(i)) or {})
+            key = _game_key(
+                lv.get("sport") or pick.get("sport") or sport,
+                lv.get("game_date") or msg_date,
+                matchup,
+            )
+            if key is None:
+                leg_games = []       # one unkeyable leg = never group the message
+                break
+            leg_games.append({"key": key, "matchup": matchup, "event": None})
 
     pending.append({
         "cache_key": cache_key, "channel_id": channel_id, "message_id": message_id,
@@ -415,7 +434,7 @@ def _queue_broadcast(
         "bc_results": bc_results, "sheets_results": sheets_results,
         "leg_indices": leg_indices, "mark_all_resolved": mark_all_resolved,
         "html_text": html_text, "msg_date": msg_date,
-        "game_key": game_key, "matchup": matchup, "event": None,
+        "game_key": None, "matchup": [], "event": None, "leg_games": leg_games,
     })
 
 
@@ -456,9 +475,11 @@ async def _flush_broadcasts(
     result without one (mid-game settle, non-ESPN sport, no event match) keeps
     the compact per-pick line, and a merge without one still posts as a single
     message but headerless (bare merged pick lines — a game-title header over
-    an unfinished game reads as a final with the score missing). Anything
-    without a resolvable game key, plus parlays and multi-pick messages, always
-    falls through to the unchanged per-message path.
+    an unfinished game reads as a final with the score missing). A multi-pick
+    message whose legs all resolved on ONE game joins the group, one line per
+    leg. Anything without a resolvable game key — parlays, and multi-pick
+    messages whose legs span different games — always falls through to the
+    unchanged per-message path.
 
     Ordering matches the pre-grouping code: mark broadcasted and persist BEFORE
     sending, so a crash mid-flush drops a result rather than double-posting one
@@ -508,18 +529,22 @@ async def _flush_broadcasts(
             await audit.broadcast_group(
                 target_channel=key[1],
                 header=_group_header(group) if has_final else "",
+                # One line per resolved leg: a multi-pick message contributes each
+                # of its legs under the same capper/message link.
                 items=[{
                     "channel_id": it["channel_id"], "message_id": it["message_id"],
-                    "capper": it["capper"], "pick": it["bc_results"][0][0],
-                    "verdict": it["bc_results"][0][1], "odds": it["bc_results"][0][2],
-                } for it in group],
+                    "capper": it["capper"], "pick": r[0],
+                    "verdict": r[1], "odds": r[2],
+                } for it in group for r in it["bc_results"]],
                 reply_to_id=next((it["reply_to_id"] for it in group if it["reply_to_id"]), None),
             )
             ident = key[2][2]
             ident_s = "/".join(ident) if isinstance(ident, tuple) else ident
             if len(group) > 1:
+                n_picks = sum(len(it["bc_results"]) for it in group)
+                extra = f" ({n_picks} picks)" if n_picks > len(group) else ""
                 print(f"  ⊞ merged {len(group)} results on {key[2][0]} {ident_s} "
-                      f"into one broadcast"
+                      f"into one broadcast{extra}"
                       + ("" if has_final else " (no final yet — headerless)"))
             else:
                 print(f"  ⊞ broadcast with final-score header on {key[2][0]} {ident_s}")
