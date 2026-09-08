@@ -982,6 +982,102 @@ arm and there is no policy versioning. Roadmap WP6.
   input identity, generation under `empirical`, the source hash, the Week 1
   replay, and the committed file recomputed from the CSV inside the test).
 
+### Completed — 2026-09-07: Rating voice (Elo) and bulk review (WP7)
+
+The first committee voice that is arithmetic rather than a model: an Elo
+rating per team, registered as expert `rating_elo` and pooled like any other
+approved opinion. It is a committee input, never a third God Expert arm, and
+every row still passes the human gate — in bulk, one week per command.
+
+- Registry: `rating_elo` (`Rating Expert (Elo)`, `mode: model`,
+  `input_profile: rating`, output schema 9, `default_model: deterministic`
+  so the aggregator's default-model rule selects its rows,
+  `allowed_backends: [deterministic]`, `markets: [side, total]`, enabled).
+  `moe/prompts/rating_elo/v1.md` is the versioned algorithm spec, hashed into
+  every row like a prompt; no model reads it. `VOICE_LENSES["rating_elo"]`
+  describes the lens for the judge without naming the expert.
+- Arithmetic (`moe_rating.py`, the FiveThirtyEight NFL form): adjusted gap
+  `g = home − away + hfa`; `p(home) = 1 / (1 + 10^(−g/400))`; expected margin
+  `g / points_per_elo`; each final moves the home team by `K · m · (S − p)`
+  and the away team by the mirror, `m = ln(|margin| + 1) · 2.2 /
+  (0.001 · winner_gap + 2.2)` (a favorite's blowout moves less; a tie moves
+  nothing); ratings regress `regression` of the way to 1500 between seasons.
+  Stars from |expected margin| at 3 / 7 / 10 / 14 points. The projected
+  total is the league scoring rate (the mean 2025 total, 46.03) — the voice
+  carries no total signal and says so in `no_signal_factors`; predicted
+  scores come from `_scores_from_estimate`, never tied.
+- Prior `moe/priors/nfl_elo_v1.json`, written by `scripts/fit_nfl_elo.py`
+  (pure stdlib, ~9 s): warm-up 1999–2022 from the widened CSV, grid search
+  on 2023–2024 minimizing the Brier of the pregame home-win probability
+  (coarse 880 + fine 165 replays of the whole file) → K 19, hfa 32,
+  regression 1/3; `points_per_elo` 21.99 by least squares of the margin on
+  the adjusted gap over the same seasons; fit Brier 0.2224 over 544 games.
+  Check on 2025, untouched by the fit: Elo Brier 0.2224 vs 0.2116 for the
+  de-vigged closing moneyline (272 games), a gap of +0.0108 — the roadmap's
+  within-0.01 target is missed by 0.0008 and the prior records
+  `target_met: false`; margin RMSE 12.93 vs 12.27 for the closing spread. A
+  fit-season probe of the margin-damping constant (1.5 … none) and the
+  probability scale (300 … 600) moved the 2023–24 Brier by under 0.0003, so
+  the plain form stays rather than tuning on the check season. (The fit
+  Brier and the 2025 Brier both round to 0.222421 by coincidence: 2023 is
+  0.2338 and 2024 is 0.2110.) End-of-2025 ratings lead with Seattle 1694,
+  Denver 1666, Houston 1643, the Rams 1643, Buffalo 1642.
+- Input (`build_rating_input(game, current_season_results)`): the prior's
+  path, SHA-256, schema version and parameters ride in the input like the
+  WNBA prior's; the end-of-2025 ratings are regressed once for the game's
+  season (any season other than `through_season + 1` is refused — refit the
+  prior each offseason), then this season's ESPN finals that kicked off
+  strictly before the game are applied in kickoff order. Ratings are used
+  as written to two decimals, so the input's numbers reproduce the
+  estimate; an adjusted gap of exactly 0 leans home (0.5001, +0.01).
+  `normalize_rating_opinion` requires every number in the response to equal
+  the input's estimate — a hand-edited response is an audit row.
+- `moe.py`: `DETERMINISTIC_MODES` (the rules aggregator and every
+  `mode: model` expert) run only on the deterministic backend with
+  `model=deterministic` and no effort; `DETERMINISTIC_RESPONDERS` maps the
+  input profile to the function that writes the opinion; schema 9 →
+  `normalize_rating_opinion`; `_source_sha256` adds `moe_rating.py` and the
+  prior for the rating profile. The deterministic backend stays refused for
+  agent experts.
+- Commands: `python scripts/generate_moe_opinion.py --event-id <id> --expert
+  rating_elo --deterministic` (or `--show-input`) for one game;
+  `python scripts/generate_rating_week.py --season 2026 --week N [--dry-run]`
+  persists one pending row per upcoming game of the week, skipping games
+  that already have a valid pending or approved rating row on the same
+  input hash (new finals change the input, so a later run adds a fresher
+  row and the earlier one keeps its status); `python
+  scripts/review_moe_opinion.py --expert rating_elo --week N [--season 2026]
+  --reviewed-by <you>` prints the week's valid pending rating rows as one
+  table (game, kickoff ET, winner, score, p(home), margin, stars, opinion
+  id, input hash) and approves them through the store's hash-checked review
+  only with `--approve`. The single-row mode is unchanged. Nothing approves
+  on its own.
+- Weekly procedure (Tuesday, after the Monday final is graded): generate the
+  week, read the table, approve it. `god_judge_runner.committee_experts()`
+  now lists `rating_elo`, so the judge runs for a game only after its rating
+  row is approved; until the week's rating rows are approved the runner
+  skips every game with "committee incomplete, no approved row for
+  rating_elo".
+- Data: `data/nfl_lines_history.csv` widened to 1999–2025 (6,967 games,
+  807 KB; the 2016–2025 rows are byte-identical to the earlier file;
+  moneylines start in 2006 and are complete from 2010, spreads and totals
+  from 1999). `DEFAULT_SEASONS` in `scripts/fetch_nfl_lines_history.py` is
+  now `1999-2025`, so a re-run is idempotent. The prior stores the CSV's
+  SHA-256; the tests fail with "re-run scripts/fit_nfl_elo.py" if the CSV
+  changes under it.
+- Tests: `scripts/test_moe_rating.py` (Elo arithmetic, replay order and
+  regression, scores, the least-squares slope, a grid-fit round trip, the
+  committed prior reproduced from the CSV including the 2025 Briers and
+  the 32 end ratings, input determinism and the strictly-before-kickoff
+  replay, the season guards, the exact-offset tie break, response
+  normalization and rejections, registry entry, generation end to end on
+  the deterministic backend, backend guards, voice selection and the
+  masked judge request with five voices, the bot renderings, the weekly
+  generator's dedupe and dry run, the bulk review filters, table, approval
+  and argument validation). `scripts/test_god_judge_runner.py`'s committee
+  now carries an approved rating row (a complete committee needs one);
+  `scripts/test_nfl_lines_history.py` pins the wider default.
+
 ### Implemented locally — 2026-09-04: authoritative NFL week metadata
 
 `nfl_games.week` previously remained blank because `new_game_row()` hardcoded

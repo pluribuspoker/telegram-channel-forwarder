@@ -1,0 +1,146 @@
+{
+  "base_rating": 1500.0,
+  "fit": {
+    "check_brier_difference": 0.010843,
+    "check_closing_ml_brier": 0.211578,
+    "check_closing_ml_games": 272,
+    "check_elo_brier": 0.222421,
+    "check_games": 272,
+    "check_margin_games": 272,
+    "check_margin_rmse_closing_spread": 12.2712,
+    "check_margin_rmse_elo": 12.9346,
+    "check_season": 2025,
+    "coarse_grid": {
+      "best": {
+        "hfa": 30.0,
+        "k": 18.0,
+        "regression": 0.333333
+      },
+      "brier": 0.222442,
+      "evaluated": 880,
+      "hfa": [
+        0.0,
+        10.0,
+        20.0,
+        30.0,
+        40.0,
+        50.0,
+        60.0,
+        70.0,
+        80.0,
+        90.0,
+        100.0
+      ],
+      "k": [
+        10.0,
+        12.0,
+        14.0,
+        16.0,
+        18.0,
+        20.0,
+        22.0,
+        24.0,
+        26.0,
+        28.0,
+        30.0,
+        32.0,
+        34.0,
+        36.0,
+        38.0,
+        40.0
+      ],
+      "regression": [
+        0.2,
+        0.25,
+        0.333333,
+        0.4,
+        0.5
+      ]
+    },
+    "fine_grid": {
+      "best": {
+        "hfa": 32.0,
+        "k": 19.0,
+        "regression": 0.333333
+      },
+      "brier": 0.222421,
+      "evaluated": 165
+    },
+    "fit_brier": 0.222421,
+    "fit_games": 544,
+    "fit_seasons": [
+      2023,
+      2024
+    ],
+    "objective": "brier of the pregame home-win probability on the fit seasons",
+    "points_per_elo": "least squares of the actual margin on the adjusted gap over the fit seasons",
+    "target_met": false,
+    "target_within": 0.01,
+    "ties_count_half": true
+  },
+  "fit_seasons": [
+    2023,
+    2024
+  ],
+  "league_scoring_rate": {
+    "games": 272,
+    "mean_total": 46.03,
+    "season": 2025
+  },
+  "model": "elo",
+  "parameters": {
+    "hfa": 32.0,
+    "k": 19.0,
+    "points_per_elo": 21.99,
+    "regression": 0.333333
+  },
+  "ratings": {
+    "Arizona Cardinals": 1339.9581,
+    "Atlanta Falcons": 1456.3309,
+    "Baltimore Ravens": 1562.7185,
+    "Buffalo Bills": 1641.8045,
+    "Carolina Panthers": 1400.5753,
+    "Chicago Bears": 1537.7233,
+    "Cincinnati Bengals": 1471.0562,
+    "Cleveland Browns": 1385.6236,
+    "Dallas Cowboys": 1434.3589,
+    "Denver Broncos": 1666.3253,
+    "Detroit Lions": 1585.9859,
+    "Green Bay Packers": 1556.5185,
+    "Houston Texans": 1643.018,
+    "Indianapolis Colts": 1448.5259,
+    "Jacksonville Jaguars": 1608.6561,
+    "Kansas City Chiefs": 1483.2075,
+    "Las Vegas Raiders": 1280.8885,
+    "Los Angeles Chargers": 1558.3566,
+    "Los Angeles Rams": 1642.6689,
+    "Miami Dolphins": 1435.8825,
+    "Minnesota Vikings": 1581.8341,
+    "New England Patriots": 1599.043,
+    "New Orleans Saints": 1407.5104,
+    "New York Giants": 1384.9773,
+    "New York Jets": 1296.9036,
+    "Philadelphia Eagles": 1585.2956,
+    "Pittsburgh Steelers": 1542.3116,
+    "San Francisco 49ers": 1576.7858,
+    "Seattle Seahawks": 1693.8527,
+    "Tampa Bay Buccaneers": 1469.5211,
+    "Tennessee Titans": 1289.4764,
+    "Washington Commanders": 1432.3056
+  },
+  "schema_version": 1,
+  "source": {
+    "games": 6967,
+    "origin": "nflverse games.csv via scripts/fetch_nfl_lines_history.py",
+    "path": "data/nfl_lines_history.csv",
+    "played": 6967,
+    "seasons": "1999-2025",
+    "sha256": "91039921bc5df5189205193b99636ee7dcc55ea38b481a9249d1d6abc9364fc9"
+  },
+  "through_season": 2025,
+  "version": "v1",
+  "warmup_seasons": [
+    1999,
+    2022
+  ]
+}

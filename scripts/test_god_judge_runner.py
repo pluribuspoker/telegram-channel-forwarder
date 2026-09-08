@@ -36,9 +36,27 @@ from scripts.test_moe_god import (
     EVENT_ID,
     KICKOFF,
     MemoryStore,
-    _committee,
     _game,
+    _opinion,
 )
+from scripts.test_moe_god import _committee as _voice_committee
+
+
+def _committee() -> list[dict]:
+    """The God tests' committee plus the rating voice (``rating_elo``,
+    enabled since WP7): a complete committee needs an approved row for
+    every enabled non-aggregator expert, so the runner's slates carry one."""
+    return _voice_committee() + [
+        _opinion(
+            "rating_elo",
+            model="deterministic",
+            probability=0.6,
+            margin=3,
+            away_score=21,
+            home_score=24,
+            stars=2,
+        )
+    ]
 
 # A stand-in for the claude binary: records argv, env, cwd and stdin next to
 # itself, then answers with a print-mode JSON envelope. A "mode" file beside

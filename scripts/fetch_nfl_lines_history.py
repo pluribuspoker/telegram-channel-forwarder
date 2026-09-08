@@ -7,7 +7,12 @@ Two committed data files come out of one run:
     One row per regular-season game from the nflverse games file
     (https://github.com/nflverse/nfldata, ``data/games.csv``): schedule,
     final score, and the closing spread, total, moneylines, and juice.
-    Rewritten in full on every run (idempotent).
+    Rewritten in full on every run (idempotent). The default span is
+    1999-2025 (6,967 games): the Elo rating voice (``moe_rating.py``,
+    ``scripts/fit_nfl_elo.py``) warms up on the early seasons, while the
+    margin table and the backtests read 2016 onward. Spreads and totals are
+    complete from 1999; moneylines and juice start in 2006 and are complete
+    from 2010.
 
 ``data/nfl_open_close.json``
     ESPN core odds for each game of ``--espn-seasons``: the ``ESPN BET``
@@ -82,7 +87,7 @@ DATA_DIR = ROOT / "data"
 LINES_CSV = DATA_DIR / "nfl_lines_history.csv"
 OPEN_CLOSE_JSON = DATA_DIR / "nfl_open_close.json"
 
-DEFAULT_SEASONS = ("2016-2025",)
+DEFAULT_SEASONS = ("1999-2025",)
 DEFAULT_ESPN_SEASONS = ("2024", "2025")
 DEFAULT_PACE_SECONDS = 0.75
 REQUEST_TIMEOUT_SECONDS = 20.0
@@ -764,7 +769,7 @@ def _http_client(timeout: float = REQUEST_TIMEOUT_SECONDS) -> httpx.Client:
 def _epilog() -> str:
     return (
         "Appending a season later: re-run with\n"
-        "  python scripts/fetch_nfl_lines_history.py --seasons 2016-2026 "
+        "  python scripts/fetch_nfl_lines_history.py --seasons 1999-2026 "
         "--espn-seasons 2024 2025 2026\n"
         "The CSV is rebuilt in full; the JSON keeps every id it already has "
         "and fetches only the new ones (use --refresh to re-fetch everything, "
@@ -786,7 +791,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--seasons",
         nargs="+",
         default=list(DEFAULT_SEASONS),
-        help="seasons for the CSV, as a range '2016-2025' or a list (default: 2016-2025)",
+        help="seasons for the CSV, as a range '1999-2025' or a list (default: 1999-2025)",
     )
     parser.add_argument(
         "--espn-seasons",

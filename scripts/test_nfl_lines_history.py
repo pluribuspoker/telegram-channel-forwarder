@@ -553,7 +553,8 @@ class CliTest(unittest.TestCase):
     def test_defaults_and_append_instruction(self):
         parser = build_parser()
         args = parser.parse_args([])
-        self.assertEqual(parse_seasons(args.seasons), list(range(2016, 2026)))
+        # 1999 onward since WP7: the Elo rating voice warms up on the early seasons.
+        self.assertEqual(parse_seasons(args.seasons), list(range(1999, 2026)))
         self.assertEqual(parse_seasons(args.espn_seasons), [2024, 2025])
         self.assertEqual(args.pace, 0.75)
         self.assertFalse(args.skip_espn or args.refresh)
@@ -562,7 +563,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(parse_seasons(later.seasons)[-1], 2026)
         self.assertEqual(parse_seasons(later.espn_seasons), [2024, 2025, 2026])
         self.assertEqual(later.espn_limit, 5)
-        self.assertIn("--seasons 2016-2026 --espn-seasons 2024 2025 2026", parser.format_help())
+        self.assertIn("--seasons 1999-2026 --espn-seasons 2024 2025 2026", parser.format_help())
 
     def test_csv_only_run_is_offline(self):
         with tempfile.TemporaryDirectory() as tmp:

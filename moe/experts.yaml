@@ -110,6 +110,21 @@ experts:
     enabled: true
     initial_weight: 1.0
     markets: [side, total]
+  rating_elo:
+    name: Rating Expert (Elo)
+    mode: model
+    version: 1
+    prompt_version: 1
+    prompt: prompts/rating_elo/v1.md
+    input_profile: rating
+    output_schema_version: 9
+    default_model: deterministic
+    allowed_backends:
+      - deterministic
+    # Side only: its projected total is the league scoring rate, no signal.
+    markets: [side]
+    enabled: true
+    initial_weight: 1.0
   god_rules:
     name: God Expert (Rules)
     mode: aggregator

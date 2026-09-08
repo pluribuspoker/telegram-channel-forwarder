@@ -42,6 +42,7 @@ from moe_god import (
 from moe_identity import (
     resolve_moe_expert_user_id_from_spreadsheet,
 )
+from moe_rating import RATING_MODE, RATING_PROFILE, build_rating_input
 from moe_win_total import build_win_total_input
 from nfl_game_history import (
     GAME_HISTORY_HEADERS,
@@ -127,8 +128,9 @@ async def main() -> None:
         "--deterministic",
         action="store_true",
         help=(
-            "Run the deterministic aggregator (god_rules). No model is "
-            "called; the computed opinion is persisted like any other."
+            "Run a deterministic expert (god_rules, or a mode-model expert "
+            "such as rating_elo). No model is called; the computed opinion "
+            "is persisted like any other."
         ),
     )
     parser.add_argument(
@@ -215,11 +217,16 @@ async def main() -> None:
     )
     expert = load_expert(args.expert, model=selected_model)
     expert_mode = str(expert.get("mode") or "")
-    if args.deterministic and expert_mode != RULES_MODE:
-        parser.error("--deterministic is only valid for the rules aggregator")
-    if expert_mode == RULES_MODE and not (args.deterministic or args.show_input):
+    if args.deterministic and expert_mode not in {RULES_MODE, RATING_MODE}:
         parser.error(
-            "The rules aggregator requires --deterministic or --show-input"
+            "--deterministic is only valid for the rules aggregator and "
+            "deterministic model experts (mode model)"
+        )
+    if expert_mode in {RULES_MODE, RATING_MODE} and not (
+        args.deterministic or args.show_input
+    ):
+        parser.error(
+            f"Expert {args.expert} requires --deterministic or --show-input"
         )
     if args.input_file and expert["input_profile"] != AGGREGATOR_PROFILE:
         parser.error("--input-file is only valid for the aggregator experts")
@@ -273,6 +280,9 @@ async def main() -> None:
             "nfl_line_snapshots"
         ).get_all_records(expected_headers=SNAPSHOT_HEADERS)
         opinions = store.list()
+    elif expert["input_profile"] == RATING_PROFILE:
+        # Preseason ratings plus this season's finals before kickoff.
+        current_results = _current_results()
     elif expert["input_profile"] == "ak_calibration":
         ak_user_id = resolve_moe_expert_user_id_from_spreadsheet(
             spreadsheet,
@@ -324,6 +334,8 @@ async def main() -> None:
                 team_history or [],
                 leans or [],
             )
+        elif expert["input_profile"] == RATING_PROFILE:
+            input_payload = build_rating_input(game, current_results or [])
         elif expert["input_profile"] == AGGREGATOR_PROFILE:
             if prebuilt is not None:
                 # The rules arm re-prints the file's canonical form and its

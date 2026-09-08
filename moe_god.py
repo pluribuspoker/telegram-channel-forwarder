@@ -135,6 +135,12 @@ VOICE_LENSES: dict[str, str] = {
         "the submission-time market using that forecaster's graded history "
         "and a capped cross-sport prior. May pass either leg."
     ),
+    "rating_elo": (
+        "Sees one Elo rating per team built from every regular-season final "
+        "since 1999 with home advantage and margin of victory, updated "
+        "through this season's finals before kickoff. Its total is the "
+        "league scoring rate. No lines, no news."
+    ),
 }
 
 MARKET_FIELDS = (
