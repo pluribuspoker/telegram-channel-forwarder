@@ -1511,6 +1511,24 @@ measured single-sample usage.
   `EvidenceTests`. The stalled key itself stays stalled until the
   committee changes; the fix applies to the next fresh key.
 
+### Completed — 2026-09-08: Phase 3 deployed; approval hash fix for deterministic rows
+
+Phase 3 (WP8–WP10, the reason-guard fix, rating rows approved on validation)
+was merged with the Cee/Celebrity commits and the desk group and deployed as
+main `6434045` (396 tests on a VPS scratch clone; `god-judge.service`
+reinstalled for `TimeoutStartSec=9000`; `telegram-intake` restarted). The
+first `generate_rating_week.py --season 2026 --week 1` then failed with
+"Opinion content changed after generation; review refused" on every Week 1
+rating row: deterministic rows persist `generation_max_tokens` 0, which the
+in-memory row and the typed sheet read both hash as an empty string
+(`0 or ""`), while the Sheets store's `review` reads raw cells and got the
+string "0". No rules or rating row could be approved through the store —
+CLI, weekly command or desk button — until `opinion_output_sha256`
+normalised the field (`_max_tokens_text`: blank and zero are one spelling,
+other values keep their integer text). Stored hashes are unchanged because
+generation always hashed the empty spelling. Test:
+`ApprovalHashNormalizationTests` in `scripts/test_moe.py`.
+
 ### Implemented locally — 2026-09-04: authoritative NFL week metadata
 
 `nfl_games.week` previously remained blank because `new_game_row()` hardcoded

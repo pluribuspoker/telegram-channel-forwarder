@@ -3694,6 +3694,24 @@ def latest_model_opinions(
     return choices
 
 
+def _max_tokens_text(value: Any) -> str:
+    """``generation_max_tokens`` for the approval hash. Deterministic rows
+    persist 0, which the in-memory row and the typed sheet read both hash as
+    "" (``0 or \"\"``) while a raw cell read gives the string "0" — the
+    Sheets store's ``review`` reads raw cells, so every rules and rating row
+    was refused until this normalised the three spellings (2026-09-08)."""
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return ""
+    try:
+        numeric = float(text)
+    except ValueError:
+        return text
+    if numeric == 0:
+        return ""
+    return str(int(numeric)) if numeric.is_integer() else text
+
+
 def opinion_output_sha256(row: dict[str, Any]) -> str:
     def number(value: Any) -> dict[str, Any]:
         if value is None or value == "":
@@ -3728,9 +3746,7 @@ def opinion_output_sha256(row: dict[str, Any]) -> str:
             row.get("output_schema_version") or ""
         ),
         "model": str(row.get("model") or ""),
-        "generation_max_tokens": str(
-            row.get("generation_max_tokens") or ""
-        ),
+        "generation_max_tokens": _max_tokens_text(row.get("generation_max_tokens")),
         "input_sha256": str(row.get("input_sha256") or ""),
         "input_json": str(row.get("input_json") or ""),
         "source_sha256": str(row.get("source_sha256") or ""),

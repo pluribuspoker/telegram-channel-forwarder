@@ -2161,5 +2161,36 @@ class OpinionViewTest(unittest.TestCase):
         )
 
 
+class ApprovalHashNormalizationTests(unittest.TestCase):
+    """The approval hash must not depend on how the sheet hands a cell back."""
+
+    def _row(self, max_tokens):
+        return {
+            "opinion_id": "abc",
+            "expert_id": "rating_elo",
+            "generation_max_tokens": max_tokens,
+            "home_win_probability": 0.6337,
+            "expected_home_margin": 4.33,
+            "predicted_away_score": 21,
+            "predicted_home_score": 25,
+            "confidence_stars": 2,
+            "thesis": "t",
+        }
+
+    def test_zero_max_tokens_hashes_the_same_from_every_read_path(self) -> None:
+        # In-memory int 0 (generation), typed 0 (get_all_records), raw "0"
+        # (row_values, the store's review path) and blank all agree.
+        hashes = {opinion_output_sha256(self._row(v)) for v in (0, "0", "", None, "0.0")}
+        self.assertEqual(len(hashes), 1)
+
+    def test_real_max_tokens_are_unchanged_and_distinct(self) -> None:
+        self.assertEqual(
+            opinion_output_sha256(self._row(5000)), opinion_output_sha256(self._row("5000"))
+        )
+        self.assertNotEqual(
+            opinion_output_sha256(self._row(5000)), opinion_output_sha256(self._row(0))
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
