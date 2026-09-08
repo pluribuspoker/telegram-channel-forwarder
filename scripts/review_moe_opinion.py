@@ -8,7 +8,10 @@ Single row (unchanged)::
     python scripts/review_moe_opinion.py --opinion-id <id> \\
         --status approved --reviewed-by <you> [--note ...]
 
-Bulk review of one expert's week (the rating voice's normal path)::
+Bulk review of one expert's week (for experts under the human gate; the
+rating voice is approved on validation at generation, so its bulk list is
+normally empty -- ``generate_rating_week.py`` also approves any earlier
+pending rating rows)::
 
     python scripts/review_moe_opinion.py --expert rating_elo --week 3 \\
         [--season 2026] --reviewed-by <you>            # list only
@@ -37,7 +40,8 @@ sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env.local")
 load_dotenv(ROOT / ".env")
 
-from moe import MoeOpinionStore, configured_opinion_store
+from moe import MoeOpinionStore, configured_opinion_store, load_expert
+from moe_god import review_policy
 
 ET = ZoneInfo("America/New_York")
 TABLE_COLUMNS = (
@@ -218,6 +222,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"{len(rows)} valid pending row(s) for {label}")
     for line in format_week_table(rows):
         print(line)
+    if review_policy(load_expert(args.expert)) == "validation":
+        print(
+            f"{args.expert} is approved on validation at generation; "
+            "generate_rating_week.py approves earlier pending rows too."
+        )
     if not rows:
         return 0
     if not args.approve:

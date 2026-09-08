@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 
 from moe import (
     OPINION_HEADERS,
+    approved_opinions,
     generate_opinion,
     load_expert,
     opinion_detail,
@@ -33,6 +34,8 @@ from moe import (
 from moe_god import (
     DETERMINISTIC_BACKEND,
     DETERMINISTIC_MODEL,
+    VALIDATION_REVIEW_NOTE,
+    VALIDATION_REVIEWER,
     VOICE_LENSES,
     _scores_from_estimate,
     aggregator_policy,
@@ -40,6 +43,7 @@ from moe_god import (
     build_judge_request,
     canonical_json,
     load_registry,
+    review_policy,
     select_voice_rows,
     sha256_text,
 )
@@ -497,6 +501,32 @@ class RegistryTests(unittest.TestCase):
         self.assertIn("Rating Expert (Elo) v1", expert["prompt_text"])
         self.assertIn("Elo", VOICE_LENSES[RATING_EXPERT_ID])
         self.assertIn(RATING_EXPERT_ID, committee_experts(load_registry()))
+        # Reviewed by validation (decided 2026-09-07): the only expert whose
+        # rows are approved at generation; every other expert keeps the gate.
+        self.assertEqual(expert["review"], "validation")
+        registry = load_registry()
+        self.assertEqual(
+            {expert_id: review_policy(config) for expert_id, config in registry["experts"].items()},
+            {"ak": "human", "divisional": "human", "god_judge": "human", "god_rules": "human", "rating_elo": "validation", "schedule": "human", "win_total": "human"},
+        )
+
+    def test_review_policy_is_deterministic_only(self) -> None:
+        self.assertEqual(review_policy({}), "human")
+        self.assertEqual(review_policy({"mode": "agent"}), "human")
+        self.assertEqual(review_policy({"mode": "model", "review": "validation"}), "validation")
+        self.assertEqual(review_policy({"mode": "agent", "review": "human"}), "human")
+        for bad in (
+            {"mode": "agent", "review": "validation"},
+            {"mode": "aggregator", "review": "validation"},
+            {"mode": "aggregator_judge", "review": "validation"},
+            {"mode": "human_calibration", "review": "validation"},
+            {"review": "validation"},
+            {"mode": "model", "review": "auto"},
+            {"mode": "model", "review": True},
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    review_policy(bad)
 
 
 class GenerationTests(unittest.IsolatedAsyncioTestCase):
@@ -515,7 +545,13 @@ class GenerationTests(unittest.IsolatedAsyncioTestCase):
         row = await self._row(store)
         self.assertEqual(store.rows, [row])
         self.assertEqual(row["generation_status"], "valid")
-        self.assertEqual(row["review_status"], "pending")
+        # Approved on validation, hash-bound like a human approval.
+        self.assertEqual(row["review_status"], "approved")
+        self.assertEqual(row["reviewed_by"], VALIDATION_REVIEWER)
+        self.assertEqual(row["review_note"], VALIDATION_REVIEW_NOTE)
+        self.assertTrue(row["reviewed_at_utc"])
+        self.assertEqual(row["approved_output_sha256"], row["output_sha256"])
+        self.assertEqual(approved_opinions([row]), [row])
         self.assertEqual(row["expert_mode"], RATING_MODE)
         self.assertEqual(row["input_profile"], RATING_PROFILE)
         self.assertEqual(row["model"], DETERMINISTIC_MODEL)
@@ -558,8 +594,8 @@ class GenerationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_rating_row_is_a_default_model_voice(self) -> None:
         row = await self._row()
-        row["review_status"] = "approved"
-        row["approved_output_sha256"] = row["output_sha256"]
+        # No hand approval: the row arrived approved on validation.
+        self.assertEqual(row["review_status"], "approved")
         registry = load_registry()
         policy = aggregator_policy(registry)
         rows = _committee() + [row]
@@ -615,8 +651,12 @@ class WeekGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary["up_to_date"], [])
         self.assertEqual(summary["failed"], [])
         self.assertEqual([row["event_id"] for row in store.rows], ["wk3-a", "wk3-b"])
-        self.assertTrue(all(row["review_status"] == "pending" and row["expert_id"] == RATING_EXPERT_ID for row in store.rows))
+        self.assertTrue(all(row["review_status"] == "approved" and row["reviewed_by"] == VALIDATION_REVIEWER and row["expert_id"] == RATING_EXPERT_ID for row in store.rows))
+        self.assertEqual(summary["approved_earlier"], [])
+        self.assertEqual(store.reviews, [])
         self.assertIn("persisted", output.getvalue())
+        self.assertIn(" approved (", output.getvalue())
+        self.assertIn("(approved on validation)", output.getvalue())
         # Same inputs again: nothing new.
         with contextlib.redirect_stdout(io.StringIO()):
             again = await generate_week(games=self.games, opinion_rows=store.rows, finals=[], store=store, season=2026, week=3)
@@ -640,6 +680,37 @@ class WeekGenerationTests(unittest.IsolatedAsyncioTestCase):
         rejected = dict(store.rows[0], review_status="rejected")
         self.assertIsNone(existing_row([rejected], event_id="wk3-a", input_sha256=rejected["input_sha256"]))
         self.assertIsNotNone(existing_row(store.rows, event_id="wk3-a", input_sha256=store.rows[0]["input_sha256"]))
+
+    async def test_generate_week_approves_earlier_pending_rows(self) -> None:
+        # A valid pending rating row from before the review policy (or from
+        # a single-game run): the week run approves it on validation through
+        # the store's review, and a dry run only says it would.
+        store = MemoryStore()
+        earlier = _opinion(RATING_EXPERT_ID, model=DETERMINISTIC_MODEL, probability=0.6, margin=3, away_score=21, home_score=24, stars=2, event_id="wk3-a", kickoff="2026-09-27T17:00:00+00:00", review_status="pending")
+        earlier["week"] = 3
+        earlier["input_sha256"] = sha256_text("an older input")
+        other_week = dict(earlier, opinion_id="other-week", week=4)
+        invalid = dict(earlier, opinion_id="broken", generation_status="invalid", review_status="not_applicable")
+        for row in (earlier, other_week, invalid):
+            store.append(row)
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            dry = await generate_week(games=self.games, opinion_rows=store.rows, finals=[], store=store, season=2026, week=3, dry_run=True)
+        self.assertEqual(dry["approved_earlier"], [{"opinion_id": earlier["opinion_id"], "dry_run": True}])
+        self.assertEqual(store.reviews, [])
+        self.assertIn("would approve 1 earlier", output.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            summary = await generate_week(games=self.games, opinion_rows=store.rows, finals=[], store=store, season=2026, week=3)
+        # The two games still get fresh rows (a different input hash), and
+        # only the week-3 valid pending row is swept; the other week's and
+        # the invalid one are left alone.
+        self.assertEqual([item["event_id"] for item in summary["persisted"]], ["wk3-a", "wk3-b"])
+        self.assertEqual(summary["approved_earlier"], [{"opinion_id": earlier["opinion_id"], "event_id": "wk3-a"}])
+        self.assertEqual(store.reviews, [(earlier["opinion_id"], "approved", VALIDATION_REVIEWER, VALIDATION_REVIEW_NOTE)])
+        by_id = {row["opinion_id"]: row for row in store.rows}
+        self.assertEqual(by_id[earlier["opinion_id"]]["review_status"], "approved")
+        self.assertEqual(by_id["other-week"]["review_status"], "pending")
+        self.assertEqual(by_id["broken"]["review_status"], "not_applicable")
+        self.assertIn("1 earlier rows approved", output.getvalue())
 
 
 class BulkReviewTests(unittest.TestCase):

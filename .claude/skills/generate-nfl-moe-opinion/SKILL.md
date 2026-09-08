@@ -31,7 +31,9 @@ and billing.
 - Persist every raw response through `scripts/generate_moe_opinion.py`; never
   write directly to the Sheet.
 - Never approve an opinion automatically. Review the persisted opinion with the
-  user under the normal hash-bound approval workflow.
+  user under the normal hash-bound approval workflow. The one exception is
+  the rating voice, whose rows are approved on validation at generation
+  (see "Rating voice"); no agent-generated row is ever auto-approved.
 - Store temporary inputs and responses outside the repository and remove them
   after persistence.
 
@@ -201,11 +203,17 @@ committed prior `moe/priors/nfl_elo_v1.json` and this season's finals
 `python scripts/generate_moe_opinion.py --event-id <id> --expert rating_elo
 --deterministic` (`--show-input` prints the rating input). The weekly path
 is `python scripts/generate_rating_week.py --season <S> --week <N>` (one
-pending row per upcoming game of the week, deduped on the input hash), then
-`python scripts/review_moe_opinion.py --expert rating_elo --week <N>
---reviewed-by <you>` to read the week's table and the same command with
-`--approve` to approve it. The judge runner needs the approved rating row
-before it judges a game. Refit the prior each offseason with
+row per upcoming game of the week, deduped on the input hash). Its rows are
+approved on validation at generation (registry `review: validation`,
+decided 2026-09-07): the response is arithmetic that
+`normalize_rating_opinion` checks against the input's own estimate, so the
+approval is hash-bound exactly like a human one (`reviewed_by=validation`)
+and needs no review step; the same run also approves any earlier valid
+pending rating rows of the week. `review_moe_opinion.py --expert rating_elo
+--week <N>` still lists, and with `--approve` approves, legacy pending rows.
+No other expert may declare `review: validation` (the registry loader
+refuses it outside `mode: model`). The judge runner needs the approved
+rating row before it judges a game. Refit the prior each offseason with
 `python scripts/fit_nfl_elo.py --check-season <season just played>`.
 
 ## Runtime notes

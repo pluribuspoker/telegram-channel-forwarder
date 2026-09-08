@@ -34,11 +34,14 @@ from moe_god import (
     JUDGE_MODE,
     MARGINS_TABLE_PATH,
     RULES_MODE,
+    VALIDATION_REVIEW_NOTE,
+    VALIDATION_REVIEWER,
     aggregator_policy,
     build_aggregator_input,
     build_judge_request,
     load_registry,
     normalize_aggregator_opinion,
+    review_policy,
     rules_arm_response,
 )
 from moe_rating import (
@@ -290,6 +293,12 @@ def load_expert(
     expert = experts[expert_id]
     if not isinstance(expert, dict) or not expert.get("enabled"):
         raise ValueError(f"MOE expert is disabled: {expert_id}")
+    try:
+        review_policy(expert)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid review policy for expert {expert_id}: {exc}"
+        ) from exc
     resolved = dict(expert)
     model_prompts = expert.get("model_prompts") or {}
     if not isinstance(model_prompts, dict):
@@ -3071,6 +3080,20 @@ async def generate_opinion(
                 f"{row['nondeterministic_analysis_usable']}"
             )
         row["output_sha256"] = opinion_output_sha256(row)
+        if not sample and review_policy(expert) == "validation":
+            # A deterministic expert's row is approved by its validation:
+            # the response just passed the normalizer, which requires every
+            # number to equal the input's own estimate. Hash-bound like a
+            # human approval, so approved_opinions verifies it the same way.
+            row.update(
+                {
+                    "review_status": "approved",
+                    "reviewed_at_utc": datetime.now(timezone.utc).isoformat(),
+                    "reviewed_by": VALIDATION_REVIEWER,
+                    "review_note": VALIDATION_REVIEW_NOTE,
+                    "approved_output_sha256": row["output_sha256"],
+                }
+            )
     except Exception as exc:
         row["generation_status"] = "sample" if sample else "invalid"
         row["generation_error"] = f"{type(exc).__name__}: {exc}"

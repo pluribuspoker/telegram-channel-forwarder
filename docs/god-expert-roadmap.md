@@ -315,6 +315,12 @@ anywhere; judge runs bill the Claude Code subscription.
   judge runner's committee requires an approved rating row per game, so the
   week's rating rows must be generated and approved before the timer judges
   it (or ship with `enabled: false` until then).
+- Review changed 2026-09-07 (night): rows are approved on validation at
+  generation (registry `review: validation`; see Decisions). The weekly
+  command is now the whole procedure; the bulk review stays for legacy
+  pending rows. Tests: `test_review_policy_is_deterministic_only`,
+  `test_generate_week_approves_earlier_pending_rows`, and the end-to-end
+  generation test in `scripts/test_moe_rating.py`.
 
 ### WP8 — Backtest harness (2.5 d, needs WP6 and WP7)
 
@@ -491,9 +497,11 @@ pending, the user's call at a week boundary. **Deployed 2026-09-07 at
 21:06 EDT by another session** together with the daily `moe-grade.timer`
 (main `7a89d41`; pushed, pulled as root, `telegram-intake` restarted, the
 timer armed for 05:23 ET). That session generated the 17 Week 1
-`rating_elo` rows, all pending: until a human bulk-approves them the judge
-runner skips every game as "committee incomplete, no approved row for
-rating_elo".
+`rating_elo` rows, all pending: until they are approved the judge runner
+skips every game as "committee incomplete, no approved row for rating_elo".
+Since the validation review (phase 3) the first
+`generate_rating_week.py --season 2026 --week 1` after the phase-3 deploy
+approves them.
 
 - All ten suites green on the VPS scratch clone.
 - Week 1 replay pinned under the overlap formula as specified (Seahawks pool
@@ -522,7 +530,7 @@ it at a later week boundary.
 
 ## Acceptance for the phase-3 deploy
 
-Status 2026-09-07: every item below is met on main (338 tests on a fresh
+Status 2026-09-07: every item below is met on main (340 tests on a fresh
 scratch clone, twelve modules, after merging the daily grading timer that
 another session landed on main meanwhile). Not pushed; deploy pending, the
 user's call. Phase 2 is already live (see above), so phase 3 deploys on top
@@ -557,10 +565,11 @@ Deploy runbook (phase 2 + phase 3 together, when the user says go):
    then `bash scripts/check_deploy_sync.sh` → all in sync.
 4. `systemctl restart telegram-intake.service` (`moe.py` changed).
 5. Already live since the phase-2 deploy: the runner needs an approved
-   `rating_elo` row per game. The 17 Week 1 rows are pending — read them
-   with `python scripts/review_moe_opinion.py --expert rating_elo --week 1
-   --season 2026 --reviewed-by <you>` and re-run with `--approve`; the
-   judge skips every game until then.
+   `rating_elo` row per game. The 17 Week 1 rows are pending; after this
+   deploy, `python scripts/generate_rating_week.py --season 2026 --week 1`
+   (as forwarder in `~/app`) approves them on validation and adds any
+   missing ones — no review command. The judge skips every game until it
+   runs.
 6. Leave `GOD_JUDGE_SAMPLES` unset (= 1) until the two-week usage read.
 7. The Seahawks committee key stays stalled on its two invalid rows until
    the committee changes (a BetOnline move or a new approved voice row);
@@ -575,6 +584,15 @@ Decided 2026-09-07 in chat, recorded here and on the Desk page:
 - Veto 0.5 points on spreads, 1.0 on totals, 10 cents on price; EV floor
   2% per unit. The backtest (WP8) may refine them.
 - The human gate stays for every row, including the rating voice's (WP7).
+  **Superseded 2026-09-07 (night), user decision, for the rating voice
+  only:** its rows are approved on validation at generation (registry
+  `review: validation`; `moe_god.review_policy`; `reviewed_by=validation`,
+  hash-bound like a human approval, because `normalize_rating_opinion`
+  already requires every number to equal the input's own estimate), and
+  `generate_rating_week.py` approves the week's earlier valid pending rows
+  the same way. The gate stays for every LLM row and for both God Expert
+  arms: the registry loader refuses `validation` on any non-`mode: model`
+  expert.
 - Judge runs are automated from a fresh headless session (WP2); the
   ensemble (WP9) follows once runner usage is measured.
 - Grading cadence (decided 2026-09-07 in chat): `moe-grade.timer` runs
@@ -735,6 +753,16 @@ an answer:
   338 tests with its `scripts.test_moe_grade`), so phase 3 deploys on
   top of it; the 17 Week 1 rating rows it generated are pending approval
   and the judge skips every game until they are approved.
+- 2026-09-07 (night, later) — user decision: rating rows are approved on
+  validation, not by a person. Registry `review: validation` on
+  `rating_elo` (`moe_god.review_policy`, refused outside `mode: model`);
+  `generate_opinion` approves such a row at generation, hash-bound
+  (`reviewed_by=validation`); `generate_rating_week.py` also approves the
+  week's earlier valid pending rows and reports it; the bulk review prints
+  a hint. Verified on a fresh VPS scratch clone: `Ran 340 tests … OK`. On
+  main, not pushed; the first weekly run after the phase-3 deploy approves
+  the 17 pending Week 1 rows. The guard fix must be live before that: the
+  approvals change both Week 1 committee keys and re-judge both games.
 
 ## Session opener (phase 2)
 

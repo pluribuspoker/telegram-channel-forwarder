@@ -12,9 +12,16 @@ For every ``nfl_games`` row of that season and week whose status is
 or approved ``rating_elo`` row already carries the same input hash. New
 finals change the input (and its hash), so a later run after more games are
 final adds a fresher row for the same game; the earlier one keeps its
-status. Every row lands pending: review the week with
-``scripts/review_moe_opinion.py --expert rating_elo --week N`` and approve it
-there. This script never approves anything.
+status.
+
+The rating voice is reviewed by validation (registry ``review: validation``,
+decided 2026-09-07): every row it persists is approved at generation,
+hash-bound, because the response is arithmetic checked against the input's
+own estimate. After the week's games, this script also approves the week's
+valid ``rating_elo`` rows that are still pending -- rows persisted before the
+policy existed, or by a single-game run -- through the store's hash-checked
+review, as ``validation``. No human step remains for this expert; every
+other expert keeps its human gate.
 """
 
 from __future__ import annotations
@@ -33,12 +40,25 @@ sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env.local")
 load_dotenv(ROOT / ".env")
 
-from moe import MoeOpinionStore, configured_opinion_store, generate_opinion
-from moe_god import DETERMINISTIC_BACKEND, canonical_json, sha256_text
+from moe import (
+    MoeOpinionStore,
+    configured_opinion_store,
+    generate_opinion,
+    load_expert,
+)
+from moe_god import (
+    DETERMINISTIC_BACKEND,
+    VALIDATION_REVIEW_NOTE,
+    VALIDATION_REVIEWER,
+    canonical_json,
+    review_policy,
+    sha256_text,
+)
 from moe_rating import RATING_EXPERT_ID, build_rating_input
 from nfl_game_history import GAME_HISTORY_HEADERS, GAME_HISTORY_TAB
 from nfl_lines import GAME_HEADERS, get_gspread_client
 from scripts.generate_moe_opinion import current_season_finals
+from scripts.review_moe_opinion import approve_rows, week_rows
 
 
 def describe_game(game: dict[str, Any]) -> str:
@@ -98,9 +118,11 @@ async def generate_week(
     summary: dict[str, list[dict[str, Any]]] = {
         "persisted": [],
         "up_to_date": [],
+        "approved_earlier": [],
         "failed": [],
     }
     prefix = "dry run: " if dry_run else ""
+    validation = review_policy(load_expert(RATING_EXPERT_ID)) == "validation"
     for game in week_games(games, season=season, week=week):
         event_id = str(game["event_id"])
         try:
@@ -148,15 +170,53 @@ async def generate_week(
             summary["failed"].append({"event_id": event_id, "error": str(exc)})
             continue
         print(
-            f"{describe_game(game)}: persisted {row['opinion_id']} pending "
-            f"({plan}; input {digest[:12]})"
+            f"{describe_game(game)}: persisted {row['opinion_id']} "
+            f"{row['review_status']} ({plan}; input {digest[:12]})"
         )
         summary["persisted"].append(
             {"event_id": event_id, "opinion_id": str(row["opinion_id"])}
         )
+    if validation:
+        # Valid rows of this week that are still pending predate the policy
+        # (or came from a single-game run); the same validation approves
+        # them, through the store's hash-checked review.
+        earlier = week_rows(
+            opinion_rows, expert_id=RATING_EXPERT_ID, week=week, season=season
+        )
+        if earlier and dry_run:
+            print(
+                f"dry run: would approve {len(earlier)} earlier valid pending "
+                "row(s) on validation: "
+                + ", ".join(str(row.get("opinion_id")) for row in earlier)
+            )
+            summary["approved_earlier"] = [
+                {"opinion_id": str(row.get("opinion_id")), "dry_run": True}
+                for row in earlier
+            ]
+        elif earlier:
+            approved = approve_rows(
+                store,
+                earlier,
+                reviewed_by=VALIDATION_REVIEWER,
+                note=VALIDATION_REVIEW_NOTE,
+            )
+            print(
+                f"approved {len(approved)} earlier valid pending row(s) on "
+                "validation: " + ", ".join(approved)
+            )
+            summary["approved_earlier"] = [
+                {
+                    "opinion_id": opinion_id,
+                    "event_id": str(row.get("event_id") or ""),
+                }
+                for opinion_id, row in zip(approved, earlier)
+            ]
     print(
-        f"rating week {season} wk{week}: {len(summary['persisted'])} persisted, "
-        f"{len(summary['up_to_date'])} up to date, {len(summary['failed'])} failed"
+        f"rating week {season} wk{week}: {len(summary['persisted'])} persisted"
+        f"{' (approved on validation)' if validation else ''}, "
+        f"{len(summary['up_to_date'])} up to date, "
+        f"{len(summary['approved_earlier'])} earlier rows approved, "
+        f"{len(summary['failed'])} failed"
     )
     return summary
 

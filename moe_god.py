@@ -220,15 +220,52 @@ def load_registry() -> dict[str, Any]:
     for expert_id, expert in config["experts"].items():
         if not isinstance(expert, dict):
             continue
-        if str(expert.get("mode") or "") in AGGREGATOR_MODES:
-            continue
         try:
-            voice_markets(expert)
+            review_policy(expert)
+            if str(expert.get("mode") or "") not in AGGREGATOR_MODES:
+                voice_markets(expert)
         except ValueError as exc:
             raise ValueError(
                 f"moe/experts.yaml expert {expert_id}: {exc}"
             ) from exc
     return config
+
+
+# How a persisted row reaches ``approved``. ``human`` (the default) is the
+# review gate every model row passes through. ``validation`` approves a row
+# at generation, hash-bound exactly like a human approval, because the
+# response is arithmetic that ``normalize_rating_opinion`` has already checked
+# against the input's own estimate; it is allowed only for ``mode: model``
+# experts (the rating voice), never for an agent expert or either God Expert
+# arm. Decided 2026-09-07 (night), superseding the phase-2 "human gate for
+# every row" for the deterministic voice.
+REVIEW_POLICIES = ("human", "validation")
+VALIDATION_REVIEW_MODES = ("model",)
+VALIDATION_REVIEWER = "validation"
+VALIDATION_REVIEW_NOTE = (
+    "deterministic expert: approved on validation; the response equals the "
+    "input's own estimate"
+)
+
+
+def review_policy(config: dict[str, Any]) -> str:
+    """The registry's ``review`` for an expert: ``human`` unless declared."""
+    raw = config.get("review")
+    if raw is None:
+        return "human"
+    policy = str(raw)
+    if policy not in REVIEW_POLICIES:
+        raise ValueError(
+            f"review must be one of {list(REVIEW_POLICIES)}: {raw!r}"
+        )
+    if (
+        policy == "validation"
+        and str(config.get("mode") or "") not in VALIDATION_REVIEW_MODES
+    ):
+        raise ValueError(
+            "review: validation is only allowed for mode: model experts"
+        )
+    return policy
 
 
 def voice_markets(config: dict[str, Any]) -> list[str]:

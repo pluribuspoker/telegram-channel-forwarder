@@ -1079,6 +1079,21 @@ every row still passes the human gate — in bulk, one week per command.
   row is approved; until the week's rating rows are approved the runner
   skips every game with "committee incomplete, no approved row for
   rating_elo".
+- Changed 2026-09-07 (night), user decision: the rating voice's rows are
+  approved on validation, not by a person. Registry `review: validation`
+  on `rating_elo` (`moe_god.review_policy`: `human` by default, `validation`
+  allowed only for `mode: model` experts, so LLM rows and both God Expert
+  arms keep the gate; `load_registry` and `load_expert` refuse anything
+  else). `generate_opinion` approves such a row in the same step that
+  validated it — `review_status=approved`, `reviewed_by=validation`, a
+  fixed note, `approved_output_sha256` = the output hash, so
+  `approved_opinions` verifies it exactly like a human approval — and
+  `generate_rating_week.py` also approves the week's earlier valid pending
+  rating rows through the store's hash-checked review (dry run says what
+  it would approve). The bulk review mode remains for legacy rows and
+  prints a hint. Tests: registry policy map, the policy guard, generation
+  lands approved, the weekly sweep. The first weekly run after the phase-3
+  deploy approves the 17 pending Week 1 rows.
 - Data: `data/nfl_lines_history.csv` widened to 1999–2025 (6,967 games,
   807 KB; the 2016–2025 rows are byte-identical to the earlier file;
   moneylines start in 2006 and are complete from 2010, spreads and totals
@@ -1107,7 +1122,7 @@ on 2026-09-07 (night) in three worktrees (`god/backtest`, `god/ensemble`,
 orchestrator's fix for two live judge rejections — and merged in that order
 with no conflicts. The suite of record is 335 tests on a fresh VPS scratch
 clone across the ten phase-2 modules plus `scripts.test_moe_backtest`
-(`bash scripts/godbuild_test.sh <slug> <dir>` runs all eleven; 338 with
+(`bash scripts/godbuild_test.sh <slug> <dir>` runs all eleven; 340 with
 `scripts.test_moe_grade` after the merge with the daily grading timer).
 **Not deployed**: phase 2 went live on 2026-09-07 at 21:06 EDT from another
 session (with the daily `moe-grade.timer`, main `7a89d41`; its 17 Week 1
