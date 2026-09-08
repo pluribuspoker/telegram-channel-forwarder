@@ -219,6 +219,10 @@ def committee(event_id="401", *, arms_status="pending"):
     ]
 
 
+def is_arm(r):
+    return r["expert_id"] in ("god_rules", "god_judge")
+
+
 def approved_of(rows):
     """Stand-in for moe.approved_opinions: the caller's hash-verified rows."""
     return [
@@ -292,7 +296,9 @@ class ModelTests(unittest.TestCase):
         )
         self.assertNotIn("cee", statuses)  # optional and absent
         self.assertEqual((desk.required_approved, desk.required_total), (4, 5))
-        self.assertEqual([r["opinion_id"] for r in desk.pending], ["p1", "c884d868-0000", "444bf3de-0000"])
+        # arms first, then voices oldest first
+        self.assertEqual([r["opinion_id"] for r in desk.pending], ["c884d868-0000", "444bf3de-0000", "p1"])
+        self.assertEqual([r["opinion_id"] for r in desk.reviewed], ["a3", "a2", "a4", "a1"])
         self.assertIsNone(desk.rules)
         self.assertFalse(desk.started)
 
@@ -317,14 +323,21 @@ class ModelTests(unittest.TestCase):
         self.assertEqual([d.event_id for d in desks], ["8"])
         self.assertTrue(desks[0].started)
 
-    def test_review_rows_keep_latest_reviewed_per_expert_and_model(self) -> None:
+    def test_pending_means_latest_valid_row_per_expert_and_model(self) -> None:
         rows = [
+            # an old pending draft superseded by a newer approved row: hidden
+            row("draft", "401", "schedule", generated="2026-09-09T00:00:00+00:00"),
             row("old", "401", "schedule", status="approved", generated="2026-09-10T00:00:00+00:00"),
-            row("new", "401", "schedule", status="rejected", generated="2026-09-11T00:00:00+00:00"),
+            # a newer pending row on the same expert+model: actionable
+            row("newer", "401", "schedule", generated="2026-09-11T00:00:00+00:00"),
             row("hk", "401", "schedule", status="approved", model="claude-haiku-4-5"),
             row("bad", "401", "schedule", generation_status="invalid"),
-            row("sample", "401", "schedule", status="not_applicable"),
+            row("sample", "401", "schedule", status="not_applicable", generation_status="sample"),
+            row("odd", "401", "schedule", status="not_applicable"),  # never reviewable either
             row("pend", "401", "win_total"),
+            row("rej", "401", "divisional", status="rejected"),
+            arm_row("r-old", "401", "god_rules", PASS_PLAIN, PASS_PLAIN, generated="2026-09-11T00:00:00+00:00"),
+            arm_row("r-new", "401", "god_rules", PASS_PLAIN, PASS_PLAIN, generated="2026-09-12T00:00:00+00:00"),
         ]
         desk = build_desks(
             [game("401", "New England Patriots", "Seattle Seahawks", SEA_KICKOFF)],
@@ -333,7 +346,20 @@ class ModelTests(unittest.TestCase):
             REGISTRY,
             now=NOW,
         )[0]
-        self.assertEqual([r["opinion_id"] for r in desk.review_rows], ["pend", "hk", "new"])
+        self.assertEqual([r["opinion_id"] for r in desk.pending], ["r-new", "newer", "pend"])
+        # committee: one row per expert — latest approved on any model without a
+        # registry default (hk is newer than old), the rejected divisional row
+        self.assertEqual([r["opinion_id"] for r in desk.reviewed], ["rej", "hk"])
+        with_default = {"experts": {**REGISTRY["experts"], "schedule": {**REGISTRY["experts"]["schedule"], "default_model": "claude-opus-4-8"}}}
+        desk = build_desks(
+            [game("401", "New England Patriots", "Seattle Seahawks", SEA_KICKOFF)],
+            rows,
+            approved_of(rows),
+            with_default,
+            now=NOW,
+        )[0]
+        self.assertEqual([r["opinion_id"] for r in desk.reviewed], ["rej", "old"])
+        self.assertEqual([r["opinion_id"] for r in desk.review_rows][:3], ["r-new", "newer", "pend"])
 
 
 class RenderTests(unittest.TestCase):
@@ -361,24 +387,27 @@ class RenderTests(unittest.TestCase):
         rows[0]["reviewed_at_utc"] = "2026-09-12T13:41:00+00:00"
         text, keyboard = render_review_card(self.desk(rows), config=CONFIG)
         self.assertIn("📥 <b>Patriots @ Seahawks</b> · Sun Sep 13 · 4:05 PM ET", text)
-        self.assertIn("judge locks 2:05 PM ET · committee 4 of 5 approved · 3 pending", text)
-        # pending rows come first, numbered; reviewed rows carry the reviewer
-        self.assertLess(text.index("Win Total Expert"), text.index("Schedule Expert"))
-        self.assertIn("1 · <b>Win Total Expert</b> · <code>opus-4-8</code>", text)
+        self.assertIn("judge locks 2:05 PM ET · committee 4/5 · 3 to review", text)
+        # arms first, then the pending voice, then the committee section
+        self.assertLess(text.index("God Expert (Rules)"), text.index("Win Total Expert"))
+        self.assertLess(text.index("Win Total Expert"), text.index("<b>Committee</b>"))
+        self.assertLess(text.index("<b>Committee</b>"), text.index("Schedule Expert"))
+        self.assertIn("1 · <b>God Expert (Rules)</b> · <code>c884d868</code>", text)
+        self.assertIn("2 · <b>God Expert (Judge)</b> · <code>444bf3de</code> · headless", text)
+        self.assertIn("3 · <b>Win Total Expert</b> · <code>opus-4-8</code>", text)
         self.assertIn("Seahawks 61% ★★ · 20-24 · “Seattle", text)
-        self.assertIn("<code>c884d868</code>", text)
-        self.assertIn("<code>444bf3de</code> · headless", text)
         self.assertIn("Side PASS (adverse move) · Total PASS (ev floor) · p home .61", text)
         self.assertIn("<b>Schedule Expert</b> · <code>opus-4-8</code> · ✅ SS 9:41 AM", text)
         # three pending rows -> three button rows, then "approve both arms"
         self.assertEqual(len(keyboard), 4)
         self.assertEqual(
-            [b["text"] for b in keyboard[0]], ["✅ 1", "❌ 1", "👁 1"]
+            [b["text"] for b in keyboard[2]], ["✅ 3", "❌ 3", "👁 3"]
         )
-        self.assertEqual(keyboard[0][0]["callback_data"], "desk:ok:p1")
-        self.assertEqual(keyboard[0][1]["callback_data"], "desk:no:p1")
+        self.assertEqual(keyboard[0][0]["callback_data"], "desk:ok:c884d868-0000")
+        self.assertEqual(keyboard[2][0]["callback_data"], "desk:ok:p1")
+        self.assertEqual(keyboard[2][1]["callback_data"], "desk:no:p1")
         self.assertEqual(
-            keyboard[0][2]["url"], "https://t.me/nflguesser_bot?start=op_p1"
+            keyboard[2][2]["url"], "https://t.me/nflguesser_bot?start=op_p1"
         )
         self.assertEqual(keyboard[3][0]["callback_data"], "desk:okarms:401")
         # every callback fits Telegram's 64-byte limit
@@ -409,7 +438,8 @@ class RenderTests(unittest.TestCase):
         rows[2]["review_note"] = "reason 2 says <three> voices"
         rows[2]["reviewed_at_utc"] = "2026-09-12T12:41:00+00:00"
         text, keyboard = render_review_card(self.desk(rows), config=CONFIG)
-        self.assertIn("❌ AK 8:41 AM · “reason 2 says &lt;three&gt; voices”", text)
+        self.assertIn("<b>Win Total Expert</b> · <code>opus-4-8</code> · ❌ AK 8:41 AM · “reason 2 says &lt;three&gt; voices”", text)
+        self.assertIn("nothing to review", render_review_card(self.desk([r for r in rows if not is_arm(r)]), config=CONFIG)[0])
         self.assertEqual(len(keyboard), 3)  # two arms + approve-both
 
     def test_picks_card_has_legs_committee_and_expandable_why(self) -> None:

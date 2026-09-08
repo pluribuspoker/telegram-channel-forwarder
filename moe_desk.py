@@ -66,6 +66,7 @@ RETENTION = timedelta(days=3)
 MAX_POSTS_PER_SYNC = 15
 MAX_REVIEW_ROWS = 12
 THESIS_CHARS = 160
+COMMITTEE_THESIS_CHARS = 110
 WHY_CHARS = 900
 
 RULES_EXPERT_ID = "god_rules"
@@ -278,9 +279,9 @@ class GameDesk:
     kickoff: datetime
     started: bool
     rows: list[dict[str, Any]]
-    pending: list[dict[str, Any]]
+    pending: list[dict[str, Any]]  # actionable: latest valid per expert+model
     approved: list[dict[str, Any]]
-    review_rows: list[dict[str, Any]]
+    reviewed: list[dict[str, Any]]  # one per expert, the aggregator's pick
     voices: list[tuple[str, str, bool]]  # (expert_id, status, required)
     required_total: int
     required_approved: int
@@ -290,6 +291,10 @@ class GameDesk:
     @property
     def event_id(self) -> str:
         return str(self.game.get("event_id") or "")
+
+    @property
+    def review_rows(self) -> list[dict[str, Any]]:
+        return self.pending + self.reviewed
 
     @property
     def week(self) -> str:
@@ -304,24 +309,65 @@ class GameDesk:
         ]
 
 
-def _select_review_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Every pending row (oldest first), then the latest reviewed row per
-    expert and model (newest first): re-judges do not pile up, and sample or
-    invalid audit rows never appear."""
-    pending = sorted((row for row in rows if is_pending_row(row)), key=row_key)
-    reviewed: dict[tuple[str, str], dict[str, Any]] = {}
+def latest_valid_by_expert_model(
+    rows: Iterable[dict[str, Any]],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    latest: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
-        if not is_valid_row(row) or review_status(row) not in {
-            "approved",
-            "rejected",
-        }:
+        if not is_valid_row(row) or review_status(row) == "not_applicable":
             continue
         key = (str(row.get("expert_id") or ""), str(row.get("model") or ""))
-        current = reviewed.get(key)
+        current = latest.get(key)
         if current is None or row_key(row) > row_key(current):
-            reviewed[key] = row
-    latest_reviewed = sorted(reviewed.values(), key=row_key, reverse=True)
-    return pending + latest_reviewed
+            latest[key] = row
+    return latest
+
+
+def actionable_pending(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pending rows still worth a decision: a pending row that is the latest
+    valid row for its expert and model. An older draft superseded by a
+    newer row on the same expert and model (approved, rejected or pending)
+    is hidden — the aggregator only ever reads the latest approved row, so
+    deciding a superseded draft changes nothing. God arms first, then
+    voices oldest first."""
+    latest = latest_valid_by_expert_model(rows)
+    pending = [row for row in latest.values() if review_status(row) == "pending"]
+    return sorted(pending, key=lambda row: (0 if is_arm_row(row) else 1, row_key(row)))
+
+
+def committee_rows(
+    rows: Iterable[dict[str, Any]],
+    approved_ids: set[str],
+    *,
+    expert_order: Iterable[str],
+    default_models: dict[str, str],
+) -> list[dict[str, Any]]:
+    """One reviewed row per expert, in ``expert_order`` then any other
+    expert with rows: the approved row the aggregator selects (latest
+    approved on the expert's default model, else latest approved on any
+    model — moe_god.select_voice_rows), else the latest rejected valid row.
+    Experts without a reviewed row are absent (the queue card shows them
+    as missing)."""
+    rows = [row for row in rows if is_valid_row(row)]
+    by_expert: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_expert.setdefault(str(row.get("expert_id") or ""), []).append(row)
+    order = list(expert_order) + [
+        expert_id for expert_id in sorted(by_expert) if expert_id not in set(expert_order)
+    ]
+    selected: list[dict[str, Any]] = []
+    for expert_id in order:
+        candidates = by_expert.get(expert_id, [])
+        approved = [row for row in candidates if str(row.get("opinion_id")) in approved_ids]
+        if approved:
+            default_model = default_models.get(expert_id, "")
+            on_default = [row for row in approved if str(row.get("model")) == default_model]
+            selected.append(latest_row(on_default or approved))
+            continue
+        rejected = [row for row in candidates if review_status(row) == "rejected"]
+        if rejected:
+            selected.append(latest_row(rejected))
+    return selected
 
 
 def build_desks(
@@ -342,6 +388,11 @@ def build_desks(
     }
     required = committee_experts(registry)
     optional = optional_experts(registry)
+    default_models = {
+        expert_id: str(config.get("default_model") or "")
+        for expert_id, config in (registry.get("experts") or {}).items()
+        if isinstance(config, dict)
+    }
     by_event: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         by_event.setdefault(str(row.get("event_id") or ""), []).append(row)
@@ -360,9 +411,7 @@ def build_desks(
         approved = [
             row for row in game_rows if str(row.get("opinion_id")) in approved_ids
         ]
-        pending = sorted(
-            (row for row in game_rows if is_pending_row(row)), key=row_key
-        )
+        pending = actionable_pending(game_rows)
         approved_experts = {str(row.get("expert_id")) for row in approved}
         pending_experts = {str(row.get("expert_id")) for row in pending}
         rejected_experts = {
@@ -394,7 +443,12 @@ def build_desks(
                 rows=game_rows,
                 pending=pending,
                 approved=approved,
-                review_rows=_select_review_rows(game_rows),
+                reviewed=committee_rows(
+                    game_rows,
+                    approved_ids,
+                    expert_order=[*required, *optional, *ARM_IDS],
+                    default_models=default_models,
+                ),
                 voices=voices,
                 required_total=len(required),
                 required_approved=sum(
@@ -511,7 +565,7 @@ def _clip(text: Any, limit: int) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
-def row_summary(row: dict[str, Any]) -> str:
+def row_summary(row: dict[str, Any], *, thesis_chars: int = THESIS_CHARS) -> str:
     """One line per row: the arms' two legs, or a voice's pick."""
     if str(row.get("pick_market") or "") == "side_and_total" and row.get(
         "side_pick_json"
@@ -544,7 +598,7 @@ def row_summary(row: dict[str, Any]) -> str:
     parts = [_esc(head)]
     if score:
         parts.append(score)
-    thesis = _clip(row.get("thesis"), THESIS_CHARS)
+    thesis = _clip(row.get("thesis"), thesis_chars)
     if thesis:
         parts.append(f"“{_esc(thesis)}”")
     return " · ".join(parts)
@@ -606,16 +660,17 @@ def render_review_card(
 ) -> tuple[str, Keyboard]:
     game = desk.game
     lock = desk.kickoff - JUDGE_LOCK
+    to_review = len(desk.pending)
     lines = [
         f"📥 <b>{_esc(teams_label(game))}</b> · {kickoff_label(desk.kickoff)} ET",
         (
             f"judge locks {clock_label(lock)} ET · committee "
-            f"{desk.required_approved} of {desk.required_total} approved · "
-            f"{len(desk.pending)} pending"
+            f"{desk.required_approved}/{desk.required_total} · "
+            + (f"{to_review} to review" if to_review else "nothing to review")
         ),
     ]
     keyboard: Keyboard = []
-    visible = desk.review_rows[:MAX_REVIEW_ROWS]
+    visible = desk.pending[:MAX_REVIEW_ROWS]
     pending_arms: dict[str, str] = {}
     for index, row in enumerate(visible, start=1):
         name = _esc(str(row.get("expert_name") or row.get("expert_id") or ""))
@@ -628,12 +683,7 @@ def render_review_card(
             model = _model_text(row)
             if model:
                 head += f" · <code>{_esc(model)}</code>"
-        mark = _reviewed_mark(row)
-        if mark:
-            head += f" · {mark}"
         lines += ["", head, row_summary(row)]
-        if not is_pending_row(row):
-            continue
         opinion_id = str(row.get("opinion_id") or "")
         buttons = [
             _button(f"✅ {index}", callback=f"{CALLBACK_PREFIX}ok:{opinion_id}"),
@@ -645,9 +695,24 @@ def render_review_card(
         keyboard.append(buttons)
         if is_arm_row(row):
             pending_arms.setdefault(str(row["expert_id"]), opinion_id)
-    hidden = len(desk.review_rows) - len(visible)
+    hidden = len(desk.pending) - len(visible)
     if hidden > 0:
-        lines += ["", f"<i>+{hidden} more reviewed rows</i>"]
+        lines += ["", f"<i>+{hidden} more to review</i>"]
+    if desk.reviewed:
+        lines += ["", "<b>Committee</b>"]
+        for row in desk.reviewed:
+            name = _esc(str(row.get("expert_name") or row.get("expert_id") or ""))
+            head = f"<b>{name}</b>"
+            if is_arm_row(row):
+                head += f" · <code>{_esc(short_id(row))}</code>"
+            else:
+                model = _model_text(row)
+                if model:
+                    head += f" · <code>{_esc(model)}</code>"
+            mark = _reviewed_mark(row)
+            if mark:
+                head += f" · {mark}"
+            lines += [head, row_summary(row, thesis_chars=COMMITTEE_THESIS_CHARS)]
     if len(pending_arms) == 2:
         keyboard.append(
             [
@@ -1409,13 +1474,13 @@ def review_targets(
             by = str(row.get("reviewed_by") or "someone").strip()
             return [], f"Already {status} by {by}."
         return [row], None
-    arms = {}
-    for row in rows:
-        if str(row.get("event_id")) == target and is_pending_row(row) and is_arm_row(row):
-            expert_id = str(row["expert_id"])
-            current = arms.get(expert_id)
-            if current is None or row_key(row) > row_key(current):
-                arms[expert_id] = row
+    arms = {
+        str(row["expert_id"]): row
+        for row in actionable_pending(
+            row for row in rows if str(row.get("event_id")) == target
+        )
+        if is_arm_row(row)
+    }
     if len(arms) != 2:
         return [], "Both arms are no longer pending."
     return [arms[RULES_EXPERT_ID], arms[JUDGE_EXPERT_ID]], None

@@ -634,10 +634,16 @@ either person sees or does.
   branch, the `/start op_<opinion>` and `/start game_<event>` deep links,
   and reviewers paging through pending rows in the DM detail view.
 - Topics and cards. 📥 Review: one card per upcoming game (inside ten days)
-  listing every pending valid row, oldest first, then the latest reviewed
-  row per expert and model (re-judges do not pile up; invalid audit rows and
-  ensemble sample rows never appear), each pending row with ✅ ❌ callbacks
-  and a 👁 deep link into the tapper's own DM. A pinned queue card shows
+  listing the rows still worth a decision — a pending row that is the
+  latest valid row for its expert and model (an older draft superseded by
+  a newer row is hidden, since the aggregator only reads the latest
+  approved row; invalid audit rows and ensemble sample rows never count),
+  God arms first — each with ✅ ❌ callbacks and a 👁 deep link into the
+  tapper's own DM; then a Committee section with one line per voice: the
+  approved row the aggregator selects (default model, else latest), or the
+  latest rejected row. Redesigned 2026-09-08 after the first live cards
+  listed every pending draft oldest-first and the Seahawks card buried its
+  God rows under a dozen Sept 4 drafts. A pinned queue card shows
   every game's committee — approved / pending / rejected / missing per
   required voice, optional voices only when they have a row — the God arms'
   state, and the count of games each required voice has no row for.
