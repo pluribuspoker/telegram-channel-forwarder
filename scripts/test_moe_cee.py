@@ -7,7 +7,7 @@ import json
 import unittest
 from types import SimpleNamespace
 
-from moe import generate_opinion, load_expert
+from moe import _normalize_cited_claim, generate_opinion, load_expert
 from moe_cee import build_cee_input
 from nfl_lines import (
     LATEST_AWAY_COLUMN,
@@ -204,6 +204,32 @@ class CeeInputTest(unittest.TestCase):
 
 
 class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
+    def test_zero_eligible_calibration_is_valid_no_signal(self) -> None:
+        payload = build_cee_input(
+            _game(),
+            [],
+            [_current_lean()],
+            _predictions(),
+            cee_user_id=CEE_ID,
+        )
+
+        normalized = _normalize_cited_claim(
+            {
+                "claim": (
+                    "Calibration has 0 eligible predictions, so it provides "
+                    "no signal."
+                ),
+                "evidence_paths": ["nfl_calibration"],
+            },
+            payload,
+            role="no_signal_factors[0]",
+        )
+
+        self.assertEqual(
+            normalized["evidence"][0]["path"],
+            "nfl_calibration",
+        )
+
     def _output(self) -> dict:
         return {
             "predicted_winner": "New England Patriots",

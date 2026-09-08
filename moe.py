@@ -1407,7 +1407,10 @@ def _normalize_cited_claim(
         value is None
         or (
             isinstance(value, dict)
-            and int(value.get("games", -1)) == 0
+            and (
+                int(value.get("games", -1)) == 0
+                or int(value.get("eligible_predictions", -1)) == 0
+            )
         )
         for value in resolved
     ):
