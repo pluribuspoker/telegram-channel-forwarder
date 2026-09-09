@@ -634,6 +634,14 @@ distribution is descriptive context, not the goal.
   retaining the exact reply. All distinct canonical bets remain; the latest
   revision wins only within the same celebrity, event, period, market family,
   subject, and stat.
+- Celebrity custom entry also accepts ordinary free-form text. The existing
+  NFL parser extracts each leg, including multiple legs from one teaser or
+  parlay, while the exact original reply is retained on every row. Each leg
+  receives a canonical side, total, team-prop, or player-prop identity and a
+  distinct pick hash, so one source message can contribute both a side and a
+  total signal without losing their shared rationale. The optional structured
+  `Subject / Market / Pick` form remains available as a deterministic manual
+  override.
 - The deterministic input separately reports the active picks, side and total
   distributions, individual records, pairwise agreement records, and each
   celebrity's record specifically when a pair disagreed. Exact-permutation

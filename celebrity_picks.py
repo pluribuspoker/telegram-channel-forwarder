@@ -69,8 +69,15 @@ def canonical_pick_key(
     return "|".join(_normalized(part) for part in parts)
 
 
-def celebrity_pick_id(submission_id: Any, celebrity_name: Any) -> str:
-    value = f"{submission_id}\0{_normalized(celebrity_name)}"
+def celebrity_pick_id(
+    submission_id: Any,
+    celebrity_name: Any,
+    canonical_key: Any = "",
+) -> str:
+    value = (
+        f"{submission_id}\0{_normalized(celebrity_name)}"
+        f"\0{_normalized(canonical_key)}"
+    )
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
@@ -79,7 +86,11 @@ def _standard_pick_fields(submission: dict[str, Any]) -> dict[str, Any]:
     side = str(submission.get("side") or "")
     period = str(submission.get("period") or "")
     line = submission.get("latest_selected_line", "")
+    if line in ("", "nodata", None):
+        line = submission.get("line", "")
     price = submission.get("latest_selected_price", "")
+    if price in ("", "nodata", None):
+        price = submission.get("price", "")
     if market in {"spread", "moneyline"}:
         market_family = "side"
         subject = "game"
@@ -138,6 +149,7 @@ def build_celebrity_rows(
         row["pick_id"] = celebrity_pick_id(
             row["submission_id"],
             name,
+            row["canonical_key"],
         )
         rows.append(row)
     return rows

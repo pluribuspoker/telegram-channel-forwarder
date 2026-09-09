@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import anthropic
 from dotenv import load_dotenv
 from gspread.exceptions import APIError, WorksheetNotFound
 from telethon import Button, TelegramClient, events
@@ -28,6 +29,7 @@ from telethon.tl.types import (
     ReplyKeyboardMarkup,
 )
 
+from ai import claude_parse
 from celebrity_picks import (
     CELEBRITY_HEADERS,
     CELEBRITY_TAB,
@@ -591,7 +593,8 @@ def custom_pick_prompt(market_family: str) -> str:
         "other": "other market",
     }[market_family]
     return (
-        f"Enter the celebrity's {label} using this structure:\n\n"
+        f"Reply with the celebrity's {label} in normal free-form text.\n\n"
+        "You can optionally use this structure for an exact manual parse:\n\n"
         "Subject: player, team, or bet subject\n"
         "Market: stat or market name\n"
         "Pick: Over 0.5, Under 250.5, Yes, No, or the exact selection\n"
@@ -599,6 +602,17 @@ def custom_pick_prompt(market_family: str) -> str:
         "Rationale: exact explanation (optional)\n\n"
         "The exact reply is retained alongside the structured fields."
     )
+
+
+def has_complete_custom_pick_fields(raw_text: str) -> bool:
+    fields = {
+        match.group(1).casefold()
+        for match in re.finditer(
+            r"(?im)^(Subject|Market|Pick)\s*:",
+            raw_text,
+        )
+    }
+    return {"subject", "market", "pick"} <= fields
 
 
 def side_buttons(
@@ -890,6 +904,174 @@ def build_custom_celebrity_submission(
         "selection_text": parsed["selection_text"],
         "raw_pick_text": parsed["raw_pick_text"],
     }
+
+
+def build_freeform_celebrity_submissions(
+    *,
+    submitted_at: datetime,
+    user_id: int,
+    username: str | None,
+    message_id: int,
+    game: dict[str, Any],
+    parsed: dict[str, Any],
+    raw_text: str,
+) -> list[dict[str, Any]]:
+    """Convert one free-form NFL parse into canonical celebrity bet legs."""
+    if str(parsed.get("sport") or "").upper() != "NFL":
+        raise ValueError("The free-form pick did not parse as an NFL bet")
+    parsed_picks = parsed.get("picks")
+    if not isinstance(parsed_picks, list) or not parsed_picks:
+        raise ValueError("No celebrity bet legs were found in the free-form text")
+
+    period_map = {
+        "game": "game",
+        "1h": "first_half",
+        "1q": "first_quarter",
+    }
+    away = str(game["away_team"])
+    home = str(game["home_team"])
+    teams_by_name = {away.casefold(): away, home.casefold(): home}
+    submitted_at_utc = submitted_at.astimezone(timezone.utc)
+    base = {
+        "submission_id": f"telegram:{user_id}:{message_id}",
+        "submitted_at_utc": submitted_at_utc.isoformat(),
+        "submitted_at_et": submitted_at_utc.astimezone(ET).isoformat(),
+        "telegram_user_id": user_id,
+        "telegram_username": username or "",
+        "event_id": game.get("event_id", ""),
+        "season": game.get("season", ""),
+        "week": game.get("week", ""),
+        "commence_time_utc": game.get("commence_time_utc", ""),
+        "commence_time_et": game.get("commence_time_et", ""),
+        "away_team": away,
+        "home_team": home,
+        "pick_id": "",
+        "price": "",
+        "raw_pick_text": raw_text,
+    }
+    submissions = []
+    for pick in parsed_picks:
+        if not isinstance(pick, dict):
+            raise ValueError("A parsed celebrity bet leg is malformed")
+        pick_sport = str(pick.get("sport") or parsed["sport"]).upper()
+        if pick_sport != "NFL":
+            raise ValueError("Every free-form celebrity leg must be an NFL bet")
+        period = period_map.get(str(pick.get("period") or "game"))
+        if period is None:
+            raise ValueError(
+                "Free-form celebrity picks support full game, first half, "
+                "and first quarter only"
+            )
+        bet_type = str(pick.get("bet_type") or "")
+        parsed_team_names = [
+            str(name) for name in pick.get("teams") or []
+        ]
+        unknown_teams = [
+            name
+            for name in parsed_team_names
+            if name.casefold() not in teams_by_name
+        ]
+        if unknown_teams:
+            raise ValueError(
+                "A free-form leg names a team outside the selected game: "
+                + ", ".join(unknown_teams)
+            )
+        parsed_teams = [
+            teams_by_name[name.casefold()] for name in parsed_team_names
+        ]
+        line = pick.get("line")
+        direction = str(pick.get("direction") or "").title()
+        if bet_type in {"spread", "moneyline"}:
+            if len(parsed_teams) != 1:
+                raise ValueError(
+                    f"Could not identify the selected team for {bet_type}"
+                )
+            selected = parsed_teams[0]
+            if bet_type == "spread" and not isinstance(line, (int, float)):
+                raise ValueError("A free-form spread leg requires a numeric line")
+            market_family = "side"
+            subject = "game"
+            stat = bet_type
+            side = selected
+            selection = (
+                selected
+                if bet_type == "moneyline"
+                else f"{selected} {float(line):+g}"
+            )
+        elif bet_type == "total":
+            if direction not in {"Over", "Under"} or not isinstance(
+                line, (int, float)
+            ):
+                raise ValueError(
+                    "A free-form total leg requires Over/Under and a numeric line"
+                )
+            market_family = "total"
+            subject = "game"
+            stat = "total"
+            side = direction
+            selection = f"{direction} {float(line):g}"
+        elif bet_type == "team_total":
+            if (
+                len(parsed_teams) != 1
+                or direction not in {"Over", "Under"}
+                or not isinstance(line, (int, float))
+            ):
+                raise ValueError(
+                    "A free-form team-total leg requires one team, "
+                    "Over/Under, and a numeric line"
+                )
+            market_family = "team_prop"
+            subject = parsed_teams[0]
+            stat = "team total"
+            side = direction
+            selection = f"{direction} {float(line):g}"
+        elif bet_type == "prop":
+            subject = str(pick.get("player") or "")
+            stat = str(pick.get("prop_stat") or "")
+            if (
+                not subject
+                or not stat
+                or not direction
+                or len(parsed_teams) != 1
+            ):
+                raise ValueError(
+                    "A free-form player prop requires player, current team, "
+                    "market, and pick"
+                )
+            market_family = "player_prop"
+            side = direction
+            selection = (
+                f"{direction} {float(line):g}"
+                if isinstance(line, (int, float))
+                else direction
+            )
+        else:
+            raise ValueError(
+                f"Unsupported free-form celebrity market: {bet_type or 'unknown'}"
+            )
+        canonical_key = canonical_pick_key(
+            period=period,
+            market_family=market_family,
+            market=bet_type,
+            subject=subject,
+            stat=stat,
+        )
+        submissions.append(
+            {
+                **base,
+                "period": period,
+                "market": bet_type,
+                "side": side,
+                "canonical_key": canonical_key,
+                "market_family": market_family,
+                "subject": subject,
+                "stat": stat,
+                "direction": side,
+                "line": "" if line is None else line,
+                "selection_text": selection,
+            }
+        )
+    return submissions
 
 
 def snapshot_lean_submission(
@@ -1860,8 +2042,7 @@ def load_celebrity_roster(limit: int = MAX_CELEBRITY_BUTTONS) -> list[str]:
 
 
 def append_celebrity_picks(rows: list[dict[str, Any]]) -> int:
-    """Append celebrity rows, skipping any (submission_id, celebrity_name) pair
-    that already exists so a double-tap can't duplicate. Returns rows written."""
+    """Append rows, deduping each submission/name/canonical-bet tuple."""
     if not rows:
         return 0
     credentials = os.environ["GOOGLE_CREDENTIALS"]
@@ -1874,13 +2055,26 @@ def append_celebrity_picks(rows: list[dict[str, Any]]) -> int:
         header_row = values[0]
         sub_index = header_row.index("submission_id")
         name_index = header_row.index("celebrity_name")
+        key_index = header_row.index("canonical_key")
+        legacy_pairs = set()
         for row in values[1:]:
             if len(row) > max(sub_index, name_index):
-                existing.add((row[sub_index], row[name_index]))
+                pair = (row[sub_index], row[name_index])
+                canonical = row[key_index] if len(row) > key_index else ""
+                if canonical:
+                    existing.add((*pair, canonical))
+                else:
+                    legacy_pairs.add(pair)
+    else:
+        legacy_pairs = set()
     to_append: list[list[Any]] = []
     for row in rows:
-        key = (str(row["submission_id"]), str(row["celebrity_name"]))
-        if key in existing:
+        key = (
+            str(row["submission_id"]),
+            str(row["celebrity_name"]),
+            str(row["canonical_key"]),
+        )
+        if key[:2] in legacy_pairs or key in existing:
             continue
         existing.add(key)
         to_append.append([row.get(header, "") for header in CELEBRITY_HEADERS])
@@ -2573,45 +2767,92 @@ async def main() -> None:
         submitted_at = datetime.now(timezone.utc)
         if is_custom:
             try:
-                custom_submission = build_custom_celebrity_submission(
-                    submitted_at=submitted_at,
-                    user_id=event.sender_id,
-                    username=getattr(sender, "username", None),
-                    message_id=event.id,
-                    game=submission["game"],
-                    period=submission["period"],
-                    market_family=str(
-                        submission["custom_market_family"]
-                    ),
-                    raw_text=raw_lean_text,
+                if has_complete_custom_pick_fields(raw_lean_text):
+                    custom_submissions = [
+                        build_custom_celebrity_submission(
+                            submitted_at=submitted_at,
+                            user_id=event.sender_id,
+                            username=getattr(sender, "username", None),
+                            message_id=event.id,
+                            game=submission["game"],
+                            period=submission["period"],
+                            market_family=str(
+                                submission["custom_market_family"]
+                            ),
+                            raw_text=raw_lean_text,
+                        )
+                    ]
+                else:
+                    parsed = await claude_parse(
+                        raw_lean_text,
+                        date=submitted_at.astimezone(ET).date().isoformat(),
+                    )
+                    if parsed is None:
+                        raise ValueError(
+                            "The free-form celebrity pick could not be parsed"
+                        )
+                    custom_submissions = build_freeform_celebrity_submissions(
+                        submitted_at=submitted_at,
+                        user_id=event.sender_id,
+                        username=getattr(sender, "username", None),
+                        message_id=event.id,
+                        game=submission["game"],
+                        parsed=parsed,
+                        raw_text=raw_lean_text,
+                    )
+            except (anthropic.APIError, TimeoutError):
+                log.exception(
+                    "Celebrity free-form parser failed user=%s message=%s",
+                    event.sender_id,
+                    event.id,
                 )
-            except ValueError as exc:
                 prompt = await event.respond(
-                    f"{exc}\n\n{custom_pick_prompt(str(submission['custom_market_family']))}",
+                    "The celebrity pick parser is temporarily unavailable, "
+                    "so this pick was not saved. Reply again to retry.\n\n"
+                    + custom_pick_prompt(
+                        str(submission["custom_market_family"])
+                    ),
                     buttons=Button.force_reply(
                         single_use=True,
-                        placeholder="Correct the structured celebrity pick",
+                        placeholder="Reply with the celebrity's exact pick",
                     ),
                 )
                 if guess_states.get(event.sender_id) is state:
                     state["prompt_msg_id"] = prompt.id
                 return
-            celebrity_rows = build_celebrity_rows(
-                submission=custom_submission,
-                names=[str(celebrity["name"])],
-            )
+            except ValueError as exc:
+                prompt = await event.respond(
+                    f"{exc}\n\n{custom_pick_prompt(str(submission['custom_market_family']))}",
+                    buttons=Button.force_reply(
+                        single_use=True,
+                        placeholder="Reply with the celebrity's exact pick",
+                    ),
+                )
+                if guess_states.get(event.sender_id) is state:
+                    state["prompt_msg_id"] = prompt.id
+                return
+            celebrity_rows = [
+                row
+                for custom_submission in custom_submissions
+                for row in build_celebrity_rows(
+                    submission=custom_submission,
+                    names=[str(celebrity["name"])],
+                )
+            ]
             appended = bool(
                 await asyncio.to_thread(
                     append_celebrity_picks,
                     celebrity_rows,
                 )
             )
-            row = celebrity_rows[0]
-            summary = (
-                f"{PERIOD_LABELS[submission['period']]} · "
-                f"{str(row['market_family']).replace('_', ' ').title()} · "
-                f"{html.escape(str(row['subject']))} · "
-                f"{html.escape(str(row['selection_text']))}"
+            summary = "\n".join(
+                (
+                    f"{PERIOD_LABELS[str(row['period'])]} · "
+                    f"{str(row['market_family']).replace('_', ' ').title()} · "
+                    f"{html.escape(str(row['subject']))} · "
+                    f"{html.escape(str(row['selection_text']))}"
+                )
+                for row in celebrity_rows
             )
         else:
             row = build_lean_row(

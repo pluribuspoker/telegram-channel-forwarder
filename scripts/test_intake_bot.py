@@ -22,6 +22,7 @@ from intake_bot import (
     append_celebrity_picks,
     build_celebrity_rows,
     build_custom_celebrity_submission,
+    build_freeform_celebrity_submissions,
     build_lean_row,
     build_suggestion_row,
     build_win_prediction_row,
@@ -33,6 +34,7 @@ from intake_bot import (
     game_browser,
     game_celebrity_picker,
     game_detail,
+    has_complete_custom_pick_fields,
     implied_score,
     implied_score_tldr,
     load_celebrity_roster,
@@ -628,6 +630,103 @@ class GameSelectionTest(unittest.TestCase):
         self.assertEqual(row["price"], -105)
         self.assertEqual(row["raw_pick_text"], raw)
         self.assertIn("player_prop", row["canonical_key"])
+
+    def test_structured_custom_form_requires_all_required_fields(self):
+        self.assertTrue(
+            has_complete_custom_pick_fields(
+                "Subject: game\nMarket: teaser\nPick: Patriots +9.5"
+            )
+        )
+        self.assertFalse(
+            has_complete_custom_pick_fields(
+                "Pick: Patriots +9.5 & Under 50.5"
+            )
+        )
+
+    def test_freeform_teaser_becomes_two_lossless_canonical_legs(self):
+        raw = (
+            "First bet of the season, 6 point teaser. So a parlay of Patriots "
+            "+9.5 & under 50.5 game total. Patriots would have covered every "
+            "regular season game with +9.5 last year. Patriots opener hasn’t "
+            "gone over for 8 seasons. Seahawks have gone under in last 4 home "
+            "openers (averaging 38 points in game total)."
+        )
+        parsed = {
+            "sport": "NFL",
+            "picks": [
+                {
+                    "bet_type": "spread",
+                    "period": "game",
+                    "teams": ["Miami Dolphins"],
+                    "line": 9.5,
+                    "direction": None,
+                    "sport": None,
+                },
+                {
+                    "bet_type": "total",
+                    "period": "game",
+                    "teams": ["Miami Dolphins", "Las Vegas Raiders"],
+                    "line": 50.5,
+                    "direction": "under",
+                    "sport": None,
+                },
+            ],
+        }
+
+        submissions = build_freeform_celebrity_submissions(
+            submitted_at=NOW,
+            user_id=1,
+            username="operator",
+            message_id=99,
+            game=_game("miami", 1),
+            parsed=parsed,
+            raw_text=raw,
+        )
+        rows = build_celebrity_rows(
+            submission=submissions[0],
+            names=["Cousin Sal"],
+        ) + build_celebrity_rows(
+            submission=submissions[1],
+            names=["Cousin Sal"],
+        )
+
+        self.assertEqual(
+            [(row["market"], row["market_family"]) for row in rows],
+            [("spread", "side"), ("total", "total")],
+        )
+        self.assertEqual(
+            [row["selection_text"] for row in rows],
+            ["Miami Dolphins +9.5", "Under 50.5"],
+        )
+        self.assertEqual([row["line"] for row in rows], [9.5, 50.5])
+        self.assertTrue(all(row["raw_pick_text"] == raw for row in rows))
+        self.assertNotEqual(rows[0]["pick_id"], rows[1]["pick_id"])
+
+    def test_freeform_rejects_teams_outside_selected_game(self):
+        parsed = {
+            "sport": "NFL",
+            "picks": [
+                {
+                    "bet_type": "total",
+                    "period": "game",
+                    "teams": ["Kansas City Chiefs", "Buffalo Bills"],
+                    "line": 50.5,
+                    "direction": "over",
+                    "sport": None,
+                }
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, "outside the selected game"):
+            build_freeform_celebrity_submissions(
+                submitted_at=NOW,
+                user_id=1,
+                username="operator",
+                message_id=99,
+                game=_game("miami", 1),
+                parsed=parsed,
+                raw_text="Chiefs Bills over 50.5",
+            )
 
     def test_lean_row_is_compact_and_duplicate_key_is_deterministic(self):
         row = build_lean_row(
