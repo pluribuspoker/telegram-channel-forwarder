@@ -508,7 +508,9 @@ opinion; either may be `PASS`.
 - Future AK submissions made as AK require a canonical away/home score and
   persist four append-only normalization fields in `nfl_leans`. Celebrity
   submissions, including ones entered by AK, keep the standard optional-score
-  free-text flow. Other intake users are unchanged.
+  free-text flow. Prompt examples use team nicknames without city names
+  (`Patriots`, `Seahawks`); the parser accepts those labels and still stores
+  canonical full team names. Other intake users are unchanged.
 - `moe_ak.py` builds a whitelisted schema-v5 input from AK's latest projection,
   the submission and current BetOnline markets, the last matching pre-kickoff
   snapshot, and completed historical outcomes. Reviewed normalized scores are

@@ -19,6 +19,7 @@ from intake_bot import (
     CELEBRITY_REGISTRY_HEADERS,
     TEAM_ABBREVIATIONS as DEFAULT_WIN_TEAMS,
     SUGGESTION_HEADERS,
+    ak_projection_example,
     append_celebrity_picks,
     build_celebrity_rows,
     build_custom_celebrity_submission,
@@ -862,6 +863,17 @@ class GameSelectionTest(unittest.TestCase):
             )
         )
         self.assertFalse(requires_ak_projection(456, "123", None))
+
+    def test_ak_projection_example_uses_team_nicknames(self):
+        self.assertEqual(
+            ak_projection_example(
+                {
+                    "away_team": "New England Patriots",
+                    "home_team": "Seattle Seahawks",
+                }
+            ),
+            "Score: Patriots 23, Seahawks 27",
+        )
 
     def test_implied_score_uses_latest_total_and_spread(self):
         score = implied_score(

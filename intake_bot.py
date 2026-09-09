@@ -686,6 +686,12 @@ def selection_side_label(game: dict[str, Any], market: str, side: str) -> str:
     return str(game[f"{side}_team"])
 
 
+def ak_projection_example(game: dict[str, Any]) -> str:
+    away = str(game["away_team"]).rsplit(" ", 1)[-1]
+    home = str(game["home_team"]).rsplit(" ", 1)[-1]
+    return f"Score: {away} 23, {home} 27"
+
+
 def selection_price_text(
     market: str, side_label: str, line: Any, price: Any
 ) -> str:
@@ -2769,8 +2775,7 @@ async def main() -> None:
                 await event.respond(
                     "AK submissions require one exact team-labeled projected "
                     "score. Example:\n"
-                    f"Score: {submission['game']['away_team']} 23, "
-                    f"{submission['game']['home_team']} 27\n"
+                    f"{ak_projection_example(submission['game'])}\n"
                     "Rationale: your game analysis.",
                 )
                 return
@@ -3783,8 +3788,7 @@ async def main() -> None:
             prompt_text = (
                 "Enter one exact team-labeled projected score and your "
                 "reasoning. Example:\n"
-                f"Score: {state['game']['away_team']} 23, "
-                f"{state['game']['home_team']} 27\n"
+                f"{ak_projection_example(state['game'])}\n"
                 "Rationale: your game analysis."
                 if requires_ak_projection(
                     event.sender_id,
