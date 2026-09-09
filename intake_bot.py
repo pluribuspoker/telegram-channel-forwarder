@@ -126,9 +126,9 @@ _SHEET_CACHE_LOCK = threading.RLock()
 _SHEET_CACHE: dict[str, tuple[float, Any]] = {}
 _INTAKE_SPREADSHEET: Any | None = None
 _MOE_STORE: Any | None = None
-GAMES_CACHE_TTL_SECONDS = 60
+GAMES_CACHE_TTL_SECONDS = 3600
 TEAM_EMOJI_CACHE_TTL_SECONDS = 600
-MOE_CACHE_TTL_SECONDS = 30
+MOE_CACHE_TTL_SECONDS = 3600
 DESK_REVIEWERS_CACHE_TTL_SECONDS = 300
 _DESK_SYNC_LOCK = threading.Lock()
 WIN_TOTALS_CACHE_TTL_SECONDS = 3600
@@ -1456,6 +1456,14 @@ def _set_sheet_cache(key: str, value: Any) -> None:
         _SHEET_CACHE[key] = (time.monotonic(), value)
 
 
+def _patch_sheet_cache(key: str, value: Any) -> None:
+    """Replace cached rows without delaying the next full Sheet refresh."""
+    with _SHEET_CACHE_LOCK:
+        cached = _SHEET_CACHE.get(key)
+        timestamp = cached[0] if cached is not None else time.monotonic()
+        _SHEET_CACHE[key] = (timestamp, value)
+
+
 def _intake_spreadsheet() -> Any:
     global _INTAKE_SPREADSHEET
     with _SHEET_CACHE_LOCK:
@@ -1491,9 +1499,12 @@ def load_cached_moe_opinions(
     ]
 
 
-def invalidate_sheet_cache(key: str) -> None:
+def expire_sheet_cache(key: str) -> None:
+    """Force the next load while retaining the last good outage fallback."""
     with _SHEET_CACHE_LOCK:
-        _SHEET_CACHE.pop(key, None)
+        cached = _SHEET_CACHE.get(key)
+        if cached is not None:
+            _SHEET_CACHE[key] = (float("-inf"), cached[1])
 
 
 def load_desk_reviewers() -> dict[int, str]:
@@ -1578,6 +1589,7 @@ def update_desk_picks_view(
     *,
     view: Any,
     message_id: int,
+    force_opinions_refresh: bool = False,
 ) -> tuple[Any, str | None]:
     """Atomically select and edit one existing Picks card; never post it."""
     with _DESK_SYNC_LOCK:
@@ -1585,6 +1597,8 @@ def update_desk_picks_view(
         raw_previous = state["expanded_picks"].get(event_id)
         previous = raw_previous
         now = datetime.now(timezone.utc)
+        if force_opinions_refresh:
+            expire_sheet_cache("moe_opinions")
         rows = load_cached_moe_opinions()
         games, _, _ = load_intake_data()
         desks = build_desk_model(
@@ -1636,6 +1650,17 @@ def update_desk_picks_view(
 
 
 def desk_review(action: str, target: str, *, reviewer: str) -> tuple[str, bool]:
+    """Review one desk target without racing refresh or synchronization."""
+    with _DESK_SYNC_LOCK:
+        return _desk_review_locked(action, target, reviewer=reviewer)
+
+
+def _desk_review_locked(
+    action: str,
+    target: str,
+    *,
+    reviewer: str,
+) -> tuple[str, bool]:
     """Apply a desk button. Picks the target rows from the cached tab,
     confirms each is still pending with a single-row read (``store.fetch``)
     so the other reviewer's tap a moment ago is respected, runs the store's
@@ -1677,7 +1702,7 @@ def desk_review(action: str, target: str, *, reviewer: str) -> tuple[str, bool]:
             opinion_output_sha256(row) if status == "approved" else ""
         )
         done.append(str(row.get("expert_name") or row.get("expert_id")))
-    _set_sheet_cache("moe_opinions", rows)
+    _patch_sheet_cache("moe_opinions", rows)
     verb = "Rejected" if status == "rejected" else "Approved"
     return f"{verb} {', '.join(done)} as {reviewer}.", True
 
@@ -2136,9 +2161,11 @@ async def main() -> None:
             await event.answer("Unknown desk action.", alert=True)
             return
         action, target = parsed
-        if action in {"show", "hide", "op", "part", "page"}:
+        if action in {"show", "hide", "op", "part", "page", "refresh"}:
             event_id = target
-            desired_view: Any = "menu" if action in {"show", "page"} else None
+            desired_view: Any = (
+                "menu" if action in {"show", "page", "refresh"} else None
+            )
             if action == "page":
                 legacy_event_id, separator, _ = target.rpartition(":")
                 if separator and legacy_event_id:
@@ -2195,6 +2222,7 @@ async def main() -> None:
                     event_id,
                     view=desired_view,
                     message_id=message_id,
+                    force_opinions_refresh=action == "refresh",
                 )
                 if problem:
                     print(

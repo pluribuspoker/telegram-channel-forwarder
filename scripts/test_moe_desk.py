@@ -491,7 +491,11 @@ class RenderTests(unittest.TestCase):
         self.assertIn("<b>Consensus</b> · Seahawks 4–0", picker_text)
         self.assertIn("<b>Select an opinion</b>", picker_text)
         self.assertEqual(
-            [row[0]["text"] for row in picker_keyboard],
+            [
+                button["text"]
+                for row in picker_keyboard
+                for button in row
+            ],
             [
                 "God Rules",
                 "God Judge",
@@ -499,6 +503,7 @@ class RenderTests(unittest.TestCase):
                 "Divisional",
                 "AK",
                 "Elo",
+                "Refresh opinions",
                 "Back to picks",
             ],
         )
@@ -1116,6 +1121,10 @@ class ConfigAndCallbackTests(unittest.TestCase):
         self.assertEqual(
             parse_callback("desk:part:401:schedule:1"),
             ("part", "401:schedule:1"),
+        )
+        self.assertEqual(
+            parse_callback("desk:refresh:401"),
+            ("refresh", "401"),
         )
         self.assertIsNone(parse_callback("desk:zap:401"))
         self.assertIsNone(parse_callback("desk:ok:"))

@@ -656,20 +656,22 @@ either person sees or does.
   row. 📊 Scores: `scripts/moe_grade.py --notify` posts the digest there
   (`<pre>`, silent) when `MOE_DESK_SCORES_TOPIC` is set and falls back to
   the watchdog DM.
-- Shared-message rules: a button acts or deep-links, never navigates the
-  message both people see. A tap is answered at once ("Working on it…")
-  and finished in a background task — Telegram discards a callback answer
-  after a few seconds and every step reads the sheet (the first live tap
-  hung on a Google 503 and showed only a spinner, 2026-09-08); the outcome
-  is the card refresh, or a silent reply under the card on failure. Each
+- Shared-message rules: Picks reading controls navigate by editing the existing
+  shared game card and never create detail messages. Show full opinions keeps
+  the summary visible, lists God Rules and God Judge first, then the approved
+  voices; Refresh opinions invalidates only the opinion cache and redraws that
+  card. A tap is answered at once because Telegram discards a callback answer
+  after a few seconds. `nfl_games` and `moe_opinions` both use one-hour
+  in-process caches; bot-based reviews patch the opinion cache immediately,
+  while Refresh opinions is the explicit cache bust for externally generated
+  rows. The sheet cache serves its last good value through 5xx and 429. Each
   target row is confirmed still pending with a single-row read
   (`GoogleSheetsMoeOpinionStore.fetch`), the cached rows are patched after
   the review so the cards re-render without a full tab read, the reviewer
-  list is kept warm by the sync loop, and the sheet cache serves its last
-  good value through 5xx as well as 429. ✅ ❌ are checked against the `reviewer` role in
+  list is kept warm by the sync loop. ✅ ❌ are checked against the `reviewer` role in
   `allowed_users` (`moe_identity.resolve_role_user_ids`; both reviewers hold
   it, granted with `scripts/desk_setup.py --grant-reviewer`), re-read the
-  sheet (a write never trusts the 30 s cache), refuse anything not pending
+  sheet (a write never trusts the display cache), refuse anything not pending
   ("Already approved by AK."), run the store's hash-checked `review` signed
   with the tapper's display name, and re-sync the card at once. "✅ Approve
   both arms" appears only when both God arms are pending

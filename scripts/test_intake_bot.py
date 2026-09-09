@@ -68,6 +68,10 @@ NOW = datetime(2026, 8, 4, 12, tzinfo=timezone.utc)
 
 
 class DeskPicksViewTests(unittest.TestCase):
+    def test_moe_channel_sheet_caches_are_one_hour(self) -> None:
+        self.assertEqual(intake_bot.GAMES_CACHE_TTL_SECONDS, 3600)
+        self.assertEqual(intake_bot.MOE_CACHE_TTL_SECONDS, 3600)
+
     def test_same_card_update_edits_only_the_clicked_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = SimpleNamespace(
@@ -84,6 +88,7 @@ class DeskPicksViewTests(unittest.TestCase):
                 patch.object(intake_bot, "load_moe_registry", return_value={}),
                 patch.object(intake_bot, "build_desk_model", return_value=[desk]),
                 patch.object(intake_bot, "resolve_picks_view", return_value="menu"),
+                patch.object(intake_bot, "expire_sheet_cache") as expire,
                 patch.object(
                     intake_bot,
                     "render_picks_card",
@@ -99,11 +104,13 @@ class DeskPicksViewTests(unittest.TestCase):
                     "401",
                     view="menu",
                     message_id=30,
+                    force_opinions_refresh=True,
                 )
             self.assertIsNone(previous)
             self.assertIsNone(error)
             api.edit.assert_called_once()
             self.assertEqual([call[0] for call in api.method_calls], ["edit"])
+            expire.assert_called_once_with("moe_opinions")
             state = intake_bot.load_desk_state(config.state_path)
             self.assertEqual(state["expanded_picks"]["401"], "menu")
             self.assertEqual(state["cards"]["picks:401"]["message_id"], 30)
@@ -320,6 +327,15 @@ class SheetCacheTest(unittest.TestCase):
         intake_bot._SHEET_CACHE.clear()
         with self.assertRaises(APIError):
             intake_bot._cached_sheet_value("opinions", 30, Mock(side_effect=APIError(response)))
+
+    def test_expiring_cache_retains_the_last_good_fallback(self) -> None:
+        rows = [{"opinion_id": "one"}]
+        intake_bot._SHEET_CACHE["moe_opinions"] = (10, rows)
+        intake_bot.expire_sheet_cache("moe_opinions")
+        self.assertEqual(
+            intake_bot._SHEET_CACHE["moe_opinions"],
+            (float("-inf"), rows),
+        )
 
     def test_win_prediction_tabs_are_cached_independently(self) -> None:
         totals = Mock()
@@ -1012,6 +1028,13 @@ class DeskReviewTest(unittest.TestCase):
         self.assertTrue(row["reviewed_at_utc"])
         # hash-verified like a sheet read: the picks card can show it now
         self.assertIn("p1", [r["opinion_id"] for r in intake_bot.approved_moe_opinions(cached)])
+
+    def test_approval_does_not_postpone_the_next_full_refresh(self) -> None:
+        with patch("intake_bot.time.monotonic", return_value=10):
+            intake_bot.load_cached_moe_opinions()
+        with patch("intake_bot.time.monotonic", return_value=100):
+            intake_bot.desk_review("ok", "p1", reviewer="AK")
+        self.assertEqual(intake_bot._SHEET_CACHE["moe_opinions"][0], 10)
 
     def test_the_other_reviewers_tap_a_moment_ago_wins(self) -> None:
         intake_bot.load_cached_moe_opinions()  # cache says p1 is pending

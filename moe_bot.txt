@@ -29,6 +29,8 @@ Picks implementation status
 - Consensus counts actual side selections and excludes side PASS rows.
 - Show full opinions keeps the complete pick summary visible and adds an
   expert picker beneath it.
+- NFL games and MOE opinions use one-hour in-process read caches.
+- Refresh opinions invalidates only the opinion cache and redraws the same card.
 - God Rules and God Judge are always the first two choices when available.
 - Each selected opinion opens on the same card with chunk navigation.
 - Back to opinions and Back to picks remain restricted to the MOE group.
@@ -118,6 +120,7 @@ Add channel-local controls:
 
 - Show full opinions
 - One choice per available opinion, with God Rules and God Judge first
+- Refresh opinions
 - Previous / Next
 - Back to opinions
 - Back to picks
@@ -128,7 +131,8 @@ first, followed by every approved non-God expert. Selecting an opinion opens it
 on the same card. Previous and Next navigate only that opinion's long-text
 chunks. Back to opinions restores the summary plus selector, and Back to picks
 restores the compact committee summary. No additional Telegram messages are
-created.
+created. Refresh opinions explicitly reloads the persisted opinion rows while
+leaving the one-hour game cache intact.
 
 Long details must:
 

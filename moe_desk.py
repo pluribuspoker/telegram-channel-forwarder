@@ -1109,6 +1109,10 @@ def render_picks_card(
         keyboard.append(
             [
                 _button(
+                    "Refresh opinions",
+                    callback=f"{CALLBACK_PREFIX}refresh:{desk.event_id}",
+                ),
+                _button(
                     "Back to picks",
                     callback=f"{CALLBACK_PREFIX}hide:{desk.event_id}",
                 )
@@ -2090,8 +2094,8 @@ def desk_ids_report(
 def parse_callback(data: str) -> tuple[str, str] | None:
     """``desk:ok:<opinion>`` → ``("ok", opinion)``; ``desk:no:<opinion>``;
     ``desk:okarms:<event>``; ``desk:show:<event>``; ``desk:hide:<event>``;
-    ``desk:op:<event>:<expert>``; ``desk:part:<event>:<expert>:<chunk>``.
-    Anything else returns ``None``."""
+    ``desk:op:<event>:<expert>``; ``desk:part:<event>:<expert>:<chunk>``;
+    ``desk:refresh:<event>``. Anything else returns ``None``."""
     if not data.startswith(CALLBACK_PREFIX):
         return None
     action, _, target = data[len(CALLBACK_PREFIX):].partition(":")
@@ -2104,6 +2108,7 @@ def parse_callback(data: str) -> tuple[str, str] | None:
         "op",
         "part",
         "page",
+        "refresh",
     } or not target:
         return None
     return action, target
