@@ -40,7 +40,6 @@ def _record(results: Iterable[str]) -> dict[str, Any]:
         "losses": counts["L"],
         "pushes": counts["P"],
         "games": len(values),
-        "chronological_results": "".join(values),
     }
 
 

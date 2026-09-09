@@ -584,6 +584,8 @@ that informs the projected margin.
   outright. When a current spread exists, a separate matching spread
   decision-pattern bucket grades historical final spread revisions ATS at
   their submitted lines. There is no cross-sport prior.
+- Cee validation accepts the unambiguous words `one` and `single` as a
+  submission count of 1; other counts remain numeric and exact.
 - Zero resolved calibration games cap confidence at two stars; one or two cap
   it at three.
 - The expert uses output schema v3, participates only in the God Expert's side
@@ -665,6 +667,10 @@ distribution is descriptive context, not the goal.
   target kickoff enter calibration. Full-game side, total, and team-total bets
   can settle from final scores. Partial-game, player-prop, and other picks
   remain tracked but ungraded until compatible deterministic results exist.
+  Calibration records persist W-L-P counts and game totals but omit unused
+  duplicate chronological-result strings; the evidence catalog already
+  preserves every record the model can cite, keeping growing participant
+  slates within the Google Sheets cell limit.
 - The opinion may recommend the current full-game spread side and/or total, or
   PASS either leg. Props and other markets may be displayed or used as
   counterevidence but cannot directly support a game side or total. A

@@ -2815,9 +2815,14 @@ def validate_opinion(
                     f"Cee opinion must state {path} decision_pattern={pattern}"
                 )
             submission_count = int(summary["submission_count"])
+            count_pattern = (
+                r"(?:1|one|single)"
+                if submission_count == 1
+                else re.escape(str(submission_count))
+            )
             if not re.search(
-                rf"(?<!\d){submission_count}(?!\d)"
-                rf"(?:\s+[\w-]+){{0,5}}\s+(?:submissions?|picks?)\b",
+                rf"(?<!\d){count_pattern}(?!\d)"
+                rf"(?:\s+\S+){{0,8}}\s+(?:submissions?|picks?)\b",
                 path_text,
                 re.IGNORECASE,
             ):

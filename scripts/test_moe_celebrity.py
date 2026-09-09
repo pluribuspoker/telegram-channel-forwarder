@@ -345,6 +345,10 @@ class CelebrityInputTest(unittest.TestCase):
         pair = payload["nfl_calibration"]["pairwise"][0]["side"]
         self.assertEqual(pair["current_relation"], "disagreement")
         self.assertEqual(pair["disagreement_games"], 1)
+        self.assertNotIn(
+            "chronological_results",
+            pair["first_record_when_disagreeing"],
+        )
         self.assertEqual(pair["first_record_when_disagreeing"]["losses"], 1)
         self.assertEqual(pair["second_record_when_disagreeing"]["wins"], 1)
 

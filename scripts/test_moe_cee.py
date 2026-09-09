@@ -586,8 +586,8 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
                 },
                 {
                     "claim": (
-                        "Cee's spread decision pattern is initial_only "
-                        "across 1 submission."
+                        "Cee's spread decision history shows a single "
+                        "initial_only New England spread submission."
                     ),
                     "evidence_paths": ["decision_history.spread"],
                 },
