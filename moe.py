@@ -1099,6 +1099,34 @@ def _cee_rationale_texts(paths: list[str], evidence: list[Any]) -> list[str]:
     return texts
 
 
+def _cee_submission_timestamps(
+    paths: list[str],
+    evidence: list[Any],
+) -> list[str]:
+    timestamps: list[str] = []
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            submitted_at = value.get("submitted_at_utc")
+            if isinstance(submitted_at, str):
+                timestamps.append(submitted_at)
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+
+    for path, value in zip(paths, evidence, strict=True):
+        if path in {
+            "cee_submissions.moneyline",
+            "cee_submissions.spread",
+            "decision_history.moneyline",
+            "decision_history.spread",
+        }:
+            collect(value)
+    return timestamps
+
+
 def _matching_record_paths(
     value: Any,
     record: tuple[int, ...],
@@ -1204,6 +1232,7 @@ def _validate_claim_numbers(
         text.replace("−", "-").replace("–", "-")
         for text in _cee_rationale_texts(paths, evidence)
     ]
+    submission_timestamps = _cee_submission_timestamps(paths, evidence)
     for match in list(
         re.finditer(r"\b(\d+)-(\d+)(?:-(\d+))?\b", normalized_claim)
     ):
@@ -1247,11 +1276,15 @@ def _validate_claim_numbers(
             )
             for rationale in rationale_texts
         )
+        timestamp_matches = any(
+            match.group(0) in timestamp for timestamp in submission_timestamps
+        )
         if (
             not record_matches
             and not scoreline_matches
             and not overlap_matches
             and not rationale_matches
+            and not timestamp_matches
         ):
             candidates = _matching_record_paths(input_payload, record)
             raise ValueError(

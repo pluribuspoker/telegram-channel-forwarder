@@ -520,9 +520,20 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
             payload,
             role="supporting factor",
         )
+        dated_history = _normalize_cited_claim(
+            {
+                "claim": (
+                    "Cee submitted the moneyline position on 2026-09-07."
+                ),
+                "evidence_paths": ["decision_history.moneyline"],
+            },
+            payload,
+            role="supporting factor",
+        )
 
         self.assertIn("16-4", moneyline["claim"])
         self.assertIn("-4", spread["claim"])
+        self.assertIn("2026-09-07", dated_history["claim"])
 
     def test_does_not_trust_numbers_from_other_freeform_prose(self) -> None:
         with self.assertRaisesRegex(ValueError, "16-4"):

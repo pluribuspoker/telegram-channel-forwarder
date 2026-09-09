@@ -581,7 +581,9 @@ that informs the projected margin.
   lines, and other statistics inside Cee's exact rationale are accepted as
   evidence only when the opinion cites that Cee submission or decision-history
   path; they remain explicitly attributed to Cee. Free-form prose from every
-  other expert remains ineligible as numeric evidence.
+  other expert remains ineligible as numeric evidence. Exact Cee submission
+  dates are likewise accepted from cited decision history rather than being
+  misread as three-part betting records.
 - Calibration uses only resolved, pre-kickoff Cee NFL moneyline picks and
   counts each historical game once using its final eligible submission. It
   reports the overall record plus matching season-order consistency,
