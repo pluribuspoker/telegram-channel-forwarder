@@ -633,28 +633,29 @@ either person sees or does.
   `MOE_DESK_SYNC_SECONDS` (default 120, floor 15), the `desk:` callback
   branch, the `/start op_<opinion>` and `/start game_<event>` deep links,
   and reviewers paging through pending rows in the DM detail view.
-- Topics and cards. 📥 Review: one card per upcoming game (inside ten days)
-  listing the rows still worth a decision — a pending row that is the
-  latest valid row for its expert and model (an older draft superseded by
-  a newer row is hidden, since the aggregator only reads the latest
-  approved row; invalid audit rows and ensemble sample rows never count),
-  God arms first — each with ✅ ❌ callbacks and a 👁 deep link into the
-  tapper's own DM; then a Committee section with one line per voice: the
-  approved row the aggregator selects (default model, else latest), or the
-  latest rejected row. Redesigned 2026-09-08 after the first live cards
-  listed every pending draft oldest-first and the Seahawks card buried its
-  God rows under a dozen Sept 4 drafts. A pinned queue card shows
-  every game's committee — approved / pending / rejected / missing per
-  required voice, optional voices only when they have a row — the God arms'
-  state, and the count of games each required voice has no row for.
-  🏈 Picks: one card per game once an arm row is approved: both arms' legs
-  with pass reasons and units, the committee count, generation times, and a
-  collapsed `<blockquote expandable>` "Why" (thesis plus up to three
-  supporting factors and two counterarguments per arm) that each viewer
-  opens on their own screen; 👁 All opinions deep-links to the game's MOE
-  view. A pinned week card lists the legs per game. 📊 Scores:
-  `scripts/moe_grade.py --notify` posts the digest there (`<pre>`, silent)
-  when `MOE_DESK_SCORES_TOPIC` is set and falls back to the watchdog DM.
+- Topics and cards (as redesigned on 2026-09-08 after the first live pass,
+  when 17 status boards plus cards for games with nothing to do read as
+  clutter and the voices' opinions were on no card at all).
+  🏈 Picks is the reading surface: one card per game once two voices are
+  approved or a God arm is — the God line on top (both arms' short legs,
+  "pending review" while the arms wait, "—" before they exist), then one
+  line per approved voice (pick, probability, stars, projected score) in a
+  fixed order, and every thesis (arms first, with up to three supporting
+  factors and two counterarguments) inside a collapsed
+  `<blockquote expandable>` each viewer opens on their own screen;
+  👁 Full opinions deep-links to the game's MOE view in the DM. A pinned
+  card lists only decided games (an approved arm) with their legs.
+  📥 Review is the to-do list: a card exists only while a game has rows
+  worth a decision — a pending row that is the latest valid row for its
+  expert and model (older drafts superseded by a newer row are hidden, since
+  the aggregator only reads the latest approved row; audit and sample rows
+  never count), God arms first, each with ✅ ❌ callbacks and a 👁 deep link
+  into the tapper's own DM — and is deleted, silently, once nothing is left.
+  The pinned queue card is three lines: what is to review per game, how
+  many committees are complete, and which required voices still have no
+  row. 📊 Scores: `scripts/moe_grade.py --notify` posts the digest there
+  (`<pre>`, silent) when `MOE_DESK_SCORES_TOPIC` is set and falls back to
+  the watchdog DM.
 - Shared-message rules: a button acts or deep-links, never navigates the
   message both people see. ✅ ❌ are checked against the `reviewer` role in
   `allowed_users` (`moe_identity.resolve_role_user_ids`; both reviewers hold

@@ -1542,12 +1542,19 @@ def desk_sync_once(config: Any, api: Any, *, now: datetime | None = None) -> Any
         finally:
             save_desk_state(config.state_path, state)
     if any(
-        (summary.posted, summary.edited, summary.alerts, summary.deferred, summary.errors)
+        (
+            summary.posted,
+            summary.edited,
+            summary.alerts,
+            summary.deleted,
+            summary.deferred,
+            summary.errors,
+        )
     ):
         print(
             f"desk: posted {summary.posted} edited {summary.edited} "
-            f"alerts {summary.alerts} deferred {summary.deferred} "
-            f"errors {summary.errors}"
+            f"alerts {summary.alerts} deleted {summary.deleted} "
+            f"deferred {summary.deferred} errors {summary.errors}"
         )
     return summary
 

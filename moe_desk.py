@@ -67,7 +67,7 @@ MAX_POSTS_PER_SYNC = 15
 MAX_REVIEW_ROWS = 12
 THESIS_CHARS = 160
 COMMITTEE_THESIS_CHARS = 110
-WHY_CHARS = 900
+WHY_CHARS = 1800
 
 RULES_EXPERT_ID = "god_rules"
 JUDGE_EXPERT_ID = "god_judge"
@@ -86,6 +86,16 @@ VOICE_ABBREVIATIONS = {
     RULES_EXPERT_ID: "Rules",
     JUDGE_EXPERT_ID: "Judge",
 }
+VOICE_NAMES = {
+    "schedule": "Schedule",
+    "divisional": "Divisional",
+    "win_total": "Win Total",
+    "ak": "AK",
+    "rating_elo": "Elo",
+    "cee": "Cee",
+    "celebrity": "Celebrity",
+}
+VOICE_DISPLAY_ORDER = ["schedule", "divisional", "win_total", "ak", "rating_elo", "cee", "celebrity"]
 STATUS_MARKS = {
     "approved": "✓",
     "pending": "⏳",
@@ -269,6 +279,18 @@ def expert_abbreviation(expert_id: str) -> str:
     return VOICE_ABBREVIATIONS.get(expert_id, expert_id[:5].title())
 
 
+def voice_name(row: dict[str, Any]) -> str:
+    expert_id = str(row.get("expert_id") or "")
+    return VOICE_NAMES.get(expert_id) or str(row.get("expert_name") or expert_id)
+
+
+def _voice_sort_key(row: dict[str, Any]) -> tuple[int, str]:
+    expert_id = str(row.get("expert_id") or "")
+    if expert_id in VOICE_DISPLAY_ORDER:
+        return (VOICE_DISPLAY_ORDER.index(expert_id), expert_id)
+    return (len(VOICE_DISPLAY_ORDER), expert_id)
+
+
 # --------------------------------------------------------------------------
 # the model
 
@@ -295,6 +317,29 @@ class GameDesk:
     @property
     def review_rows(self) -> list[dict[str, Any]]:
         return self.pending + self.reviewed
+
+    @property
+    def approved_voices(self) -> list[dict[str, Any]]:
+        """The committee as the picks card shows it: one approved row per
+        voice, in display order."""
+        return sorted(
+            (
+                row
+                for row in self.reviewed
+                if not is_arm_row(row) and review_status(row) == "approved"
+            ),
+            key=_voice_sort_key,
+        )
+
+    @property
+    def show_picks(self) -> bool:
+        """A picks card is worth posting once two voices have spoken or a God
+        arm is approved; a lone rating row on every game would be noise."""
+        return (
+            self.rules is not None
+            or self.judge is not None
+            or len(self.approved_voices) >= 2
+        )
 
     @property
     def week(self) -> str:
@@ -664,19 +709,20 @@ def _button(text: str, *, callback: str | None = None, url: str | None = None) -
 def render_review_card(
     desk: GameDesk, *, config: DeskConfig
 ) -> tuple[str, Keyboard]:
+    """The to-do card: only the rows still worth a decision, God arms first,
+    each with its buttons. Nothing else — the opinions live on the picks
+    card, the status on the pinned queue."""
     game = desk.game
     lock = desk.kickoff - JUDGE_LOCK
-    to_review = len(desk.pending)
     lines = [
         f"📥 <b>{_esc(teams_label(game))}</b> · {kickoff_label(desk.kickoff)} ET",
-        (
-            f"judge locks {clock_label(lock)} ET · committee "
-            f"{desk.required_approved}/{desk.required_total} · "
-            + (f"{to_review} to review" if to_review else "nothing to review")
-        ),
+        f"locks {clock_label(lock)} ET · committee {desk.required_approved}/{desk.required_total}",
     ]
     keyboard: Keyboard = []
     visible = desk.pending[:MAX_REVIEW_ROWS]
+    if not visible:
+        lines.append("Nothing to review.")
+        return "\n".join(lines), keyboard
     pending_arms: dict[str, str] = {}
     for index, row in enumerate(visible, start=1):
         name = _esc(str(row.get("expert_name") or row.get("expert_id") or ""))
@@ -704,21 +750,6 @@ def render_review_card(
     hidden = len(desk.pending) - len(visible)
     if hidden > 0:
         lines += ["", f"<i>+{hidden} more to review</i>"]
-    if desk.reviewed:
-        lines += ["", "<b>Committee</b>"]
-        for row in desk.reviewed:
-            name = _esc(str(row.get("expert_name") or row.get("expert_id") or ""))
-            head = f"<b>{name}</b>"
-            if is_arm_row(row):
-                head += f" · <code>{_esc(short_id(row))}</code>"
-            else:
-                model = _model_text(row)
-                if model:
-                    head += f" · <code>{_esc(model)}</code>"
-            mark = _reviewed_mark(row)
-            if mark:
-                head += f" · {mark}"
-            lines += [head, row_summary(row, thesis_chars=COMMITTEE_THESIS_CHARS)]
     if len(pending_arms) == 2:
         keyboard.append(
             [
@@ -752,66 +783,95 @@ def _factor_texts(value: Any, limit: int) -> list[str]:
     return [text for text in texts if text.strip()]
 
 
+def _short_legs(row: dict[str, Any]) -> str:
+    side, total = arm_legs(row)
+    return (
+        f"{leg_label(side, kind='side', with_reason=False, short_pass=True)} · "
+        f"{leg_label(total, kind='total', with_reason=False, short_pass=True)}"
+    )
+
+
+def god_line(desk: GameDesk) -> str:
+    """``God rules Seahawks -3.5 (+100) ★ 0.6u · pass | judge pass · pass``."""
+    if desk.rules is None and desk.judge is None:
+        if any(is_arm_row(row) for row in desk.pending):
+            return "<b>God</b> pending review"
+        return "<b>God</b> —"
+    parts = []
+    for label, row in (("rules", desk.rules), ("judge", desk.judge)):
+        parts.append(f"{label} —" if row is None else f"{label} {_short_legs(row)}")
+    return "<b>God</b> " + _esc(" | ".join(parts))
+
+
+def voice_line(row: dict[str, Any]) -> str:
+    """One line per committee voice: ``Schedule Seahawks 66% ★★★ · 20-26``."""
+    name = _esc(voice_name(row))
+    if str(row.get("pick_market") or "") == "side_and_total" and row.get("side_pick_json"):
+        return f"<b>{name}</b> {_esc(_short_legs(row))}"
+    winner = nickname(row.get("predicted_winner"))
+    try:
+        probability = float(row.get("home_win_probability"))
+        if str(row.get("predicted_winner")) != str(row.get("home_team")):
+            probability = 1 - probability
+        pct = f"{probability:.0%}"
+    except (TypeError, ValueError):
+        pct = ""
+    try:
+        score = (
+            f"{int(float(row.get('predicted_away_score')))}-"
+            f"{int(float(row.get('predicted_home_score')))}"
+        )
+    except (TypeError, ValueError):
+        score = ""
+    head = " ".join(part for part in (winner, pct, _stars(row)) if part)
+    text = f"<b>{name}</b> {_esc(head)}"
+    if score:
+        text += f" · {score}"
+    return text
+
+
 def _why_block(desk: GameDesk) -> str:
+    """Collapsed on the card: the arms' theses and factors, then one thesis
+    per voice."""
     pieces: list[str] = []
-    for arm_row in (desk.rules, desk.judge):
-        if arm_row is None:
+    for label, row in (("Rules", desk.rules), ("Judge", desk.judge)):
+        if row is None:
             continue
-        label = ARM_LABELS.get(str(arm_row.get("expert_id")), "Arm")
-        thesis = _clip(arm_row.get("thesis"), 260)
-        segment = [f"<b>{label}</b>"]
-        if thesis:
-            segment[0] += f" · {_esc(thesis)}"
-        for factor in _factor_texts(arm_row.get("supporting_factors_json"), 3):
+        thesis = _clip(row.get("thesis"), 260)
+        segment = [f"<b>{label}</b>" + (f" · {_esc(thesis)}" if thesis else "")]
+        for factor in _factor_texts(row.get("supporting_factors_json"), 3):
             segment.append(f"• {_esc(_clip(factor, 200))}")
-        for factor in _factor_texts(arm_row.get("counterarguments_json"), 2):
+        for factor in _factor_texts(row.get("counterarguments_json"), 2):
             segment.append(f"◦ {_esc(_clip(factor, 200))}")
         pieces.append("\n".join(segment))
+    for row in desk.approved_voices:
+        thesis = _clip(row.get("thesis"), 220)
+        if thesis:
+            pieces.append(f"<b>{_esc(voice_name(row))}</b> · {_esc(thesis)}")
     text = "\n".join(pieces)
     if len(text) > WHY_CHARS:
         text = text[: WHY_CHARS - 1].rstrip() + "…"
     return text
 
 
-def _arm_line(label: str, row: dict[str, Any] | None) -> str:
-    if row is None:
-        return f"<b>{label}</b>  —"
-    side, total = arm_legs(row)
-    text = (
-        f"<b>{label}</b>  {_esc(leg_label(side, kind='side'))} · "
-        f"total {_esc(leg_label(total, kind='total'))}"
-    )
-    p_home = _p_home(row)
-    if p_home:
-        text += f" · {_esc(p_home)}"
-    return text
-
-
 def render_picks_card(
     desk: GameDesk, *, config: DeskConfig
 ) -> tuple[str, Keyboard]:
+    """The reading card: the God line, one line per approved voice, and every
+    thesis inside a collapsed quote each viewer opens on their own screen."""
     game = desk.game
     lines = [
         f"🏈 <b>{_esc(teams_label(game))}</b> · {kickoff_label(desk.kickoff)} ET",
-        _arm_line("Rules", desk.rules),
-        _arm_line("Judge", desk.judge),
+        god_line(desk),
     ]
-    stamps = []
-    for label, row in (("rules", desk.rules), ("judge", desk.judge)):
-        if row is not None and row.get("generated_at_utc"):
-            try:
-                stamps.append(f"{label} {clock_label(_parse_time(row['generated_at_utc']))}")
-            except ValueError:
-                pass
-    committee = f"committee {desk.required_approved}/{desk.required_total}"
-    lines.append(" · ".join([committee, *stamps]))
+    lines += [voice_line(row) for row in desk.approved_voices]
     why = _why_block(desk)
     if why:
         lines.append(f"<blockquote expandable>{why}</blockquote>")
     keyboard: Keyboard = []
     link = deep_link(config, f"game_{desk.event_id}")
     if link:
-        keyboard.append([_button("👁 All opinions", url=link)])
+        keyboard.append([_button("👁 Full opinions", url=link)])
     return "\n".join(lines), keyboard
 
 
@@ -826,25 +886,10 @@ def _week_label(desks: Iterable[GameDesk]) -> str:
     return f"Weeks {weeks[0]}–{weeks[-1]}"
 
 
-def _voice_status_text(desk: GameDesk) -> str:
-    parts = []
-    for expert_id, status, required in desk.voices:
-        mark = STATUS_MARKS.get(status, "?")
-        text = f"{expert_abbreviation(expert_id)} {mark}"
-        if not required:
-            text += " (opt)"
-        parts.append(text)
-    arms = []
-    for arm_id, approved_row in ((RULES_EXPERT_ID, desk.rules), (JUDGE_EXPERT_ID, desk.judge)):
-        if approved_row is not None:
-            arms.append("✓")
-        elif any(
-            is_pending_row(row) and row.get("expert_id") == arm_id for row in desk.rows
-        ):
-            arms.append("⏳")
-        else:
-            arms.append("—")
-    return " ".join(parts) + f" · God {arms[0]}/{arms[1]}"
+def _teams_short(desk: GameDesk, team_abbrevs: dict[str, str] | None) -> str:
+    away = _abbrev(desk.game.get("away_team"), team_abbrevs)
+    home = _abbrev(desk.game.get("home_team"), team_abbrevs)
+    return _esc(f"{away} @ {home}")
 
 
 def render_queue_card(
@@ -852,49 +897,47 @@ def render_queue_card(
     *,
     team_abbrevs: dict[str, str] | None = None,
 ) -> tuple[str, Keyboard]:
+    """Three lines: what is to review, how many committees are complete, and
+    which required voices still have no row at all."""
     active = [desk for desk in desks if not desk.started]
-    pending_rows = sum(len(desk.pending) for desk in active)
-    pending_games = sum(1 for desk in active if desk.pending)
     week = _week_label(active)
     head = "📥 <b>Review queue</b>"
     if week:
         head += f" · {week}"
-    head += f" · {pending_rows} pending in {pending_games} game{'s' if pending_games != 1 else ''}"
     lines = [head]
-    if not active:
-        lines.append("No upcoming games inside ten days.")
-        return "\n".join(lines), []
+    to_review = [desk for desk in active if desk.pending]
+    if to_review:
+        lines.append(
+            "To review: "
+            + " · ".join(
+                f"<b>{_teams_short(desk, team_abbrevs)}</b> {len(desk.pending)}"
+                for desk in to_review
+            )
+        )
+    else:
+        lines.append("Nothing to review.")
+    complete = sum(
+        1
+        for desk in active
+        if desk.required_total and desk.required_approved == desk.required_total
+    )
+    line = f"Committees: {complete} of {len(active)} complete"
     missing_counts: dict[str, int] = {}
     for desk in active:
-        away = _abbrev(desk.game.get("away_team"), team_abbrevs)
-        home = _abbrev(desk.game.get("home_team"), team_abbrevs)
-        lines.append(
-            f"<b>{_esc(f'{away} @ {home}')}</b> {short_kickoff(desk.kickoff)} · "
-            f"{_esc(_voice_status_text(desk))}"
-        )
         for expert_id in desk.missing_required:
             missing_counts[expert_id] = missing_counts.get(expert_id, 0) + 1
     if missing_counts:
-        missing = " · ".join(
+        line += " · no row yet: " + " · ".join(
             f"{expert_abbreviation(expert_id)} {count}"
             for expert_id, count in sorted(missing_counts.items())
         )
-        lines += ["", f"no row yet · {_esc(missing)}"]
+    lines.append(_esc(line))
     return "\n".join(lines), []
 
 
 def _week_legs(desk: GameDesk) -> str:
-    if desk.rules is None and desk.judge is None:
-        return f"waiting on committee ({desk.required_approved}/{desk.required_total})"
     parts = []
-    if desk.rules is not None:
-        side, total = arm_legs(desk.rules)
-        parts.append(
-            f"{leg_label(side, kind='side', with_reason=False, short_pass=True)} · "
-            f"{leg_label(total, kind='total', with_reason=False, short_pass=True)}"
-        )
-    else:
-        parts.append("rules —")
+    parts.append(_short_legs(desk.rules) if desk.rules is not None else "rules —")
     if desk.judge is not None:
         side, total = arm_legs(desk.judge)
         parts.append(
@@ -912,22 +955,20 @@ def render_week_card(
     *,
     team_abbrevs: dict[str, str] | None = None,
 ) -> tuple[str, Keyboard]:
+    """Only decided games: one line per game with an approved God arm."""
     active = [desk for desk in desks if not desk.started]
-    complete = sum(1 for desk in active if desk.rules is not None)
+    decided = [desk for desk in active if desk.rules is not None or desk.judge is not None]
     week = _week_label(active)
     head = "🧠 <b>God Expert</b>"
     if week:
         head += f" · {week}"
-    head += f" · {complete} of {len(active)} committees complete"
     lines = [head]
-    if not active:
-        lines.append("No upcoming games inside ten days.")
+    if not decided:
+        lines.append("No decided games yet.")
         return "\n".join(lines), []
-    for desk in active:
-        away = _abbrev(desk.game.get("away_team"), team_abbrevs)
-        home = _abbrev(desk.game.get("home_team"), team_abbrevs)
+    for desk in decided:
         lines.append(
-            f"<b>{_esc(f'{away} @ {home}')}</b> {short_kickoff(desk.kickoff)} · "
+            f"<b>{_teams_short(desk, team_abbrevs)}</b> {short_kickoff(desk.kickoff)} · "
             f"{_esc(_week_legs(desk))}"
         )
     return "\n".join(lines), []
@@ -1185,6 +1226,7 @@ class SyncSummary:
     posted: list[str] = field(default_factory=list)
     edited: list[str] = field(default_factory=list)
     alerts: list[str] = field(default_factory=list)
+    deleted: list[str] = field(default_factory=list)
     deferred: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -1301,10 +1343,11 @@ def sync_desk(
         if desk.started:
             continue
         review_id = None
-        if desk.review_rows:
+        review_key = f"review:{desk.event_id}"
+        if desk.pending:
             text, keyboard = render_review_card(desk, config=config)
             review_id = _upsert_card(
-                key=f"review:{desk.event_id}",
+                key=review_key,
                 topic=config.review_topic,
                 text=text,
                 keyboard=keyboard,
@@ -1314,8 +1357,17 @@ def sync_desk(
                 budget=budget,
                 summary=summary,
             )
+        elif review_key in state["cards"]:
+            # Nothing left to decide: the to-do card goes away (silently).
+            entry = state["cards"].pop(review_key)
+            try:
+                message_id = int(entry.get("message_id") or 0)
+            except (TypeError, ValueError):
+                message_id = 0
+            if message_id and api.delete(config.chat_id, message_id):
+                summary.deleted.append(review_key)
         picks_id = None
-        if desk.rules is not None or desk.judge is not None:
+        if desk.show_picks:
             text, keyboard = render_picks_card(desk, config=config)
             picks_id = _upsert_card(
                 key=f"picks:{desk.event_id}",

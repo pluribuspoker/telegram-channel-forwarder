@@ -239,6 +239,7 @@ class FakeApi(BotApi):
         self.edits: list[dict] = []
         self.pins: list[int] = []
         self.missing: set[int] = set()
+        self.deleted: list[int] = []
         self.next_id = 100
 
     def send(self, chat_id, thread_id, text, *, keyboard=None, silent=True, reply_to=None):
@@ -264,6 +265,10 @@ class FakeApi(BotApi):
 
     def pin(self, chat_id, message_id):
         self.pins.append(message_id)
+        return True
+
+    def delete(self, chat_id, message_id):
+        self.deleted.append(message_id)
         return True
 
 
@@ -384,35 +389,28 @@ class RenderTests(unittest.TestCase):
             leg_label(OVER, kind="total", with_stars=False), "Over 44.5 (-105)"
         )
 
-    def test_review_card_lists_pending_first_with_buttons(self) -> None:
+    def test_review_card_lists_actionable_rows_arms_first_with_buttons(self) -> None:
         rows = committee()
-        rows[0]["reviewed_at_utc"] = "2026-09-12T13:41:00+00:00"
         text, keyboard = render_review_card(self.desk(rows), config=CONFIG)
         self.assertIn("📥 <b>Patriots @ Seahawks</b> · Sun Sep 13 · 4:05 PM ET", text)
-        self.assertIn("judge locks 2:05 PM ET · committee 4/5 · 3 to review", text)
-        # arms first, then the pending voice, then the committee section
-        self.assertLess(text.index("God Expert (Rules)"), text.index("Win Total Expert"))
-        self.assertLess(text.index("Win Total Expert"), text.index("<b>Committee</b>"))
-        self.assertLess(text.index("<b>Committee</b>"), text.index("Schedule Expert"))
+        self.assertIn("locks 2:05 PM ET · committee 4/5", text)
+        self.assertLess(text.index("God Expert (Rules)"), text.index("God Expert (Judge)"))
+        self.assertLess(text.index("God Expert (Judge)"), text.index("Win Total Expert"))
         self.assertIn("1 · <b>God Expert (Rules)</b> · <code>c884d868</code>", text)
         self.assertIn("2 · <b>God Expert (Judge)</b> · <code>444bf3de</code> · headless", text)
         self.assertIn("3 · <b>Win Total Expert</b> · <code>opus-4-8</code>", text)
-        self.assertIn("Seahawks 61% ★★ · 20-24 · “Seattle", text)
         self.assertIn("Side PASS (adverse move) · Total PASS (ev floor) · p home .61", text)
-        self.assertIn("<b>Schedule Expert</b> · <code>opus-4-8</code> · ✅ SS 9:41 AM", text)
-        # three pending rows -> three button rows, then "approve both arms"
+        self.assertIn("Seahawks 61% ★★ · 20-24 · “Seattle", text)
+        # the to-do card carries no approved opinions and no status board
+        self.assertNotIn("Schedule Expert", text)
+        self.assertNotIn("Committee", text)
         self.assertEqual(len(keyboard), 4)
-        self.assertEqual(
-            [b["text"] for b in keyboard[2]], ["✅ 3", "❌ 3", "👁 3"]
-        )
+        self.assertEqual([b["text"] for b in keyboard[2]], ["✅ 3", "❌ 3", "👁 3"])
         self.assertEqual(keyboard[0][0]["callback_data"], "desk:ok:c884d868-0000")
         self.assertEqual(keyboard[2][0]["callback_data"], "desk:ok:p1")
         self.assertEqual(keyboard[2][1]["callback_data"], "desk:no:p1")
-        self.assertEqual(
-            keyboard[2][2]["url"], "https://t.me/nflguesser_bot?start=op_p1"
-        )
+        self.assertEqual(keyboard[2][2]["url"], "https://t.me/nflguesser_bot?start=op_p1")
         self.assertEqual(keyboard[3][0]["callback_data"], "desk:okarms:401")
-        # every callback fits Telegram's 64-byte limit
         for row_buttons in keyboard:
             for button in row_buttons:
                 if "callback_data" in button:
@@ -433,45 +431,69 @@ class RenderTests(unittest.TestCase):
             "desk:okarms:401", [b.get("callback_data") for r in keyboard for b in r]
         )
 
-    def test_rejected_row_shows_note_and_escapes_html(self) -> None:
-        rows = committee()
-        rows[2]["review_status"] = "rejected"
-        rows[2]["reviewed_by"] = "AK"
-        rows[2]["review_note"] = "reason 2 says <three> voices"
-        rows[2]["reviewed_at_utc"] = "2026-09-12T12:41:00+00:00"
+    def test_review_card_with_nothing_pending_says_so(self) -> None:
+        rows = [r for r in committee() if not is_arm(r) and r["opinion_id"] != "p1"]
         text, keyboard = render_review_card(self.desk(rows), config=CONFIG)
-        self.assertIn("<b>Win Total Expert</b> · <code>opus-4-8</code> · ❌ AK 8:41 AM · “reason 2 says &lt;three&gt; voices”", text)
-        self.assertIn("nothing to review", render_review_card(self.desk([r for r in rows if not is_arm(r)]), config=CONFIG)[0])
-        self.assertEqual(len(keyboard), 3)  # two arms + approve-both
+        self.assertIn("Nothing to review.", text)
+        self.assertEqual(keyboard, [])
 
-    def test_picks_card_has_legs_committee_and_expandable_why(self) -> None:
+    def test_picks_card_lists_god_and_every_approved_voice(self) -> None:
         rows = committee(arms_status="approved")
         rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
         rows[5]["total_pick_json"] = json.dumps(OVER)
         rows[5]["supporting_factors_json"] = json.dumps(
             ["Pool p(home) .56 vs market .58", {"text": "Voices split 3-2"}]
         )
-        text, keyboard = render_picks_card(self.desk(rows), config=CONFIG)
-        self.assertIn("🏈 <b>Patriots @ Seahawks</b>", text)
-        self.assertIn(
-            "<b>Rules</b>  Seahawks -3.5 (+100) ★ 0.6u · total Over 44.5 (-105) ★ 0.5u · p home .61",
-            text,
-        )
-        self.assertIn("<b>Judge</b>  PASS · total PASS · p home .61", text)
-        self.assertIn("committee 4/5 · rules 8:30 AM · judge 8:31 AM", text)
-        self.assertIn("<blockquote expandable><b>Rules</b> · God Expert (rules)", text)
-        self.assertIn("• Pool p(home) .56 vs market .58\n• Voices split 3-2\n<b>Judge</b>", text)
-        self.assertTrue(text.endswith("</blockquote>"))
+        rows[0]["thesis"] = "Seattle <stronger> at home"
+        desk = self.desk(rows)
+        self.assertTrue(desk.show_picks)
+        text, keyboard = render_picks_card(desk, config=CONFIG)
+        lines = text.split("\n")
+        self.assertEqual(lines[0], "🏈 <b>Patriots @ Seahawks</b> · Sun Sep 13 · 4:05 PM ET")
         self.assertEqual(
-            keyboard, [[{"text": "👁 All opinions", "url": "https://t.me/nflguesser_bot?start=game_401"}]]
+            lines[1],
+            "<b>God</b> rules Seahawks -3.5 (+100) ★ 0.6u · Over 44.5 (-105) ★ 0.5u | judge pass · pass",
+        )
+        # one line per approved voice in display order, no theses on the card
+        self.assertEqual(
+            lines[2:6],
+            [
+                "<b>Schedule</b> Seahawks 61% ★★ · 20-24",
+                "<b>Divisional</b> Seahawks 61% ★★ · 20-24",
+                "<b>AK</b> Seahawks 61% ★★ · 20-24",
+                "<b>Elo</b> Seahawks 61% ★★ · 20-24",
+            ],
+        )
+        self.assertTrue(lines[6].startswith("<blockquote expandable><b>Rules</b> · God Expert (rules)"))
+        self.assertIn("• Pool p(home) .56 vs market .58\n• Voices split 3-2\n<b>Judge</b> · ", text)
+        self.assertIn("<b>Schedule</b> · Seattle &lt;stronger&gt; at home", text)
+        self.assertTrue(text.endswith("</blockquote>"))
+        self.assertNotIn("Win Total", text)  # pending, not approved
+        self.assertEqual(
+            keyboard,
+            [[{"text": "👁 Full opinions", "url": "https://t.me/nflguesser_bot?start=game_401"}]],
         )
 
-    def test_picks_card_with_one_arm(self) -> None:
+    def test_picks_card_states_pending_or_missing_god(self) -> None:
+        desk = self.desk(committee())  # arms pending, four voices approved
+        self.assertTrue(desk.show_picks)
+        self.assertIn("<b>God</b> pending review", render_picks_card(desk, config=CONFIG)[0])
+        rows = [r for r in committee() if not is_arm(r)]
+        self.assertIn("<b>God</b> —", render_picks_card(self.desk(rows), config=CONFIG)[0])
         rows = committee(arms_status="approved")
         rows[6]["review_status"] = "pending"
-        text, _ = render_picks_card(self.desk(rows), config=CONFIG)
-        self.assertIn("<b>Judge</b>  —", text)
-        self.assertIn("committee 4/5 · rules 8:30 AM\n", text)
+        self.assertIn(
+            "<b>God</b> rules pass · pass | judge —",
+            render_picks_card(self.desk(rows), config=CONFIG)[0],
+        )
+
+    def test_picks_card_needs_two_voices_or_an_arm(self) -> None:
+        lone = [row("a4", "401", "rating_elo", status="approved", model="deterministic")]
+        self.assertFalse(self.desk(lone).show_picks)
+        two = lone + [row("a1", "401", "schedule", status="approved")]
+        self.assertTrue(self.desk(two).show_picks)
+        arm = lone + [arm_row("r1", "401", "god_rules", PASS_PLAIN, PASS_PLAIN, status="approved")]
+        self.assertTrue(self.desk(arm).show_picks)
 
     def test_queue_and_week_cards(self) -> None:
         rows = committee("401") + [
@@ -491,23 +513,31 @@ class RenderTests(unittest.TestCase):
         abbrevs = {"Seattle Seahawks": "SEA", "New England Patriots": "NE"}
         text, keyboard = render_queue_card(desks, team_abbrevs=abbrevs)
         self.assertEqual(keyboard, [])
-        self.assertIn("📥 <b>Review queue</b> · Weeks 1–2 · 3 pending in 1 game", text)
-        self.assertIn(
-            "<b>NE @ SEA</b> Sun 4:05 PM · AK ✓ Div ✓ Elo ✓ Sch ✓ WT ⏳ · God ⏳/⏳", text
+        self.assertEqual(
+            text.split("\n"),
+            [
+                "📥 <b>Review queue</b> · Weeks 1–2",
+                "To review: <b>NE @ SEA</b> 3",
+                "Committees: 0 of 3 complete · no row yet: AK 2 · Div 2 · Elo 2 · Sch 2 · WT 2",
+            ],
         )
-        self.assertIn("<b>49ers @ Rams</b> Sun 4:25 PM · AK — Div — Elo — Sch — WT — · God ✓/—", text)
-        self.assertIn("no row yet · AK 2 · Div 2 · Elo 2 · Sch 2 · WT 2", text)
         text, _ = render_week_card(desks, team_abbrevs=abbrevs)
-        self.assertIn("🧠 <b>God Expert</b> · Weeks 1–2 · 1 of 3 committees complete", text)
-        self.assertIn("<b>NE @ SEA</b> Sun 4:05 PM · waiting on committee (4/5)", text)
-        self.assertIn("<b>49ers @ Rams</b> Sun 4:25 PM · Seahawks -3.5 (+100) ★ 0.6u · pass · judge —", text)
+        self.assertEqual(
+            text.split("\n"),
+            [
+                "🧠 <b>God Expert</b> · Weeks 1–2",
+                "<b>49ers @ Rams</b> Sun 4:25 PM · Seahawks -3.5 (+100) ★ 0.6u · pass · judge —",
+            ],
+        )
 
     def test_empty_slate_cards(self) -> None:
         text, _ = render_queue_card([])
-        self.assertIn("0 pending in 0 games", text)
-        self.assertIn("No upcoming games inside ten days.", text)
+        self.assertEqual(
+            text.split("\n"),
+            ["📥 <b>Review queue</b>", "Nothing to review.", "Committees: 0 of 0 complete"],
+        )
         text, _ = render_week_card([])
-        self.assertIn("0 of 0 committees complete", text)
+        self.assertEqual(text.split("\n"), ["🧠 <b>God Expert</b>", "No decided games yet."])
 
 
 class SyncTests(unittest.TestCase):
@@ -535,12 +565,12 @@ class SyncTests(unittest.TestCase):
     def test_first_pass_posts_cards_and_pins_queue_and_week(self) -> None:
         rows = committee("401")
         summary = self.sync(rows)
-        self.assertEqual(summary.posted, ["review:401", "queue", "week"])
+        self.assertEqual(summary.posted, ["review:401", "picks:401", "queue", "week"])
         self.assertEqual(summary.alerts, [])
         topics = [m["topic"] for m in self.api.sent]
-        self.assertEqual(topics, [11, 11, 22])
+        self.assertEqual(topics, [11, 22, 11, 22])
         self.assertTrue(all(m["silent"] for m in self.api.sent))
-        self.assertEqual(self.api.pins, [102, 103])
+        self.assertEqual(self.api.pins, [103, 104])
         self.assertEqual(self.state["cards"]["review:401"]["message_id"], 101)
         self.assertEqual(self.state["kickoffs"]["401"], SEA_KICKOFF)
         self.assertIn("402", self.state["kickoffs"])
@@ -561,8 +591,10 @@ class SyncTests(unittest.TestCase):
         rows[2]["reviewed_by"] = "AK"
         summary = self.sync(rows)
         self.assertEqual(summary.posted, [])
-        self.assertEqual(summary.edited, ["review:401", "queue", "week"])
-        self.assertIn("✅ AK", self.api.edits[0]["text"])
+        self.assertEqual(summary.edited, ["review:401", "picks:401", "queue"])
+        review_text, picks_text = self.api.edits[0]["text"], self.api.edits[1]["text"]
+        self.assertNotIn("Win Total", review_text)  # decided: off the to-do card
+        self.assertIn("<b>Win Total</b> Seahawks 61% ★★ · 20-24", picks_text)
 
     def test_approved_arm_posts_the_picks_card_and_one_loud_bet_alert(self) -> None:
         rows = committee("401", arms_status="approved")
@@ -628,10 +660,31 @@ class SyncTests(unittest.TestCase):
     def test_post_budget_defers_the_rest_to_the_next_pass(self) -> None:
         rows = committee("401") + committee("402")
         summary = self.sync(rows, max_posts=2)
-        self.assertEqual(summary.posted, ["review:401", "review:402"])
-        self.assertEqual(summary.deferred, ["queue", "week"])
+        self.assertEqual(summary.posted, ["review:401", "picks:401"])
+        self.assertEqual(summary.deferred, ["review:402", "picks:402", "queue", "week"])
+        summary = self.sync(rows, max_posts=2)
+        self.assertEqual(summary.posted, ["review:402", "picks:402"])
         summary = self.sync(rows, max_posts=2)
         self.assertEqual(summary.posted, ["queue", "week"])
+
+    def test_review_card_is_deleted_once_nothing_is_left_to_review(self) -> None:
+        rows = committee("401")
+        self.sync(rows)
+        review_id = self.state["cards"]["review:401"]["message_id"]
+        for r in rows:
+            if r["review_status"] == "pending":
+                r["review_status"] = "approved"
+                r["reviewed_by"] = "AK"
+        summary = self.sync(rows)
+        self.assertEqual(summary.deleted, ["review:401"])
+        self.assertEqual(self.api.deleted, [review_id])
+        self.assertNotIn("review:401", self.state["cards"])
+        self.assertIn("picks:401", self.state["cards"])
+        # a fresh pending row brings the to-do card back
+        rows.append(row("p2", "401", "win_total", generated="2026-09-12T13:00:00+00:00"))
+        summary = self.sync(rows)
+        self.assertEqual(summary.posted, ["review:401"])
+        self.assertEqual(summary.deleted, [])
 
     def test_api_errors_are_collected_not_raised(self) -> None:
         class Broken(FakeApi):
@@ -641,7 +694,7 @@ class SyncTests(unittest.TestCase):
         self.api = Broken()
         summary = self.sync(committee("401"))
         self.assertEqual(summary.posted, [])
-        self.assertEqual(len(summary.errors), 3)
+        self.assertEqual(len(summary.errors), 4)
         self.assertEqual(self.state["cards"], {})
 
 
