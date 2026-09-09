@@ -2204,13 +2204,23 @@ def _normalize_ak_opinion(
         else "WNBA-only total interpretation: this mapped band supplies no "
         "directional pick."
     )
-    wnba_lines = [
-        (
+    if gaps["favorite_flip"]:
+        spread_mapping = (
+            f"Spread mapping: AK favors {gaps['ak_favorite']} by "
+            f"{gaps['ak_predicted_margin']:g}, while the market favors "
+            f"{gaps['market_favorite']} by "
+            f"{float(gaps['market_spread_magnitude']):g}; bucket "
+            f"{gaps['side_gap_bucket']}."
+        )
+    else:
+        spread_mapping = (
             f"Spread mapping: AK margin {gaps['ak_predicted_margin']:g} "
             f"versus market {float(gaps['market_spread_magnitude']):g}; "
             f"{float(gaps['side_margin_gap']):+g}-point gap maps to "
             f"{gaps['side_gap_bucket']}."
-        ),
+        )
+    wnba_lines = [
+        spread_mapping,
         catalog["wnba_side_prior"]["text"],
         (
             "WNBA-only spread interpretation: the historical record leans "

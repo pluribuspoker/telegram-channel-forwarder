@@ -462,6 +462,65 @@ class AkGenerationTest(unittest.IsolatedAsyncioTestCase):
             row["full_opinion"],
         )
 
+    async def test_favorite_flip_renders_without_numeric_side_gap(self) -> None:
+        lean = {
+            **_lean(),
+            "prediction_parse_status": "parsed",
+            "predicted_away_score": 24,
+            "predicted_home_score": 20,
+        }
+        response = {
+            "predicted_winner": "Los Angeles Rams",
+            "predicted_away_score": 21,
+            "predicted_home_score": 24,
+            "home_win_probability": 0.6,
+            "expected_home_margin": 3.0,
+            "side": {
+                "selection": "PASS",
+                "line": None,
+                "confidence_stars": 1,
+                "evidence_ids": [],
+                "counterargument_ids": [
+                    "nfl_side_bucket",
+                    "wnba_side_prior",
+                ],
+            },
+            "total": {
+                "selection": "PASS",
+                "line": None,
+                "confidence_stars": 1,
+                "evidence_ids": [],
+                "counterargument_ids": [
+                    "nfl_total_bucket",
+                    "wnba_total_prior",
+                ],
+            },
+            "discarded_considerations": [
+                "The supplied NFL calibration buckets are empty."
+            ],
+        }
+
+        async def create_fn(**_kwargs):
+            return SimpleNamespace(
+                content=[SimpleNamespace(text=json.dumps(response))]
+            )
+
+        row = await generate_opinion(
+            expert_id="ak",
+            game=_game(),
+            history=[],
+            leans=[lean],
+            ak_user_id="123",
+            store=MemoryStore(),
+            create_fn=create_fn,
+        )
+
+        self.assertIn(
+            "AK favors San Francisco 49ers by 4, while the market favors "
+            "Los Angeles Rams by 3.5; bucket favorite_flip.",
+            row["full_opinion"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
