@@ -27,6 +27,8 @@ def log(*a):
         pass
 
 def main():
+    if os.environ.get("NIGHTLY_AUDIT"):
+        return  # headless nightly-audit agent — not the channels session
     if os.uname().nodename != ONLY_HOST:
         return  # VPS only
 

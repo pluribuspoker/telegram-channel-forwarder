@@ -1,0 +1,15 @@
+# 04:05 ET nightly: West-coast finals have had ~2.5h to settle through the
+# grade daemon, and the whole run (90-min internal budget) clears the 06:00
+# auto-reboot / ~06:31 unattended-upgrades window. Persistent=true so a
+# night the box was down is caught up on boot.
+[Unit]
+Description=Run the nightly ungraded-pick audit at 04:05 ET
+
+[Timer]
+OnCalendar=*-*-* 04:05:00
+AccuracySec=60s
+Persistent=true
+Unit=ungraded-audit.service
+
+[Install]
+WantedBy=timers.target

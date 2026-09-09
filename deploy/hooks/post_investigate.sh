@@ -13,6 +13,10 @@
 # NOTE: uses python3 (this VPS has no bare `python` — a bare `python` here
 # silently failed and made this hook a no-op for a while).
 
+# Headless nightly-audit agents run /investigate too, but their runner owns
+# reporting and their prompt forbids routine lessons — don't gate their Stop.
+[ -n "$NIGHTLY_AUDIT" ] && exit 0
+
 INPUT=$(cat)
 TRANSCRIPT=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('transcript_path',''))" 2>/dev/null)
 [ -z "$TRANSCRIPT" ] && exit 0

@@ -1,0 +1,36 @@
+# Nightly ungraded-pick audit: scan parse_cache for picks past their game
+# date with no verdict, then one fresh headless /investigate agent per pick
+# group, strictly sequential (scripts/ungraded_audit.py). The runner pushes
+# any agent commits and restarts grade-daemon at the end; it NEVER restarts
+# telegram-forwarder. DMs the operator a per-pick summary via the watchdog
+# bot; silent when the scan is clean.
+#
+# TimeoutStartSec=6600 = 3 pick groups (the runner's --max-picks default)
+# x the 1500 s per-agent timeout, plus scan/push/restart overhead; the
+# runner's own 90-min budget stops launching agents well before this.
+# 04:05 ET start + worst case still clears the 06:00 auto-reboot window.
+#
+# Environment: .env (watchdog DM config), .env.local (server-only values),
+# ~/.claude/auth.env (CLAUDE_CODE_OAUTH_TOKEN — agents bill the
+# subscription; the runner refuses to start without it). The agents
+# themselves get a from-scratch environment (no ANTHROPIC_API_KEY).
+[Unit]
+Description=Nightly ungraded-pick audit (headless /investigate agents)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+EnvironmentFile=-/home/forwarder/.claude/auth.env
+Environment=PATH=/home/forwarder/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/forwarder
+ExecStart=/home/forwarder/app/run_ungraded_audit.sh
+TimeoutStartSec=6600
+SyslogIdentifier=ungraded-audit
+StandardOutput=journal
+StandardError=journal

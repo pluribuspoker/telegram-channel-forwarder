@@ -27,6 +27,7 @@ Rules here are terse on purpose. Each section points to a `docs/*.md` file holdi
 - `telegram-forwarder.service` — listener (persistent).
 - `telegram-tracker.timer` — pick grader, every 5 min (Telegram reads, parsing, odds).
 - `god-judge.timer` — God Expert judge runner at :12/:42 (`run_god_judge.sh`, single attempt, `GOD_JUDGE_HEALTHCHECK_URL`); one subscription call per new committee.
+- `ungraded-audit.timer` — nightly 04:05 ET (`run_ungraded_audit.sh`, `UNGRADED_AUDIT_HEALTHCHECK_URL`): headless `/investigate` agents for ungraded picks (see below).
 - `moe-grade.timer` — MOE opinion grader, daily 05:23 ET (`run_moe_grade.sh` → `scripts/moe_grade.py --write --notify`): deterministic, zero Claude/Telethon, idempotent `moe_grades` append (dedupe on opinion id); DMs the scoreboard via the watchdog bot only when rows were appended, a failed DM exits non-zero → `/fail` ping; `MOE_GRADE_HEALTHCHECK_URL`. The judge recomputes the scoreboard live — this ledger feeds the report, not the weights.
 - `grade-daemon.service` — grades every 10s, **sole broadcaster**, zero Telethon; cycle timeout + systemd watchdog. Shares `parse_cache.json` with the tracker (atomic `os.replace`); sets `broadcasted=True` so the tracker skips.
 - `angles-dashboard.service` — serves `https://fightclubpicks.cc`.
@@ -71,6 +72,12 @@ Rules here are terse on purpose. Each section points to a `docs/*.md` file holdi
 - `validate_sport` alt-sport overrides fire only on club-level evidence (`_nickname_evidence`: nickname/short-name/abbrev token) — city words ("San"/"Los") once rebound a correctly-parsed NFL lookahead to MLB "Los Angeles Angels" and graded the wrong game. Same-sport fuzzy rescue deliberately unchanged. Test: `scripts/test_sport_override_regression.py`.
 - KBO: scraped from koreabaseball.com (`fetch_kbo_context`); picks post the US evening before, so fetch `date+1`.
 
+## Nightly ungraded audit — docs/ungraded-audit.md
+
+- `scripts/ungraded_audit.py` (04:05 ET): scans `parse_cache.json` for legs with no verdict past their stale-reference date (incl. daemon-retired `_failed`, excl. "message deleted"), groups fan-out copies, then ONE fresh headless `claude -p "/investigate …"` agent per group, strictly sequential, `--max-picks 3`/night, flock'd, killed at 25 min. Subscription-billed (OAuth env only, **never** `ANTHROPIC_API_KEY`); `NIGHTLY_AUDIT=1` stands down the session hooks; `--no-session-persistence` keeps transcripts out of the resume-notify hook's lookup — the stream file under `logs/ungraded_audit/<date>/` is the transcript.
+- Agents commit (`nightly-audit:` prefix, own files only) but never push/restart; the RUNNER pushes once, restarts grade-daemon on code change, never touches telegram-forwarder (⚠ DM note instead). Failed agents' tracked edits are reverted.
+- Auditable: `logs/ungraded_audit_runs.jsonl` (scan + per-agent: outcome/commits/cost/usage), per-pick transcripts + result.md, `ungraded_audit_state.json` (2-attempt cap → parked; terminal outcomes park immediately; `--rearm <key>` retries). DM summary via watchdog bot, one line per pick; silent on a clean night. Kill switch `UNGRADED_AUDIT_DISABLED=1`. `--dry-run` / `--target <key>` for manual runs. Test: `scripts/test_ungraded_audit_scan.py`.
+
 ## Odds — docs/odds.md
 
 - Force re-fetch: delete `odds_by_pick` from the cache entry — **only safe before first pitch**; after start, write closing lines directly via `odds._try_pregame(...)` and set `game_date` yourself (verify an already-correct sibling reproduces exactly).
@@ -92,7 +99,7 @@ Rules here are terse on purpose. Each section points to a `docs/*.md` file holdi
 ## Broadcast results — docs/tracker.md
 
 - `_format_pick` (`audit.py`) is the ONE renderer (broadcast, merged broadcast, Sheets) — **every `bet_type` branch must interpolate `period_tag`** (after team/player, before the bet). New branch = new case in `scripts/test_period_tag.py`, incl. the MLB/KBO renames (`1h`→`F5`, `1q`→`1st Inn`). The `_clean_desc` fallback must never truncate to a bare team name (its vs-strip requires bet content before the "vs"); a market with two parse shapes (BTTS = prop OR line-less total) converges into the structured branches, not the fallback. Sweep net for renderer changes: replay `_format_pick` old-vs-new over all cached picks.
-- The game-title header is EXCLUSIVELY the final-score format: a scored result — lone or merged — renders via `broadcast_group` ("⚾️ Marlins 1–6 Cubs", capper after dash). No final yet → a merge still posts as ONE message but headerless (bare pick lines); a lone result stays a compact `broadcast_results` line; parlays/multi-pick always compact. Gate on the score, not the event. Test: `scripts/test_single_score_header.py`.
+- The game-title header is EXCLUSIVELY the final-score format: a scored result — lone or merged — renders via `broadcast_group` ("⚾️ Marlins 1–6 Cubs", capper after dash). No final yet → a merge still posts as ONE message but headerless (bare pick lines); a lone result stays a compact `broadcast_results` line. Parlays always compact; a multi-pick message joins the game merge (one line per leg) only when EVERY leg resolves to the same game post-ESPN-upgrade — legs spanning games keep the compact per-message path. Gate on the score, not the event. Test: `scripts/test_single_score_header.py`.
 - Test workflow: `scripts/clear_emojis.py --channel <id>` (or `--days 2`) then `python tracker.py --live --channel <id>`.
 
 ## Sauce daily — docs/sauce.md
