@@ -1,18 +1,19 @@
 """Desk group: the shared Telegram supergroup where the two reviewers work the
 NFL MOE committee and read the God Expert.
 
-One supergroup with forum topics, the intake bot as admin, both reviewers in
+One supergroup with forum topics, the dedicated MOE bot as admin, both reviewers in
 it with the same rights. Every card is one message both of them see:
 
 - **Review topic** — one card per upcoming game listing that game's valid
-  opinion rows (pending first) with ✅ / ❌ callback buttons per pending row
-  and a 👁 deep link into the reviewer's own DM with the bot. A pinned queue
-  card summarises every upcoming game's committee (approved / pending /
-  missing per voice).
+  opinion rows (pending first) with ✅ / ❌ callback buttons per pending row.
+  Full pending explanations are replies beneath the card. A pinned queue card
+  summarises every upcoming game's committee (approved / pending / missing per
+  voice).
 - **Picks topic** — one card per game once a God Expert arm is approved:
   both arms' legs, the committee count, and a collapsed
   ``<blockquote expandable>`` "Why" each viewer opens on their own screen.
-  A pinned week card lists the legs for every game.
+  Full approved opinions are replies beneath the card. A pinned week card
+  lists the legs for every game.
 - **Scores topic** — the grading digest (``scripts/moe_grade.py --notify``).
 
 Loud (a notification) in two places only: a reply under the picks card when
@@ -20,13 +21,12 @@ a bet leg is approved, and a reply under the review card when the judge lock
 is near with rows still pending. Everything else is posted silently and
 edited in place; Telegram edits never notify.
 
-Shared-message rules: a button either acts (approve / reject, checked against
-the reviewer list and signed with who tapped) or deep-links into the
-tapper's own DM; nothing navigates the shared message.
+Shared-message review buttons act only after checking the reviewer list and
+signing the write with who tapped.
 
 This module owns the pure logic (model, renderers, sync decisions) and a thin
-Bot API transport; ``intake_bot.py`` wires it to the sheet, the Telethon
-callback events and a periodic sync task. It imports nothing from ``moe``
+Bot API transport; ``moe_bot.py`` wires it to the sheet, the Telethon callback
+events and a periodic sync task. It imports nothing from ``moe``
 (``fcntl``) so its tests run on Windows: the caller passes the hash-verified
 approved rows in.
 """
@@ -44,7 +44,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -52,8 +52,8 @@ from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
 ROOT = Path(__file__).resolve().parent
-DEFAULT_STATE_PATH = ROOT / "moe_desk_state.json"
-STATE_VERSION = 1
+DEFAULT_STATE_PATH = ROOT / "moe_bot_state.json"
+STATE_VERSION = 2
 
 # The judge runner skips games inside two hours of kickoff
 # (scripts/god_judge_runner.py KICKOFF_CUTOFF); the lock warning counts back
@@ -68,6 +68,7 @@ MAX_REVIEW_ROWS = 12
 THESIS_CHARS = 160
 COMMITTEE_THESIS_CHARS = 110
 WHY_CHARS = 1800
+DETAIL_BODY_CHARS = 3000
 
 RULES_EXPERT_ID = "god_rules"
 JUDGE_EXPERT_ID = "god_judge"
@@ -122,13 +123,9 @@ class DeskConfig:
     review_topic: int
     picks_topic: int
     scores_topic: int | None = None
-    bot_username: str = ""
     sync_seconds: int = DEFAULT_SYNC_SECONDS
     lock_warn_hours: float = DEFAULT_LOCK_WARN_HOURS
     state_path: Path = DEFAULT_STATE_PATH
-
-    def with_username(self, username: str) -> "DeskConfig":
-        return replace(self, bot_username=(username or "").lstrip("@"))
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -147,7 +144,7 @@ def desk_config_from_env(
     """The desk is enabled when the chat id and both card topics are set;
     otherwise ``None`` and nothing in the bot touches a group."""
     environ = os.environ if environ is None else environ
-    token = str(environ.get("INTAKE_BOT_TOKEN") or "").strip()
+    token = str(environ.get("MOE_BOT_TOKEN") or "").strip()
     chat_id = str(environ.get("MOE_DESK_CHAT_ID") or "").strip()
     review = _int_or_none(environ.get("MOE_DESK_REVIEW_TOPIC"))
     picks = _int_or_none(environ.get("MOE_DESK_PICKS_TOPIC"))
@@ -679,21 +676,6 @@ def _model_text(row: dict[str, Any]) -> str:
     return model.replace("claude-", "") if model else ""
 
 
-def deep_link(config: DeskConfig, param: str) -> str | None:
-    if not config.bot_username:
-        return None
-    return f"https://t.me/{config.bot_username}?start={param}"
-
-
-def parse_start_param(text: str) -> tuple[str, str] | None:
-    """``/start op_<opinion id>`` → ``("op", id)``; ``/start game_<event>`` →
-    ``("game", event)``; anything else ``None``."""
-    match = re.match(r"^/start(?:@\w+)?\s+(op|game)_([A-Za-z0-9\-]+)\s*$", text or "")
-    if not match:
-        return None
-    return match.group(1), match.group(2)
-
-
 # --------------------------------------------------------------------------
 # renderers: (html, inline keyboard rows)
 
@@ -741,9 +723,6 @@ def render_review_card(
             _button(f"✅ {index}", callback=f"{CALLBACK_PREFIX}ok:{opinion_id}"),
             _button(f"❌ {index}", callback=f"{CALLBACK_PREFIX}no:{opinion_id}"),
         ]
-        link = deep_link(config, f"op_{opinion_id}")
-        if link:
-            buttons.append(_button(f"👁 {index}", url=link))
         keyboard.append(buttons)
         if is_arm_row(row):
             pending_arms.setdefault(str(row["expert_id"]), opinion_id)
@@ -781,6 +760,104 @@ def _factor_texts(value: Any, limit: int) -> list[str]:
                     texts.append(str(item[key]))
                     break
     return [text for text in texts if text.strip()]
+
+
+def _all_factor_texts(value: Any) -> list[str]:
+    if value in (None, ""):
+        return []
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    texts: list[str] = []
+    for item in parsed:
+        if isinstance(item, str):
+            text = item
+        elif isinstance(item, dict):
+            text = next(
+                (
+                    str(item[key])
+                    for key in ("text", "claim", "factor", "reason", "summary")
+                    if item.get(key)
+                ),
+                "",
+            )
+        else:
+            text = ""
+        if text.strip():
+            texts.append(text.strip())
+    return texts
+
+
+def _detail_body(row: dict[str, Any]) -> str:
+    full = str(row.get("full_opinion") or "").strip()
+    if full:
+        return full
+    sections: list[str] = []
+    thesis = str(row.get("thesis") or "").strip()
+    if thesis:
+        sections.append(f"Thesis\n{thesis}")
+    for label, key in (
+        ("Supporting factors", "supporting_factors_json"),
+        ("Counterarguments", "counterarguments_json"),
+        ("No-signal factors", "no_signal_factors_json"),
+        ("Discarded considerations", "discarded_considerations_json"),
+    ):
+        factors = _all_factor_texts(row.get(key))
+        if factors:
+            sections.append(label + "\n" + "\n".join(f"- {item}" for item in factors))
+    return "\n\n".join(sections) or "No detailed explanation was persisted."
+
+
+def _split_plain_text(text: str, limit: int = DETAIL_BODY_CHARS) -> list[str]:
+    chunks: list[str] = []
+    current: list[str] = []
+    escaped_length = 0
+    for character in text:
+        character_length = len(_esc(character))
+        if current and escaped_length + character_length > limit:
+            chunks.append("".join(current).strip())
+            current = []
+            escaped_length = 0
+        current.append(character)
+        escaped_length += character_length
+    if current or not chunks:
+        chunks.append("".join(current).strip())
+    return chunks
+
+
+def render_opinion_details(
+    rows: Iterable[dict[str, Any]],
+    *,
+    context: str,
+) -> list[str]:
+    """Full persisted explanations as same-group messages.
+
+    Each chunk is escaped independently and remains comfortably below
+    Telegram's HTML message limit.
+    """
+    messages: list[str] = []
+    for row in rows:
+        name = str(row.get("expert_name") or row.get("expert_id") or "Expert")
+        model = _model_text(row)
+        status = review_status(row)
+        meta = " · ".join(item for item in (status, model) if item)
+        chunks = _split_plain_text(_detail_body(row))
+        for index, chunk in enumerate(chunks):
+            suffix = f" · part {index + 1}/{len(chunks)}" if len(chunks) > 1 else ""
+            lines = [
+                f"🔎 <b>{_esc(name)}</b>{_esc(suffix)}",
+                f"<i>{_esc(context)}{(' · ' + meta) if meta else ''}</i>",
+            ]
+            if index == 0:
+                lines.append(row_summary(row))
+            lines.append(
+                f"<blockquote expandable>{_esc(chunk)}</blockquote>"
+            )
+            messages.append("\n".join(lines))
+    return messages
 
 
 def _short_legs(row: dict[str, Any]) -> str:
@@ -868,11 +945,9 @@ def render_picks_card(
     why = _why_block(desk)
     if why:
         lines.append(f"<blockquote expandable>{why}</blockquote>")
-    keyboard: Keyboard = []
-    link = deep_link(config, f"game_{desk.event_id}")
-    if link:
-        keyboard.append([_button("👁 Full opinions", url=link)])
-    return "\n".join(lines), keyboard
+    if desk.rules is not None or desk.judge is not None or desk.approved_voices:
+        lines.append("<i>Full opinions are posted as replies to this card.</i>")
+    return "\n".join(lines), []
 
 
 def _week_label(desks: Iterable[GameDesk]) -> str:
@@ -1053,12 +1128,20 @@ def prune_state(state: dict[str, Any], *, now: datetime) -> None:
                 expired.add(event_id)
         except ValueError:
             expired.add(event_id)
-    for event_id in expired:
-        state["kickoffs"].pop(event_id, None)
-    for key in list(state["cards"]):
-        _, _, event_id = key.partition(":")
-        if event_id and event_id in expired:
+    retained_expired: set[str] = set()
+    for key, value in list(state["cards"].items()):
+        event_id = value.get("event_id") if isinstance(value, dict) else None
+        if not event_id:
+            _, _, event_id = key.partition(":")
+            event_id = event_id.split(":", 1)[0]
+        if event_id not in expired:
+            continue
+        if isinstance(value, dict) and value.get("obsolete_message_ids"):
+            retained_expired.add(event_id)
+        else:
             state["cards"].pop(key, None)
+    for event_id in expired - retained_expired:
+        state["kickoffs"].pop(event_id, None)
     for key, value in list(state["announced"].items()):
         event_id = value.get("event_id") if isinstance(value, dict) else None
         if event_id in expired:
@@ -1199,8 +1282,11 @@ class BotApi:
     def delete(self, chat_id: str, message_id: int) -> bool:
         try:
             self.call("deleteMessage", chat_id=chat_id, message_id=message_id)
-        except DeskApiError:
-            return False
+        except DeskApiError as exc:
+            message = str(exc).lower()
+            if "message to delete not found" in message or "message not found" in message:
+                return True
+            raise
         return True
 
     def create_topic(self, chat_id: str, name: str) -> int:
@@ -1243,6 +1329,73 @@ class _Budget:
         return True
 
 
+def _cleanup_obsolete(
+    *,
+    key: str,
+    entry: dict[str, Any],
+    config: DeskConfig,
+    api: BotApi,
+    summary: SyncSummary,
+) -> None:
+    remaining: list[int] = []
+    for raw_message_id in entry.get("obsolete_message_ids") or []:
+        try:
+            message_id = int(raw_message_id)
+            deleted = api.delete(config.chat_id, message_id)
+        except (DeskApiError, TypeError, ValueError) as exc:
+            summary.errors.append(f"{key}: obsolete delete failed: {exc}")
+            try:
+                remaining.append(int(raw_message_id))
+            except (TypeError, ValueError):
+                pass
+            continue
+        if deleted:
+            summary.deleted.append(f"{key}:obsolete:{message_id}")
+        else:
+            remaining.append(message_id)
+    if remaining:
+        entry["obsolete_message_ids"] = remaining
+    else:
+        entry.pop("obsolete_message_ids", None)
+
+
+def _delete_entry_messages(
+    *,
+    key: str,
+    entry: dict[str, Any],
+    config: DeskConfig,
+    api: BotApi,
+    summary: SyncSummary,
+) -> bool:
+    raw_ids = [
+        entry.get("message_id"),
+        *(entry.get("obsolete_message_ids") or []),
+    ]
+    remaining: list[int] = []
+    for raw_message_id in raw_ids:
+        try:
+            message_id = int(raw_message_id)
+        except (TypeError, ValueError):
+            continue
+        try:
+            deleted = api.delete(config.chat_id, message_id)
+        except DeskApiError as exc:
+            summary.errors.append(f"{key}: delete failed: {exc}")
+            remaining.append(message_id)
+            continue
+        if not deleted:
+            summary.errors.append(f"{key}: delete failed")
+            remaining.append(message_id)
+    if remaining:
+        entry["message_id"] = remaining[0]
+        if len(remaining) > 1:
+            entry["obsolete_message_ids"] = remaining[1:]
+        else:
+            entry.pop("obsolete_message_ids", None)
+        return False
+    return True
+
+
 def _upsert_card(
     *,
     key: str,
@@ -1255,34 +1408,167 @@ def _upsert_card(
     budget: _Budget,
     summary: SyncSummary,
     pin: bool = False,
+    reply_to: int | None = None,
+    event_id: str | None = None,
 ) -> int | None:
     digest = content_hash(text, keyboard, topic)
     entry = state["cards"].get(key)
     if isinstance(entry, dict) and entry.get("message_id"):
-        if entry.get("hash") == digest:
-            return int(entry["message_id"])
-        try:
-            if api.edit(config.chat_id, int(entry["message_id"]), text, keyboard=keyboard):
-                entry["hash"] = digest
-                summary.edited.append(key)
+        _cleanup_obsolete(
+            key=key,
+            entry=entry,
+            config=config,
+            api=api,
+            summary=summary,
+        )
+        if entry.get("reply_to") != reply_to:
+            if not budget.take():
+                summary.deferred.append(key)
                 return int(entry["message_id"])
-        except DeskApiError as exc:
-            summary.errors.append(f"{key}: {exc}")
+            try:
+                message_id = api.send(
+                    config.chat_id,
+                    topic,
+                    text,
+                    keyboard=keyboard,
+                    silent=True,
+                    reply_to=reply_to,
+                )
+            except DeskApiError as exc:
+                summary.errors.append(f"{key}: {exc}")
+                return int(entry["message_id"])
+            obsolete = [
+                int(entry["message_id"]),
+                *[
+                    int(value)
+                    for value in entry.get("obsolete_message_ids") or []
+                ],
+            ]
+            replacement = {
+                "message_id": message_id,
+                "hash": digest,
+                "topic": topic,
+                "reply_to": reply_to,
+                "event_id": event_id,
+                "obsolete_message_ids": obsolete,
+            }
+            state["cards"][key] = replacement
+            summary.posted.append(key)
+            _cleanup_obsolete(
+                key=key,
+                entry=replacement,
+                config=config,
+                api=api,
+                summary=summary,
+            )
+            return message_id
+    if isinstance(entry, dict) and entry.get("message_id"):
+        if not entry.get("current_missing") and entry.get("hash") == digest:
             return int(entry["message_id"])
-        state["cards"].pop(key, None)
+        if not entry.get("current_missing"):
+            try:
+                if api.edit(
+                    config.chat_id,
+                    int(entry["message_id"]),
+                    text,
+                    keyboard=keyboard,
+                ):
+                    entry["hash"] = digest
+                    summary.edited.append(key)
+                    return int(entry["message_id"])
+            except DeskApiError as exc:
+                summary.errors.append(f"{key}: {exc}")
+                return int(entry["message_id"])
+            entry["current_missing"] = True
     if not budget.take():
         summary.deferred.append(key)
         return None
     try:
-        message_id = api.send(config.chat_id, topic, text, keyboard=keyboard, silent=True)
+        message_id = api.send(
+            config.chat_id,
+            topic,
+            text,
+            keyboard=keyboard,
+            silent=True,
+            reply_to=reply_to,
+        )
     except DeskApiError as exc:
         summary.errors.append(f"{key}: {exc}")
         return None
-    state["cards"][key] = {"message_id": message_id, "hash": digest, "topic": topic}
+    replacement = {
+        "message_id": message_id,
+        "hash": digest,
+        "topic": topic,
+        "reply_to": reply_to,
+        "event_id": event_id,
+    }
+    if isinstance(entry, dict) and entry.get("obsolete_message_ids"):
+        replacement["obsolete_message_ids"] = list(
+            entry["obsolete_message_ids"]
+        )
+    state["cards"][key] = replacement
     summary.posted.append(key)
     if pin:
         api.pin(config.chat_id, message_id)
     return message_id
+
+
+def _sync_detail_bundle(
+    *,
+    prefix: str,
+    event_id: str,
+    topic: int,
+    messages: Iterable[str],
+    reply_to: int | None,
+    config: DeskConfig,
+    api: BotApi,
+    state: dict[str, Any],
+    budget: _Budget,
+    summary: SyncSummary,
+) -> None:
+    messages = list(messages)
+    if messages and reply_to is None:
+        return
+    active: set[str] = set()
+    errors_before = len(summary.errors)
+    deferred_before = len(summary.deferred)
+    for index, text in enumerate(messages):
+        key = f"{prefix}:{event_id}:{index}"
+        active.add(key)
+        _upsert_card(
+            key=key,
+            topic=topic,
+            text=text,
+            keyboard=[],
+            config=config,
+            api=api,
+            state=state,
+            budget=budget,
+            summary=summary,
+            reply_to=reply_to,
+            event_id=event_id,
+        )
+    if (
+        len(summary.errors) != errors_before
+        or len(summary.deferred) != deferred_before
+    ):
+        return
+    stale = [
+        key
+        for key in state["cards"]
+        if key.startswith(f"{prefix}:{event_id}:") and key not in active
+    ]
+    for key in stale:
+        entry = state["cards"][key]
+        if _delete_entry_messages(
+            key=key,
+            entry=entry,
+            config=config,
+            api=api,
+            summary=summary,
+        ):
+            state["cards"].pop(key, None)
+            summary.deleted.append(key)
 
 
 def _announce(
@@ -1337,6 +1623,16 @@ def sync_desk(
     desks = list(desks)
     summary = SyncSummary()
     budget = _Budget(max_posts)
+    card_ids: dict[tuple[str, str], int | None] = {}
+    for key, entry in state["cards"].items():
+        if isinstance(entry, dict) and entry.get("obsolete_message_ids"):
+            _cleanup_obsolete(
+                key=key,
+                entry=entry,
+                config=config,
+                api=api,
+                summary=summary,
+            )
     prune_state(state, now=now)
     for desk in desks:
         state["kickoffs"][desk.event_id] = desk.kickoff.isoformat()
@@ -1356,21 +1652,28 @@ def sync_desk(
                 state=state,
                 budget=budget,
                 summary=summary,
+                event_id=desk.event_id,
             )
-        elif review_key in state["cards"]:
-            # Nothing left to decide: the to-do card goes away (silently).
-            entry = state["cards"].pop(review_key)
-            try:
-                message_id = int(entry.get("message_id") or 0)
-            except (TypeError, ValueError):
-                message_id = 0
-            if message_id and api.delete(config.chat_id, message_id):
-                summary.deleted.append(review_key)
+        else:
+            if review_key in state["cards"]:
+                # Nothing left to decide: the to-do card goes away silently.
+                entry = state["cards"][review_key]
+                if _delete_entry_messages(
+                    key=review_key,
+                    entry=entry,
+                    config=config,
+                    api=api,
+                    summary=summary,
+                ):
+                    state["cards"].pop(review_key, None)
+                    summary.deleted.append(review_key)
+        card_ids[("review", desk.event_id)] = review_id
         picks_id = None
+        picks_key = f"picks:{desk.event_id}"
         if desk.show_picks:
             text, keyboard = render_picks_card(desk, config=config)
             picks_id = _upsert_card(
-                key=f"picks:{desk.event_id}",
+                key=picks_key,
                 topic=config.picks_topic,
                 text=text,
                 keyboard=keyboard,
@@ -1379,6 +1682,7 @@ def sync_desk(
                 state=state,
                 budget=budget,
                 summary=summary,
+                event_id=desk.event_id,
             )
             for arm_row in (desk.rules, desk.judge):
                 if arm_row is None:
@@ -1400,6 +1704,18 @@ def sync_desk(
                         summary=summary,
                         now=now,
                     )
+        elif picks_key in state["cards"]:
+            entry = state["cards"][picks_key]
+            if _delete_entry_messages(
+                key=picks_key,
+                entry=entry,
+                config=config,
+                api=api,
+                summary=summary,
+            ):
+                state["cards"].pop(picks_key, None)
+                summary.deleted.append(picks_key)
+        card_ids[("picks", desk.event_id)] = picks_id
         if lock_warning_due(desk, config=config, now=now):
             _announce(
                 key=f"lock:{desk.event_id}",
@@ -1440,6 +1756,44 @@ def sync_desk(
         summary=summary,
         pin=True,
     )
+    for desk in desks:
+        if desk.started:
+            continue
+        _sync_detail_bundle(
+            prefix="review-detail",
+            event_id=desk.event_id,
+            topic=config.review_topic,
+            messages=render_opinion_details(
+                desk.pending,
+                context="Pending review",
+            ),
+            reply_to=card_ids.get(("review", desk.event_id)),
+            config=config,
+            api=api,
+            state=state,
+            budget=budget,
+            summary=summary,
+        )
+        detail_rows = [
+            row
+            for row in (desk.rules, desk.judge, *desk.approved_voices)
+            if row is not None
+        ]
+        _sync_detail_bundle(
+            prefix="picks-detail",
+            event_id=desk.event_id,
+            topic=config.picks_topic,
+            messages=render_opinion_details(
+                detail_rows,
+                context="Approved committee",
+            ) if desk.show_picks else [],
+            reply_to=card_ids.get(("picks", desk.event_id)),
+            config=config,
+            api=api,
+            state=state,
+            budget=budget,
+            summary=summary,
+        )
     return summary
 
 

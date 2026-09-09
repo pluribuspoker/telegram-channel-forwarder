@@ -404,6 +404,14 @@ class GameSelectionTest(unittest.TestCase):
             [button.data.decode() for button in buttons[0]],
             ["period:game", "period:first_half", "period:first_quarter"],
         )
+        self.assertNotIn("MOE", text)
+        self.assertFalse(
+            any(
+                button.data and button.data.decode().startswith("moe:")
+                for row in buttons
+                for button in row
+            )
+        )
 
     def test_detail_uses_sheet_team_emoji_mapping(self):
         text, _ = game_detail(
@@ -879,130 +887,6 @@ class GameSelectionTest(unittest.TestCase):
         self.assertEqual(row["telegram_user_id"], celebrity_id)
         self.assertEqual(row["telegram_username"], "")
         self.assertEqual(row["telegram_display_name"], "LeBron James")
-
-
-class _FakeOpinionStore:
-    def __init__(self, rows):
-        self.rows = [dict(row) for row in rows]
-        self.reviews: list[tuple[str, str, str]] = []
-
-    def list(self, event_id=None):
-        return [dict(row) for row in self.rows]
-
-    def fetch(self, opinion_id):
-        for row in self.rows:
-            if row["opinion_id"] == opinion_id:
-                return dict(row)
-        return None
-
-    def review(self, opinion_id, *, status, reviewed_by, note):
-        for row in self.rows:
-            if row["opinion_id"] == opinion_id:
-                row["review_status"] = status
-                row["reviewed_by"] = reviewed_by
-                self.reviews.append((opinion_id, status, reviewed_by))
-                return
-        raise ValueError("Expected one opinion_id match, found 0")
-
-
-def _desk_row(opinion_id, expert_id, name, *, status="pending", **extra):
-    row = {
-        "opinion_id": opinion_id,
-        "event_id": "401",
-        "expert_id": expert_id,
-        "expert_name": name,
-        "generated_at_utc": "2026-09-12T12:00:00+00:00",
-        "generation_status": "valid",
-        "review_status": status,
-        "reviewed_by": "SS" if status != "pending" else "",
-    }
-    row.update(extra)
-    return row
-
-
-class DeskReviewTest(unittest.TestCase):
-    """The desk group's buttons: intake_bot.desk_review over a fake store."""
-
-    def setUp(self) -> None:
-        intake_bot._SHEET_CACHE.clear()
-        self.store = _FakeOpinionStore(
-            [
-                _desk_row("p1", "win_total", "Win Total Expert"),
-                _desk_row("a1", "schedule", "Schedule Expert", status="approved"),
-                _desk_row("r1", "god_rules", "God Expert (Rules)"),
-                _desk_row("j1", "god_judge", "God Expert (Judge)"),
-                _desk_row("x1", "schedule", "Schedule Expert", generation_status="invalid"),
-            ]
-        )
-        intake_bot._MOE_STORE = self.store
-
-    def tearDown(self) -> None:
-        intake_bot._SHEET_CACHE.clear()
-        intake_bot._MOE_STORE = None
-
-    def test_approve_and_reject_sign_with_the_reviewer(self) -> None:
-        self.assertEqual(
-            intake_bot.desk_review("ok", "p1", reviewer="AK"),
-            ("Approved Win Total Expert as AK.", True),
-        )
-        self.assertEqual(self.store.reviews, [("p1", "approved", "AK")])
-        # a second tap on the same row is refused, whoever taps
-        self.assertEqual(
-            intake_bot.desk_review("ok", "p1", reviewer="SS"),
-            ("Already approved by AK.", False),
-        )
-        self.assertEqual(
-            intake_bot.desk_review("no", "a1", reviewer="SS"),
-            ("Already approved by SS.", False),
-        )
-        self.assertEqual(intake_bot.desk_review("no", "x1", reviewer="SS")[1], False)
-        self.assertEqual(len(self.store.reviews), 1)
-
-    def test_approval_patches_the_cache_so_cards_refresh_at_once(self) -> None:
-        intake_bot.desk_review("ok", "p1", reviewer="AK")
-        cached = intake_bot.load_cached_moe_opinions()
-        row = next(r for r in cached if r["opinion_id"] == "p1")
-        self.assertEqual((row["review_status"], row["reviewed_by"]), ("approved", "AK"))
-        self.assertTrue(row["reviewed_at_utc"])
-        # hash-verified like a sheet read: the picks card can show it now
-        self.assertIn("p1", [r["opinion_id"] for r in intake_bot.approved_moe_opinions(cached)])
-
-    def test_the_other_reviewers_tap_a_moment_ago_wins(self) -> None:
-        intake_bot.load_cached_moe_opinions()  # cache says p1 is pending
-        self.store.rows[0]["review_status"] = "approved"
-        self.store.rows[0]["reviewed_by"] = "SS"
-        self.assertEqual(
-            intake_bot.desk_review("ok", "p1", reviewer="AK"),
-            ("Already approved by SS.", False),
-        )
-        self.assertEqual(self.store.reviews, [])
-        cached = next(r for r in intake_bot.load_cached_moe_opinions() if r["opinion_id"] == "p1")
-        self.assertEqual(cached["reviewed_by"], "SS")  # the cache learned it too
-
-    def test_approve_both_arms_reviews_rules_then_judge(self) -> None:
-        text, ok = intake_bot.desk_review("okarms", "401", reviewer="SS")
-        self.assertTrue(ok)
-        self.assertEqual(text, "Approved God Expert (Rules), God Expert (Judge) as SS.")
-        self.assertEqual(
-            [r[0] for r in self.store.reviews], ["r1", "j1"]
-        )
-        self.assertEqual(
-            intake_bot.desk_review("okarms", "401", reviewer="SS"),
-            ("Both arms are no longer pending.", False),
-        )
-
-    def test_store_refusal_propagates_to_the_tapper(self) -> None:
-        self.store.rows.append(_desk_row("ghost", "schedule", "Schedule Expert"))
-        original = self.store.review
-
-        def refuse(opinion_id, **kwargs):
-            raise ValueError("Opinion content changed after generation; review refused")
-
-        self.store.review = refuse
-        with self.assertRaisesRegex(ValueError, "review refused"):
-            intake_bot.desk_review("ok", "ghost", reviewer="SS")
-        self.store.review = original
-        self.assertEqual(intake_bot.game_stub({"event_id": 7, "away_team": "A"})["event_id"], "7")
 
 
 class _FakeWorksheet:

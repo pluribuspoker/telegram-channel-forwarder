@@ -2681,6 +2681,37 @@ class SampleRowTests(unittest.IsolatedAsyncioTestCase):
             store.review("sample-1", status="approved", reviewed_by="tester", note="")
         self.assertIn("Only valid opinions", str(caught.exception))
 
+    def test_store_review_refuses_an_already_reviewed_row(self) -> None:
+        store = GoogleSheetsMoeOpinionStore("credentials", "sheet-id")
+        row = {header: "" for header in OPINION_HEADERS}
+        row.update(
+            {
+                "opinion_id": "approved-1",
+                "generation_status": "valid",
+                "review_status": "approved",
+                "reviewed_by": "AK",
+            }
+        )
+        values = [row[header] for header in OPINION_HEADERS]
+        worksheet = SimpleNamespace(
+            col_values=lambda column: ["opinion_id", "approved-1"],
+            row_values=lambda number: values,
+            update=lambda *args, **kwargs: self.fail(
+                "an already reviewed row was updated"
+            ),
+        )
+        store._spreadsheet_instance = SimpleNamespace(
+            worksheet=lambda name: worksheet
+        )
+        with self.assertRaises(ValueError) as caught:
+            store.review(
+                "approved-1",
+                status="rejected",
+                reviewed_by="tester",
+                note="",
+            )
+        self.assertIn("already approved by AK", str(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -233,3 +233,4 @@ angles/data/
 
 # Desk group (moe_desk.py): message ids and announcements, one slate at a time
 moe_desk_state.json
+moe_bot_state.json

@@ -1,0 +1,589 @@
+MOE BOT SEPARATION PLAN
+=======================
+
+Purpose
+-------
+
+Give the MOE review group its own Telegram bot and make that group the primary,
+self-contained place to read, review, approve, and grade MOE opinions.
+
+After the migration, @nflguesser_bot should be only the NFL prediction/intake
+product. It should not advertise, render, navigate, or process MOE expert
+opinions. The dedicated MOE bot should own the MOE group's messages, buttons,
+commands, permissions, synchronization, and any optional private drill-down.
+
+This file records the current state before implementation and the intended
+state after implementation. Update it when implementation decisions change.
+
+Implementation status (2026-09-08)
+----------------------------------
+
+- BotFather identity created: @nfl_moe_bot (display name NFL MOE).
+- The bot is a MOE supergroup administrator with Manage Topics, Pin Messages,
+  Delete Messages and posting/editing rights.
+- Dedicated runtime, service, channel-native detail bundles and NFL Guesser
+  separation are implemented in the feature worktree.
+- MOE_BOT_TOKEN has not been provided to the runtime or committed anywhere.
+- Local tests must pass before push; live cutover remains pending.
+
+
+STATE OF THE WORLD NOW
+======================
+
+Telegram identities and process
+--------------------------------
+
+1. @nflguesser_bot is the only bot identity involved.
+2. telegram-intake.service runs intake_bot.py with INTAKE_BOT_TOKEN and
+   INTAKE_BOT_SESSION.
+3. The same Telethon client handles both:
+   - NFL prediction and celebrity-intake workflows in private messages.
+   - MOE group commands, review callbacks, private opinion views, and desk
+     synchronization.
+4. The MOE group is a private Telegram supergroup with Topics enabled.
+5. The intake bot is an administrator in that group and needs permission to
+   manage topics, post/edit messages, and pin messages.
+
+Current MOE group layout
+------------------------
+
+The group has three configured topics:
+
+- MOE_DESK_REVIEW_TOPIC: pending-opinion review cards and the pinned queue.
+- MOE_DESK_PICKS_TOPIC: approved voice/God cards and the pinned weekly card.
+- MOE_DESK_SCORES_TOPIC: grading digests.
+
+moe_desk.py already owns most of the group-specific behavior:
+
+- Desk configuration and environment parsing.
+- Game/committee desk model.
+- Review, picks, queue, week, and score renderers.
+- Idempotent message synchronization.
+- Persistent message IDs and content hashes in moe_desk_state.json.
+- Bot API posting, editing, deleting, pinning, and 429 handling.
+- Review callback parsing.
+
+intake_bot.py supplies the runtime around moe_desk.py:
+
+- Loads NFL games and MOE opinion rows from the Google Sheet.
+- Filters hash-valid approved opinions.
+- Loads reviewer identities from allowed_users.
+- Runs the periodic desk synchronization loop.
+- Performs hash-checked approve/reject writes.
+- Dispatches desk callbacks received by the shared Telethon client.
+
+Current MOE handlers inside intake_bot.py
+-----------------------------------------
+
+The coupling is concentrated rather than spread across the repository:
+
+1. A periodic desk synchronization task.
+2. A desk: callback branch for approve, reject, and approve-both-arms.
+3. A /desk group command used to report group/topic setup information.
+4. A private /start game_<event_id> or /start op_<opinion_id> deep-link
+   handler.
+5. Private MOE navigation callbacks:
+   - moe:view
+   - moe:expert
+   - moe:opinion
+6. An "MOE opinions" button in the normal NFL Guesser game view.
+7. Shared helpers and caches for the opinion store, games, reviewer roles,
+   and per-user game navigation state.
+
+Current reading experience
+--------------------------
+
+The Picks topic is already partially self-contained:
+
+- It shows the God result.
+- It shows one summary line per approved expert voice.
+- It includes a collapsed expandable blockquote with abbreviated reasons.
+
+The complete opinion is not shown there. "Full opinions" links to:
+
+    https://t.me/nflguesser_bot?start=game_<event_id>
+
+That opens a private conversation with NFL Guesser. The private view provides:
+
+- Full game-level MOE summaries.
+- Individual opinion details.
+- Pagination.
+- Model selection where several model outputs exist.
+- Reviewer access to pending and rejected opinions.
+- Approved-only access for other allowed NFL Guesser users.
+
+Review cards similarly deep-link to an individual pending opinion in the
+reviewer's NFL Guesser DM.
+
+Current data and authorization
+------------------------------
+
+The source of truth does not belong to either Telegram bot:
+
+- nfl_games contains the slate.
+- moe_opinions contains append-only generated opinions and review metadata.
+- allowed_users contains roles, including reviewer.
+- moe.approved_opinions performs approved-row integrity filtering.
+- GoogleSheetsMoeOpinionStore.review performs hash-checked review writes.
+
+The bot identity is only transport and UI. Separating the bots must not change
+the opinion format, approval hashes, expert registry, committee construction,
+God policy, generation workflow, or grading workflow.
+
+Current configuration assumptions
+---------------------------------
+
+- moe_desk.desk_config_from_env reads INTAKE_BOT_TOKEN.
+- scripts/desk_setup.py reads INTAKE_BOT_TOKEN.
+- telegram-intake.service owns the desk loop.
+- MOE_DESK_CHAT_ID and the topic IDs identify the existing group.
+- The existing moe_desk_state.json contains message IDs created by
+  @nflguesser_bot.
+- Scores may be posted to the Scores topic by scripts/moe_grade.py.
+
+
+TARGET STATE AFTER THE MOVE
+===========================
+
+Telegram identities and services
+--------------------------------
+
+1. @nflguesser_bot remains the prediction/intake bot.
+2. A new dedicated bot, referred to here as @MOE_BOT_USERNAME until its final
+   BotFather username is chosen, owns the MOE group.
+3. A new moe-bot.service runs moe_bot.py independently of
+   telegram-intake.service.
+4. The dedicated bot is an administrator in the existing MOE supergroup.
+5. @nflguesser_bot is removed from the group after the cutover is verified,
+   unless Telegram requires a temporary rollback window.
+6. Restarting or deploying the MOE bot does not interrupt NFL Guesser, and
+   restarting NFL Guesser does not interrupt the MOE group.
+
+Product boundary
+----------------
+
+@nflguesser_bot:
+
+- Accepts game predictions, win-total predictions, celebrity picks, and
+  suggestions.
+- Does not show an "MOE opinions" button.
+- Does not render MOE summaries, expert details, or model pickers.
+- Does not accept MOE deep links.
+- Does not process desk callbacks or /desk.
+- Does not run a desk synchronization loop.
+- Does not import MOE desk/runtime code solely for user-facing MOE features.
+
+Dedicated MOE bot:
+
+- Posts and updates all Review, Picks, and Scores topic content.
+- Processes review callbacks.
+- Enforces the reviewer role before writing a review.
+- Signs review writes with the reviewer's configured display name.
+- Runs desk synchronization and maintains desk state.
+- Handles /desk setup/diagnostic commands.
+- May provide private MOE drill-down, but no private conversation is required
+  to understand the current game card.
+
+Channel-first reading experience
+--------------------------------
+
+The MOE group becomes the canonical reading surface.
+
+Each Picks game card should directly contain:
+
+- Matchup and kickoff.
+- Current God Rules and God Judge legs/status.
+- One concise line per approved expert voice.
+- Projected score, probability, selection, line, and confidence where present.
+- Expandable explanation sections containing the useful thesis, supporting
+  factors, counterarguments, no-signal factors, and pass reasons.
+- A clear indication when more than one model/version exists.
+
+Telegram's 4096-character message limit means a full 20-expert committee will
+not reliably fit in one card. The channel-native design therefore needs stable
+detail messages:
+
+1. Keep one compact primary Picks card per game.
+2. Maintain one or more full-opinion detail messages for that game in the same
+   MOE group/topic.
+3. Split detail bundles only at expert boundaries and keep every message below
+   Telegram's limit with headroom for HTML entities.
+4. Store their message IDs in desk state and edit them in place.
+5. Reply detail messages to the primary game card where Telegram permits it.
+6. If a navigation button is retained, it must link to a message inside the
+   MOE group, never to @nflguesser_bot.
+7. Deleting, superseding, or adding an opinion must reconcile the bundle
+   without reposting unchanged messages.
+
+The Review topic should directly show enough of every pending opinion to make a
+decision without leaving the group. Long raw explanations may use an adjacent
+detail message, but it must also be in the MOE group.
+
+Optional private drill-down
+---------------------------
+
+Private drill-down is useful for:
+
+- Very long opinions.
+- Model/version comparison.
+- Historical, rejected, or superseded rows.
+- Per-user pagination that should not edit a shared message.
+
+If retained, it belongs to the dedicated MOE bot. It is an optional secondary
+view, not a requirement for reading the live committee. There must be no
+@nflguesser_bot link or dependency.
+
+Reviewer visibility remains unchanged:
+
+- Reviewers may inspect valid pending and rejected rows.
+- Non-reviewers may see only hash-valid approved rows.
+- The private group membership and callback role check remain separate
+  controls; being in the group alone does not authorize approval.
+
+Configuration
+-------------
+
+New server-only secrets:
+
+- MOE_BOT_TOKEN
+- MOE_BOT_SESSION, if the Telethon receiver uses a StringSession
+
+These belong in .env.local and must be written with:
+
+    python3 scripts/set_env_local.py KEY=VALUE
+
+Existing non-secret desk configuration remains:
+
+- MOE_DESK_CHAT_ID
+- MOE_DESK_REVIEW_TOPIC
+- MOE_DESK_PICKS_TOPIC
+- MOE_DESK_SCORES_TOPIC
+- MOE_DESK_SYNC_SECONDS
+- MOE_DESK_LOCK_WARN_HOURS
+- MOE_DESK_STATE_PATH, when overridden
+
+moe_desk.desk_config_from_env and scripts/desk_setup.py should use
+MOE_BOT_TOKEN. They must not silently fall back to INTAKE_BOT_TOKEN after the
+cutover, because that could cause NFL Guesser to reclaim or alter MOE messages.
+
+The exact final bot username is intentionally not hardcoded in the plan.
+
+
+IMPLEMENTATION PLAN
+===================
+
+Phase 0: register and prepare the dedicated bot
+------------------------------------------------
+
+Human/BotFather steps:
+
+1. Create the dedicated bot and choose its display name and username.
+2. Disable or configure privacy mode as required for group commands and
+   callbacks.
+3. Add it to the existing MOE supergroup.
+4. Grant only the required administrator rights:
+   - Post and edit messages.
+   - Delete its own obsolete messages.
+   - Pin messages.
+   - Manage topics if setup still creates or validates topics.
+5. Do not remove @nflguesser_bot yet.
+
+Server steps:
+
+1. Store MOE_BOT_TOKEN in .env.local with set_env_local.py.
+2. Generate/store MOE_BOT_SESSION if the receiver uses Telethon sessions.
+3. Preserve .env.local ownership and mode.
+4. Validate the token with getMe without logging it.
+
+Phase 1: create a dedicated runtime
+-----------------------------------
+
+Add moe_bot.py as the dedicated process entry point.
+
+It should own:
+
+- Telegram client startup for the MOE bot identity.
+- /desk.
+- desk: callback dispatch.
+- Immediate callback acknowledgement and background review completion.
+- Reviewer cache.
+- Opinion cache/store access.
+- NFL game loading needed by build_desks.
+- Periodic desk synchronization.
+- Optional private /start and MOE navigation handlers if retained.
+- Clean shutdown of outstanding tasks.
+
+Do not import intake_bot.py from moe_bot.py. That would move execution without
+removing architectural coupling.
+
+Extract or reuse small shared data helpers where appropriate:
+
+- Spreadsheet opening and retry behavior.
+- NFL game loading.
+- Opinion-store construction.
+- Reviewer-role resolution.
+- Last-good sheet-cache behavior.
+
+Keep MOE-specific cache policy and review orchestration with moe_bot.py unless a
+helper is genuinely shared by another non-intake process.
+
+Phase 2: make the group self-contained
+--------------------------------------
+
+Extend moe_desk.py's model, rendering, state, and synchronization to maintain
+full-opinion detail bundles in the group.
+
+Required behavior:
+
+1. Primary game cards remain concise and stable.
+2. Full expert information is available in same-group messages.
+3. Pending review details are directly available in Review.
+4. Message splitting respects Telegram text and HTML limits.
+5. Message IDs and hashes are persisted.
+6. Removed bundle segments are deleted only after replacement messages exist.
+7. Unchanged segments are not edited.
+8. A partial Bot API failure is retried on the next pass and cannot erase the
+   last usable view.
+9. Existing approved-row hash validation remains mandatory before display.
+10. Pending/rejected rows are never exposed on a surface intended for
+    non-reviewers.
+
+The first implementation should preserve the existing information content
+before redesigning visual layout. View iteration can then happen entirely in
+moe_desk.py without touching NFL Guesser.
+
+Phase 3: add service and deployment artifacts
+---------------------------------------------
+
+Add source-controlled deployment files:
+
+- run_moe_bot.sh with set -o pipefail.
+- deploy/systemd/moe-bot.service.
+- Any health-check environment key used by the runner.
+
+The service should:
+
+- Run as forwarder.
+- Load .env then .env.local, with .env.local winning.
+- Restart on unexpected failure with a conservative delay.
+- Have a startup timeout that exceeds session initialization and initial sync.
+- Log the authenticated bot username and configured group/topics.
+- Fail loudly when MOE_BOT_TOKEN, required group IDs, or reviewer access is
+  unavailable.
+
+Update deploy documentation and scripts/check_deploy_sync.sh coverage if
+required by existing conventions.
+
+Phase 4: switch ownership without losing live cards
+----------------------------------------------------
+
+Bot-created Telegram messages cannot necessarily be edited by a different bot.
+Assume the new bot must create replacement cards.
+
+Cutover sequence:
+
+1. Stop only the MOE desk loop in telegram-intake.service through a temporary
+   configuration/code gate, or deploy the intake cleanup and new service in
+   one controlled window.
+2. Back up moe_desk_state.json.
+3. Start moe-bot.service in a no-write/check mode and verify:
+   - Correct bot identity.
+   - Correct group and topic IDs.
+   - Required admin permissions.
+   - Sheet reads.
+   - Reviewer resolution.
+4. Start the new writer.
+5. Use a new state namespace/path or clear only the resolved per-card message
+   references that belong to the old bot. Never recursively delete state.
+6. Let the new bot post replacement pinned queue/week cards and game cards.
+7. Verify review callbacks on a disposable/test row or a non-mutating callback
+   path before reviewing a real opinion.
+8. Remove or unpin obsolete @nflguesser_bot cards only after the replacement
+   surface is complete.
+9. Restart telegram-intake.service with all MOE runtime paths removed.
+10. Remove @nflguesser_bot from the MOE group after the rollback window.
+
+Avoid both bots running the desk synchronization loop at the same time.
+
+Phase 5: remove MOE from NFL Guesser
+------------------------------------
+
+Remove from intake_bot.py:
+
+- The "MOE opinions" button in the game view.
+- MOE summary/detail/model-picker imports used only by private browsing.
+- MOE opinion and reviewer caches used only by MOE views.
+- /start game_ and /start op_ MOE deep-link behavior.
+- moe:view, moe:expert, and moe:opinion callback branches.
+- /desk.
+- desk: callback handling.
+- Desk review orchestration.
+- Desk synchronization startup and loop.
+- MOE-specific per-user navigation state.
+
+Preserve AK prediction parsing and any intake behavior that contributes source
+data to an expert. "AK the person submits projected scores through NFL
+Guesser" is not the same as "NFL Guesser displays the AK Expert opinion."
+
+Remove all generated links to @nflguesser_bot from moe_desk.py and its tests.
+
+Update:
+
+- README.md.
+- CLAUDE.md.
+- docs/telegram-intake-plan.md.
+- scripts/desk_setup.py.
+- Environment examples/documentation.
+- Service/deploy documentation.
+
+Phase 6: tests and validation
+-----------------------------
+
+Unit coverage:
+
+1. Dedicated bot configuration requires MOE_BOT_TOKEN.
+2. Desk setup uses MOE_BOT_TOKEN.
+3. Intake game views contain no MOE button.
+4. Intake callback handling has no MOE routes.
+5. NFL Guesser /start does not accept MOE deep links.
+6. MOE bot /desk reports the expected IDs and topic readiness.
+7. Unauthorized users cannot review.
+8. Authorized reviewers can approve/reject with hash checking.
+9. Duplicate taps and already-reviewed rows remain safe.
+10. Full-opinion bundles split below Telegram limits.
+11. Bundle reconciliation handles growth, shrinkage, deletion, and unchanged
+    content.
+12. Pending/rejected information is not exposed to non-reviewers.
+13. Internal group links, if used, target the dedicated MOE surface.
+14. No rendered URL references @nflguesser_bot.
+15. Desk state from the old bot cannot make the new bot attempt to edit
+    messages it does not own.
+
+Targeted validation should include:
+
+- scripts/test_moe_desk.py
+- MOE-specific tests extracted from scripts/test_intake_bot.py
+- New scripts/test_moe_bot.py
+- scripts/test_moe_identity.py
+- Relevant God runner and grading notification tests
+- scripts/check_deploy_sync.sh after deployment artifacts change
+
+Live validation:
+
+1. Both services are active.
+2. Journal identifies the correct username for each service.
+3. NFL Guesser prediction and win-total flows still work.
+4. NFL Guesser contains no MOE buttons or MOE deep-link behavior.
+5. Review, Picks, and Scores topics are populated by the dedicated bot.
+6. A reviewer can open all necessary detail without leaving the MOE group.
+7. Approval changes the sheet and refreshes the correct cards.
+8. A non-reviewer cannot approve a row.
+9. A new approved opinion appears on the next sync.
+10. Restarting either bot does not interrupt the other product.
+
+
+WHAT MUST NOT CHANGE
+====================
+
+- Opinion generation remains append-only.
+- Review writes remain hash checked.
+- Approved display rows remain output-hash validated.
+- Existing expert IDs and versions are not rewritten for this migration.
+- Committee keys and God inputs do not change merely because the bot changes.
+- Google Sheets remains the source of truth.
+- Reviewer identity continues to come from allowed_users roles.
+- Pending rows are never automatically approved.
+- Generation, God runner, and grading services do not depend on a Telegram bot
+  username.
+- Existing topic IDs remain valid unless the user explicitly chooses a new
+  group.
+
+
+RISKS AND MITIGATIONS
+=====================
+
+Old messages cannot be edited by the new bot
+---------------------------------------------
+
+Mitigation: create replacement cards using a separate state namespace, verify
+them, then remove the old cards. Do not point the new bot at old message IDs.
+
+Two writers race
+----------------
+
+Mitigation: ensure only one service has desk synchronization enabled during
+cutover. The old intake process must lose desk ownership before the new writer
+is enabled.
+
+Channel clutter
+---------------
+
+Mitigation: retain compact primary cards, group full opinions into stable
+detail bundles, use expandable blockquotes, and edit in place rather than
+posting a new message for every update.
+
+Telegram message limits
+-----------------------
+
+Mitigation: split at expert boundaries with conservative character headroom,
+validate HTML before sending, and test the maximum expected 20-expert
+committee.
+
+Loss of private per-user navigation
+-----------------------------------
+
+Mitigation: keep optional private views in the dedicated MOE bot until the
+channel-native views prove sufficient. Remove them later only by an explicit
+product decision.
+
+Accidental exposure of pending opinions
+---------------------------------------
+
+Mitigation: keep Review in the private MOE group, retain reviewer checks for
+mutations, and never include pending/rejected rows in any public or
+non-reviewer private view.
+
+Secret/configuration drift
+--------------------------
+
+Mitigation: store bot credentials in .env.local through set_env_local.py,
+retain backups, validate required keys on startup, and never fall back to the
+intake token.
+
+
+ROLLBACK
+========
+
+Before removing @nflguesser_bot from the group:
+
+1. Preserve the old desk state backup.
+2. Keep the prior deploy commit available.
+3. Stop moe-bot.service.
+4. Restore the prior intake deployment/configuration.
+5. Restore the old state only if @nflguesser_bot's original messages still
+   exist and are intended to be reused.
+6. Restart telegram-intake.service once.
+
+Do not run both writers as a rollback shortcut.
+
+
+DONE WHEN
+=========
+
+The migration is complete only when:
+
+1. A dedicated bot is registered and is the sole MOE group writer.
+2. moe-bot.service independently runs the desk loop and callbacks.
+3. The MOE group directly contains enough information to read and review every
+   current opinion.
+4. Any optional private drill-down opens the dedicated MOE bot.
+5. No MOE-rendered link targets @nflguesser_bot.
+6. NFL Guesser has no MOE button, view, callback, deep link, command, desk
+   loop, or MOE group responsibility.
+7. Prediction/intake workflows remain unchanged.
+8. Review writes remain role-checked and hash-checked.
+9. Existing MOE data, approvals, committee behavior, God generation, and
+   grading remain intact.
+10. Deployment artifacts are source-controlled and synchronized with the VPS.
+11. Live cards, callbacks, service independence, and restart behavior have
+    been verified.

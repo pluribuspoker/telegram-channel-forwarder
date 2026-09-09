@@ -360,9 +360,9 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python angles/extract_angles.py"
 
 ---
 
-## NFL Guesser (MOE + God Expert)
+## NFL Guesser and MOE
 
-The NFL intake bot (`intake_bot.py`, `telegram-intake.service`), the BetOnline line fetcher (`nfl_lines.py`, `nfl-lines-fetcher.timer`), the mixture-of-experts opinions (`moe.py`, `moe/experts.yaml`, `scripts/generate_moe_opinion.py`, `scripts/review_moe_opinion.py`) and the God Expert aggregator (`moe_god.py`: deterministic `god_rules` and Fable 5.1 `god_judge` on one shared policy; `scripts/god_judge_runner.py` on `god-judge.timer`; `scripts/moe_grade.py` scoreboard and disagreement report) are documented in `docs/telegram-intake-plan.md` and `docs/god-expert-roadmap.md`. Historical lines for the backtests come from free sources only: `scripts/fetch_nfl_lines_history.py` → `data/nfl_lines_history.csv` and `data/nfl_open_close.json`. These tests are Unix-only (`moe.py` imports `fcntl`); run them on the VPS from a scratch clone, never in `~/app`.
+The NFL intake bot (`intake_bot.py`, `telegram-intake.service`) handles user predictions only. The dedicated MOE bot (`moe_bot.py`, `moe-bot.service`) owns the private Review, Picks, and Scores topics, including channel-native full opinion details and reviewer callbacks. The BetOnline line fetcher (`nfl_lines.py`, `nfl-lines-fetcher.timer`), mixture-of-experts opinions (`moe.py`, `moe/experts.yaml`, `scripts/generate_moe_opinion.py`, `scripts/review_moe_opinion.py`) and God Expert aggregator (`moe_god.py`: deterministic `god_rules` and Fable 5.1 `god_judge`; `scripts/god_judge_runner.py` on `god-judge.timer`; `scripts/moe_grade.py` scoreboard and disagreement report) are documented in `docs/telegram-intake-plan.md` and `docs/god-expert-roadmap.md`. Historical lines for the backtests come from free sources only: `scripts/fetch_nfl_lines_history.py` → `data/nfl_lines_history.csv` and `data/nfl_open_close.json`. These tests are Unix-only (`moe.py` imports `fcntl`); run them on the VPS from a scratch clone, never in `~/app`.
 
 ## VPS deployment
 
