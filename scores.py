@@ -1919,6 +1919,10 @@ _AMBIGUOUS_SPORTS = {
 # can only ever pin the nickname to one league; the schedule is evidence.
 _NICKNAME_COLLISIONS: dict[str, list[tuple[str, str]]] = {
     "snakes": [("MLB", "Arizona Diamondbacks"), ("Lacrosse", "Maryland Whipsnakes")],
+    # NCAAF listed first: `matched` keys on a candidate's last word appearing in
+    # the parsed team, and the WNBA name's last word ("liberty") is a substring
+    # of a correctly-parsed "Liberty Flames" — WNBA-first would mis-key those.
+    "liberty": [("NCAAF", "Liberty Flames"), ("WNBA", "New York Liberty")],
 }
 
 # Tiebreak window, used ONLY when more than one candidate has a game that day.
