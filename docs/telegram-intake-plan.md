@@ -579,6 +579,42 @@ position that informs the projected margin.
   Sonnet 4.6, and Haiku 4.5. It is committee-optional, so games without a Cee
   submission do not block the automated God Expert.
 
+### Implemented locally — 2026-09-09: Hi Lo Expert v1 / prompt v2
+
+The Hi Lo Expert is a committee-optional market-structure voice. It receives
+no injuries, rosters, records, ratings, news, schedule-strength evidence, or
+other expert opinions. It generates for every game: qualifying extremes drive
+the opinion when present, while other games explicitly report that they have
+no weekly extreme and describe their current line values and ranks.
+
+- `moe_hi_lo.py` decodes the existing full-game, first-half, and first-quarter
+  BetOnline lines. Weekly extrema are tie-aware and report the value, selected
+  side, rank, tied event ids, distance to the next distinct value, and market
+  coverage.
+- A market board is eligible only when at least four games and at least half
+  the week's games have that market. Sparse period boards remain visible in
+  `weekly_market_positions` but cannot create an outlier opinion.
+- The tracked categories are largest spread underdog, highest and lowest
+  total, largest moneyline underdog, and largest moneyline favorite for each
+  available period.
+- Literal season extrema are computed from the season's stored game rows.
+  Full-game weekly-extreme calibration is computed from the committed
+  1999–2025 regular-season lines, including every tied extreme. Spread cohorts
+  grade the underdog ATS; total cohorts grade Over for the weekly high and
+  Under for the weekly low; moneyline cohorts grade the selected extreme side.
+- Historical H1/Q1 lines paired with period scores are not stored. Those
+  extrema are retained with `status=unavailable` and must be rendered as no
+  signal rather than being assigned an invented record. Persisting quarter
+  scores and building current-season period calibration remains the next data
+  phase.
+- The prompt and schema-v3 validator require the exact outlier categories,
+  periods, values, sides, tie counts, board counts, historical selections,
+  records, weeks, observations, and the period-data limitation. Confidence is
+  capped at two stars below 10 historical observations and three below 30.
+- The registry ID is `hi_lo`, default model Opus 4.8 at max effort, markets
+  `[side, total]`, automatic validation approval, and
+  `committee_optional: true`.
+
 ### Implemented — 2026-09-08: Celebrity Expert
 
 The Celebrity Expert is an Opus 4.8-only, committee-optional voice

@@ -149,6 +149,22 @@ experts:
     committee_optional: true
     initial_weight: 1.0
     markets: [side, total]
+  hi_lo:
+    name: Hi Lo Expert
+    mode: agent
+    version: 1
+    prompt_version: 2
+    prompt: prompts/hi_lo/v2.md
+    input_profile: hi_lo_outliers
+    output_schema_version: 3
+    default_model: claude-opus-4-8
+    reasoning_effort: max
+    allowed_models:
+      - claude-opus-4-8
+    enabled: true
+    committee_optional: true
+    initial_weight: 1.0
+    markets: [side, total]
   rating_elo:
     name: Rating Expert (Elo)
     mode: model

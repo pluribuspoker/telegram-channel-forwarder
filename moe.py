@@ -54,6 +54,7 @@ from moe_rating import (
     normalize_rating_opinion,
     rating_response,
 )
+from moe_hi_lo import build_hi_lo_input
 from moe_win_total import build_win_total_input
 
 ROOT = Path(__file__).resolve().parent
@@ -239,6 +240,13 @@ def _source_sha256(expert: dict[str, Any]) -> str:
         )
     if expert.get("input_profile") == "win_total":
         paths.append(ROOT / "moe_win_total.py")
+    if expert.get("input_profile") == "hi_lo_outliers":
+        paths.extend(
+            (
+                ROOT / "moe_hi_lo.py",
+                ROOT / "data" / "nfl_lines_history.csv",
+            )
+        )
     if expert.get("input_profile") == AGGREGATOR_PROFILE:
         paths.extend((ROOT / "moe_god.py", ROOT / "moe_ak.py", MARGINS_TABLE_PATH))
     if expert.get("input_profile") == RATING_PROFILE:
@@ -2433,7 +2441,13 @@ def validate_opinion(
     cited_schema = bool(
         schedule_input is not None
         and schedule_input.get("input_profile")
-        in {"schedule_only", "divisional", "win_total", "cee_calibration"}
+        in {
+            "schedule_only",
+            "divisional",
+            "win_total",
+            "cee_calibration",
+            "hi_lo_outliers",
+        }
         and isinstance(opinion.get("thesis_citation"), dict)
     )
     if (
@@ -2822,6 +2836,192 @@ def validate_opinion(
                 "Cee opinion confidence cannot exceed three stars with at "
                 "most two resolved NFL calibration games"
             )
+    if (
+        schedule_input is not None
+        and schedule_input.get("input_profile") == "hi_lo_outliers"
+    ):
+        claims = [
+            opinion["thesis_citation"],
+            *opinion.get("supporting_factors", []),
+            *opinion.get("counterarguments", []),
+            *opinion.get("no_signal_factors", []),
+        ]
+        cited_paths = {
+            str(evidence["path"])
+            for claim in claims
+            for evidence in claim.get("evidence", [])
+        }
+        required_paths = {
+            "current_game_outliers",
+            "weekly_outlier_status",
+            "weekly_market_positions",
+            "season_extrema",
+            "data_limits",
+        }
+        missing = required_paths - cited_paths
+        if not any(
+            path == "historical_weekly_extrema"
+            or path.startswith("historical_weekly_extrema.")
+            for path in cited_paths
+        ):
+            missing.add("historical_weekly_extrema")
+        if missing:
+            raise ValueError(
+                "Hi Lo opinion must cite every outlier input section; "
+                f"missing paths: {sorted(missing)}"
+            )
+
+        def claims_for_path(path: str) -> list[dict[str, Any]]:
+            return [
+                claim
+                for claim in claims
+                if any(
+                    str(evidence.get("path") or "") == path
+                    for evidence in claim.get("evidence", [])
+                )
+            ]
+
+        def rendered_claims(path: str) -> str:
+            return " ".join(
+                str(claim.get("claim") or "")
+                for claim in claims_for_path(path)
+            )
+
+        def has_number(text: str, value: Any) -> bool:
+            value_text = (
+                f"{float(value):g}"
+                if isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                else str(value)
+            )
+            return bool(
+                re.search(
+                    rf"(?<!\d){re.escape(value_text)}(?:\.0)?(?!\d)",
+                    text,
+                )
+            )
+
+        rendered = " ".join(str(claim.get("claim") or "") for claim in claims)
+        status_rendered = rendered_claims("weekly_outlier_status")
+        status_statement = str(
+            schedule_input["weekly_outlier_status"]["statement"]
+        )
+        status_phrase = status_statement.rstrip(".")
+        if status_phrase.casefold() not in status_rendered.casefold():
+            raise ValueError(
+                "Hi Lo opinion must state the supplied weekly outlier status: "
+                f"{status_statement}"
+            )
+        position_rendered = rendered_claims("weekly_market_positions")
+        for position in schedule_input["weekly_market_positions"]:
+            if position["period"] != "game" or not position["board_eligible"]:
+                continue
+            for required_text, label in (
+                (str(position["category"]), "category"),
+                (str(position["selected_side"]), "selected side"),
+            ):
+                if required_text.casefold() not in position_rendered.casefold():
+                    raise ValueError(
+                        f"Hi Lo opinion must state market position {label}: "
+                        f"{required_text}"
+                    )
+            for value, label in (
+                (position["value"], "value"),
+                (position["rank"], "rank"),
+                (position["games_with_market"], "market count"),
+            ):
+                if not has_number(position_rendered, value):
+                    raise ValueError(
+                        f"Hi Lo opinion must state market position {label}: "
+                        f"{value}"
+                    )
+        if any(
+            not position["board_eligible"]
+            for position in schedule_input["weekly_market_positions"]
+        ) and "no signal" not in position_rendered.casefold():
+            raise ValueError(
+                "Hi Lo opinion must identify sparse market boards as no signal"
+            )
+        outlier_rendered = rendered_claims("current_game_outliers")
+        for outlier in schedule_input["current_game_outliers"]:
+            for required_text, label in (
+                (str(outlier["period"]), "period"),
+                (str(outlier["category"]), "category"),
+                (str(outlier["selected_side"]), "selected side"),
+            ):
+                if required_text.casefold() not in outlier_rendered.casefold():
+                    raise ValueError(
+                        f"Hi Lo opinion must state outlier {label}: "
+                        f"{required_text}"
+                    )
+            required_numbers = [
+                (outlier["value"], "value"),
+                (outlier["tie_count"], "tie count"),
+                (outlier["games_with_market"], "market count"),
+            ]
+            if outlier.get("distance_to_next") is not None:
+                required_numbers.append(
+                    (outlier["distance_to_next"], "distance to next")
+                )
+            for value, label in required_numbers:
+                if not has_number(outlier_rendered, value):
+                    raise ValueError(
+                        f"Hi Lo opinion must state outlier {label}: {value}"
+                    )
+        historical_samples = []
+        for category, summary in schedule_input[
+            "historical_weekly_extrema"
+        ].items():
+            category_path = f"historical_weekly_extrema.{category}"
+            category_rendered = rendered_claims(category_path)
+            if not category_rendered:
+                raise ValueError(
+                    "Hi Lo opinion must cite historical category: "
+                    f"{category_path}"
+                )
+            if summary.get("status") == "unavailable":
+                if "unavailable" not in category_rendered.casefold():
+                    raise ValueError(
+                        "Hi Lo opinion must disclose unavailable period "
+                        f"history at {category_path}"
+                    )
+                continue
+            observations = int(summary["observations"])
+            historical_samples.append(observations)
+            for required_text, label in (
+                (str(summary["selection"]), "selection"),
+                (str(summary["record"]), "record"),
+            ):
+                if required_text.casefold() not in category_rendered.casefold():
+                    raise ValueError(
+                        f"Hi Lo opinion must state historical {label}: "
+                        f"{required_text}"
+                    )
+            for value, label in (
+                (summary["weeks"], "weeks"),
+                (observations, "observations"),
+            ):
+                if not has_number(category_rendered, value):
+                    raise ValueError(
+                        f"Hi Lo opinion must state historical {label}: {value}"
+                    )
+        confidence = int(opinion["confidence_stars"])
+        largest_sample = max(historical_samples, default=0)
+        if not schedule_input["current_game_outliers"] and confidence > 2:
+            raise ValueError(
+                "Hi Lo confidence cannot exceed two stars without an "
+                "eligible weekly market extreme"
+            )
+        if largest_sample < 10 and confidence > 2:
+            raise ValueError(
+                "Hi Lo confidence cannot exceed two stars with fewer than "
+                "10 historical observations"
+            )
+        if largest_sample < 30 and confidence > 3:
+            raise ValueError(
+                "Hi Lo confidence cannot exceed three stars with fewer than "
+                "30 historical observations"
+            )
     winner = str(opinion.get("predicted_winner") or "")
     if winner not in {away_team, home_team}:
         raise ValueError("predicted_winner must exactly match one game team")
@@ -3017,6 +3217,7 @@ async def generate_opinion(
     expert_id: str,
     game: dict[str, Any],
     history: list[dict[str, Any]],
+    games: list[dict[str, Any]] | None = None,
     schedule: list[dict[str, Any]] | None = None,
     current_season_results: list[dict[str, Any]] | None = None,
     leans: list[dict[str, Any]] | None = None,
@@ -3116,6 +3317,10 @@ async def generate_opinion(
             team_history,
             leans,
         )
+    elif expert["input_profile"] == "hi_lo_outliers":
+        if games is None:
+            raise ValueError("Hi Lo expert requires the NFL games board")
+        input_payload = build_hi_lo_input(game, games)
     elif expert["input_profile"] == AGGREGATOR_PROFILE:
         if opinions is None:
             raise ValueError(
@@ -3484,6 +3689,7 @@ async def generate_opinion(
                 expert_id=expert_id,
                 game=game,
                 history=history,
+                games=games,
                 schedule=schedule,
                 current_season_results=current_season_results,
                 leans=leans,

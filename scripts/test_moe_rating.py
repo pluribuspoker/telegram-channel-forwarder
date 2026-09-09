@@ -506,7 +506,7 @@ class RegistryTests(unittest.TestCase):
         registry = load_registry()
         self.assertEqual(
             {expert_id: review_policy(config) for expert_id, config in registry["experts"].items()},
-            {"ak": "validation", "cee": "validation", "celebrity": "validation", "divisional": "validation", "god_judge": "validation", "god_rules": "validation", "rating_elo": "validation", "schedule": "validation", "win_total": "validation"},
+            {"ak": "validation", "cee": "validation", "celebrity": "validation", "divisional": "validation", "god_judge": "validation", "god_rules": "validation", "hi_lo": "validation", "rating_elo": "validation", "schedule": "validation", "win_total": "validation"},
         )
 
     def test_review_policy_defaults_to_validation_with_human_opt_out(

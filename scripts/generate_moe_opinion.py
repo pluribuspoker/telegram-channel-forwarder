@@ -28,6 +28,7 @@ from moe import (
 )
 from moe_ak import build_ak_input
 from moe_cee import build_cee_input
+from moe_hi_lo import build_hi_lo_input
 from moe_god import (
     AGGREGATOR_PROFILE,
     DETERMINISTIC_BACKEND,
@@ -384,6 +385,8 @@ async def main() -> None:
                 team_history or [],
                 leans or [],
             )
+        elif expert["input_profile"] == "hi_lo_outliers":
+            input_payload = build_hi_lo_input(game, games)
         elif expert["input_profile"] == RATING_PROFILE:
             input_payload = build_rating_input(game, current_results or [])
         elif expert["input_profile"] == AGGREGATOR_PROFILE:
@@ -460,6 +463,7 @@ async def main() -> None:
             if expert["input_profile"] == "celebrity_patterns"
             else history
         ),
+        games=games,
         schedule=schedule,
         current_season_results=current_results,
         leans=leans,

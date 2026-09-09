@@ -148,6 +148,11 @@ VOICE_LENSES: dict[str, str] = {
         "Props and other markets are tracked but do not directly inform the "
         "game side or total pools."
     ),
+    "hi_lo": (
+        "Sees only tie-aware weekly and season market extremes plus the "
+        "historical results of comparable full-game weekly extremes. "
+        "No team-quality inputs, records, news, or injuries."
+    ),
     "rating_elo": (
         "Sees one Elo rating per team built from every regular-season final "
         "since 1999 with home advantage and margin of victory, updated "
