@@ -5,17 +5,17 @@ Decision recorded 2026-09-08
 ----------------------------
 
 Focus on fixing the existing private MOE supergroup and its Review, Picks, and
-Scores topics. Do not redesign or add MOE surfaces inside NFL Guesser private
-chats at this stage.
+Scores topics. Leave the current NFL Guesser private-chat behavior unchanged
+at this stage, including its existing MOE navigation. Removing that navigation
+can be a later product decision after the channel view is complete.
 
 Use the existing @nflguesser_bot identity as the Telegram transport for both
 products. Product separation comes from strict chat scoping, not from a second
 bot identity:
 
-- NFL Guesser private chats keep their current prediction/intake behavior.
+- NFL Guesser private chats keep their complete current behavior.
 - The MOE supergroup gets its own channel-native cards and interactions.
 - MOE group handlers run only when the chat ID equals MOE_DESK_CHAT_ID.
-- MOE content is not linked from or rendered in NFL Guesser private chats.
 
 The separately registered @nfl_moe_bot is no longer part of the target
 architecture. Keep it stopped until the shared-bot design is verified, then
@@ -63,22 +63,20 @@ Google Sheets remains the source of truth. Repo prompt files remain generation
 instructions and version history; they are not channel-view storage.
 
 
-CURRENT DEPLOYED STATE
-======================
+CURRENT BASELINE
+================
 
-- main contains commit 1e39d64.
-- telegram-intake.service is active.
-- User-facing MOE buttons, deep links, and private navigation were removed
-  from NFL Guesser.
-- The dedicated moe-bot.service is installed but disabled and stopped.
-- @nfl_moe_bot is an administrator in the MOE group but has never posted.
-- MOE_BOT_TOKEN is stored safely in .env.local.
-- Existing MOE cards were created by @nflguesser_bot and remain in the group.
-- The dedicated-bot initial sync was not started; no 33-message replacement
-  wave was published.
-
-The next implementation must pivot the group runtime back to the existing bot
-without restoring MOE content to NFL Guesser private chats.
+- Production is being restored to the pre-separation implementation from
+  faa50cd.
+- telegram-intake.service owns both the private NFL Guesser experience and the
+  MOE group synchronization.
+- Existing MOE cards were created by @nflguesser_bot and their message IDs are
+  stored in moe_desk_state.json.
+- The dedicated moe-bot.service remains disabled and will be removed.
+- @nfl_moe_bot has never posted and is not part of the target design.
+- No dedicated-bot 33-message replacement wave was published.
+- NFL Guesser private MOE navigation remains unchanged and is outside the
+  immediate channel-view scope.
 
 
 TARGET CHANNEL EXPERIENCE
@@ -169,8 +167,9 @@ before processing a MOE group command or callback.
 NFL Guesser private-chat behavior
 ---------------------------------
 
-Leave the private prediction/intake experience unchanged for now. Do not add
-MOE buttons, summaries, model pickers, opinion details, or MOE deep links.
+Leave the complete private prediction/intake and existing MOE navigation
+experience unchanged for now. Channel-view work must not add, remove, or alter
+its buttons, summaries, model pickers, opinion details, or deep links.
 
 The same bot process and token do not imply shared UI. Telegram chat context
 determines which handler is allowed to respond.
@@ -193,25 +192,15 @@ shared runtime machinery merely to iterate on a card layout.
 IMPLEMENTATION PLAN
 ===================
 
-Phase 1: pivot from the dedicated bot
--------------------------------------
+Phase 1: restore and freeze the working baseline
+------------------------------------------------
 
-1. Restore only the MOE group runtime pieces to intake_bot.py:
-   - Periodic desk synchronization.
-   - desk: callback dispatch.
-   - Reviewer-role loading and hash-checked review writes.
-   - /desk inside the configured MOE group.
-   - Show/Hide detail callbacks restricted to the MOE group.
-2. Do not restore:
-   - The NFL Guesser game-view MOE button.
-   - Private /start game_ or /start op_ deep links.
-   - Private moe:view, moe:expert, or moe:opinion navigation.
-   - Per-user private MOE browsing state.
-3. Make moe_desk.desk_config_from_env and scripts/desk_setup.py use the
-   existing intake bot token.
-4. Reuse moe_desk_state.json and the existing bot-owned message IDs where
-   valid, rather than creating replacement cards.
-5. Ensure only telegram-intake.service runs the desk loop.
+1. Restore the pre-separation intake/MOE implementation.
+2. Keep telegram-intake.service as the only desk writer.
+3. Reuse moe_desk_state.json and the existing bot-owned message IDs.
+4. Remove the disabled dedicated service unit from the VPS.
+5. Leave NFL Guesser private views unchanged while channel work proceeds.
+6. Restrict new Show/Hide callbacks to MOE_DESK_CHAT_ID.
 
 Phase 2: redesign the cards
 ---------------------------
@@ -230,9 +219,9 @@ Phase 3: tests
 
 Required coverage:
 
-1. NFL Guesser private game views contain no MOE button.
-2. NFL Guesser private callbacks contain no MOE navigation routes.
-3. MOE callbacks are rejected outside MOE_DESK_CHAT_ID.
+1. Existing NFL Guesser private views remain byte-for-byte unchanged.
+2. Existing NFL Guesser MOE navigation continues to work.
+3. New channel-only callbacks are rejected outside MOE_DESK_CHAT_ID.
 4. Authorized reviewers can approve/reject in the MOE group.
 5. Unauthorized users cannot mutate reviews.
 6. Existing @nflguesser_bot-owned cards are edited rather than replaced.
@@ -342,8 +331,8 @@ DONE WHEN
 =========
 
 1. @nflguesser_bot is the sole active MOE group writer.
-2. NFL Guesser private chats contain no MOE view or navigation surface.
-3. Review, Picks, and Scores operate entirely inside the MOE supergroup.
+2. NFL Guesser private behavior remains unchanged during this phase.
+3. Review, Picks, and Scores operate directly inside the MOE supergroup.
 4. Primary game cards are compact and existing cards update in place.
 5. Full opinions appear only when Show full opinions is requested.
 6. Hide full opinions removes the tracked detail bundle safely.

@@ -612,47 +612,7 @@ verification gates, backups, and rollback with post-cutover delta replay. It
 must be reconciled with the final script names after the backend implementation
 and rehearsed against a production export before use.
 
-### Implemented locally — 2026-09-08: dedicated MOE bot separation
-
-The MOE group is now a separate Telegram product from NFL Guesser.
-`@nfl_moe_bot` is the sole group identity; `moe_bot.py` runs under
-`moe-bot.service` and owns desk synchronization, `/desk`, reviewer callbacks,
-the opinion/reviewer caches and hash-checked review writes. `intake_bot.py`
-retains only prediction and source-input workflows: there is no MOE button in
-the game view, no `moe:*` or `desk:*` callback branch, no MOE deep-link
-handler and no desk loop.
-
-`moe_desk.py` remains the pure model/renderer/synchronizer. Picks and Review
-each retain one compact primary card per game, then post the complete persisted
-opinions as replies in the same topic. Detail text is escaped and split with
-headroom below Telegram's 4096-character limit; message ids, content hashes,
-parent ids and event ids live in the version-2 `moe_bot_state.json`. Primary
-cards and pinned queue/week cards consume the post budget before detail
-bundles, so a new slate never hides its navigation behind long explanations.
-Bundle growth, shrinkage and changed parents reconcile in place; obsolete
-segments are deleted.
-
-The dedicated runtime authenticates only with `MOE_BOT_TOKEN` and optional
-`MOE_BOT_SESSION`, both server-only values in `.env.local`. It deliberately
-does not fall back to `INTAKE_BOT_TOKEN`. Existing `MOE_DESK_CHAT_ID` and topic
-keys remain unchanged. `scripts/desk_setup.py` now validates the dedicated bot,
-and `scripts/moe_grade.py --notify` reaches the Scores topic through the same
-configuration.
-
-Cutover requires installing/enabling `deploy/systemd/moe-bot.service`, starting
-the new bot with a fresh state file, verifying its replacement cards and
-callbacks, then removing the obsolete NFL Guesser cards and group membership.
-Never run the old intake desk loop and the new writer simultaneously.
-
-Tests: `scripts/test_moe_desk.py` covers channel-native detail splitting and
-reconciliation; `scripts/test_moe_bot.py` owns the review-runtime tests moved
-out of `scripts/test_intake_bot.py`; the intake tests protect the remaining
-prediction workflows.
-
-The complete current-to-target migration record and rollback checklist is
-`moe_bot.txt`.
-
-### Historical baseline — 2026-09-08: Desk group (Option B, superseded)
+### Implemented locally — 2026-09-08: Desk group (Option B)
 
 The Telegram surface for operating the committee: one private supergroup
 with forum topics, the intake bot as admin, SS and AK as members with

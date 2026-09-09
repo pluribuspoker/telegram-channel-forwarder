@@ -56,9 +56,34 @@ from nfl_win_predictions import (
     latest_predictions_for_user,
     replace_rows,
 )
+from moe import (
+    approved_opinions as approved_moe_opinions,
+    configured_opinion_store,
+    latest_model_opinions as latest_moe_model_opinions,
+    opinion_detail as moe_opinion_detail,
+    opinion_model_picker as moe_opinion_model_picker,
+    opinion_output_sha256,
+    opinion_summary as moe_opinion_summary,
+)
 from moe_ak import parse_ak_projection
+from moe_desk import (
+    BotApi as DeskBotApi,
+    build_desks as build_desk_model,
+    desk_config_from_env,
+    load_state as load_desk_state,
+    parse_callback as parse_desk_callback,
+    desk_ids_report,
+    parse_start_param,
+    review_targets as desk_review_targets,
+    topic_id_from_reply,
+    save_state as save_desk_state,
+    sync_desk,
+)
+from moe_god import load_registry as load_moe_registry
 from moe_identity import (
+    REVIEWER_ROLE,
     resolve_moe_expert_user_id_from_spreadsheet,
+    resolve_role_user_ids_from_spreadsheet,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -97,8 +122,12 @@ _CELEBRITY_REGISTRY_LOCK = threading.Lock()
 _SHEET_CACHE_LOCK = threading.RLock()
 _SHEET_CACHE: dict[str, tuple[float, Any]] = {}
 _INTAKE_SPREADSHEET: Any | None = None
+_MOE_STORE: Any | None = None
 GAMES_CACHE_TTL_SECONDS = 60
 TEAM_EMOJI_CACHE_TTL_SECONDS = 600
+MOE_CACHE_TTL_SECONDS = 30
+DESK_REVIEWERS_CACHE_TTL_SECONDS = 300
+_DESK_SYNC_LOCK = threading.Lock()
 WIN_TOTALS_CACHE_TTL_SECONDS = 3600
 TEAM_HISTORY_CACHE_TTL_SECONDS = 21600
 WIN_PREDICTIONS_CACHE_TTL_SECONDS = 30
@@ -513,6 +542,12 @@ def game_detail(
             Button.inline("Full game", b"period:game"),
             Button.inline("First half", b"period:first_half"),
             Button.inline("First quarter", b"period:first_quarter"),
+        ],
+        [
+            Button.inline(
+                "🧠 MOE opinions",
+                f"moe:view:{game['event_id']}:0".encode(),
+            )
         ],
         [Button.inline("← Back to games", f"games:{days}:{page}".encode())]
     ]
@@ -1428,9 +1463,149 @@ def _intake_spreadsheet() -> Any:
         return _INTAKE_SPREADSHEET
 
 
+def _moe_store() -> Any:
+    global _MOE_STORE
+    with _SHEET_CACHE_LOCK:
+        if _MOE_STORE is None:
+            _MOE_STORE = configured_opinion_store()
+        return _MOE_STORE
+
+
+def load_cached_moe_opinions(
+    event_id: str | None = None,
+) -> list[dict[str, Any]]:
+    rows = _cached_sheet_value(
+        "moe_opinions",
+        MOE_CACHE_TTL_SECONDS,
+        lambda: _moe_store().list(),
+    )
+    if event_id is None:
+        return rows
+    return [
+        row
+        for row in rows
+        if str(row.get("event_id")) == str(event_id)
+    ]
+
+
 def invalidate_sheet_cache(key: str) -> None:
     with _SHEET_CACHE_LOCK:
         _SHEET_CACHE.pop(key, None)
+
+
+def load_desk_reviewers() -> dict[int, str]:
+    """Telegram id -> display name for every ``reviewer`` row in
+    ``allowed_users`` (the desk group's approve/reject buttons and the
+    pending-opinion deep links are open to exactly these people)."""
+    return _cached_sheet_value(
+        "desk_reviewers",
+        DESK_REVIEWERS_CACHE_TTL_SECONDS,
+        lambda: resolve_role_user_ids_from_spreadsheet(
+            _intake_spreadsheet(), REVIEWER_ROLE
+        ),
+    )
+
+
+def game_stub(row: dict[str, Any]) -> dict[str, Any]:
+    """Enough of a game record for the MOE views when the opinion's game
+    has left the slate; the line views refuse it gracefully."""
+    return {
+        "event_id": str(row.get("event_id") or ""),
+        "away_team": str(row.get("away_team") or ""),
+        "home_team": str(row.get("home_team") or ""),
+        "commence_time_utc": str(row.get("commence_time_utc") or ""),
+        "status": "past",
+    }
+
+
+def desk_sync_once(config: Any, api: Any, *, now: datetime | None = None) -> Any:
+    """One reconcile pass over the desk group (moe_desk.sync_desk): the
+    sheet's opinions and games in, silent posts and edits out, loud
+    replies for new bet legs and near locks. Serialised so the periodic
+    loop and a button tap never race on the state file."""
+    now = now or datetime.now(timezone.utc)
+    with _DESK_SYNC_LOCK:
+        rows = load_cached_moe_opinions()
+        games, _, team_abbrevs = load_intake_data()
+        registry = load_moe_registry()
+        desks = build_desk_model(
+            games, rows, approved_moe_opinions(rows), registry, now=now
+        )
+        state = load_desk_state(config.state_path)
+        try:
+            summary = sync_desk(
+                config=config,
+                api=api,
+                state=state,
+                desks=desks,
+                now=now,
+                team_abbrevs=team_abbrevs,
+            )
+        finally:
+            save_desk_state(config.state_path, state)
+    if any(
+        (
+            summary.posted,
+            summary.edited,
+            summary.alerts,
+            summary.deleted,
+            summary.deferred,
+            summary.errors,
+        )
+    ):
+        print(
+            f"desk: posted {summary.posted} edited {summary.edited} "
+            f"alerts {summary.alerts} deleted {summary.deleted} "
+            f"deferred {summary.deferred} errors {summary.errors}"
+        )
+    return summary
+
+
+def desk_review(action: str, target: str, *, reviewer: str) -> tuple[str, bool]:
+    """Apply a desk button. Picks the target rows from the cached tab,
+    confirms each is still pending with a single-row read (``store.fetch``)
+    so the other reviewer's tap a moment ago is respected, runs the store's
+    hash-checked review signed with the reviewer's display name, then
+    patches the cached rows so the cards re-render at once without
+    re-reading the whole tab (the next timed pass re-reads anyway).
+    Returns the outcome text and whether it succeeded."""
+    rows = load_cached_moe_opinions()
+    targets, error = desk_review_targets(action, target, rows)
+    if error:
+        return error, False
+    status = "rejected" if action == "no" else "approved"
+    store = _moe_store()
+    fetch = getattr(store, "fetch", None)
+    done: list[str] = []
+    reviewed_at = datetime.now(timezone.utc).isoformat()
+    for row in targets:
+        opinion_id = str(row["opinion_id"])
+        if fetch is not None:
+            live = fetch(opinion_id)
+            if live is None:
+                return "That row is no longer in the sheet.", False
+            live_status = str(live.get("review_status") or "pending").strip().lower()
+            if live_status != "pending":
+                by = str(live.get("reviewed_by") or "someone").strip()
+                row.update(
+                    review_status=live_status,
+                    reviewed_by=by,
+                    reviewed_at_utc=str(live.get("reviewed_at_utc") or ""),
+                    approved_output_sha256=str(live.get("approved_output_sha256") or ""),
+                )
+                return f"Already {live_status} by {by}.", False
+        store.review(opinion_id, status=status, reviewed_by=reviewer, note="")
+        row["review_status"] = status
+        row["reviewed_by"] = reviewer
+        row["reviewed_at_utc"] = reviewed_at
+        row["review_note"] = ""
+        row["approved_output_sha256"] = (
+            opinion_output_sha256(row) if status == "approved" else ""
+        )
+        done.append(str(row.get("expert_name") or row.get("expert_id")))
+    _set_sheet_cache("moe_opinions", rows)
+    verb = "Rejected" if status == "rejected" else "Approved"
+    return f"{verb} {', '.join(done)} as {reviewer}.", True
 
 
 def load_intake_data() -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
@@ -1771,6 +1946,101 @@ async def main() -> None:
     guess_states: dict[int, dict[str, Any]] = {}
     game_celeb_states: dict[int, dict[str, Any]] = {}
     win_guess_states: dict[int, dict[str, Any]] = {}
+    # The desk group (moe_desk.py); filled after client.start() once the
+    # bot's username is known, read by the callback and deep-link handlers.
+    desk: dict[str, Any] = {"config": None, "api": None, "task": None}
+
+    def open_game_state(user_id: int, game: dict[str, Any]) -> None:
+        game_celeb_states.pop(user_id, None)
+        win_guess_states.pop(user_id, None)
+        guess_states[user_id] = {
+            "game": game,
+            "days": 10,
+            "page": 0,
+            "celebrity": None,
+        }
+
+    async def resync_desk() -> str | None:
+        """Re-render the cards now; the problem text when that failed."""
+        if desk["config"] is None or desk["api"] is None:
+            return None
+        try:
+            await asyncio.to_thread(desk_sync_once, desk["config"], desk["api"])
+        except Exception as exc:  # noqa: BLE001 - the loop retries
+            print(f"desk: sync after a review failed: {type(exc).__name__}: {exc}")
+            return f"{type(exc).__name__}: {exc}"[:200]
+        return None
+
+    desk_inflight: set[str] = set()
+    desk_tasks: set[asyncio.Task] = set()
+
+    async def desk_reply(event, text: str) -> None:
+        """A silent reply under the card the tap came from — both reviewers
+        see the outcome, and it survives Telegram's callback timeout."""
+        try:
+            await event.reply(text, silent=True)
+        except Exception as exc:  # noqa: BLE001 - logged, nothing else to do
+            print(f"desk: reply failed: {type(exc).__name__}: {exc}")
+
+    async def finish_desk_action(event, action: str, target: str, key: str) -> None:
+        try:
+            try:
+                reviewers = await asyncio.to_thread(load_desk_reviewers)
+            except Exception as exc:  # noqa: BLE001 - Sheets down
+                await desk_reply(
+                    event,
+                    "❌ Could not read the reviewer list "
+                    f"({type(exc).__name__}: {exc}). Tap again in a minute."[:400],
+                )
+                return
+            reviewer = reviewers.get(event.sender_id)
+            if reviewer is None:
+                await desk_reply(
+                    event,
+                    "❌ Reviewers only. Add the reviewer role to your allowed_users row.",
+                )
+                return
+            try:
+                text, ok = await asyncio.to_thread(
+                    desk_review, action, target, reviewer=reviewer
+                )
+            except Exception as exc:  # noqa: BLE001 - shown under the card
+                text, ok = f"{type(exc).__name__}: {exc}"[:350], False
+            if not ok:
+                await desk_reply(event, f"❌ {text}")
+                return
+            print(f"desk: {text}")
+            problem = await resync_desk()
+            if problem:
+                await desk_reply(
+                    event,
+                    f"✅ {text} The card could not refresh yet ({problem}); "
+                    "it will on the next pass.",
+                )
+        finally:
+            desk_inflight.discard(key)
+
+    async def handle_desk_callback(event, data: str) -> None:
+        parsed = parse_desk_callback(data)
+        if parsed is None:
+            await event.answer("Unknown desk action.", alert=True)
+            return
+        action, target = parsed
+        key = f"{action}:{target}"
+        if key in desk_inflight:
+            await event.answer("Still working on the last tap.")
+            return
+        desk_inflight.add(key)
+        # Answer at once: Telegram discards a callback answer after a few
+        # seconds, and every step of the work reads the sheet.
+        try:
+            await event.answer("Working on it…")
+        except Exception as exc:  # noqa: BLE001 - the work still runs
+            print(f"desk: answer failed: {type(exc).__name__}: {exc}")
+        task = asyncio.create_task(finish_desk_action(event, action, target, key))
+        desk_tasks.add(task)
+        task.add_done_callback(desk_tasks.discard)
+
     @client.on(
         events.NewMessage(
             pattern=r"^/(?:start|guess_nfl_game|predict_nfl_wins)(?:@\w+)?$",
@@ -1812,6 +2082,95 @@ async def main() -> None:
             team_abbrevs=team_abbrevs,
         )
         await event.respond(text, buttons=buttons)
+
+    @client.on(
+        events.NewMessage(
+            pattern=r"^/start(?:@\w+)?\s+\S+",
+            incoming=True,
+            func=lambda event: event.is_private,
+        )
+    )
+    async def open_deep_link(event):
+        """``/start op_<opinion>`` and ``/start game_<event>`` — the desk
+        group's 👁 buttons land here, in the tapper's own DM."""
+        if event.sender_id not in allowed:
+            await event.respond("Not authorized.")
+            return
+        parsed = parse_start_param(event.raw_text)
+        if parsed is None:
+            await event.respond(
+                "Tap /guess_nfl_game to browse games.",
+                buttons=command_keyboard(),
+            )
+            return
+        kind, value = parsed
+        records, _, _ = await _intake_data()
+        rows = await asyncio.to_thread(load_cached_moe_opinions)
+        if kind == "game":
+            game = next(
+                (g for g in records if str(g.get("event_id")) == value), None
+            )
+            if game is None:
+                await event.respond("That game is not in the current slate.")
+                return
+            open_game_state(event.sender_id, game)
+            text, buttons = moe_opinion_summary(
+                game,
+                [r for r in rows if str(r.get("event_id")) == value],
+                event_id=value,
+            )
+            await event.respond(text, buttons=buttons, parse_mode="html")
+            return
+        opinion = next(
+            (r for r in rows if str(r.get("opinion_id")) == value), None
+        )
+        if opinion is None or str(
+            opinion.get("generation_status") or "valid"
+        ) != "valid":
+            await event.respond("That opinion is not available.")
+            return
+        if str(opinion.get("review_status") or "") != "approved":
+            reviewers = await asyncio.to_thread(load_desk_reviewers)
+            if event.sender_id not in reviewers:
+                await event.respond(
+                    "That opinion is available once it is approved."
+                )
+                return
+        elif not approved_moe_opinions([opinion]):
+            await event.respond("That opinion is no longer available.")
+            return
+        event_id = str(opinion.get("event_id") or "")
+        game = next(
+            (g for g in records if str(g.get("event_id")) == event_id), None
+        )
+        open_game_state(event.sender_id, game or game_stub(opinion))
+        text, buttons = moe_opinion_detail(opinion, event_id=event_id)
+        await event.respond(text, buttons=buttons, parse_mode="html")
+
+    @client.on(
+        events.NewMessage(
+            pattern=r"^/desk(?:@\w+)?$",
+            incoming=True,
+            func=lambda event: not event.is_private,
+        )
+    )
+    async def report_desk_ids(event):
+        """Sent inside the group: answer with the chat id (and the topic id
+        when sent inside a topic) the desk needs, and whether the group is
+        a supergroup with Topics yet. Commands reach the bot in groups even
+        with privacy mode on."""
+        if event.sender_id not in allowed:
+            return
+        chat = await event.get_chat()
+        text = desk_ids_report(
+            event.chat_id,
+            title=str(getattr(chat, "title", "") or ""),
+            supergroup=bool(getattr(chat, "megagroup", False)),
+            topics=bool(getattr(chat, "forum", False)),
+            topic_id=topic_id_from_reply(getattr(event.message, "reply_to", None)),
+        )
+        print("desk: " + text.replace("\n", " · "))
+        await event.reply(text)
 
     @client.on(
         events.NewMessage(
@@ -2143,6 +2502,9 @@ async def main() -> None:
             await event.answer("Not authorized.", alert=True)
             return
         data = event.data.decode()
+        if data.startswith("desk:"):
+            await handle_desk_callback(event, data)
+            return
         if data.startswith("celebwin:"):
             state = win_guess_states.setdefault(event.sender_id, {})
             if data == "celebwin:start":
@@ -2404,7 +2766,142 @@ async def main() -> None:
                 )
             await edit_callback(event, text, buttons)
             return
-        records, team_emojis, team_abbrevs = await _intake_data()
+        is_moe_callback = (
+            data.startswith("moe:view")
+            or data.startswith("moe:expert:")
+            or data.startswith("moe:opinion:")
+        )
+        if not is_moe_callback:
+            records, team_emojis, team_abbrevs = await _intake_data()
+        if is_moe_callback:
+            state = guess_states.get(event.sender_id)
+            if state is None:
+                await event.answer(
+                    "This game view expired. Choose the game again.",
+                    alert=True,
+                )
+                return
+            if data.startswith("moe:view"):
+                parts = data.split(":")
+                if len(parts) != 4:
+                    await event.answer("Invalid MOE view.", alert=True)
+                    return
+                try:
+                    event_id = parts[2]
+                    page = int(parts[3])
+                except ValueError:
+                    await event.answer("Invalid MOE page.", alert=True)
+                    return
+                if str(state["game"]["event_id"]) != event_id:
+                    await event.answer(
+                        "This MOE view expired. Reopen the game.",
+                        alert=True,
+                    )
+                    return
+                opinions = await asyncio.to_thread(
+                    load_cached_moe_opinions, event_id
+                )
+                text, buttons = moe_opinion_summary(
+                    state["game"],
+                    opinions,
+                    page=page,
+                    event_id=event_id,
+                )
+                await edit_callback(event, text, buttons)
+                return
+            if data.startswith("moe:opinion:"):
+                parts = data.split(":")
+                if len(parts) != 4:
+                    await event.answer("Invalid MOE view.", alert=True)
+                    return
+                opinion_id = parts[2]
+                try:
+                    page = int(parts[3])
+                except ValueError:
+                    await event.answer("Invalid MOE page.", alert=True)
+                    return
+                event_id = str(state["game"]["event_id"])
+                opinions = await asyncio.to_thread(
+                    load_cached_moe_opinions, event_id
+                )
+                candidates = approved_moe_opinions(opinions)
+                if event.sender_id in await asyncio.to_thread(load_desk_reviewers):
+                    # Reviewers page through pending and rejected rows too
+                    # (the desk group's 👁 deep link lands on them).
+                    candidates = candidates + [
+                        row
+                        for row in opinions
+                        if str(row.get("generation_status") or "valid") == "valid"
+                        and str(row.get("review_status") or "") != "approved"
+                    ]
+                opinion = next(
+                    (
+                        row
+                        for row in candidates
+                        if str(row.get("opinion_id")) == opinion_id
+                    ),
+                    None,
+                )
+                if opinion is None:
+                    await event.answer(
+                        "That model opinion is no longer available.",
+                        alert=True,
+                    )
+                    return
+                model_choices = latest_moe_model_opinions(
+                    opinions, str(opinion["expert_id"])
+                )
+                text, buttons = moe_opinion_detail(
+                    opinion,
+                    page=page,
+                    event_id=event_id,
+                    show_model_picker=len(model_choices) > 1,
+                )
+                await edit_callback(event, text, buttons)
+                return
+            parts = data.split(":")
+            if len(parts) != 5:
+                await event.answer("Invalid MOE view.", alert=True)
+                return
+            expert_id = parts[2]
+            event_id = parts[3]
+            try:
+                page = int(parts[4])
+            except ValueError:
+                await event.answer("Invalid MOE page.", alert=True)
+                return
+            if str(state["game"]["event_id"]) != event_id:
+                await event.answer(
+                    "This MOE view expired. Reopen the game.",
+                    alert=True,
+                )
+                return
+            opinions = await asyncio.to_thread(
+                load_cached_moe_opinions, event_id
+            )
+            model_choices = latest_moe_model_opinions(
+                opinions, expert_id
+            )
+            if not model_choices:
+                await event.answer(
+                    "That expert opinion is no longer available.",
+                    alert=True,
+                )
+                return
+            if len(model_choices) > 1:
+                text, buttons = moe_opinion_model_picker(
+                    opinions,
+                    expert_id=expert_id,
+                    page=page,
+                    event_id=event_id,
+                )
+                await edit_callback(event, text, buttons)
+                return
+            text, buttons = moe_opinion_detail(
+                model_choices[0], page=page, event_id=event_id
+            )
+            await edit_callback(event, text, buttons)
+            return
         if data.startswith("celebgame:"):
             parts = data.split(":")
             action = parts[1] if len(parts) > 1 else ""
@@ -2873,6 +3370,35 @@ async def main() -> None:
     )
     identity = await client.get_me()
     print(f"Intake bot running as @{identity.username}")
+    desk_config = desk_config_from_env()
+    if desk_config is None:
+        print("Desk group disabled (MOE_DESK_CHAT_ID / topic ids unset)")
+    else:
+        desk["config"] = desk_config.with_username(identity.username or "")
+        desk["api"] = DeskBotApi(desk_config.bot_token)
+        print(
+            f"Desk group enabled: chat {desk_config.chat_id}, review topic "
+            f"{desk_config.review_topic}, picks topic {desk_config.picks_topic}, "
+            f"scores topic {desk_config.scores_topic}, sync every "
+            f"{desk_config.sync_seconds}s"
+        )
+
+        async def desk_loop() -> None:
+            while True:
+                # Keep the reviewer list warm so a tap never waits on it.
+                try:
+                    await asyncio.to_thread(load_desk_reviewers)
+                except Exception as exc:  # noqa: BLE001 - Sheets down
+                    print(f"desk: reviewers refresh failed: {type(exc).__name__}: {exc}")
+                try:
+                    await asyncio.to_thread(
+                        desk_sync_once, desk["config"], desk["api"]
+                    )
+                except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                    print(f"desk: sync failed: {type(exc).__name__}: {exc}")
+                await asyncio.sleep(desk["config"].sync_seconds)
+
+        desk["task"] = asyncio.create_task(desk_loop())
     await client.run_until_disconnected()
 
 

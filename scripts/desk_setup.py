@@ -5,7 +5,7 @@ Claude session included, so every step works from a phone.
 Order of operations, once, when the group is created:
 
 1. In Telegram: create a private group, convert it to a supergroup with
-   Topics enabled, add the dedicated MOE bot (@nfl_moe_bot) as an admin with
+   Topics enabled, add the intake bot (@nflguesser_bot) as an admin with
    "Manage topics" and "Pin messages", add both reviewers.
 2. Send ``/desk`` inside the group: the bot replies with the chat id (and,
    inside a topic, that topic's id) and whether Topics are on. Set
@@ -18,9 +18,9 @@ Order of operations, once, when the group is created:
 5. ``python scripts/desk_setup.py --check`` — chat type, the bot's rights,
    topics, reviewers. ``--post-test`` also posts and deletes one message per
    configured topic.
-6. Restart ``moe-bot.service``; the bot logs its group and topic ids.
+6. Restart ``telegram-intake.service``; the bot logs "Desk group enabled".
 
-Env: MOE_BOT_TOKEN, MOE_DESK_CHAT_ID, MOE_DESK_REVIEW_TOPIC,
+Env: INTAKE_BOT_TOKEN, MOE_DESK_CHAT_ID, MOE_DESK_REVIEW_TOPIC,
 MOE_DESK_PICKS_TOPIC, MOE_DESK_SCORES_TOPIC (optional);
 GOOGLE_CREDENTIALS + NFL_INTAKE_SHEET_ID for the reviewer commands.
 """
@@ -82,7 +82,7 @@ def create_topics(api: BotApi, chat_id: str) -> int:
         print(f"{env_name}={thread_id}")
     print(
         "Put the lines above in .env on both machines (syncenv deletes server "
-        "keys that are absent locally), then restart moe-bot."
+        "keys that are absent locally), then restart telegram-intake."
     )
     return 0
 
@@ -107,11 +107,7 @@ def check(api: BotApi, chat_id: str, *, post_test: bool) -> int:
     if status not in {"administrator", "creator"}:
         print("  ✗ the bot must be an admin")
         problems += 1
-    for key in (
-        "can_manage_topics",
-        "can_pin_messages",
-        "can_delete_messages",
-    ):
+    for key in ("can_manage_topics", "can_pin_messages"):
         if not rights[key]:
             print(f"  ✗ missing admin right: {key}")
             problems += 1
@@ -199,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.grant_reviewer is not None:
         return grant_reviewer(args.grant_reviewer)
-    api = BotApi(_require("MOE_BOT_TOKEN"))
+    api = BotApi(_require("INTAKE_BOT_TOKEN"))
     chat_id = _require("MOE_DESK_CHAT_ID")
     try:
         if args.create_topics:

@@ -33,9 +33,9 @@ from moe_desk import (
     load_state,
     lock_warning_due,
     parse_callback,
+    parse_start_param,
     post_scores_notice,
     prune_state,
-    render_opinion_details,
     render_picks_card,
     render_queue_card,
     render_review_card,
@@ -73,6 +73,7 @@ CONFIG = DeskConfig(
     review_topic=11,
     picks_topic=22,
     scores_topic=33,
+    bot_username="nflguesser_bot",
 )
 SEA_SIDE = {
     "confidence_stars": 1,
@@ -404,17 +405,18 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("Schedule Expert", text)
         self.assertNotIn("Committee", text)
         self.assertEqual(len(keyboard), 4)
-        self.assertEqual([b["text"] for b in keyboard[2]], ["✅ 3", "❌ 3"])
+        self.assertEqual([b["text"] for b in keyboard[2]], ["✅ 3", "❌ 3", "👁 3"])
         self.assertEqual(keyboard[0][0]["callback_data"], "desk:ok:c884d868-0000")
         self.assertEqual(keyboard[2][0]["callback_data"], "desk:ok:p1")
         self.assertEqual(keyboard[2][1]["callback_data"], "desk:no:p1")
+        self.assertEqual(keyboard[2][2]["url"], "https://t.me/nflguesser_bot?start=op_p1")
         self.assertEqual(keyboard[3][0]["callback_data"], "desk:okarms:401")
         for row_buttons in keyboard:
             for button in row_buttons:
                 if "callback_data" in button:
                     self.assertLessEqual(len(button["callback_data"].encode()), 64)
 
-    def test_review_card_has_only_review_actions(self) -> None:
+    def test_review_card_without_username_has_no_read_links(self) -> None:
         rows = committee()
         _, keyboard = render_review_card(
             self.desk(rows), config=DeskConfig("t", "-1", 1, 2)
@@ -465,30 +467,12 @@ class RenderTests(unittest.TestCase):
         self.assertTrue(lines[6].startswith("<blockquote expandable><b>Rules</b> · God Expert (rules)"))
         self.assertIn("• Pool p(home) .56 vs market .58\n• Voices split 3-2\n<b>Judge</b> · ", text)
         self.assertIn("<b>Schedule</b> · Seattle &lt;stronger&gt; at home", text)
-        self.assertTrue(
-            text.endswith(
-                "<i>Full opinions are posted as replies to this card.</i>"
-            )
-        )
+        self.assertTrue(text.endswith("</blockquote>"))
         self.assertNotIn("Win Total", text)  # pending, not approved
-        self.assertEqual(keyboard, [])
-
-    def test_full_opinions_render_inside_the_group_and_split_safely(self) -> None:
-        opinion = row(
-            "p1",
-            "401",
-            "schedule",
-            status="approved",
-            full_opinion="A < B\n" + ("<long explanation> " * 500),
+        self.assertEqual(
+            keyboard,
+            [[{"text": "👁 Full opinions", "url": "https://t.me/nflguesser_bot?start=game_401"}]],
         )
-        messages = render_opinion_details(
-            [opinion],
-            context="Approved committee",
-        )
-        self.assertGreater(len(messages), 1)
-        self.assertTrue(all(len(message) < 4096 for message in messages))
-        self.assertIn("A &lt; B", messages[0])
-        self.assertNotIn("nflguesser", "".join(messages).lower())
 
     def test_picks_card_states_pending_or_missing_god(self) -> None:
         desk = self.desk(committee())  # arms pending, four voices approved
@@ -581,26 +565,10 @@ class SyncTests(unittest.TestCase):
     def test_first_pass_posts_cards_and_pins_queue_and_week(self) -> None:
         rows = committee("401")
         summary = self.sync(rows)
-        self.assertEqual(
-            summary.posted[:4],
-            ["review:401", "picks:401", "queue", "week"],
-        )
-        self.assertEqual(
-            summary.posted[4:],
-            [
-                "review-detail:401:0",
-                "review-detail:401:1",
-                "review-detail:401:2",
-                "picks-detail:401:0",
-                "picks-detail:401:1",
-                "picks-detail:401:2",
-                "picks-detail:401:3",
-            ],
-        )
+        self.assertEqual(summary.posted, ["review:401", "picks:401", "queue", "week"])
         self.assertEqual(summary.alerts, [])
         topics = [m["topic"] for m in self.api.sent]
-        self.assertEqual(topics[:4], [11, 22, 11, 22])
-        self.assertEqual(topics[4:], [11, 11, 11, 22, 22, 22, 22])
+        self.assertEqual(topics, [11, 22, 11, 22])
         self.assertTrue(all(m["silent"] for m in self.api.sent))
         self.assertEqual(self.api.pins, [103, 104])
         self.assertEqual(self.state["cards"]["review:401"]["message_id"], 101)
@@ -622,18 +590,8 @@ class SyncTests(unittest.TestCase):
         rows[2]["review_status"] = "approved"
         rows[2]["reviewed_by"] = "AK"
         summary = self.sync(rows)
-        self.assertEqual(summary.posted, ["picks-detail:401:4"])
-        self.assertEqual(
-            summary.edited,
-            [
-                "review:401",
-                "picks:401",
-                "queue",
-                "picks-detail:401:2",
-                "picks-detail:401:3",
-            ],
-        )
-        self.assertEqual(summary.deleted, ["review-detail:401:2"])
+        self.assertEqual(summary.posted, [])
+        self.assertEqual(summary.edited, ["review:401", "picks:401", "queue"])
         review_text, picks_text = self.api.edits[0]["text"], self.api.edits[1]["text"]
         self.assertNotIn("Win Total", review_text)  # decided: off the to-do card
         self.assertIn("<b>Win Total</b> Seahawks 61% ★★ · 20-24", picks_text)
@@ -643,10 +601,8 @@ class SyncTests(unittest.TestCase):
         rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
         summary = self.sync(rows)
         self.assertEqual(
-            summary.posted[:4],
-            ["review:401", "picks:401", "queue", "week"],
+            summary.posted, ["review:401", "picks:401", "queue", "week"]
         )
-        self.assertEqual(len(summary.posted), 11)
         self.assertEqual(summary.alerts, ["bet:c884d868-0000:side"])
         alert = next(m for m in self.api.sent if not m["silent"])
         self.assertEqual(alert["topic"], 22)
@@ -692,156 +648,20 @@ class SyncTests(unittest.TestCase):
         self.assertNotIn("review:401", self.state["cards"])
         self.assertNotIn("401", self.state["kickoffs"])
 
-    def test_started_game_retries_obsolete_message_cleanup(self) -> None:
-        rows = committee("401")
-        self.sync(rows)
-        key = "review-detail:401:0"
-        obsolete_id = 999
-        self.state["cards"][key]["obsolete_message_ids"] = [obsolete_id]
-        original_delete = self.api.delete
-
-        def fail_obsolete(chat_id, message_id):
-            if message_id == obsolete_id:
-                raise DeskApiError("deleteMessage: temporary failure")
-            return original_delete(chat_id, message_id)
-
-        self.api.delete = fail_obsolete
-        kickoff = datetime.fromisoformat(SEA_KICKOFF)
-        self.sync(rows, now=kickoff + timedelta(minutes=5))
-        self.assertEqual(
-            self.state["cards"][key]["obsolete_message_ids"],
-            [obsolete_id],
-        )
-
-        self.api.delete = original_delete
-        self.sync(rows, now=kickoff + timedelta(minutes=10))
-        self.assertNotIn(
-            "obsolete_message_ids",
-            self.state["cards"][key],
-        )
-        self.assertIn(obsolete_id, self.api.deleted)
-
     def test_a_deleted_card_is_reposted(self) -> None:
         rows = committee("401")
         self.sync(rows)
         self.api.missing.add(self.state["cards"]["review:401"]["message_id"])
         rows[2]["review_status"] = "rejected"
-        sent_before = len(self.api.sent)
         summary = self.sync(rows)
-        self.assertEqual(
-            summary.posted,
-            ["review:401", "review-detail:401:0", "review-detail:401:1"],
-        )
-        self.assertEqual(
-            self.state["cards"]["review:401"]["message_id"],
-            self.api.sent[sent_before]["id"],
-        )
-
-    def test_parent_replacement_keeps_details_until_budget_can_repost(self) -> None:
-        rows = committee("401")
-        self.sync(rows)
-        old_details = {
-            key: value["message_id"]
-            for key, value in self.state["cards"].items()
-            if key in {"review-detail:401:0", "review-detail:401:1"}
-        }
-        self.api.missing.add(self.state["cards"]["review:401"]["message_id"])
-        rows[2]["review_status"] = "rejected"
-        summary = self.sync(rows, max_posts=1)
         self.assertEqual(summary.posted, ["review:401"])
-        self.assertTrue(
-            {"review-detail:401:0", "review-detail:401:1"}
-            <= set(summary.deferred)
-        )
-        self.assertTrue(
-            all(message_id not in self.api.deleted for message_id in old_details.values())
-        )
-        summary = self.sync(rows)
-        self.assertEqual(
-            summary.posted,
-            ["review-detail:401:0", "review-detail:401:1"],
-        )
-        self.assertTrue(
-            all(message_id in self.api.deleted for message_id in old_details.values())
-        )
-
-    def test_failed_replacement_send_keeps_old_detail_and_state(self) -> None:
-        rows = committee("401")
-        self.sync(rows)
-        old_parent = self.state["cards"]["review:401"]["message_id"]
-        detail_key = "review-detail:401:0"
-        old_detail = self.state["cards"][detail_key]["message_id"]
-        self.api.missing.add(old_parent)
-        rows[2]["review_status"] = "rejected"
-        original_send = self.api.send
-        failed = False
-
-        def fail_detail(chat_id, thread_id, text, **kwargs):
-            nonlocal failed
-            if kwargs.get("reply_to") not in {None, old_parent} and not failed:
-                failed = True
-                raise DeskApiError("sendMessage: temporary failure")
-            return original_send(chat_id, thread_id, text, **kwargs)
-
-        self.api.send = fail_detail
-        summary = self.sync(rows)
-        self.assertTrue(failed)
-        self.assertTrue(any(detail_key in error for error in summary.errors))
-        self.assertEqual(
-            self.state["cards"][detail_key]["message_id"],
-            old_detail,
-        )
-        self.assertNotIn(old_detail, self.api.deleted)
-
-        self.api.send = original_send
-        summary = self.sync(rows)
-        self.assertIn(detail_key, summary.posted)
-        self.assertIn(old_detail, self.api.deleted)
-        self.assertNotEqual(
-            self.state["cards"][detail_key]["message_id"],
-            old_detail,
-        )
-
-    def test_missing_current_carries_failed_obsolete_cleanup(self) -> None:
-        rows = committee("401")
-        self.sync(rows)
-        key = "review-detail:401:0"
-        current_id = self.state["cards"][key]["message_id"]
-        obsolete_id = 999
-        self.state["cards"][key]["obsolete_message_ids"] = [obsolete_id]
-        self.api.missing.add(current_id)
-        original_delete = self.api.delete
-
-        def fail_obsolete(chat_id, message_id):
-            if message_id == obsolete_id:
-                raise DeskApiError("deleteMessage: temporary failure")
-            return original_delete(chat_id, message_id)
-
-        self.api.delete = fail_obsolete
-        rows[5]["thesis"] = "Updated pending arm"
-        summary = self.sync(rows)
-        self.assertIn(key, summary.posted)
-        self.assertEqual(
-            self.state["cards"][key]["obsolete_message_ids"],
-            [obsolete_id],
-        )
-
-        self.api.delete = original_delete
-        self.sync(rows)
-        self.assertNotIn(
-            "obsolete_message_ids",
-            self.state["cards"][key],
-        )
-        self.assertIn(obsolete_id, self.api.deleted)
+        self.assertEqual(self.state["cards"]["review:401"]["message_id"], self.api.sent[-1]["id"])
 
     def test_post_budget_defers_the_rest_to_the_next_pass(self) -> None:
         rows = committee("401") + committee("402")
         summary = self.sync(rows, max_posts=2)
         self.assertEqual(summary.posted, ["review:401", "picks:401"])
-        self.assertEqual(
-            summary.deferred[:4],
-            ["review:402", "picks:402", "queue", "week"],
-        )
+        self.assertEqual(summary.deferred, ["review:402", "picks:402", "queue", "week"])
         summary = self.sync(rows, max_posts=2)
         self.assertEqual(summary.posted, ["review:402", "picks:402"])
         summary = self.sync(rows, max_posts=2)
@@ -856,171 +676,15 @@ class SyncTests(unittest.TestCase):
                 r["review_status"] = "approved"
                 r["reviewed_by"] = "AK"
         summary = self.sync(rows)
-        self.assertEqual(summary.deleted[0], "review:401")
-        self.assertEqual(
-            summary.deleted[1:],
-            [
-                "review-detail:401:0",
-                "review-detail:401:1",
-                "review-detail:401:2",
-            ],
-        )
-        self.assertIn(review_id, self.api.deleted)
+        self.assertEqual(summary.deleted, ["review:401"])
+        self.assertEqual(self.api.deleted, [review_id])
         self.assertNotIn("review:401", self.state["cards"])
         self.assertIn("picks:401", self.state["cards"])
         # a fresh pending row brings the to-do card back
         rows.append(row("p2", "401", "win_total", generated="2026-09-12T13:00:00+00:00"))
         summary = self.sync(rows)
-        self.assertEqual(
-            summary.posted,
-            ["review:401", "review-detail:401:0"],
-        )
+        self.assertEqual(summary.posted, ["review:401"])
         self.assertEqual(summary.deleted, [])
-
-    def test_picks_card_is_deleted_when_approvals_are_revoked(self) -> None:
-        rows = committee("401")
-        self.sync(rows)
-        picks_id = self.state["cards"]["picks:401"]["message_id"]
-        for item in rows:
-            if item["review_status"] == "approved":
-                item["review_status"] = "rejected"
-                item["reviewed_by"] = "SS"
-
-        summary = self.sync(rows)
-
-        self.assertIn("picks:401", summary.deleted)
-        self.assertIn(picks_id, self.api.deleted)
-        self.assertNotIn("picks:401", self.state["cards"])
-        self.assertFalse(
-            any(key.startswith("picks-detail:401:") for key in self.state["cards"])
-        )
-
-    def test_transient_detail_delete_failure_keeps_state_for_retry(self) -> None:
-        rows = committee("401")
-        self.sync(rows)
-        detail_key = "review-detail:401:0"
-        detail_id = self.state["cards"][detail_key]["message_id"]
-        original_delete = self.api.delete
-
-        def fail_once(chat_id, message_id):
-            if message_id == detail_id:
-                raise DeskApiError("deleteMessage: temporary network failure")
-            return original_delete(chat_id, message_id)
-
-        self.api.delete = fail_once
-        for item in rows:
-            if item["review_status"] == "pending":
-                item["review_status"] = "approved"
-                item["reviewed_by"] = "AK"
-        summary = self.sync(rows)
-        self.assertIn(detail_key, summary.errors[0])
-        self.assertIn("deleteMessage", summary.errors[0])
-        self.assertIn(detail_key, self.state["cards"])
-
-        self.api.delete = original_delete
-        summary = self.sync(rows)
-        self.assertIn(detail_key, summary.deleted)
-        self.assertNotIn(detail_key, self.state["cards"])
-
-    def test_review_card_tracks_obsolete_copy_until_full_delete(self) -> None:
-        rows = committee("401")
-        self.sync(rows)
-        key = "review:401"
-        obsolete_id = 999
-        current_id = self.state["cards"][key]["message_id"]
-        self.state["cards"][key]["obsolete_message_ids"] = [obsolete_id]
-        original_delete = self.api.delete
-
-        def fail_obsolete(chat_id, message_id):
-            if message_id == obsolete_id:
-                raise DeskApiError("deleteMessage: temporary failure")
-            return original_delete(chat_id, message_id)
-
-        self.api.delete = fail_obsolete
-        for item in rows:
-            if item["review_status"] == "pending":
-                item["review_status"] = "approved"
-                item["reviewed_by"] = "AK"
-        self.sync(rows)
-        self.assertIn(current_id, self.api.deleted)
-        self.assertEqual(self.state["cards"][key]["message_id"], obsolete_id)
-
-        self.api.delete = original_delete
-        summary = self.sync(rows)
-        self.assertIn(key, summary.deleted)
-        self.assertNotIn(key, self.state["cards"])
-
-    def test_failed_edit_prevents_bundle_tail_deletion(self) -> None:
-        rows = committee("401")
-        self.sync(rows)
-        keys = [
-            "review-detail:401:0",
-            "review-detail:401:1",
-            "review-detail:401:2",
-        ]
-        rows[5]["review_status"] = "approved"
-        rows[5]["reviewed_by"] = "AK"
-        target_id = self.state["cards"][keys[0]]["message_id"]
-        original_edit = self.api.edit
-
-        def fail_edit(chat_id, message_id, text, *, keyboard=None):
-            if message_id == target_id:
-                raise DeskApiError("editMessageText: temporary failure")
-            return original_edit(
-                chat_id,
-                message_id,
-                text,
-                keyboard=keyboard,
-            )
-
-        self.api.edit = fail_edit
-        summary = self.sync(rows)
-        self.assertTrue(any(keys[0] in error for error in summary.errors))
-        self.assertTrue(all(key in self.state["cards"] for key in keys))
-
-        self.api.edit = original_edit
-        summary = self.sync(rows)
-        self.assertIn(keys[2], summary.deleted)
-        self.assertIn(keys[1], self.state["cards"])
-
-    def test_stale_replacement_tracks_old_copy_until_both_delete(self) -> None:
-        rows = committee("401")
-        self.sync(rows)
-        parent_id = self.state["cards"]["review:401"]["message_id"]
-        detail_key = "review-detail:401:2"
-        old_detail = self.state["cards"][detail_key]["message_id"]
-        self.api.missing.add(parent_id)
-        rows[2]["thesis"] = "Updated pending opinion"
-        original_delete = self.api.delete
-
-        def fail_old(chat_id, message_id):
-            if message_id == old_detail:
-                raise DeskApiError("deleteMessage: temporary failure")
-            return original_delete(chat_id, message_id)
-
-        self.api.delete = fail_old
-        self.sync(rows)
-        replacement = self.state["cards"][detail_key]["message_id"]
-        self.assertNotEqual(replacement, old_detail)
-        self.assertEqual(
-            self.state["cards"][detail_key]["obsolete_message_ids"],
-            [old_detail],
-        )
-
-        rows[2]["review_status"] = "approved"
-        rows[2]["reviewed_by"] = "AK"
-        self.sync(rows)
-        self.assertIn(replacement, self.api.deleted)
-        self.assertEqual(
-            self.state["cards"][detail_key]["message_id"],
-            old_detail,
-        )
-
-        self.api.delete = original_delete
-        summary = self.sync(rows)
-        self.assertIn(detail_key, summary.deleted)
-        self.assertIn(old_detail, self.api.deleted)
-        self.assertNotIn(detail_key, self.state["cards"])
 
     def test_api_errors_are_collected_not_raised(self) -> None:
         class Broken(FakeApi):
@@ -1056,11 +720,6 @@ class StateTests(unittest.TestCase):
         }
         state["cards"] = {
             "review:old": {"message_id": 1},
-            "picks-detail:old:0": {
-                "message_id": 4,
-                "obsolete_message_ids": [5],
-                "event_id": "old",
-            },
             "picks:new": {"message_id": 2},
             "queue": {"message_id": 3},
         }
@@ -1069,17 +728,7 @@ class StateTests(unittest.TestCase):
             "lock:new": {"at": "", "event_id": "new"},
         }
         prune_state(state, now=NOW)
-        self.assertEqual(
-            sorted(state["cards"]),
-            ["picks-detail:old:0", "picks:new", "queue"],
-        )
-        self.assertIn("old", state["kickoffs"])
-        state["cards"]["picks-detail:old:0"].pop(
-            "obsolete_message_ids"
-        )
-        prune_state(state, now=NOW)
-        self.assertNotIn("picks-detail:old:0", state["cards"])
-        self.assertNotIn("old", state["kickoffs"])
+        self.assertEqual(sorted(state["cards"]), ["picks:new", "queue"])
         self.assertEqual(list(state["announced"]), ["lock:new"])
         self.assertEqual(list(state["kickoffs"]), ["new"])
 
@@ -1093,7 +742,7 @@ class StateTests(unittest.TestCase):
 class ConfigAndCallbackTests(unittest.TestCase):
     def test_config_from_env_requires_chat_and_both_topics(self) -> None:
         env = {
-            "MOE_BOT_TOKEN": "t",
+            "INTAKE_BOT_TOKEN": "t",
             "MOE_DESK_CHAT_ID": "-100123",
             "MOE_DESK_REVIEW_TOPIC": "2",
             "MOE_DESK_PICKS_TOPIC": "3",
@@ -1108,11 +757,19 @@ class ConfigAndCallbackTests(unittest.TestCase):
         )
         self.assertEqual(config.sync_seconds, 15)  # floor
         self.assertEqual(config.lock_warn_hours, 1.5)
-        for missing in ("MOE_BOT_TOKEN", "MOE_DESK_CHAT_ID", "MOE_DESK_REVIEW_TOPIC", "MOE_DESK_PICKS_TOPIC"):
+        self.assertEqual(config.with_username("@nflguesser_bot").bot_username, "nflguesser_bot")
+        for missing in ("INTAKE_BOT_TOKEN", "MOE_DESK_CHAT_ID", "MOE_DESK_REVIEW_TOPIC", "MOE_DESK_PICKS_TOPIC"):
             partial = {k: v for k, v in env.items() if k != missing}
             self.assertIsNone(desk_config_from_env(partial), missing)
         self.assertIsNone(desk_config_from_env({**env, "MOE_DESK_PICKS_TOPIC": "x"}))
         self.assertIsNone(desk_config_from_env({**env, "MOE_DESK_SCORES_TOPIC": ""}).scores_topic)
+
+    def test_parse_start_param(self) -> None:
+        self.assertEqual(parse_start_param("/start op_c884d868-1"), ("op", "c884d868-1"))
+        self.assertEqual(parse_start_param("/start@nflguesser_bot game_401"), ("game", "401"))
+        self.assertIsNone(parse_start_param("/start"))
+        self.assertIsNone(parse_start_param("/start hello"))
+        self.assertIsNone(parse_start_param("/start op_../x"))
 
     def test_desk_ids_report_and_topic_id(self) -> None:
         class Reply:
@@ -1251,7 +908,7 @@ class BotApiTests(unittest.TestCase):
     def test_scores_notice_posts_pre_block_or_declines(self) -> None:
         api = FakeApi()
         env = {
-            "MOE_BOT_TOKEN": "t",
+            "INTAKE_BOT_TOKEN": "t",
             "MOE_DESK_CHAT_ID": "-1",
             "MOE_DESK_REVIEW_TOPIC": "1",
             "MOE_DESK_PICKS_TOPIC": "2",

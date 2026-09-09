@@ -3545,14 +3545,6 @@ class GoogleSheetsMoeOpinionStore:
         )
         if current["generation_status"] != "valid":
             raise ValueError("Only valid opinions can be reviewed")
-        current_review_status = str(
-            current.get("review_status") or "pending"
-        ).strip().lower()
-        if current_review_status != "pending":
-            reviewed_by = str(current.get("reviewed_by") or "someone").strip()
-            raise ValueError(
-                f"Opinion already {current_review_status} by {reviewed_by}"
-            )
         current_output_sha256 = opinion_output_sha256(current)
         if current_output_sha256 != current["output_sha256"]:
             raise ValueError(
