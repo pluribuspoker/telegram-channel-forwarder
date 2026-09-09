@@ -256,6 +256,25 @@ class SheetCacheTest(unittest.TestCase):
         self.assertEqual(stale, ["rows"])
         self.assertEqual(intake_bot._SHEET_CACHE["opinions"][0], 41)
 
+    def test_serves_stale_value_on_a_google_outage(self) -> None:
+        response = Mock(status_code=503)
+        response.json.return_value = {
+            "error": {"code": 503, "message": "unavailable", "status": "UNAVAILABLE"}
+        }
+        loader = Mock(side_effect=[["rows"], APIError(response), APIError(response)])
+        with patch("intake_bot.time.monotonic", side_effect=[10, 41, 50]):
+            intake_bot._cached_sheet_value("opinions", 30, loader)
+            stale = intake_bot._cached_sheet_value("opinions", 30, loader)
+            again = intake_bot._cached_sheet_value("opinions", 30, loader)
+
+        self.assertEqual(stale, ["rows"])
+        self.assertEqual(again, ["rows"])
+        self.assertEqual(loader.call_count, 2)  # the reset timestamp is the backoff
+        # a cold cache still raises: there is nothing stale to serve
+        intake_bot._SHEET_CACHE.clear()
+        with self.assertRaises(APIError):
+            intake_bot._cached_sheet_value("opinions", 30, Mock(side_effect=APIError(response)))
+
     def test_win_prediction_tabs_are_cached_independently(self) -> None:
         totals = Mock()
         totals.get_all_records.return_value = [{"team": "Seattle Seahawks"}]
@@ -870,6 +889,12 @@ class _FakeOpinionStore:
     def list(self, event_id=None):
         return [dict(row) for row in self.rows]
 
+    def fetch(self, opinion_id):
+        for row in self.rows:
+            if row["opinion_id"] == opinion_id:
+                return dict(row)
+        return None
+
     def review(self, opinion_id, *, status, reviewed_by, note):
         for row in self.rows:
             if row["opinion_id"] == opinion_id:
@@ -932,6 +957,27 @@ class DeskReviewTest(unittest.TestCase):
         )
         self.assertEqual(intake_bot.desk_review("no", "x1", reviewer="SS")[1], False)
         self.assertEqual(len(self.store.reviews), 1)
+
+    def test_approval_patches_the_cache_so_cards_refresh_at_once(self) -> None:
+        intake_bot.desk_review("ok", "p1", reviewer="AK")
+        cached = intake_bot.load_cached_moe_opinions()
+        row = next(r for r in cached if r["opinion_id"] == "p1")
+        self.assertEqual((row["review_status"], row["reviewed_by"]), ("approved", "AK"))
+        self.assertTrue(row["reviewed_at_utc"])
+        # hash-verified like a sheet read: the picks card can show it now
+        self.assertIn("p1", [r["opinion_id"] for r in intake_bot.approved_moe_opinions(cached)])
+
+    def test_the_other_reviewers_tap_a_moment_ago_wins(self) -> None:
+        intake_bot.load_cached_moe_opinions()  # cache says p1 is pending
+        self.store.rows[0]["review_status"] = "approved"
+        self.store.rows[0]["reviewed_by"] = "SS"
+        self.assertEqual(
+            intake_bot.desk_review("ok", "p1", reviewer="AK"),
+            ("Already approved by SS.", False),
+        )
+        self.assertEqual(self.store.reviews, [])
+        cached = next(r for r in intake_bot.load_cached_moe_opinions() if r["opinion_id"] == "p1")
+        self.assertEqual(cached["reviewed_by"], "SS")  # the cache learned it too
 
     def test_approve_both_arms_reviews_rules_then_judge(self) -> None:
         text, ok = intake_bot.desk_review("okarms", "401", reviewer="SS")

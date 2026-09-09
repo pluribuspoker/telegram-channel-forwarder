@@ -3489,6 +3489,29 @@ class GoogleSheetsMoeOpinionStore:
             if str(row.get("event_id")) == str(event_id)
         ]
 
+    def fetch(self, opinion_id: str) -> dict[str, Any] | None:
+        """One row as the sheet holds it now (raw cell strings), or ``None``
+        when the id is absent or duplicated. Two small reads, so a button can
+        confirm a row is still pending without re-reading the whole tab."""
+        worksheet = self._spreadsheet().worksheet(OPINIONS_TAB)
+        ids = _call_with_retry(
+            worksheet.col_values, OPINION_HEADERS.index("opinion_id") + 1
+        )
+        matches = [
+            row_number
+            for row_number, value in enumerate(ids, start=1)
+            if value == opinion_id
+        ]
+        if len(matches) != 1:
+            return None
+        values = _call_with_retry(worksheet.row_values, matches[0])
+        return dict(
+            zip(
+                OPINION_HEADERS,
+                values + [""] * (len(OPINION_HEADERS) - len(values)),
+            )
+        )
+
     def review(
         self,
         opinion_id: str,

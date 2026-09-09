@@ -62,6 +62,7 @@ from moe import (
     latest_model_opinions as latest_moe_model_opinions,
     opinion_detail as moe_opinion_detail,
     opinion_model_picker as moe_opinion_model_picker,
+    opinion_output_sha256,
     opinion_summary as moe_opinion_summary,
 )
 from moe_ak import parse_ak_projection
@@ -1431,13 +1432,14 @@ def _cached_sheet_value(key: str, ttl: int, loader) -> Any:
         try:
             value = loader()
         except APIError as exc:
-            if (
-                cached is not None
-                and getattr(exc.response, "status_code", None) == 429
+            status = getattr(exc.response, "status_code", None)
+            # Quota (429) and Google-side outages (5xx) both get the last
+            # good value for one more TTL; the timestamp reset is the backoff.
+            if cached is not None and (
+                status == 429 or (isinstance(status, int) and status >= 500)
             ):
                 log.warning(
-                    "Sheets quota exceeded refreshing %s; serving stale cache",
-                    key,
+                    "Sheets %s refreshing %s; serving stale cache", status, key
                 )
                 _SHEET_CACHE[key] = (now, cached[1])
                 return cached[1]
@@ -1560,29 +1562,48 @@ def desk_sync_once(config: Any, api: Any, *, now: datetime | None = None) -> Any
 
 
 def desk_review(action: str, target: str, *, reviewer: str) -> tuple[str, bool]:
-    """Apply a desk button. Re-reads the sheet first (a write never
-    trusts the 30 s cache), refuses anything that is not pending, then
-    runs the store's hash-checked review signed with the reviewer's
-    display name. Returns the toast text and whether it succeeded."""
-    invalidate_sheet_cache("moe_opinions")
+    """Apply a desk button. Picks the target rows from the cached tab,
+    confirms each is still pending with a single-row read (``store.fetch``)
+    so the other reviewer's tap a moment ago is respected, runs the store's
+    hash-checked review signed with the reviewer's display name, then
+    patches the cached rows so the cards re-render at once without
+    re-reading the whole tab (the next timed pass re-reads anyway).
+    Returns the outcome text and whether it succeeded."""
     rows = load_cached_moe_opinions()
     targets, error = desk_review_targets(action, target, rows)
     if error:
         return error, False
     status = "rejected" if action == "no" else "approved"
     store = _moe_store()
+    fetch = getattr(store, "fetch", None)
     done: list[str] = []
-    try:
-        for row in targets:
-            store.review(
-                str(row["opinion_id"]),
-                status=status,
-                reviewed_by=reviewer,
-                note="",
-            )
-            done.append(str(row.get("expert_name") or row.get("expert_id")))
-    finally:
-        invalidate_sheet_cache("moe_opinions")
+    reviewed_at = datetime.now(timezone.utc).isoformat()
+    for row in targets:
+        opinion_id = str(row["opinion_id"])
+        if fetch is not None:
+            live = fetch(opinion_id)
+            if live is None:
+                return "That row is no longer in the sheet.", False
+            live_status = str(live.get("review_status") or "pending").strip().lower()
+            if live_status != "pending":
+                by = str(live.get("reviewed_by") or "someone").strip()
+                row.update(
+                    review_status=live_status,
+                    reviewed_by=by,
+                    reviewed_at_utc=str(live.get("reviewed_at_utc") or ""),
+                    approved_output_sha256=str(live.get("approved_output_sha256") or ""),
+                )
+                return f"Already {live_status} by {by}.", False
+        store.review(opinion_id, status=status, reviewed_by=reviewer, note="")
+        row["review_status"] = status
+        row["reviewed_by"] = reviewer
+        row["reviewed_at_utc"] = reviewed_at
+        row["review_note"] = ""
+        row["approved_output_sha256"] = (
+            opinion_output_sha256(row) if status == "approved" else ""
+        )
+        done.append(str(row.get("expert_name") or row.get("expert_id")))
+    _set_sheet_cache("moe_opinions", rows)
     verb = "Rejected" if status == "rejected" else "Approved"
     return f"{verb} {', '.join(done)} as {reviewer}.", True
 
@@ -1939,37 +1960,86 @@ async def main() -> None:
             "celebrity": None,
         }
 
-    async def resync_desk() -> None:
+    async def resync_desk() -> str | None:
+        """Re-render the cards now; the problem text when that failed."""
         if desk["config"] is None or desk["api"] is None:
-            return
+            return None
         try:
             await asyncio.to_thread(desk_sync_once, desk["config"], desk["api"])
         except Exception as exc:  # noqa: BLE001 - the loop retries
             print(f"desk: sync after a review failed: {type(exc).__name__}: {exc}")
+            return f"{type(exc).__name__}: {exc}"[:200]
+        return None
+
+    desk_inflight: set[str] = set()
+    desk_tasks: set[asyncio.Task] = set()
+
+    async def desk_reply(event, text: str) -> None:
+        """A silent reply under the card the tap came from — both reviewers
+        see the outcome, and it survives Telegram's callback timeout."""
+        try:
+            await event.reply(text, silent=True)
+        except Exception as exc:  # noqa: BLE001 - logged, nothing else to do
+            print(f"desk: reply failed: {type(exc).__name__}: {exc}")
+
+    async def finish_desk_action(event, action: str, target: str, key: str) -> None:
+        try:
+            try:
+                reviewers = await asyncio.to_thread(load_desk_reviewers)
+            except Exception as exc:  # noqa: BLE001 - Sheets down
+                await desk_reply(
+                    event,
+                    "❌ Could not read the reviewer list "
+                    f"({type(exc).__name__}: {exc}). Tap again in a minute."[:400],
+                )
+                return
+            reviewer = reviewers.get(event.sender_id)
+            if reviewer is None:
+                await desk_reply(
+                    event,
+                    "❌ Reviewers only. Add the reviewer role to your allowed_users row.",
+                )
+                return
+            try:
+                text, ok = await asyncio.to_thread(
+                    desk_review, action, target, reviewer=reviewer
+                )
+            except Exception as exc:  # noqa: BLE001 - shown under the card
+                text, ok = f"{type(exc).__name__}: {exc}"[:350], False
+            if not ok:
+                await desk_reply(event, f"❌ {text}")
+                return
+            print(f"desk: {text}")
+            problem = await resync_desk()
+            if problem:
+                await desk_reply(
+                    event,
+                    f"✅ {text} The card could not refresh yet ({problem}); "
+                    "it will on the next pass.",
+                )
+        finally:
+            desk_inflight.discard(key)
 
     async def handle_desk_callback(event, data: str) -> None:
         parsed = parse_desk_callback(data)
         if parsed is None:
             await event.answer("Unknown desk action.", alert=True)
             return
-        reviewers = await asyncio.to_thread(load_desk_reviewers)
-        reviewer = reviewers.get(event.sender_id)
-        if reviewer is None:
-            await event.answer(
-                "Reviewers only. Add the reviewer role to your allowed_users row.",
-                alert=True,
-            )
-            return
         action, target = parsed
+        key = f"{action}:{target}"
+        if key in desk_inflight:
+            await event.answer("Still working on the last tap.")
+            return
+        desk_inflight.add(key)
+        # Answer at once: Telegram discards a callback answer after a few
+        # seconds, and every step of the work reads the sheet.
         try:
-            text, ok = await asyncio.to_thread(
-                desk_review, action, target, reviewer=reviewer
-            )
-        except Exception as exc:  # noqa: BLE001 - shown to the tapper
-            text, ok = f"Review refused: {exc}"[:200], False
-        await event.answer(text, alert=not ok)
-        if ok:
-            await resync_desk()
+            await event.answer("Working on it…")
+        except Exception as exc:  # noqa: BLE001 - the work still runs
+            print(f"desk: answer failed: {type(exc).__name__}: {exc}")
+        task = asyncio.create_task(finish_desk_action(event, action, target, key))
+        desk_tasks.add(task)
+        task.add_done_callback(desk_tasks.discard)
 
     @client.on(
         events.NewMessage(
@@ -3315,6 +3385,11 @@ async def main() -> None:
 
         async def desk_loop() -> None:
             while True:
+                # Keep the reviewer list warm so a tap never waits on it.
+                try:
+                    await asyncio.to_thread(load_desk_reviewers)
+                except Exception as exc:  # noqa: BLE001 - Sheets down
+                    print(f"desk: reviewers refresh failed: {type(exc).__name__}: {exc}")
                 try:
                     await asyncio.to_thread(
                         desk_sync_once, desk["config"], desk["api"]
