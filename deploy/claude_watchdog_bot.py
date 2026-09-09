@@ -26,6 +26,8 @@ Requires: pip install python-telegram-bot (already in venv)
 Env: WATCHDOG_BOT_TOKEN, WATCHDOG_USER_ID in .env
 """
 
+import html
+import json
 import os
 import re
 import subprocess
@@ -51,6 +53,13 @@ if env_file.exists():
 TOKEN = os.environ.get("WATCHDOG_BOT_TOKEN", "")
 ALLOWED_USER_ID = int(os.environ.get("WATCHDOG_USER_ID", "0"))
 SERVICE = "claude-channels.service"
+
+# --- nightly-audit card buttons (scripts/ungraded_audit.py sends them) ----
+APP_DIR = Path(__file__).resolve().parent.parent
+VENV_PY = "/home/forwarder/venv/bin/python"
+AUDIT_CARDS_FILE = APP_DIR / "logs" / "ungraded_audit_cards.json"
+AUDIT_CB_RE = re.compile(r"^aud:([0-9a-f]{10}):(W|L|P)$")
+AUDIT_VERDICT = {"W": "WIN", "L": "LOSS", "P": "PUSH"}
 
 if not TOKEN or not ALLOWED_USER_ID:
     print("Set WATCHDOG_BOT_TOKEN and WATCHDOG_USER_ID in .env")
@@ -204,6 +213,58 @@ def mem_summary() -> str:
     )
 
 
+async def handle_audit_callback(update, context):
+    """WIN/LOSS/PUSH tap on a nightly-audit card → scripts/audit_mark.py,
+    then re-render the card: status line appended, verdict buttons gone,
+    the copy_text follow-up button kept."""
+    q = update.callback_query
+    if not q:
+        return
+    if q.from_user.id != ALLOWED_USER_ID:
+        await q.answer()
+        return
+    m = AUDIT_CB_RE.match(q.data or "")
+    if not m:
+        await q.answer("unknown button")
+        return
+    card_id, verdict = m.group(1), AUDIT_VERDICT[m.group(2)]
+    await q.answer(f"applying {verdict}…")
+    out = await asyncio.to_thread(
+        run_argv,
+        [VENV_PY, str(APP_DIR / "scripts" / "audit_mark.py"), card_id, verdict],
+        180,
+    )
+    status = ((out or "(no output)").strip().splitlines() or ["(no output)"])[-1][:400]
+
+    try:
+        card = json.loads(AUDIT_CARDS_FILE.read_text(encoding="utf-8")).get(card_id) or {}
+    except (OSError, json.JSONDecodeError):
+        card = {}
+    rows = [
+        row for row in (card.get("keyboard") or {}).get("inline_keyboard", [])
+        if not any(str(b.get("callback_data", "")).startswith("aud:") for b in row)
+    ]
+    try:
+        from telegram import InlineKeyboardMarkup
+
+        markup = (InlineKeyboardMarkup.de_json({"inline_keyboard": rows}, context.bot)
+                  if rows else None)
+        if card.get("html"):
+            await q.edit_message_text(
+                f"{card['html']}\n\n{html.escape(status)}",
+                parse_mode="HTML", reply_markup=markup,
+                disable_web_page_preview=True,
+            )
+        else:
+            await q.message.reply_text(status)
+    except Exception as exc:
+        log.warning("audit card edit failed: %s", exc)
+        try:
+            await q.message.reply_text(status)
+        except Exception:
+            pass
+
+
 async def handle_message(update, context):
     """Handle incoming messages."""
     msg = update.message
@@ -322,11 +383,13 @@ async def handle_message(update, context):
 
 
 def main():
-    from telegram.ext import ApplicationBuilder, MessageHandler, filters
+    from telegram.ext import (ApplicationBuilder, CallbackQueryHandler,
+                              MessageHandler, filters)
 
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(handle_audit_callback))
     log.info("Watchdog bot started (user_id=%d)", ALLOWED_USER_ID)
     app.run_polling(drop_pending_updates=True)
 

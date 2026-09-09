@@ -26,11 +26,14 @@ unattended-upgrades window). It:
 5. pushes any commits the agents made, restarts ``grade-daemon`` if code
    changed (the tracker timer picks new code up by itself; the listener is
    NEVER auto-restarted — flood-wait caution — only flagged in the DM);
-6. DMs the operator through the watchdog bot (Bot API HTML): an emoji
-   headline per pick, the issue/action prose collapsed in an expandable
-   blockquote. Silent when the scan found nothing (watchdog convention:
-   silent-unless-alerting; the scan ledger line is still written every
-   night).
+6. DMs the operator through the watchdog bot (Bot API HTML): a run header,
+   then one actionable card per pick — emoji headline hyperlinked to the
+   pick's message, prose collapsed in an expandable blockquote,
+   WIN/LOSS/PUSH buttons while unresolved (handled by claude-watchdog.service
+   via scripts/audit_mark.py; card facts in logs/ungraded_audit_cards.json)
+   and a copy_text follow-up prompt. Silent when the scan found nothing
+   (watchdog convention: silent-unless-alerting; the scan ledger line is
+   still written every night).
 
 Every agent call bills the Claude Code subscription (OAuth token, same as the
 interactive session and the god judge). A failed call is logged and reported,
@@ -47,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import html
 import json
 import os
@@ -75,6 +79,8 @@ RESOLVED = ("WIN", "LOSS", "PUSH", "VOID")
 
 CACHE_FILE = ROOT / "parse_cache.json"
 STATE_FILE = ROOT / "logs" / "ungraded_audit_state.json"
+CARDS_FILE = ROOT / "logs" / "ungraded_audit_cards.json"
+CARD_RETENTION_DAYS = 45
 LOCK_FILE = ROOT / "logs" / ".ungraded_audit.lock"
 TRANSCRIPT_ROOT = ROOT / "logs" / "ungraded_audit"
 DEFAULT_RUNS_LOG = ROOT / "logs" / "ungraded_audit_runs.jsonl"
@@ -594,11 +600,14 @@ def git_revert_paths(paths: set[str]) -> list[str]:
     return reverted
 
 
-def send_watchdog_dm(text: str, *, as_html: bool = False) -> bool:
+def send_watchdog_dm(text: str, *, as_html: bool = False,
+                     reply_markup: dict | None = None) -> bool:
     """DM the operator through the watchdog bot (same send as god_judge_runner).
 
     as_html sends Bot API HTML (expandable blockquotes need it); a rejected
     payload falls back to a tag-stripped plain send so the report still lands.
+    reply_markup is a raw Bot API inline keyboard dict (verdict callbacks are
+    handled by claude-watchdog.service; copy_text buttons are client-side).
     """
     token = os.environ.get("WATCHDOG_BOT_TOKEN", "")
     uid = os.environ.get("WATCHDOG_USER_ID", "")
@@ -608,6 +617,8 @@ def send_watchdog_dm(text: str, *, as_html: bool = False) -> bool:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
 
     def _post(payload: dict[str, str]) -> bool:
+        if reply_markup:
+            payload["reply_markup"] = json.dumps(reply_markup)
         data = urllib.parse.urlencode(payload).encode()
         with urllib.request.urlopen(
             urllib.request.Request(url, data=data), timeout=20
@@ -642,31 +653,115 @@ OUTCOME_BADGE = {  # (emoji, label) per AUDIT_RESULT outcome
 }
 
 
-def compose_dm(results: list[dict], notes: list[str], *, run_date: str) -> str:
-    """Bot API HTML: one scannable headline per pick, the agent's issue/action
-    prose in a collapsed <blockquote expandable> under it (desk-card pattern).
+# Outcomes whose pick is already settled — no WIN/LOSS/PUSH buttons.
+SETTLED_OUTCOMES = ("graded", "no_issue")
+
+
+def _card_id(run_date: str, primary_key: str) -> str:
+    return hashlib.sha1(f"{run_date}|{primary_key}".encode()).hexdigest()[:10]
+
+
+def _follow_up_prompt(r: dict, *, run_date: str) -> str:
+    """Short prompt the operator can paste at the Claude session to follow up
+    on this pick's audit (copy_text buttons cap at 256 chars)."""
+    primary = (r.get("keys") or [""])[0]
+    safe_key = primary.replace(":", "_")
+    return (f"inv follow up nightly audit {run_date}: "
+            f"{r.get('capper') or '?'} — {(r.get('desc') or 'pick')[:48]} | "
+            f"key {primary} | outcome {r['outcome']} | transcript "
+            f"logs/ungraded_audit/{run_date}/{safe_key}.stream.jsonl")[:256]
+
+
+def compose_header(results: list[dict], notes: list[str], *,
+                   run_date: str) -> str:
+    """Run summary: outcome tally + the runner's push/restart/⚠ notes.
     Static ledger/transcript paths stay out — they never change."""
     esc = html.escape
-    lines = [f"pickbot: nightly ungraded audit {run_date} — "
-             f"{len(results)} pick(s) examined"]
+    tally: dict[str, int] = {}
     for r in results:
-        desc = (r.get("desc") or "pick")[:48]
-        copies = f", ×{r['n_keys']}" if r.get("n_keys", 1) > 1 else ""
-        emoji, label = OUTCOME_BADGE.get(r["outcome"], ("❓", r["outcome"]))
-        line = (f"{emoji} <b>{esc(r.get('capper') or '?')} — {esc(desc)}</b> "
-                f"({esc(r['ref_date'])}{copies}) — {label}")
-        if r.get("commits"):
-            line += f" · {len(r['commits'])} commit(s)"
-        if r.get("parked"):
-            line += " [parked]"
-        lines.append(line)
-        detail = esc(r.get("issue") or "").strip()
-        if r.get("action") and r["action"].lower() not in ("", "none"):
-            detail += ("\n→ " if detail else "→ ") + esc(r["action"])
-        if detail:
-            lines.append(f"<blockquote expandable>{detail}</blockquote>")
+        tally[r["outcome"]] = tally.get(r["outcome"], 0) + 1
+    bits = " ".join(f"{OUTCOME_BADGE.get(o, ('❓', o))[0]}{n}"
+                    for o, n in sorted(tally.items()))
+    lines = [f"pickbot: nightly ungraded audit {run_date} — "
+             f"{len(results)} pick(s): {bits}".rstrip(": ")]
     lines.extend(esc(n) for n in notes)
     return "\n".join(lines)
+
+
+def compose_card(r: dict, *, run_date: str) -> tuple[str, dict]:
+    """One audited pick group → (Bot API HTML, inline keyboard).
+
+    Headline links the pick's Telegram message; the agent's issue/action
+    prose collapses into a <blockquote expandable> (desk-card pattern).
+    Still-unresolved picks get WIN/LOSS/PUSH buttons (handled by
+    claude-watchdog.service → scripts/audit_mark.py); every card gets a
+    copy_text follow-up prompt button."""
+    esc = html.escape
+    keys = r.get("keys") or []
+    primary = keys[0] if keys else ""
+    desc = (r.get("desc") or "pick")[:48]
+    copies = f", ×{r['n_keys']}" if r.get("n_keys", 1) > 1 else ""
+    emoji, label = OUTCOME_BADGE.get(r["outcome"], ("❓", r["outcome"]))
+    title = f"{esc(r.get('capper') or '?')} — {esc(desc)}"
+    link = _tme_link(primary)
+    if link:
+        title = f'<a href="{link}">{title}</a>'
+    line = f"{emoji} <b>{title}</b> ({esc(r['ref_date'])}{copies}) — {label}"
+    if r.get("commits"):
+        line += f" · {len(r['commits'])} commit(s)"
+    if r.get("parked"):
+        line += " [parked]"
+    lines = [line]
+    extra = [f'<a href="{_tme_link(k)}">copy {i}</a>'
+             for i, k in enumerate(keys[1:], 2) if _tme_link(k)]
+    if extra:
+        lines.append("fan-out: " + " · ".join(extra))
+    detail = esc(r.get("issue") or "").strip()
+    if r.get("action") and r["action"].lower() not in ("", "none"):
+        detail += ("\n→ " if detail else "→ ") + esc(r["action"])
+    if detail:
+        lines.append(f"<blockquote expandable>{detail}</blockquote>")
+
+    cid = _card_id(run_date, primary)
+    rows = []
+    if r["outcome"] not in SETTLED_OUTCOMES:
+        rows.append([
+            {"text": "✅ Win", "callback_data": f"aud:{cid}:W"},
+            {"text": "❌ Loss", "callback_data": f"aud:{cid}:L"},
+            {"text": "🟨 Push", "callback_data": f"aud:{cid}:P"},
+        ])
+    rows.append([{"text": "📋 Follow-up prompt",
+                  "copy_text": {"text": _follow_up_prompt(r, run_date=run_date)}}])
+    return "\n".join(lines), {"inline_keyboard": rows}
+
+
+def register_cards(cards: list[dict], *, path: Path = CARDS_FILE) -> None:
+    """Persist card_id → group facts so audit_mark.py can resolve a button
+    tap (callback_data caps at 64 bytes — too small for the keys). The card's
+    html/keyboard ride along so the bot can re-render after marking."""
+    try:
+        reg = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(reg, dict):
+            reg = {}
+    except (OSError, json.JSONDecodeError):
+        reg = {}
+    floor = (datetime.now(ET).date()
+             - timedelta(days=CARD_RETENTION_DAYS)).isoformat()
+    reg = {cid: c for cid, c in reg.items()
+           if isinstance(c, dict) and str(c.get("run_date") or "") >= floor}
+    for c in cards:
+        r = c["r"]
+        reg[c["card_id"]] = {
+            "run_date": c["run_date"], "keys": r.get("keys") or [],
+            "capper": r.get("capper") or "", "desc": r.get("desc") or "",
+            "outcome": r["outcome"], "html": c["html"],
+            "keyboard": c["markup"], "marked": None,
+        }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(reg, indent=2, sort_keys=True) + "\n",
+                   encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def prune_old_transcripts(root: Path, *, today_et: date) -> None:
@@ -821,6 +916,7 @@ def run(args: argparse.Namespace) -> int:
         results.append({
             "capper": group["capper"], "desc": desc,
             "ref_date": group["ref_date"], "n_keys": len(group["keys"]),
+            "keys": list(group["keys"]),
             "outcome": audit["outcome"], "issue": audit["issue"],
             "action": audit["action"], "commits": record["commits"],
             "parked": parked,
@@ -865,13 +961,25 @@ def run(args: argparse.Namespace) -> int:
 
     prune_old_transcripts(TRANSCRIPT_ROOT, today_et=today_et)
 
-    dm = compose_dm(results, notes, run_date=run_date)
-    print("---\n" + dm)
+    header = compose_header(results, notes, run_date=run_date)
+    cards = []
+    for r in results:
+        card_html, markup = compose_card(r, run_date=run_date)
+        cards.append({"card_id": _card_id(run_date, (r.get("keys") or [""])[0]),
+                      "run_date": run_date, "html": card_html,
+                      "markup": markup, "r": r})
+    print("---\n" + header)
+    for c in cards:
+        print("---\n" + c["html"])
     if results or any(n.startswith("⚠") for n in notes):
         if args.no_dm:
             print("(DM suppressed by --no-dm)")
         else:
-            send_watchdog_dm(dm, as_html=True)
+            register_cards(cards)
+            send_watchdog_dm(header, as_html=True)
+            for c in cards:
+                send_watchdog_dm(c["html"], as_html=True,
+                                 reply_markup=c["markup"])
     return 0
 
 

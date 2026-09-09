@@ -12,12 +12,16 @@ import unittest
 from datetime import date
 
 from scripts.ungraded_audit import (
+    _card_id,
+    _follow_up_prompt,
     _stale_reference_date,
     _unresolved_indices,
     build_prompt,
-    compose_dm,
+    compose_card,
+    compose_header,
     parse_audit_result,
     record_attempt,
+    register_cards,
     scan,
 )
 
@@ -201,43 +205,86 @@ class RecordAttempt(unittest.TestCase):
 
 def dm_result(**kw):
     base = {"capper": "Cap", "desc": "Elks ML (-115)", "ref_date": "2026-09-07",
-            "n_keys": 1, "outcome": "graded", "issue": "", "action": "",
-            "commits": [], "parked": False}
+            "n_keys": 1, "keys": ["-1002123:456"], "outcome": "graded",
+            "issue": "", "action": "", "commits": [], "parked": False}
     base.update(kw)
     return base
 
 
-class ComposeDm(unittest.TestCase):
-    def test_headline_bold_with_detail_in_expandable_quote(self):
-        dm = compose_dm([dm_result(
+class ComposeCards(unittest.TestCase):
+    def test_headline_links_message_detail_in_expandable_quote(self):
+        card, _ = compose_card(dm_result(
             issue="cfl.ca went SPA & parser found <0> games",
             action="rewrote _parse_cfl_schedule", n_keys=2,
-            commits=["abc"], parked=True)], [], run_date="2026-09-09")
-        self.assertIn("✅ <b>Cap — Elks ML (-115)</b> (2026-09-07, ×2) "
-                      "— graded · 1 commit(s) [parked]", dm)
+            keys=["-1002123:456", "-1004567:99"],
+            commits=["abc"], parked=True), run_date="2026-09-09")
+        self.assertIn('✅ <b><a href="https://t.me/c/2123/456">Cap — '
+                      "Elks ML (-115)</a></b> (2026-09-07, ×2) "
+                      "— graded · 1 commit(s) [parked]", card)
+        self.assertIn('fan-out: <a href="https://t.me/c/4567/99">copy 2</a>',
+                      card)
         self.assertIn("<blockquote expandable>cfl.ca went SPA &amp; parser "
                       "found &lt;0&gt; games\n→ rewrote _parse_cfl_schedule"
-                      "</blockquote>", dm)
+                      "</blockquote>", card)
 
-    def test_no_quote_when_agent_had_nothing_to_say(self):
-        dm = compose_dm([dm_result(outcome="no_issue", action="none")],
-                        [], run_date="2026-09-09")
-        self.assertIn("👌", dm)
-        self.assertIn("already resolved", dm)
-        self.assertNotIn("<blockquote", dm)
+    def test_verdict_buttons_only_while_unresolved(self):
+        cid = _card_id("2026-09-09", "-1002123:456")
+        _, kb = compose_card(dm_result(outcome="needs_human"),
+                             run_date="2026-09-09")
+        flat = [b for row in kb["inline_keyboard"] for b in row]
+        self.assertEqual(
+            [f"aud:{cid}:W", f"aud:{cid}:L", f"aud:{cid}:P"],
+            [b["callback_data"] for b in flat if "callback_data" in b])
+        card, kb = compose_card(dm_result(outcome="graded"),
+                                run_date="2026-09-09")
+        flat = [b for row in kb["inline_keyboard"] for b in row]
+        self.assertFalse([b for b in flat if "callback_data" in b])
+        self.assertNotIn("<blockquote", card)  # no prose → no quote
+        (follow,) = [b for b in flat if "copy_text" in b]
+        self.assertLessEqual(len(follow["copy_text"]["text"]), 256)
 
-    def test_unknown_outcome_degrades_and_notes_are_escaped(self):
-        dm = compose_dm([dm_result(outcome="exploded")],
-                        ["pushed 4 commit(s) <fast & loose>"],
-                        run_date="2026-09-09")
-        self.assertIn("❓", dm)
-        self.assertIn("exploded", dm)
-        self.assertIn("pushed 4 commit(s) &lt;fast &amp; loose&gt;", dm)
+    def test_follow_up_prompt_is_inv_trigger_with_key_and_transcript(self):
+        p = _follow_up_prompt(dm_result(desc="X" * 200,
+                                        outcome="needs_human"),
+                              run_date="2026-09-09")
+        self.assertTrue(p.startswith("inv follow up nightly audit"))
+        self.assertLessEqual(len(p), 256)
+        p = _follow_up_prompt(dm_result(outcome="needs_human"),
+                              run_date="2026-09-09")
+        self.assertIn("key -1002123:456", p)
+        self.assertIn("logs/ungraded_audit/2026-09-09/-1002123_456"
+                      ".stream.jsonl", p)
 
-    def test_static_footer_paths_are_gone(self):
-        dm = compose_dm([dm_result()], [], run_date="2026-09-09")
-        self.assertNotIn("ledger:", dm)
-        self.assertNotIn("ungraded_audit_runs.jsonl", dm)
+    def test_header_tallies_outcomes_and_escapes_notes(self):
+        header = compose_header(
+            [dm_result(), dm_result(outcome="needs_human")],
+            ["pushed 4 commit(s) <fast & loose>"], run_date="2026-09-09")
+        self.assertIn("2 pick(s)", header)
+        self.assertIn("✅1", header)
+        self.assertIn("🙋1", header)
+        self.assertIn("pushed 4 commit(s) &lt;fast &amp; loose&gt;", header)
+        self.assertNotIn("ledger:", header)
+
+    def test_register_cards_stores_group_and_prunes_old(self):
+        import json as _json
+        import tempfile
+        from pathlib import Path as _P
+        r = dm_result(outcome="needs_human")
+        card_html, kb = compose_card(r, run_date="2026-09-09")
+        with tempfile.TemporaryDirectory() as td:
+            path = _P(td) / "cards.json"
+            path.write_text(_json.dumps(
+                {"deadbeef00": {"run_date": "2001-01-01"}}))
+            register_cards([{"card_id": "abc123def0", "run_date": "2026-09-09",
+                             "html": card_html, "markup": kb, "r": r}],
+                           path=path)
+            reg = _json.loads(path.read_text())
+            self.assertNotIn("deadbeef00", reg)  # pruned
+            saved = reg["abc123def0"]
+            self.assertEqual(["-1002123:456"], saved["keys"])
+            self.assertIsNone(saved["marked"])
+            self.assertEqual(card_html, saved["html"])
+            self.assertEqual(kb, saved["keyboard"])
 
 
 class Prompt(unittest.TestCase):

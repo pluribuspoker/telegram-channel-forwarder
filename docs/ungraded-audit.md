@@ -85,20 +85,47 @@ untracked leftovers are reported, not deleted.
 
 ## Operator interface
 
-- DM via the watchdog bot, **Bot API HTML** (2026-09-09): one bold headline
-  per pick — outcome emoji + label (`OUTCOME_BADGE`), capper, description,
-  ref date, `×N` copies, commit count, `[parked]` — with the agent's
-  issue/action prose collapsed in a `<blockquote expandable>` underneath
-  (the desk-card "Why" pattern; the prompt asks for telegraph-style ≤90-char
-  issue/action — hashes/dates/test names belong in the ledger). Footer notes
-  for push/restart/leftovers only; the static ledger/transcript paths are
-  deliberately gone from the DM (they never change — see Audit trail above).
-  A Telegram rejection of the HTML falls back to a tag-stripped plain send
-  (`send_watchdog_dm(as_html=True)`), so a markup slip can't lose the
-  report. **Silent when the scan found nothing** (watchdog convention) — the
-  nightly `kind: "scan"` ledger line is still written, and
-  `UNGRADED_AUDIT_HEALTHCHECK_URL` (unset today = silent no-op) is the
-  liveness net.
+- DM via the watchdog bot, **Bot API HTML, one message per pick**
+  (2026-09-09): a header (outcome tally + the runner's push/restart/⚠
+  notes) followed by one **card** per audited group. Card = bold headline —
+  outcome emoji + label (`OUTCOME_BADGE`), capper + description
+  **hyperlinked to the pick's t.me message** (fan-out copies linked on a
+  second line), ref date, `×N`, commit count, `[parked]` — with the agent's
+  issue/action prose collapsed in a `<blockquote expandable>` (the
+  desk-card "Why" pattern; the prompt asks for telegraph-style ≤90-char
+  issue/action — hashes/dates/test names belong in the ledger). The static
+  ledger/transcript paths are deliberately gone from the DM (they never
+  change — see Audit trail above). A Telegram rejection of the HTML falls
+  back to a tag-stripped plain send (`send_watchdog_dm(as_html=True)`), so
+  a markup slip can't lose the report. **Silent when the scan found
+  nothing** (watchdog convention) — the nightly `kind: "scan"` ledger line
+  is still written, and `UNGRADED_AUDIT_HEALTHCHECK_URL` (unset today =
+  silent no-op) is the liveness net.
+- **Actionable cards** (2026-09-09): every card carries a 📋 follow-up
+  button — a Bot API `copy_text` button (client-side, ≤256 chars) that
+  copies an `inv …` prompt naming the pick, its cache key, outcome, and
+  transcript path, ready to paste at the Claude session. Cards whose pick is
+  still unresolved (every outcome except graded / no_issue) also get
+  **✅ Win / ❌ Loss / 🟨 Push** buttons. Card facts persist in
+  `logs/ungraded_audit_cards.json` (`register_cards`, 45-day retention —
+  `callback_data` caps at 64 bytes, too small for the keys).
+- **Verdict tap flow**: `claude-watchdog.service` (the interactive watchdog
+  bot handles the callback; deploy = restart that service) runs
+  `scripts/audit_mark.py <card_id> <verdict>`, which writes the verdict into
+  every still-unresolved leg of every fan-out copy via the second-writer-safe
+  cache API (`tracker_cache._load_pending_cache`/`_save_pending_cache` — no
+  daemon stop), clears `_failed` so the pipeline picks the entry back up
+  (grade-daemon emojis + broadcasts within ~10 s; the tracker's 5-min pass
+  covers send_as_user channels), parks every key in the audit state (the
+  audit never touches the pick again), and stamps the card `marked`. The bot
+  then re-renders the card: status line appended, verdict buttons gone,
+  follow-up kept. Settled legs are never overwritten; a second tap is a
+  no-op (exit 3). Picks older than `MAX_AGE_DAYS` (12) are refused — a
+  fully-resolved entry past `tracker_cache._EVICT_AFTER_DAYS` (14) would be
+  evicted before broadcasting, silently losing the verdict; use the
+  follow-up prompt for those. Manual CLI:
+  `~/venv/bin/python scripts/audit_mark.py <card_id> WIN|LOSS|PUSH`.
+  Test: `scripts/test_audit_mark.py`.
 - `--dry-run` — plan + first prompt, calls nothing, writes only the scan
   ledger line. `--target <key>` (repeatable) — audit a specific entry now,
   bypassing scan/state gates. `--rearm <key>` — clear a parked key so the
