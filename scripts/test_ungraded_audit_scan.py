@@ -15,6 +15,7 @@ from scripts.ungraded_audit import (
     _stale_reference_date,
     _unresolved_indices,
     build_prompt,
+    compose_dm,
     parse_audit_result,
     record_attempt,
     scan,
@@ -196,6 +197,47 @@ class RecordAttempt(unittest.TestCase):
         self.assertTrue(
             record_attempt(state, ["a"], "error", attempt_cap=2))
         self.assertIn("attempt cap", state["a"]["parked_reason"])
+
+
+def dm_result(**kw):
+    base = {"capper": "Cap", "desc": "Elks ML (-115)", "ref_date": "2026-09-07",
+            "n_keys": 1, "outcome": "graded", "issue": "", "action": "",
+            "commits": [], "parked": False}
+    base.update(kw)
+    return base
+
+
+class ComposeDm(unittest.TestCase):
+    def test_headline_bold_with_detail_in_expandable_quote(self):
+        dm = compose_dm([dm_result(
+            issue="cfl.ca went SPA & parser found <0> games",
+            action="rewrote _parse_cfl_schedule", n_keys=2,
+            commits=["abc"], parked=True)], [], run_date="2026-09-09")
+        self.assertIn("✅ <b>Cap — Elks ML (-115)</b> (2026-09-07, ×2) "
+                      "— graded · 1 commit(s) [parked]", dm)
+        self.assertIn("<blockquote expandable>cfl.ca went SPA &amp; parser "
+                      "found &lt;0&gt; games\n→ rewrote _parse_cfl_schedule"
+                      "</blockquote>", dm)
+
+    def test_no_quote_when_agent_had_nothing_to_say(self):
+        dm = compose_dm([dm_result(outcome="no_issue", action="none")],
+                        [], run_date="2026-09-09")
+        self.assertIn("👌", dm)
+        self.assertIn("already resolved", dm)
+        self.assertNotIn("<blockquote", dm)
+
+    def test_unknown_outcome_degrades_and_notes_are_escaped(self):
+        dm = compose_dm([dm_result(outcome="exploded")],
+                        ["pushed 4 commit(s) <fast & loose>"],
+                        run_date="2026-09-09")
+        self.assertIn("❓", dm)
+        self.assertIn("exploded", dm)
+        self.assertIn("pushed 4 commit(s) &lt;fast &amp; loose&gt;", dm)
+
+    def test_static_footer_paths_are_gone(self):
+        dm = compose_dm([dm_result()], [], run_date="2026-09-09")
+        self.assertNotIn("ledger:", dm)
+        self.assertNotIn("ungraded_audit_runs.jsonl", dm)
 
 
 class Prompt(unittest.TestCase):

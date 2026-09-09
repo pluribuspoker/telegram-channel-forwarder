@@ -26,10 +26,11 @@ unattended-upgrades window). It:
 5. pushes any commits the agents made, restarts ``grade-daemon`` if code
    changed (the tracker timer picks new code up by itself; the listener is
    NEVER auto-restarted — flood-wait caution — only flagged in the DM);
-6. DMs the operator through the watchdog bot: one line per pick — outcome,
-   what the issue was, what changed. Silent when the scan found nothing
-   (watchdog convention: silent-unless-alerting; the scan ledger line is
-   still written every night).
+6. DMs the operator through the watchdog bot (Bot API HTML): an emoji
+   headline per pick, the issue/action prose collapsed in an expandable
+   blockquote. Silent when the scan found nothing (watchdog convention:
+   silent-unless-alerting; the scan ledger line is still written every
+   night).
 
 Every agent call bills the Claude Code subscription (OAuth token, same as the
 interactive session and the god judge). A failed call is logged and reported,
@@ -46,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import html
 import json
 import os
 import re
@@ -339,8 +341,9 @@ def build_prompt(group: dict[str, Any], *, today_et: date) -> str:
     )
     lines.append(
         'AUDIT_RESULT: {"outcome": "graded|fixed_needs_verify|legit_ungraded|'
-        'needs_human|no_issue", "issue": "<one line: what the problem was>", '
-        '"action": "<one line: what you changed, or none>"}'
+        'needs_human|no_issue", "issue": "<root cause, telegraph style, '
+        '<=90 chars — no commit hashes, dates, or test names; the ledger '
+        'holds those>", "action": "<what changed, <=90 chars, or none>"}'
     )
     return "\n".join(lines)
 
@@ -591,57 +594,78 @@ def git_revert_paths(paths: set[str]) -> list[str]:
     return reverted
 
 
-def send_watchdog_dm(text: str) -> bool:
-    """DM the operator through the watchdog bot (same send as god_judge_runner)."""
+def send_watchdog_dm(text: str, *, as_html: bool = False) -> bool:
+    """DM the operator through the watchdog bot (same send as god_judge_runner).
+
+    as_html sends Bot API HTML (expandable blockquotes need it); a rejected
+    payload falls back to a tag-stripped plain send so the report still lands.
+    """
     token = os.environ.get("WATCHDOG_BOT_TOKEN", "")
     uid = os.environ.get("WATCHDOG_USER_ID", "")
     if not token or not uid:
         print("WATCHDOG_BOT_TOKEN / WATCHDOG_USER_ID not set", file=sys.stderr)
         return False
-    data = urllib.parse.urlencode({"chat_id": uid, "text": text}).encode()
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    try:
+
+    def _post(payload: dict[str, str]) -> bool:
+        data = urllib.parse.urlencode(payload).encode()
         with urllib.request.urlopen(
             urllib.request.Request(url, data=data), timeout=20
         ) as response:
             return response.status == 200
+
+    try:
+        if as_html:
+            try:
+                return _post({"chat_id": uid, "text": text,
+                              "parse_mode": "HTML",
+                              "disable_web_page_preview": "true"})
+            except Exception as exc:
+                print(f"HTML send failed ({exc}), retrying plain",
+                      file=sys.stderr)
+                text = html.unescape(re.sub(r"<[^>]+>", "", text))
+        return _post({"chat_id": uid, "text": text})
     except Exception as exc:
         print(f"send failed: {exc}", file=sys.stderr)
         return False
 
 
-OUTCOME_LABEL = {
-    "graded": "GRADED",
-    "fixed_needs_verify": "FIXED (verify tomorrow)",
-    "legit_ungraded": "legit ungraded",
-    "needs_human": "NEEDS HUMAN",
-    "no_issue": "already resolved",
-    "unparsed": "ran, report unparsed",
-    "error": "agent FAILED",
-    "timeout": "agent TIMED OUT",
+OUTCOME_BADGE = {  # (emoji, label) per AUDIT_RESULT outcome
+    "graded": ("✅", "graded"),
+    "fixed_needs_verify": ("🔧", "fixed — verify tomorrow"),
+    "legit_ungraded": ("⚪", "legit ungraded"),
+    "needs_human": ("🙋", "NEEDS HUMAN"),
+    "no_issue": ("👌", "already resolved"),
+    "unparsed": ("⚠️", "ran, report unparsed"),
+    "error": ("❌", "agent failed"),
+    "timeout": ("⏱", "agent timed out"),
 }
 
 
 def compose_dm(results: list[dict], notes: list[str], *, run_date: str) -> str:
+    """Bot API HTML: one scannable headline per pick, the agent's issue/action
+    prose in a collapsed <blockquote expandable> under it (desk-card pattern).
+    Static ledger/transcript paths stay out — they never change."""
+    esc = html.escape
     lines = [f"pickbot: nightly ungraded audit {run_date} — "
              f"{len(results)} pick(s) examined"]
     for r in results:
         desc = (r.get("desc") or "pick")[:48]
-        copies = f", {r['n_keys']} copies" if r.get("n_keys", 1) > 1 else ""
-        line = (f"• {r.get('capper') or '?'} — {desc} ({r['ref_date']}{copies}) — "
-                f"{OUTCOME_LABEL.get(r['outcome'], r['outcome'])}")
-        if r.get("issue"):
-            line += f": {r['issue']}"
-        if r.get("action") and r["action"].lower() not in ("", "none"):
-            line += f" | {r['action']}"
+        copies = f", ×{r['n_keys']}" if r.get("n_keys", 1) > 1 else ""
+        emoji, label = OUTCOME_BADGE.get(r["outcome"], ("❓", r["outcome"]))
+        line = (f"{emoji} <b>{esc(r.get('capper') or '?')} — {esc(desc)}</b> "
+                f"({esc(r['ref_date'])}{copies}) — {label}")
         if r.get("commits"):
-            line += f" ({len(r['commits'])} commit(s))"
+            line += f" · {len(r['commits'])} commit(s)"
         if r.get("parked"):
             line += " [parked]"
         lines.append(line)
-    lines.extend(notes)
-    lines.append("ledger: logs/ungraded_audit_runs.jsonl · transcripts: "
-                 f"logs/ungraded_audit/{run_date}/")
+        detail = esc(r.get("issue") or "").strip()
+        if r.get("action") and r["action"].lower() not in ("", "none"):
+            detail += ("\n→ " if detail else "→ ") + esc(r["action"])
+        if detail:
+            lines.append(f"<blockquote expandable>{detail}</blockquote>")
+    lines.extend(esc(n) for n in notes)
     return "\n".join(lines)
 
 
@@ -847,7 +871,7 @@ def run(args: argparse.Namespace) -> int:
         if args.no_dm:
             print("(DM suppressed by --no-dm)")
         else:
-            send_watchdog_dm(dm)
+            send_watchdog_dm(dm, as_html=True)
     return 0
 
 

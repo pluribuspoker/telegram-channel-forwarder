@@ -85,12 +85,20 @@ untracked leftovers are reported, not deleted.
 
 ## Operator interface
 
-- DM via the watchdog bot, one line per pick: capper, description, outcome,
-  the issue, the change, commit count, `[parked]` marker; footer notes for
-  push/restart/leftovers and the ledger/transcript paths. **Silent when the
-  scan found nothing** (watchdog convention) — the nightly `kind: "scan"`
-  ledger line is still written, and `UNGRADED_AUDIT_HEALTHCHECK_URL` (unset
-  today = silent no-op) is the liveness net.
+- DM via the watchdog bot, **Bot API HTML** (2026-09-09): one bold headline
+  per pick — outcome emoji + label (`OUTCOME_BADGE`), capper, description,
+  ref date, `×N` copies, commit count, `[parked]` — with the agent's
+  issue/action prose collapsed in a `<blockquote expandable>` underneath
+  (the desk-card "Why" pattern; the prompt asks for telegraph-style ≤90-char
+  issue/action — hashes/dates/test names belong in the ledger). Footer notes
+  for push/restart/leftovers only; the static ledger/transcript paths are
+  deliberately gone from the DM (they never change — see Audit trail above).
+  A Telegram rejection of the HTML falls back to a tag-stripped plain send
+  (`send_watchdog_dm(as_html=True)`), so a markup slip can't lose the
+  report. **Silent when the scan found nothing** (watchdog convention) — the
+  nightly `kind: "scan"` ledger line is still written, and
+  `UNGRADED_AUDIT_HEALTHCHECK_URL` (unset today = silent no-op) is the
+  liveness net.
 - `--dry-run` — plan + first prompt, calls nothing, writes only the scan
   ledger line. `--target <key>` (repeatable) — audit a specific entry now,
   bypassing scan/state gates. `--rearm <key>` — clear a parked key so the
