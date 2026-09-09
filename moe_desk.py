@@ -1081,6 +1081,21 @@ def render_picks_card(
         f"🏈 <b>{_esc(teams_label(game))}</b> · "
         f"{kickoff_label(desk.kickoff)} ET"
     )
+    summary_lines = [
+        header,
+        "",
+        "<b>GOD EXPERT</b>",
+        *god_pick_lines(desk),
+    ]
+    if desk.approved_voices:
+        summary_lines += [
+            "",
+            "<b>EXPERTS</b>",
+            *[voice_line(row) for row in desk.approved_voices],
+        ]
+        consensus = consensus_line(desk)
+        if consensus:
+            summary_lines += ["", consensus]
     if selected == "menu" and groups:
         keyboard = [
             [
@@ -1100,7 +1115,7 @@ def render_picks_card(
             ]
         )
         return "\n".join(
-            [header, "", "<b>Select an opinion</b>"]
+            [*summary_lines, "", "<b>Select an opinion</b>"]
         ), keyboard
     if isinstance(selected, dict) and groups:
         expert = selected["expert"]
@@ -1160,27 +1175,12 @@ def render_picks_card(
             ],
         ]
 
-    lines = [
-        header,
-        "",
-        "<b>GOD EXPERT</b>",
-        *god_pick_lines(desk),
-    ]
-    if desk.approved_voices:
-        lines += [
-            "",
-            "<b>EXPERTS</b>",
-            *[voice_line(row) for row in desk.approved_voices],
-        ]
-        consensus = consensus_line(desk)
-        if consensus:
-            lines += ["", consensus]
     keyboard = (
         [[_button("Show full opinions", callback=f"{CALLBACK_PREFIX}show:{desk.event_id}")]]
         if groups
         else []
     )
-    return "\n".join(lines), keyboard
+    return "\n".join(summary_lines), keyboard
 
 
 def _week_label(desks: Iterable[GameDesk]) -> str:

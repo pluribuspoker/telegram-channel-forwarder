@@ -483,6 +483,12 @@ class RenderTests(unittest.TestCase):
             config=CONFIG,
             view="menu",
         )
+        self.assertIn("<b>GOD EXPERT</b>", picker_text)
+        self.assertIn(
+            "<b>Schedule</b> Seahawks 61% ★★ · 20-24",
+            picker_text,
+        )
+        self.assertIn("<b>Consensus</b> · Seahawks 4–0", picker_text)
         self.assertIn("<b>Select an opinion</b>", picker_text)
         self.assertEqual(
             [row[0]["text"] for row in picker_keyboard],

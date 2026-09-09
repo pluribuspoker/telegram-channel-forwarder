@@ -27,7 +27,8 @@ Picks implementation status
 - Compact game cards render both God arms and every approved expert conclusion
   directly from the persisted Sheet rows.
 - Consensus counts actual side selections and excludes side PASS rows.
-- Show full opinions edits the existing card into an expert picker.
+- Show full opinions keeps the complete pick summary visible and adds an
+  expert picker beneath it.
 - God Rules and God Judge are always the first two choices when available.
 - Each selected opinion opens on the same card with chunk navigation.
 - Back to opinions and Back to picks remain restricted to the MOE group.
@@ -121,12 +122,13 @@ Add channel-local controls:
 - Back to opinions
 - Back to picks
 
-Show full opinions edits the existing game card into an opinion selector. God
-Rules and God Judge are listed first, followed by every approved non-God expert.
-Selecting an opinion opens it on the same card. Previous and Next navigate only
-that opinion's long-text chunks. Back to opinions restores the selector, and
-Back to picks restores the compact committee summary. No additional Telegram
-messages are created.
+Show full opinions keeps the complete committee summary on the existing game
+card and adds an opinion selector beneath it. God Rules and God Judge are listed
+first, followed by every approved non-God expert. Selecting an opinion opens it
+on the same card. Previous and Next navigate only that opinion's long-text
+chunks. Back to opinions restores the summary plus selector, and Back to picks
+restores the compact committee summary. No additional Telegram messages are
+created.
 
 Long details must:
 
