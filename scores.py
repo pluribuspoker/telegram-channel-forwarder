@@ -893,6 +893,36 @@ async def fetch_soccer_context(
     return "", date
 
 
+async def fetch_soccer_scoreboard(date: str) -> dict | None:
+    """Every SOCCER_LEAGUES event for one date, merged into one scoreboard dict.
+
+    Soccer has no single ESPN scoreboard, so `fetch_espn` can't serve it — grading
+    goes through `fetch_soccer_context` instead, which returns text. Consumers that
+    need soccer *events* in the standard scoreboard shape (the grade daemon's
+    score-header event lookup) get the leagues merged here; ESPN event ids are
+    global, so downstream `espn:<id>` keys stay unambiguous. Returns None only when
+    every league fetch failed (so "no events" and "ESPN down" stay distinguishable).
+    """
+    date_nodash = date.replace("-", "")
+
+    async def _fetch(http: httpx.AsyncClient, category: str, league: str) -> dict | None:
+        url = f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/scoreboard"
+        try:
+            r = await http.get(url, params={"dates": date_nodash, "limit": "200"})
+            r.raise_for_status()
+            return r.json()
+        except Exception:
+            return None
+
+    async with httpx.AsyncClient(timeout=10) as http:
+        results = await asyncio.gather(
+            *(_fetch(http, cat, lg) for cat, lg in SOCCER_LEAGUES)
+        )
+    if all(sb is None for sb in results):
+        return None
+    return {"events": [e for sb in results if sb for e in sb.get("events", [])]}
+
+
 async def _fetch_soccer_stats(http: httpx.AsyncClient, category: str, league: str, event_id: str) -> str:
     """Fetch team statistics from ESPN summary for a soccer match."""
     url = f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/summary"

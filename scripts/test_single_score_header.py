@@ -12,7 +12,7 @@ rule is coherent and this pins it:
 
   1. lone result + completed ESPN event  -> group format (score header, capper after dash)
   2. lone result + game still in progress -> compact line (never print a running score)
-  3. lone result + no ESPN event at all   -> compact line (CFL/KBO, offseason, no match)
+  3. lone result + no ESPN event at all   -> compact line (KBO, offseason, no match)
   4. two results on the same game, final  -> merged into one message with score header
   5. two results, game still in progress  -> merged into ONE message, but headerless —
      the title header is exclusively the final-score format
@@ -27,6 +27,14 @@ parlay — one ticket, one price) keep the compact per-message path:
   8. multi-pick legs on different games        -> compact multi-pick message
   9. parlay on one game                        -> compact "Parlay:" line, unchanged
  10. multi-pick one game, still in progress    -> compact (header only over finals)
+
+Soccer (2026-09-09, "James Bets · Liverpool ML" posted compact despite a known
+final): soccer lives outside ESPN_LEAGUES, so fetch_espn returns None for it and
+the event lookup never found a final — _ESPNCache must route Soccer through the
+merged SOCCER_LEAGUES scoreboard, and a lone soccer final renders the header:
+
+ 11. _ESPNCache.get("Soccer", …)  -> fetch_soccer_scoreboard, never fetch_espn
+ 12. lone Soccer result + completed event -> "⚽️ Atlético 1–2 Liverpool" header
 """
 import asyncio
 import sys
@@ -260,6 +268,75 @@ print("multi+live:", text.replace("\n", " | "))
 check("multi+live posts once", len(posts) == 1, f"{len(posts)} posts")
 check("multi+live stays compact",
       "<u>" not in text and text.startswith("<b><a href="), text)
+
+# ── 11. _ESPNCache routes Soccer through the merged soccer scoreboard ─────────
+# fetch_espn("Soccer", …) is None (soccer isn't in ESPN_LEAGUES) — the exact gap
+# that left every soccer result compact. The cache must never send Soccer there.
+SOCCER_SENTINEL = {"events": [{"id": "sentinel"}]}
+
+
+async def _fake_soccer_sb(date_str):
+    return SOCCER_SENTINEL
+
+
+async def _fake_fetch_espn(sport, date_str):
+    if sport == "Soccer":
+        raise AssertionError("Soccer must not route through fetch_espn")
+    return {"events": []}
+
+_orig = gd.fetch_espn, gd.fetch_soccer_scoreboard
+gd.fetch_espn, gd.fetch_soccer_scoreboard = _fake_fetch_espn, _fake_soccer_sb
+try:
+    cache_obj = gd._ESPNCache()
+    got_soccer = asyncio.run(cache_obj.get("Soccer", TODAY))
+    got_mlb = asyncio.run(cache_obj.get("MLB", TODAY))
+    check("Soccer routes to fetch_soccer_scoreboard", got_soccer is SOCCER_SENTINEL,
+          f"got {got_soccer!r}")
+    check("other sports still route to fetch_espn", got_mlb == {"events": []},
+          f"got {got_mlb!r}")
+finally:
+    gd.fetch_espn, gd.fetch_soccer_scoreboard = _orig
+
+
+# ── 12. lone Soccer result + final -> ⚽️ score header ─────────────────────────
+# Event shape copied from the real UCL scoreboard (uefa.champions, 2026-09-09) —
+# the game whose result broadcast compact and triggered this fix.
+def make_soccer_event() -> dict:
+    return {
+        "id": "401915446",
+        "shortName": "ATM @ LIV",
+        "competitions": [{
+            "status": {"type": {"completed": True}},
+            "competitors": [
+                {"homeAway": "home", "score": "2",
+                 "team": {"displayName": "Liverpool", "shortDisplayName": "Liverpool"}},
+                {"homeAway": "away", "score": "1",
+                 "team": {"displayName": "Atlético Madrid", "shortDisplayName": "Atlético"}},
+            ],
+        }],
+    }
+
+
+def queue_soccer(pending):
+    pick = {"bet_type": "moneyline", "teams": ["Liverpool"], "sport": "Soccer",
+            "period": "game", "description": "Liverpool moneyline"}
+    gd._queue_broadcast(
+        pending, cache_key="k1", channel_id=-1001, message_id=843,
+        capper="James Bets", reply_to_id=None,
+        bc_results=[(pick, "WIN", None)], sheets_results=[],
+        leg_indices=[0], mark_all_resolved=False, html_text="",
+        msg_date=TODAY, sport="Soccer", picks=[pick],
+        leg_verdicts={"0": {"verdict": "WIN", "sport": "Soccer", "game_date": TODAY}},
+        odds_by_pick={"0": {"odds": None}},
+    )
+
+posts = run_flush_queued({"events": [make_soccer_event()]}, queue_soccer)
+text = posts[0]["text"] if posts else ""
+print("soccer+final:", text.replace("\n", " | "))
+check("soccer+final posts once", len(posts) == 1, f"{len(posts)} posts")
+check("soccer+final has ⚽️ score header",
+      "<b><u>⚽️ Atlético 1–2 Liverpool</u></b>" in text, text)
+check("soccer+final capper after dash", "— <a href=" in text and "James Bets" in text, text)
 
 print()
 if failures:

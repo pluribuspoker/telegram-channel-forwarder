@@ -40,6 +40,7 @@ from common import (
 )
 from scores import (
     fetch_espn,
+    fetch_soccer_scoreboard,
     try_early_grade_math,
     fetch_cfl_scoreboard,
     build_early_context,
@@ -230,7 +231,14 @@ class _ESPNCache:
         cached = self._data.get(key)
         if cached and (time.monotonic() - cached[0]) < self._ttl:
             return cached[1]
-        data = await fetch_espn(sport, date_str)
+        # Soccer lives outside ESPN_LEAGUES (per-league scoreboards), so
+        # fetch_espn returns None for it and every soccer result rendered
+        # compact/headerless despite a known final — route it through the
+        # merged SOCCER_LEAGUES scoreboard instead.
+        if sport == "Soccer":
+            data = await fetch_soccer_scoreboard(date_str)
+        else:
+            data = await fetch_espn(sport, date_str)
         self._data[key] = (time.monotonic(), data)
         return data
 
