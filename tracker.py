@@ -35,7 +35,7 @@ from scores import (
 )
 from odds import (fetch_odds, fetch_odds_current, quota_used as odds_quota_used,
                   quota_exhausted as odds_quota_exhausted, OddsResult,
-                  should_retry_odds)
+                  should_retry_odds, hist_rescues_msg_date)
 from pikkit import get_pick_splits
 from ai import (
     claude_parse,
@@ -772,9 +772,16 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         pick_sport = pick.get("sport") or sport
                         result = await fetch_odds_current(pick_sport, pick, free_only=is_retry)
                         # If the current-endpoint matched a game far from
-                        # the message date, the real game likely already
+                        # the message date, the real game may already have
                         # ended and we matched a future event.  Fall back
-                        # to historical odds for the message date.
+                        # to historical odds for the message date — but adopt
+                        # them only when they priced a game NEAR that date:
+                        # the historical snapshot also lists upcoming events,
+                        # so a lookahead pick posted days early ("Early week 2
+                        # play", a UFC card) just re-prices the same future
+                        # game there, and adopting that result would drop the
+                        # game_date/commence_time anchor (the daemon then
+                        # retires the pick before its game is played).
                         if not is_retry and result.game_date and date_str:
                             try:
                                 delta = abs((_date.fromisoformat(result.game_date) - _date.fromisoformat(date_str)).days)
@@ -782,8 +789,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                 delta = 0
                             if delta > 2:
                                 hist = await fetch_odds(pick_sport, date_str, pick)
-                                if hist.odds is not None:
-                                    print(f"  [odds] current matched wrong game ({result.game_date}), using historical ({date_str})")
+                                if hist_rescues_msg_date(hist, date_str):
+                                    print(f"  [odds] current matched wrong game ({result.game_date}), using historical ({hist.game_date})")
                                     result = hist
                         # Quota out: take ESPN's free number rather than post the
                         # pick with no price at all. One book instead of best-of-

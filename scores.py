@@ -1567,14 +1567,15 @@ def extract_espn_bookmaker(competition: dict) -> dict | None:
     return {"key": "espn_draftkings", "markets": markets}
 
 
-def espn_bookmakers_for_teams(espn_data: dict, teams: list[str]) -> list[dict]:
-    """Find the event matching teams in ESPN scoreboard data and return its bookmaker list.
+def espn_event_for_teams(espn_data: dict, teams: list[str]) -> tuple[dict | None, dict | None]:
+    """Find the scoreboard event whose competitors match the pick's teams.
 
-    Returns [] if no event found or no odds available.
-    Only works pre-game (ESPN clears odds once games are completed).
+    Returns (event, competition), or (None, None). Callers needing the game's
+    date must read it off the returned event — some scoreboards are week-scoped
+    (college football), so a matched event is not necessarily on the queried date.
     """
     if not espn_data or not teams:
-        return []
+        return None, None
     for event in espn_data.get("events", []):
         for comp in event.get("competitions", []):
             comp_names = [
@@ -1582,9 +1583,21 @@ def espn_bookmakers_for_teams(espn_data: dict, teams: list[str]) -> list[dict]:
                 for c in comp.get("competitors", [])
             ]
             if any(_team_matches(t.lower(), cn) for t in teams for cn in comp_names):
-                bk = extract_espn_bookmaker(comp)
-                return [bk] if bk else []
-    return []
+                return event, comp
+    return None, None
+
+
+def espn_bookmakers_for_teams(espn_data: dict, teams: list[str]) -> list[dict]:
+    """Find the event matching teams in ESPN scoreboard data and return its bookmaker list.
+
+    Returns [] if no event found or no odds available.
+    Only works pre-game (ESPN clears odds once games are completed).
+    """
+    _event, comp = espn_event_for_teams(espn_data, teams)
+    if not comp:
+        return []
+    bk = extract_espn_bookmaker(comp)
+    return [bk] if bk else []
 
 
 # ─── ESPN sport validation ───────────────────────────────────────────────────

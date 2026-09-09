@@ -19,7 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from odds import _find_event_id, _snapshot_time, _sport_key_candidates  # noqa: E402
+from odds import (_find_event_id, _snapshot_time, _sport_key_candidates,  # noqa: E402
+                  hist_rescues_msg_date, OddsResult)
 
 PRESEASON = [
     {"id": "pre_car_ari", "sport_key": "americanfootball_nfl_preseason",
@@ -104,5 +105,33 @@ check("a sport with no second phase is untouched",
       _sport_key_candidates("CFL"), ["americanfootball_cfl"])
 check("unknown sport yields no keys", _sport_key_candidates("Cricket"), [])
 
-print(f"\n{10 - len(failures)}/10 passed")
+# 7. The tracker's wrong-game fallback (current match >2 days from the message
+#    date → re-fetch historical odds for the message date) must adopt the
+#    historical result ONLY when it priced a game near the message date. The
+#    historical snapshot lists events still upcoming as of that moment, so a
+#    lookahead pick ("Early week 2 play" posted Tuesday for Friday; a UFC card
+#    five days out) re-prices the SAME future game there — adopting it dropped
+#    game_date/commence_time and the daemon retired the pick before kickoff
+#    (Rutgers +3.5, 2026-09-08 → game 2026-09-11).
+check("lookahead pick keeps the anchored current result",
+      hist_rescues_msg_date(OddsResult(match_type="exact", odds=-112,
+                                       game_date="2026-09-11"), "2026-09-08"),
+      False)
+check("game on the message date is a genuine rescue",
+      hist_rescues_msg_date(OddsResult(match_type="exact", odds=-102,
+                                       game_date="2026-08-06"), "2026-08-06"),
+      True)
+check("late-evening ET rollover (msg_date+1) still rescues",
+      hist_rescues_msg_date(OddsResult(match_type="exact", odds=-110,
+                                       game_date="2026-08-07"), "2026-08-06"),
+      True)
+check("historical miss is never adopted",
+      hist_rescues_msg_date(OddsResult(match_type="no_game"), "2026-09-08"),
+      False)
+check("a price with no game binding proves nothing — keep current",
+      hist_rescues_msg_date(OddsResult(match_type="outright_winner", odds=+455),
+                            "2026-09-08"),
+      False)
+
+print(f"\n{15 - len(failures)}/15 passed")
 sys.exit(1 if failures else 0)

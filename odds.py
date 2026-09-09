@@ -40,7 +40,7 @@ import httpx
 from dotenv import load_dotenv
 
 from common import is_regulation_ml
-from scores import _team_matches, fetch_espn, espn_bookmakers_for_teams, ESPN_LEAGUES
+from scores import _team_matches, fetch_espn, espn_bookmakers_for_teams, espn_event_for_teams, ESPN_LEAGUES
 
 ROOT = Path(__file__).resolve().parent
 DB_PATH = str(ROOT / "picks.db")
@@ -354,6 +354,30 @@ class OddsResult:
         if self.odds is None:
             return None
         return f"+{self.odds}" if self.odds > 0 else str(self.odds)
+
+
+def hist_rescues_msg_date(hist: "OddsResult", msg_date: str, window_days: int = 2) -> bool:
+    """True when a historical fetch is a genuine wrong-game rescue.
+
+    The tracker falls back to fetch_odds(msg_date) when the current endpoint
+    matched a game more than window_days from the message date, on the theory
+    that the pick's real game already ended and the current list only had the
+    team's NEXT game. But a historical snapshot lists every event still
+    UPCOMING as of that moment, so for a pick simply posted early ("Early
+    week 2 play", a UFC card five days out) it re-prices the SAME lookahead
+    game — and adopting that result used to throw away the event anchor
+    (game_date/commence_time), which false-flagged the nightly audit and let
+    the grade daemon retire the pick before its game was even played
+    (Rutgers +3.5, posted 2026-09-08 for 2026-09-11). Adopt only when the
+    historical result proves it priced a game in the message-date window.
+    """
+    if hist.odds is None or not hist.game_date:
+        return False
+    from datetime import date as _d
+    try:
+        return abs((_d.fromisoformat(hist.game_date) - _d.fromisoformat(msg_date)).days) <= window_days
+    except (ValueError, TypeError):
+        return False
 
 
 # ── Retryable misses ──────────────────────────────────────────────────────────
@@ -1253,6 +1277,8 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
                 bookmaker   = r["bookmaker"],
                 api_line    = r["api_line"],
                 pick_line   = r["pick_line"],
+                game_date   = _get_event_date(event_list, event_id),
+                commence_time = _get_event_commence(event_list, event_id),
             )
 
         # ── Non-goals team/game totals (corners, etc.): Odds API has no market ─
@@ -1269,7 +1295,9 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
         # Adopted only when it actually prices: for completed games ESPN has
         # nothing and the API tier below must still own the verdict.
         r: dict | None = None
-        if sport in ESPN_LEAGUES:
+        gd: str | None = None        # date of the game this result actually priced
+        commence: str | None = None  # — callers (the tracker's wrong-game fallback)
+        if sport in ESPN_LEAGUES:    #   use it to tell a rescue from a lookahead
             espn_data = await fetch_espn(sport, game_date)
             if espn_data:
                 espn_bk = espn_bookmakers_for_teams(espn_data, teams)
@@ -1277,6 +1305,9 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
                     r_espn = lookup_pick_odds(sport, pick, espn_bk)
                     if r_espn.get("adjusted_odds") is not None:
                         r = r_espn
+                        espn_event, _comp = espn_event_for_teams(espn_data, teams)
+                        commence = (espn_event or {}).get("date") or None
+                        gd = _utc_to_eastern_date(commence) if commence else None
 
         # Odds API last resort (historical closing odds + alternate lines)
         if r is None:
@@ -1285,6 +1316,8 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
             if event_id:
                 ev_key     = _event_sport_key(event_list, event_id, sport_key)
                 bookmakers = await _fetch_bookmakers(ev_key, event_id, game_date, _markets_for_pick(pick, sport), conn)
+                gd         = _get_event_date(event_list, event_id)
+                commence   = _get_event_commence(event_list, event_id)
 
             r = lookup_pick_odds(sport, pick, bookmakers)
 
@@ -1303,6 +1336,8 @@ async def fetch_odds(sport: str, game_date: str, pick: dict, db_path: str = DB_P
             bookmaker   = r["bookmaker"],
             api_line    = r["api_line"],
             pick_line   = r["pick_line"],
+            game_date   = gd,
+            commence_time = commence,
         )
 
     finally:
@@ -1598,6 +1633,14 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH,
                     r = lookup_pick_odds(sport, pick, espn_bk)
                     if r.get("adjusted_odds") is not None:
                         bookmakers = espn_bk  # feeds the both-sides extraction below
+                        if gd is None:
+                            # /events had no binding — anchor off ESPN's matched
+                            # event instead so the result still carries its game.
+                            espn_event, _comp = espn_event_for_teams(espn_data, teams)
+                            ct = (espn_event or {}).get("date") or None
+                            if ct:
+                                commence = ct
+                                gd = _utc_to_eastern_date(ct)
 
         # Bovada second (free; pre-game only — _bovada_pick_event refuses a
         # started game here, so a live price can't be recorded as a closing
