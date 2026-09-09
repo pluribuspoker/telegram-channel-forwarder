@@ -36,6 +36,7 @@ from moe_desk import (
     parse_start_param,
     post_scores_notice,
     prune_state,
+    render_opinion_details,
     render_picks_card,
     render_queue_card,
     render_review_card,
@@ -451,12 +452,15 @@ class RenderTests(unittest.TestCase):
         lines = text.split("\n")
         self.assertEqual(lines[0], "🏈 <b>Patriots @ Seahawks</b> · Sun Sep 13 · 4:05 PM ET")
         self.assertEqual(
-            lines[1],
-            "<b>God</b> rules Seahawks -3.5 (+100) ★ 0.6u · Over 44.5 (-105) ★ 0.5u | judge pass · pass",
+            lines[2:5],
+            [
+                "<b>GOD EXPERT</b>",
+                "<b>Rules</b> · Side Seahawks -3.5 (+100) ★ 0.6u · Total Over 44.5 (-105) ★ 0.5u",
+                "<b>Judge</b> · Side pass · Total pass",
+            ],
         )
-        # one line per approved voice in display order, no theses on the card
         self.assertEqual(
-            lines[2:6],
+            lines[7:11],
             [
                 "<b>Schedule</b> Seahawks 61% ★★ · 20-24",
                 "<b>Divisional</b> Seahawks 61% ★★ · 20-24",
@@ -464,28 +468,55 @@ class RenderTests(unittest.TestCase):
                 "<b>Elo</b> Seahawks 61% ★★ · 20-24",
             ],
         )
-        self.assertTrue(lines[6].startswith("<blockquote expandable><b>Rules</b> · God Expert (rules)"))
-        self.assertIn("• Pool p(home) .56 vs market .58\n• Voices split 3-2\n<b>Judge</b> · ", text)
-        self.assertIn("<b>Schedule</b> · Seattle &lt;stronger&gt; at home", text)
-        self.assertTrue(text.endswith("</blockquote>"))
+        self.assertEqual(lines[-1], "<b>Consensus</b> · Seahawks 4–0")
+        self.assertNotIn("<blockquote", text)
         self.assertNotIn("Win Total", text)  # pending, not approved
         self.assertEqual(
             keyboard,
-            [[{"text": "👁 Full opinions", "url": "https://t.me/nflguesser_bot?start=game_401"}]],
+            [[{"text": "Show full opinions", "callback_data": "desk:show:401"}]],
+        )
+        self.assertNotIn("t.me/nflguesser_bot", str(keyboard))
+
+        _, expanded_keyboard = render_picks_card(
+            desk,
+            config=CONFIG,
+            expanded=True,
+        )
+        self.assertEqual(
+            expanded_keyboard,
+            [[{"text": "Hide full opinions", "callback_data": "desk:hide:401"}]],
         )
 
     def test_picks_card_states_pending_or_missing_god(self) -> None:
         desk = self.desk(committee())  # arms pending, four voices approved
         self.assertTrue(desk.show_picks)
-        self.assertIn("<b>God</b> pending review", render_picks_card(desk, config=CONFIG)[0])
+        self.assertIn("<i>Pending review</i>", render_picks_card(desk, config=CONFIG)[0])
         rows = [r for r in committee() if not is_arm(r)]
-        self.assertIn("<b>God</b> —", render_picks_card(self.desk(rows), config=CONFIG)[0])
+        self.assertIn("<i>Not available</i>", render_picks_card(self.desk(rows), config=CONFIG)[0])
         rows = committee(arms_status="approved")
         rows[6]["review_status"] = "pending"
         self.assertIn(
-            "<b>God</b> rules pass · pass | judge —",
+            "<b>Rules</b> · Side pass · Total pass\n<b>Judge</b> · —",
             render_picks_card(self.desk(rows), config=CONFIG)[0],
         )
+
+    def test_full_opinions_use_persisted_text_and_safe_chunks(self) -> None:
+        approved = row(
+            "a1",
+            "401",
+            "schedule",
+            status="approved",
+            full_opinion="<" * 3200,
+        )
+        messages = render_opinion_details(
+            [approved],
+            context="Approved committee",
+        )
+        self.assertEqual(len(messages), 5)
+        self.assertTrue(all(len(message) < 4096 for message in messages))
+        self.assertTrue(all("&lt;" in message for message in messages))
+        self.assertIn("part 1/5", messages[0])
+        self.assertIn("Schedule Expert", messages[0])
 
     def test_picks_card_needs_two_voices_or_an_arm(self) -> None:
         lone = [row("a4", "401", "rating_elo", status="approved", model="deterministic")]
@@ -494,6 +525,30 @@ class RenderTests(unittest.TestCase):
         self.assertTrue(self.desk(two).show_picks)
         arm = lone + [arm_row("r1", "401", "god_rules", PASS_PLAIN, PASS_PLAIN, status="approved")]
         self.assertTrue(self.desk(arm).show_picks)
+
+    def test_consensus_does_not_count_a_side_pass(self) -> None:
+        rows = [
+            row("a1", "401", "schedule", status="approved"),
+            row(
+                "a2",
+                "401",
+                "divisional",
+                status="approved",
+                predicted_winner="New England Patriots",
+            ),
+            row(
+                "a3",
+                "401",
+                "ak",
+                status="approved",
+                pick_market="side_and_total",
+                side_pick_json=json.dumps(PASS_PLAIN),
+                total_pick_json=json.dumps(PASS_PLAIN),
+            ),
+        ]
+        text, _ = render_picks_card(self.desk(rows), config=CONFIG)
+        self.assertIn("<b>Consensus</b> · split 1–1", text)
+        self.assertNotIn("Seahawks 2–1", text)
 
     def test_queue_and_week_cards(self) -> None:
         rows = committee("401") + [
@@ -583,6 +638,164 @@ class SyncTests(unittest.TestCase):
         self.assertEqual((summary.posted, summary.edited, summary.alerts), ([], [], []))
         self.assertEqual(len(self.api.sent), sent)
         self.assertEqual(self.api.edits, [])
+
+    def test_show_and_hide_full_opinions_are_idempotent(self) -> None:
+        rows = committee("401")
+        self.sync(rows)
+        picks_id = self.state["cards"]["picks:401"]["message_id"]
+
+        self.state["expanded_picks"]["401"] = True
+        summary = self.sync(rows)
+        detail_keys = sorted(
+            key
+            for key in self.state["cards"]
+            if key.startswith("picks-detail:401:")
+        )
+        self.assertEqual(len(detail_keys), 4)
+        self.assertEqual(summary.posted, detail_keys)
+        self.assertIn("picks:401", summary.edited)
+        detail_messages = [
+            message
+            for message in self.api.sent
+            if message["reply_to"] == picks_id
+        ]
+        self.assertEqual(len(detail_messages), 4)
+        self.assertTrue(
+            all("Approved committee" in message["text"] for message in detail_messages)
+        )
+
+        summary = self.sync(rows)
+        self.assertEqual(
+            (summary.posted, summary.edited, summary.deleted),
+            ([], [], []),
+        )
+
+        detail_ids = [
+            self.state["cards"][key]["message_id"] for key in detail_keys
+        ]
+        self.state["expanded_picks"].pop("401")
+        summary = self.sync(rows)
+        self.assertIn("picks:401", summary.edited)
+        self.assertEqual(
+            sorted(summary.deleted),
+            detail_keys,
+        )
+        self.assertTrue(all(message_id in self.api.deleted for message_id in detail_ids))
+        self.assertFalse(
+            any(key.startswith("picks-detail:401:") for key in self.state["cards"])
+        )
+
+    def test_priority_show_completes_details_before_other_cards(self) -> None:
+        rows = committee("401")
+        self.state["expanded_picks"]["401"] = True
+        summary = self.sync(
+            rows,
+            max_posts=1,
+            priority_event_id="401",
+        )
+        detail_keys = sorted(
+            key
+            for key in self.state["cards"]
+            if key.startswith("picks-detail:401:")
+        )
+        self.assertEqual(len(detail_keys), 4)
+        self.assertFalse(
+            any(key.startswith("picks-detail:401:") for key in summary.deferred)
+        )
+        self.assertIn("week", summary.deferred)
+
+    def test_failed_old_detail_delete_is_retained_for_retry(self) -> None:
+        rows = committee("401")
+        self.sync(rows)
+        self.state["expanded_picks"]["401"] = True
+        self.sync(rows, priority_event_id="401")
+        detail_key = "picks-detail:401:0"
+        old_detail_id = self.state["cards"][detail_key]["message_id"]
+        old_picks_id = self.state["cards"]["picks:401"]["message_id"]
+        self.api.missing.add(old_picks_id)
+        rows[0]["predicted_home_score"] = 25
+        original_delete = self.api.delete
+
+        def fail_old_detail(chat_id, message_id):
+            if message_id == old_detail_id:
+                return False
+            return original_delete(chat_id, message_id)
+
+        self.api.delete = fail_old_detail
+        summary = self.sync(rows, priority_event_id="401")
+        self.assertTrue(
+            any(detail_key in error for error in summary.errors)
+        )
+        self.assertEqual(
+            self.state["cards"][detail_key]["obsolete_message_ids"],
+            [old_detail_id],
+        )
+
+        self.api.delete = original_delete
+        self.sync(rows, priority_event_id="401")
+        self.assertNotIn(
+            "obsolete_message_ids",
+            self.state["cards"][detail_key],
+        )
+        self.assertIn(old_detail_id, self.api.deleted)
+
+    def test_hide_still_removes_details_after_kickoff(self) -> None:
+        rows = committee("401")
+        self.sync(rows)
+        self.state["expanded_picks"]["401"] = True
+        self.sync(rows, priority_event_id="401")
+        detail_ids = [
+            entry["message_id"]
+            for key, entry in self.state["cards"].items()
+            if key.startswith("picks-detail:401:")
+        ]
+
+        self.state["expanded_picks"].pop("401")
+        summary = self.sync(
+            rows,
+            now=datetime.fromisoformat(SEA_KICKOFF) + timedelta(minutes=5),
+            priority_event_id="401",
+        )
+
+        self.assertTrue(
+            all(message_id in self.api.deleted for message_id in detail_ids)
+        )
+        self.assertFalse(
+            any(key.startswith("picks-detail:401:") for key in self.state["cards"])
+        )
+        self.assertFalse(
+            any(key.startswith("picks-detail:401:") for key in summary.errors)
+        )
+
+    def test_partial_hide_failure_keeps_obsolete_separate_from_current(self) -> None:
+        rows = committee("401")
+        self.sync(rows)
+        self.state["expanded_picks"]["401"] = True
+        self.sync(rows, priority_event_id="401")
+        key = "picks-detail:401:0"
+        current_id = self.state["cards"][key]["message_id"]
+        obsolete_id = 999
+        self.state["cards"][key]["obsolete_message_ids"] = [obsolete_id]
+        original_delete = self.api.delete
+
+        def fail_obsolete(chat_id, message_id):
+            if message_id == obsolete_id:
+                return False
+            return original_delete(chat_id, message_id)
+
+        self.api.delete = fail_obsolete
+        self.state["expanded_picks"].pop("401")
+        self.sync(rows, priority_event_id="401")
+        entry = self.state["cards"][key]
+        self.assertNotIn("message_id", entry)
+        self.assertEqual(entry["obsolete_message_ids"], [obsolete_id])
+        self.assertIn(current_id, self.api.deleted)
+
+        self.state["expanded_picks"]["401"] = True
+        self.sync(rows, priority_event_id="401")
+        entry = self.state["cards"][key]
+        self.assertNotEqual(entry["message_id"], obsolete_id)
+        self.assertEqual(entry["obsolete_message_ids"], [obsolete_id])
 
     def test_a_review_edits_only_the_affected_cards(self) -> None:
         rows = committee("401")
@@ -712,6 +925,24 @@ class StateTests(unittest.TestCase):
             self.assertEqual(load_state(path), empty_state())
             self.assertEqual(load_state(Path(tmp) / "absent.json"), empty_state())
 
+    def test_old_state_loads_with_collapsed_picks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "cards": {"picks:401": {"message_id": 4}},
+                        "announced": {},
+                        "kickoffs": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = load_state(path)
+        self.assertEqual(state["cards"]["picks:401"]["message_id"], 4)
+        self.assertEqual(state["expanded_picks"], {})
+
     def test_prune_keeps_recent_and_global_cards(self) -> None:
         state = empty_state()
         state["kickoffs"] = {
@@ -802,6 +1033,8 @@ class ConfigAndCallbackTests(unittest.TestCase):
         self.assertEqual(parse_callback("desk:ok:abc"), ("ok", "abc"))
         self.assertEqual(parse_callback("desk:no:abc"), ("no", "abc"))
         self.assertEqual(parse_callback("desk:okarms:401"), ("okarms", "401"))
+        self.assertEqual(parse_callback("desk:show:401"), ("show", "401"))
+        self.assertEqual(parse_callback("desk:hide:401"), ("hide", "401"))
         self.assertIsNone(parse_callback("desk:zap:401"))
         self.assertIsNone(parse_callback("desk:ok:"))
         self.assertIsNone(parse_callback("moe:view:401:0"))

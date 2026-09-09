@@ -21,6 +21,19 @@ The separately registered @nfl_moe_bot is no longer part of the target
 architecture. Keep it stopped until the shared-bot design is verified, then
 remove it from the group, delete it through BotFather, and clear its token.
 
+Picks implementation status
+---------------------------
+
+- Compact game cards render both God arms and every approved expert conclusion
+  directly from the persisted Sheet rows.
+- Consensus counts actual side selections and excludes side PASS rows.
+- Show full opinions and Hide full opinions are restricted to the MOE group.
+- Full persisted opinions are split safely into replies only on request.
+- Existing @nflguesser_bot-owned Picks cards are edited in place.
+- Review, Scores, and NFL Guesser private views remain unchanged.
+- Local validation and live-data rendering are complete; deployment restart
+  waits for approval of the exact card preview.
+
 
 WHY ONE BOT
 ===========

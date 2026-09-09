@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from datetime import datetime, timedelta, timezone
 
@@ -41,6 +44,7 @@ from intake_bot import (
     requires_ak_projection,
     select_games,
     selected_market_context,
+    set_desk_picks_expanded,
     side_buttons,
     snapshot_lean_submission,
     team_emoji,
@@ -61,6 +65,26 @@ from nfl_lines import (
 
 
 NOW = datetime(2026, 8, 4, 12, tzinfo=timezone.utc)
+
+
+class DeskExpansionStateTests(unittest.TestCase):
+    def test_expansion_update_returns_the_exact_prior_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = SimpleNamespace(
+                state_path=Path(tmp) / "moe_desk_state.json"
+            )
+            self.assertFalse(
+                set_desk_picks_expanded(config, "401", expanded=True)
+            )
+            self.assertTrue(
+                set_desk_picks_expanded(config, "401", expanded=True)
+            )
+            self.assertTrue(
+                set_desk_picks_expanded(config, "401", expanded=False)
+            )
+            self.assertFalse(
+                set_desk_picks_expanded(config, "401", expanded=False)
+            )
 
 
 def _game(event_id: str, days: int, away: str = "Miami Dolphins") -> dict:

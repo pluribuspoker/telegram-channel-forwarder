@@ -68,6 +68,7 @@ MAX_REVIEW_ROWS = 12
 THESIS_CHARS = 160
 COMMITTEE_THESIS_CHARS = 110
 WHY_CHARS = 1800
+DETAIL_BODY_CHARS = 3000
 
 RULES_EXPERT_ID = "god_rules"
 JUDGE_EXPERT_ID = "god_judge"
@@ -783,10 +784,120 @@ def _factor_texts(value: Any, limit: int) -> list[str]:
     return [text for text in texts if text.strip()]
 
 
+def _all_factor_texts(value: Any) -> list[str]:
+    if value in (None, ""):
+        return []
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    texts: list[str] = []
+    for item in parsed:
+        if isinstance(item, str):
+            text = item
+        elif isinstance(item, dict):
+            text = next(
+                (
+                    str(item[key])
+                    for key in ("text", "claim", "factor", "reason", "summary")
+                    if item.get(key)
+                ),
+                "",
+            )
+        else:
+            text = ""
+        if text.strip():
+            texts.append(text.strip())
+    return texts
+
+
+def _detail_body(row: dict[str, Any]) -> str:
+    full = str(row.get("full_opinion") or "").strip()
+    if full:
+        return full
+    sections: list[str] = []
+    thesis = str(row.get("thesis") or "").strip()
+    if thesis:
+        sections.append(f"Thesis\n{thesis}")
+    for label, key in (
+        ("Supporting factors", "supporting_factors_json"),
+        ("Counterarguments", "counterarguments_json"),
+        ("No-signal factors", "no_signal_factors_json"),
+        ("Discarded considerations", "discarded_considerations_json"),
+    ):
+        factors = _all_factor_texts(row.get(key))
+        if factors:
+            sections.append(
+                label + "\n" + "\n".join(f"- {item}" for item in factors)
+            )
+    return "\n\n".join(sections) or "No detailed explanation was persisted."
+
+
+def _split_plain_text(
+    text: str, limit: int = DETAIL_BODY_CHARS
+) -> list[str]:
+    chunks: list[str] = []
+    current: list[str] = []
+    escaped_length = 0
+    for character in text:
+        character_length = len(_esc(character))
+        if current and escaped_length + character_length > limit:
+            chunks.append("".join(current).strip())
+            current = []
+            escaped_length = 0
+        current.append(character)
+        escaped_length += character_length
+    if current or not chunks:
+        chunks.append("".join(current).strip())
+    return chunks
+
+
+def render_opinion_details(
+    rows: Iterable[dict[str, Any]],
+    *,
+    context: str,
+) -> list[str]:
+    """Render persisted full opinions as safe same-topic reply messages."""
+    messages: list[str] = []
+    for row in rows:
+        name = str(row.get("expert_name") or row.get("expert_id") or "Expert")
+        model = _model_text(row)
+        chunks = _split_plain_text(_detail_body(row))
+        for index, chunk in enumerate(chunks):
+            suffix = (
+                f" · part {index + 1}/{len(chunks)}"
+                if len(chunks) > 1
+                else ""
+            )
+            lines = [
+                f"🔎 <b>{_esc(name)}</b>{_esc(suffix)}",
+                f"<i>{_esc(context)}{(' · ' + _esc(model)) if model else ''}</i>",
+            ]
+            if index == 0:
+                lines.append(row_summary(row))
+            lines.append(
+                f"<blockquote expandable>{_esc(chunk)}</blockquote>"
+            )
+            messages.append("\n".join(lines))
+    return messages
+
+
 def _short_legs(row: dict[str, Any]) -> str:
     side, total = arm_legs(row)
     return (
         f"{leg_label(side, kind='side', with_reason=False, short_pass=True)} · "
+        f"{leg_label(total, kind='total', with_reason=False, short_pass=True)}"
+    )
+
+
+def _labeled_legs(row: dict[str, Any]) -> str:
+    side, total = arm_legs(row)
+    return (
+        "Side "
+        f"{leg_label(side, kind='side', with_reason=False, short_pass=True)}"
+        " · Total "
         f"{leg_label(total, kind='total', with_reason=False, short_pass=True)}"
     )
 
@@ -803,11 +914,26 @@ def god_line(desk: GameDesk) -> str:
     return "<b>God</b> " + _esc(" | ".join(parts))
 
 
+def god_pick_lines(desk: GameDesk) -> list[str]:
+    if desk.rules is None and desk.judge is None:
+        status = (
+            "Pending review"
+            if any(is_arm_row(row) for row in desk.pending)
+            else "Not available"
+        )
+        return [f"<i>{status}</i>"]
+    lines = []
+    for label, row in (("Rules", desk.rules), ("Judge", desk.judge)):
+        value = "—" if row is None else _labeled_legs(row)
+        lines.append(f"<b>{label}</b> · {_esc(value)}")
+    return lines
+
+
 def voice_line(row: dict[str, Any]) -> str:
     """One line per committee voice: ``Schedule Seahawks 66% ★★★ · 20-26``."""
     name = _esc(voice_name(row))
     if str(row.get("pick_market") or "") == "side_and_total" and row.get("side_pick_json"):
-        return f"<b>{name}</b> {_esc(_short_legs(row))}"
+        return f"<b>{name}</b> {_esc(_labeled_legs(row))}"
     winner = nickname(row.get("predicted_winner"))
     try:
         probability = float(row.get("home_win_probability"))
@@ -828,6 +954,33 @@ def voice_line(row: dict[str, Any]) -> str:
     if score:
         text += f" · {score}"
     return text
+
+
+def consensus_line(desk: GameDesk) -> str:
+    counts: dict[str, int] = {}
+    for row in desk.approved_voices:
+        if str(row.get("pick_market") or "") == "side_and_total":
+            side, _ = arm_legs(row)
+            winner = (
+                str(side.get("selection") or "").strip()
+                if leg_is_bet(side)
+                else ""
+            )
+        else:
+            winner = str(row.get("predicted_winner") or "").strip()
+        if winner:
+            counts[winner] = counts.get(winner, 0) + 1
+    if not counts:
+        return ""
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    if len(ordered) > 1 and ordered[0][1] == ordered[1][1]:
+        score = "–".join(str(count) for _, count in ordered)
+        return f"<b>Consensus</b> · split {score}"
+    winner, count = ordered[0]
+    return (
+        f"<b>Consensus</b> · {_esc(nickname(winner))} "
+        f"{count}–{sum(counts.values()) - count}"
+    )
 
 
 def _why_block(desk: GameDesk) -> str:
@@ -855,23 +1008,35 @@ def _why_block(desk: GameDesk) -> str:
 
 
 def render_picks_card(
-    desk: GameDesk, *, config: DeskConfig
+    desk: GameDesk, *, config: DeskConfig, expanded: bool = False
 ) -> tuple[str, Keyboard]:
-    """The reading card: the God line, one line per approved voice, and every
-    thesis inside a collapsed quote each viewer opens on their own screen."""
+    """Compact approved-opinion index with channel-local detail controls."""
     game = desk.game
     lines = [
         f"🏈 <b>{_esc(teams_label(game))}</b> · {kickoff_label(desk.kickoff)} ET",
-        god_line(desk),
+        "",
+        "<b>GOD EXPERT</b>",
+        *god_pick_lines(desk),
     ]
-    lines += [voice_line(row) for row in desk.approved_voices]
-    why = _why_block(desk)
-    if why:
-        lines.append(f"<blockquote expandable>{why}</blockquote>")
-    keyboard: Keyboard = []
-    link = deep_link(config, f"game_{desk.event_id}")
-    if link:
-        keyboard.append([_button("👁 Full opinions", url=link)])
+    if desk.approved_voices:
+        lines += [
+            "",
+            "<b>EXPERTS</b>",
+            *[voice_line(row) for row in desk.approved_voices],
+        ]
+        consensus = consensus_line(desk)
+        if consensus:
+            lines += ["", consensus]
+    action = "hide" if expanded else "show"
+    label = "Hide full opinions" if expanded else "Show full opinions"
+    keyboard = [
+        [
+            _button(
+                label,
+                callback=f"{CALLBACK_PREFIX}{action}:{desk.event_id}",
+            )
+        ]
+    ]
     return "\n".join(lines), keyboard
 
 
@@ -1009,7 +1174,13 @@ def render_scores_notice(text: str) -> str:
 
 
 def empty_state() -> dict[str, Any]:
-    return {"version": STATE_VERSION, "cards": {}, "announced": {}, "kickoffs": {}}
+    return {
+        "version": STATE_VERSION,
+        "cards": {},
+        "announced": {},
+        "kickoffs": {},
+        "expanded_picks": {},
+    }
 
 
 def load_state(path: str | Path) -> dict[str, Any]:
@@ -1021,7 +1192,7 @@ def load_state(path: str | Path) -> dict[str, Any]:
     if not isinstance(raw, dict) or raw.get("version") != STATE_VERSION:
         return empty_state()
     state = empty_state()
-    for key in ("cards", "announced", "kickoffs"):
+    for key in ("cards", "announced", "kickoffs", "expanded_picks"):
         if isinstance(raw.get(key), dict):
             state[key] = raw[key]
     return state
@@ -1043,9 +1214,15 @@ def save_state(path: str | Path, state: dict[str, Any]) -> None:
         raise
 
 
-def prune_state(state: dict[str, Any], *, now: datetime) -> None:
+def prune_state(
+    state: dict[str, Any],
+    *,
+    now: datetime,
+    preserve_event_ids: Iterable[str] = (),
+) -> None:
     """Drop cards and announcements for games that kicked off more than the
     retention window ago, so the file stays the size of one slate."""
+    preserve = set(preserve_event_ids)
     expired = set()
     for event_id, kickoff in list(state["kickoffs"].items()):
         try:
@@ -1053,8 +1230,10 @@ def prune_state(state: dict[str, Any], *, now: datetime) -> None:
                 expired.add(event_id)
         except ValueError:
             expired.add(event_id)
+    expired -= preserve
     for event_id in expired:
         state["kickoffs"].pop(event_id, None)
+        state["expanded_picks"].pop(event_id, None)
     for key in list(state["cards"]):
         _, _, event_id = key.partition(":")
         if event_id and event_id in expired:
@@ -1243,6 +1422,93 @@ class _Budget:
         return True
 
 
+def _cleanup_obsolete(
+    *,
+    key: str,
+    entry: dict[str, Any],
+    config: DeskConfig,
+    api: BotApi,
+    summary: SyncSummary,
+) -> None:
+    remaining: list[int] = []
+    for raw_message_id in entry.get("obsolete_message_ids") or []:
+        try:
+            message_id = int(raw_message_id)
+        except (TypeError, ValueError):
+            continue
+        try:
+            deleted = api.delete(config.chat_id, message_id)
+        except DeskApiError as exc:
+            summary.errors.append(f"{key}: obsolete delete failed: {exc}")
+            remaining.append(message_id)
+            continue
+        if deleted:
+            summary.deleted.append(f"{key}:obsolete:{message_id}")
+        else:
+            summary.errors.append(
+                f"{key}: obsolete delete failed for {message_id}"
+            )
+            remaining.append(message_id)
+    if remaining:
+        entry["obsolete_message_ids"] = remaining
+    else:
+        entry.pop("obsolete_message_ids", None)
+
+
+def _delete_entry_messages(
+    *,
+    key: str,
+    entry: dict[str, Any],
+    config: DeskConfig,
+    api: BotApi,
+    summary: SyncSummary,
+) -> bool:
+    active_remaining: int | None = None
+    obsolete_remaining: list[int] = []
+    raw_active = entry.get("message_id")
+    try:
+        active_id = int(raw_active)
+    except (TypeError, ValueError):
+        active_id = None
+    raw_obsolete = entry.get("obsolete_message_ids") or []
+    for is_active, raw_message_id in [
+        (True, active_id),
+        *[(False, value) for value in raw_obsolete],
+    ]:
+        try:
+            message_id = int(raw_message_id)
+        except (TypeError, ValueError):
+            continue
+        try:
+            deleted = api.delete(config.chat_id, message_id)
+        except DeskApiError as exc:
+            summary.errors.append(f"{key}: delete failed: {exc}")
+            if is_active:
+                active_remaining = message_id
+            else:
+                obsolete_remaining.append(message_id)
+            continue
+        if not deleted:
+            summary.errors.append(f"{key}: delete failed for {message_id}")
+            if is_active:
+                active_remaining = message_id
+            else:
+                obsolete_remaining.append(message_id)
+    if active_remaining is None:
+        entry.pop("message_id", None)
+        entry.pop("hash", None)
+        entry.pop("reply_to", None)
+    else:
+        entry["message_id"] = active_remaining
+    if obsolete_remaining:
+        entry["obsolete_message_ids"] = obsolete_remaining
+    else:
+        entry.pop("obsolete_message_ids", None)
+    if active_remaining is None and not obsolete_remaining:
+        return True
+    return False
+
+
 def _upsert_card(
     *,
     key: str,
@@ -1255,10 +1521,60 @@ def _upsert_card(
     budget: _Budget,
     summary: SyncSummary,
     pin: bool = False,
+    reply_to: int | None = None,
 ) -> int | None:
     digest = content_hash(text, keyboard, topic)
     entry = state["cards"].get(key)
+    if isinstance(entry, dict):
+        _cleanup_obsolete(
+            key=key,
+            entry=entry,
+            config=config,
+            api=api,
+            summary=summary,
+        )
     if isinstance(entry, dict) and entry.get("message_id"):
+        if entry.get("reply_to") != reply_to:
+            if not budget.take():
+                summary.deferred.append(key)
+                return int(entry["message_id"])
+            try:
+                replacement_id = api.send(
+                    config.chat_id,
+                    topic,
+                    text,
+                    keyboard=keyboard,
+                    silent=True,
+                    reply_to=reply_to,
+                )
+            except DeskApiError as exc:
+                summary.errors.append(f"{key}: {exc}")
+                return int(entry["message_id"])
+            old_id = int(entry["message_id"])
+            obsolete = [
+                old_id,
+                *[
+                    int(value)
+                    for value in entry.get("obsolete_message_ids") or []
+                ],
+            ]
+            replacement = {
+                "message_id": replacement_id,
+                "hash": digest,
+                "topic": topic,
+                "reply_to": reply_to,
+                "obsolete_message_ids": obsolete,
+            }
+            state["cards"][key] = replacement
+            summary.posted.append(key)
+            _cleanup_obsolete(
+                key=key,
+                entry=replacement,
+                config=config,
+                api=api,
+                summary=summary,
+            )
+            return replacement_id
         if entry.get("hash") == digest:
             return int(entry["message_id"])
         try:
@@ -1274,15 +1590,125 @@ def _upsert_card(
         summary.deferred.append(key)
         return None
     try:
-        message_id = api.send(config.chat_id, topic, text, keyboard=keyboard, silent=True)
+        message_id = api.send(
+            config.chat_id,
+            topic,
+            text,
+            keyboard=keyboard,
+            silent=True,
+            reply_to=reply_to,
+        )
     except DeskApiError as exc:
         summary.errors.append(f"{key}: {exc}")
         return None
-    state["cards"][key] = {"message_id": message_id, "hash": digest, "topic": topic}
+    replacement = {
+        "message_id": message_id,
+        "hash": digest,
+        "topic": topic,
+        "reply_to": reply_to,
+    }
+    if isinstance(entry, dict) and entry.get("obsolete_message_ids"):
+        replacement["obsolete_message_ids"] = list(
+            entry["obsolete_message_ids"]
+        )
+    state["cards"][key] = replacement
     summary.posted.append(key)
     if pin:
         api.pin(config.chat_id, message_id)
     return message_id
+
+
+def _sync_picks_details(
+    *,
+    desk: GameDesk,
+    picks_id: int | None,
+    config: DeskConfig,
+    api: BotApi,
+    state: dict[str, Any],
+    budget: _Budget,
+    summary: SyncSummary,
+) -> None:
+    prefix = f"picks-detail:{desk.event_id}:"
+    expanded = bool(state["expanded_picks"].get(desk.event_id))
+    rows = [
+        row
+        for row in (desk.rules, desk.judge, *desk.approved_voices)
+        if row is not None
+    ]
+    messages = (
+        render_opinion_details(rows, context="Approved committee")
+        if expanded and picks_id is not None
+        else []
+    )
+    active: set[str] = set()
+    for index, text in enumerate(messages):
+        key = f"{prefix}{index}"
+        active.add(key)
+        _upsert_card(
+            key=key,
+            topic=config.picks_topic,
+            text=text,
+            keyboard=[],
+            config=config,
+            api=api,
+            state=state,
+            budget=budget,
+            summary=summary,
+            reply_to=picks_id,
+        )
+    stale = [
+        key
+        for key in state["cards"]
+        if key.startswith(prefix) and key not in active
+    ]
+    for key in stale:
+        entry = state["cards"][key]
+        if _delete_entry_messages(
+            key=key,
+            entry=entry,
+            config=config,
+            api=api,
+            summary=summary,
+        ):
+            state["cards"].pop(key, None)
+            summary.deleted.append(key)
+
+
+def _cleanup_expired_picks_details(
+    *,
+    state: dict[str, Any],
+    now: datetime,
+    config: DeskConfig,
+    api: BotApi,
+    summary: SyncSummary,
+) -> set[str]:
+    failed_events: set[str] = set()
+    for event_id, kickoff in list(state["kickoffs"].items()):
+        try:
+            expired = _parse_time(kickoff) < now - RETENTION
+        except ValueError:
+            expired = True
+        if not expired:
+            continue
+        keys = [
+            key
+            for key in state["cards"]
+            if key.startswith(f"picks-detail:{event_id}:")
+        ]
+        for key in keys:
+            entry = state["cards"][key]
+            if _delete_entry_messages(
+                key=key,
+                entry=entry,
+                config=config,
+                api=api,
+                summary=summary,
+            ):
+                state["cards"].pop(key, None)
+                summary.deleted.append(key)
+            else:
+                failed_events.add(event_id)
+    return failed_events
 
 
 def _announce(
@@ -1329,6 +1755,7 @@ def sync_desk(
     now: datetime,
     team_abbrevs: dict[str, str] | None = None,
     max_posts: int = MAX_POSTS_PER_SYNC,
+    priority_event_id: str | None = None,
 ) -> SyncSummary:
     """Reconcile the group with the model: post missing cards, edit changed
     ones, announce new bet legs and near locks once. Idempotent — an
@@ -1336,11 +1763,94 @@ def sync_desk(
     per pass so a first run over a full slate spreads across passes."""
     desks = list(desks)
     summary = SyncSummary()
+    priority = None
+    if priority_event_id:
+        desks.sort(
+            key=lambda desk: (
+                desk.event_id != priority_event_id,
+                desk.kickoff,
+                desk.event_id,
+            )
+        )
+        priority = next(
+            (
+                desk
+                for desk in desks
+                if desk.event_id == priority_event_id
+                and state["expanded_picks"].get(desk.event_id)
+            ),
+            None,
+        )
+        if priority is not None:
+            priority_rows = [
+                row
+                for row in (
+                    priority.rules,
+                    priority.judge,
+                    *priority.approved_voices,
+                )
+                if row is not None
+            ]
+            max_posts = max(
+                max_posts,
+                len(
+                    render_opinion_details(
+                        priority_rows,
+                        context="Approved committee",
+                    )
+                )
+                + 3,
+            )
+        if not any(desk.event_id == priority_event_id for desk in desks):
+            summary.errors.append(
+                f"picks:{priority_event_id}: game is no longer available"
+            )
     budget = _Budget(max_posts)
-    prune_state(state, now=now)
+    preserve = _cleanup_expired_picks_details(
+        state=state,
+        now=now,
+        config=config,
+        api=api,
+        summary=summary,
+    )
+    prune_state(state, now=now, preserve_event_ids=preserve)
     for desk in desks:
         state["kickoffs"][desk.event_id] = desk.kickoff.isoformat()
         if desk.started:
+            picks_key = f"picks:{desk.event_id}"
+            existing = state["cards"].get(picks_key)
+            if desk.show_picks and isinstance(existing, dict):
+                text, keyboard = render_picks_card(
+                    desk,
+                    config=config,
+                    expanded=bool(
+                        state["expanded_picks"].get(desk.event_id)
+                    ),
+                )
+                picks_id = _upsert_card(
+                    key=picks_key,
+                    topic=config.picks_topic,
+                    text=text,
+                    keyboard=keyboard,
+                    config=config,
+                    api=api,
+                    state=state,
+                    budget=budget,
+                    summary=summary,
+                )
+                _sync_picks_details(
+                    desk=desk,
+                    picks_id=picks_id,
+                    config=config,
+                    api=api,
+                    state=state,
+                    budget=budget,
+                    summary=summary,
+                )
+            elif priority_event_id == desk.event_id:
+                summary.errors.append(
+                    f"picks:{desk.event_id}: card is no longer available"
+                )
             continue
         review_id = None
         review_key = f"review:{desk.event_id}"
@@ -1368,7 +1878,13 @@ def sync_desk(
                 summary.deleted.append(review_key)
         picks_id = None
         if desk.show_picks:
-            text, keyboard = render_picks_card(desk, config=config)
+            text, keyboard = render_picks_card(
+                desk,
+                config=config,
+                expanded=bool(
+                    state["expanded_picks"].get(desk.event_id)
+                ),
+            )
             picks_id = _upsert_card(
                 key=f"picks:{desk.event_id}",
                 topic=config.picks_topic,
@@ -1400,6 +1916,15 @@ def sync_desk(
                         summary=summary,
                         now=now,
                     )
+            _sync_picks_details(
+                desk=desk,
+                picks_id=picks_id,
+                config=config,
+                api=api,
+                state=state,
+                budget=budget,
+                summary=summary,
+            )
         if lock_warning_due(desk, config=config, now=now):
             _announce(
                 key=f"lock:{desk.event_id}",
@@ -1504,11 +2029,12 @@ def desk_ids_report(
 
 def parse_callback(data: str) -> tuple[str, str] | None:
     """``desk:ok:<opinion>`` → ``("ok", opinion)``; ``desk:no:<opinion>``;
-    ``desk:okarms:<event>``. Anything else ``None``."""
+    ``desk:okarms:<event>``; ``desk:show:<event>``; ``desk:hide:<event>``.
+    Anything else ``None``."""
     if not data.startswith(CALLBACK_PREFIX):
         return None
     action, _, target = data[len(CALLBACK_PREFIX):].partition(":")
-    if action not in {"ok", "no", "okarms"} or not target:
+    if action not in {"ok", "no", "okarms", "show", "hide"} or not target:
         return None
     return action, target
 

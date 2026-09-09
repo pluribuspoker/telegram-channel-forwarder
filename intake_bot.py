@@ -1518,7 +1518,13 @@ def game_stub(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def desk_sync_once(config: Any, api: Any, *, now: datetime | None = None) -> Any:
+def desk_sync_once(
+    config: Any,
+    api: Any,
+    *,
+    now: datetime | None = None,
+    priority_event_id: str | None = None,
+) -> Any:
     """One reconcile pass over the desk group (moe_desk.sync_desk): the
     sheet's opinions and games in, silent posts and edits out, loud
     replies for new bet legs and near locks. Serialised so the periodic
@@ -1540,6 +1546,7 @@ def desk_sync_once(config: Any, api: Any, *, now: datetime | None = None) -> Any
                 desks=desks,
                 now=now,
                 team_abbrevs=team_abbrevs,
+                priority_event_id=priority_event_id,
             )
         finally:
             save_desk_state(config.state_path, state)
@@ -1559,6 +1566,24 @@ def desk_sync_once(config: Any, api: Any, *, now: datetime | None = None) -> Any
             f"deferred {summary.deferred} errors {summary.errors}"
         )
     return summary
+
+
+def set_desk_picks_expanded(
+    config: Any,
+    event_id: str,
+    *,
+    expanded: bool,
+) -> bool:
+    """Persist a shared Picks-card expansion choice without racing the loop."""
+    with _DESK_SYNC_LOCK:
+        state = load_desk_state(config.state_path)
+        previous = bool(state["expanded_picks"].get(event_id))
+        if expanded:
+            state["expanded_picks"][event_id] = True
+        else:
+            state["expanded_picks"].pop(event_id, None)
+        save_desk_state(config.state_path, state)
+        return previous
 
 
 def desk_review(action: str, target: str, *, reviewer: str) -> tuple[str, bool]:
@@ -1960,15 +1985,43 @@ async def main() -> None:
             "celebrity": None,
         }
 
-    async def resync_desk() -> str | None:
+    async def resync_desk(
+        *,
+        priority_event_id: str | None = None,
+    ) -> str | None:
         """Re-render the cards now; the problem text when that failed."""
         if desk["config"] is None or desk["api"] is None:
             return None
         try:
-            await asyncio.to_thread(desk_sync_once, desk["config"], desk["api"])
+            summary = await asyncio.to_thread(
+                desk_sync_once,
+                desk["config"],
+                desk["api"],
+                priority_event_id=priority_event_id,
+            )
         except Exception as exc:  # noqa: BLE001 - the loop retries
             print(f"desk: sync after a review failed: {type(exc).__name__}: {exc}")
             return f"{type(exc).__name__}: {exc}"[:200]
+        relevant_deferred = [
+            key
+            for key in summary.deferred
+            if priority_event_id is None
+            or key == f"picks:{priority_event_id}"
+            or key.startswith(f"picks-detail:{priority_event_id}:")
+        ]
+        relevant_errors = [
+            error
+            for error in summary.errors
+            if priority_event_id is None
+            or error.startswith(f"picks:{priority_event_id}:")
+            or error.startswith(f"picks-detail:{priority_event_id}:")
+        ]
+        if relevant_errors or relevant_deferred:
+            parts = [
+                *relevant_errors,
+                *[f"{key}: deferred" for key in relevant_deferred],
+            ]
+            return "; ".join(parts)[:200]
         return None
 
     desk_inflight: set[str] = set()
@@ -2021,11 +2074,54 @@ async def main() -> None:
             desk_inflight.discard(key)
 
     async def handle_desk_callback(event, data: str) -> None:
+        if desk["config"] is None or str(event.chat_id) != str(
+            desk["config"].chat_id
+        ):
+            await event.answer(
+                "This action belongs to the MOE group.",
+                alert=True,
+            )
+            return
         parsed = parse_desk_callback(data)
         if parsed is None:
             await event.answer("Unknown desk action.", alert=True)
             return
         action, target = parsed
+        if action in {"show", "hide"}:
+            key = f"view:{target}"
+            if key in desk_inflight:
+                await event.answer("Still updating this game.")
+                return
+            desk_inflight.add(key)
+            try:
+                await event.answer(
+                    "Loading opinions…"
+                    if action == "show"
+                    else "Hiding opinions…"
+                )
+                previous = await asyncio.to_thread(
+                    set_desk_picks_expanded,
+                    desk["config"],
+                    target,
+                    expanded=action == "show",
+                )
+                problem = await resync_desk(priority_event_id=target)
+                if problem:
+                    await asyncio.to_thread(
+                        set_desk_picks_expanded,
+                        desk["config"],
+                        target,
+                        expanded=previous,
+                    )
+                    await resync_desk(priority_event_id=target)
+                    await desk_reply(
+                        event,
+                        f"Could not update the full opinions yet ({problem}); "
+                        "the previous view was restored.",
+                    )
+            finally:
+                desk_inflight.discard(key)
+            return
         key = f"{action}:{target}"
         if key in desk_inflight:
             await event.answer("Still working on the last tap.")
