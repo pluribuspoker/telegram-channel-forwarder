@@ -1,0 +1,52 @@
+{
+ "comp_final": {
+  "id": "182691",
+  "date": "2026-09-04T23:05Z",
+  "competitors": [
+   {
+    "id": "9376",
+    "name": "Valentin Vacherot",
+    "winner": false
+   },
+   {
+    "id": "2708",
+    "name": "Frances Tiafoe",
+    "winner": true
+   }
+  ]
+ },
+ "linescores": {
+  "9376": {
+   "items": [
+    {
+     "period": 1,
+     "displayValue": "4"
+    },
+    {
+     "period": 2,
+     "displayValue": "2"
+    },
+    {
+     "period": 3,
+     "displayValue": "4"
+    }
+   ]
+  },
+  "2708": {
+   "items": [
+    {
+     "period": 1,
+     "displayValue": "6"
+    },
+    {
+     "period": 2,
+     "displayValue": "6"
+    },
+    {
+     "period": 3,
+     "displayValue": "6"
+    }
+   ]
+  }
+ }
+}

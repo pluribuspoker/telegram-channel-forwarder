@@ -21,6 +21,14 @@ fetcher reads, never retyped. The pregame variant is the same competition
 with the winner flags cleared — exactly what the core API served before the
 match ended. The tie-break case shifts the fixture's date field only (the
 sort under test cares about dates, not payload bytes).
+
+2026-09-04 (-1004427337587:206): "Francis Tiafoe ML 2u" — ESPN spells him
+"Frances Tiafoe", so the exact matcher never bound and the pick
+context-skipped every cycle until retirement (zero UNKNOWN attempts burned).
+Fix: _player_near_match — exact surname + first name within one edit — as a
+strictly lower tier than an exact match, refused when two different players
+fit (the Wang sisters problem). Second fixture: real competition 182691
+(Tiafoe d. Vacherot), captured 2026-09-09.
 """
 import asyncio
 import copy
@@ -35,12 +43,19 @@ import ai
 import scores
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "tennis_usopen_qf_20260909.json"
+FIXTURE_TIAFOE = Path(__file__).resolve().parent / "fixtures" / "tennis_usopen_tiafoe_20260904.json"
 SKIP = "__SKIP__"
 
 FINAL_CONTEXT = (
     "Tennis match on 2026-09-09 (ATP):\n"
     "  Ben Shelton: S1=6 S2=6 S3=6 S4=1 S5=7 [WINNER]\n"
     "  Carlos Alcaraz: S1=7 S2=1 S3=3 S4=6 S5=6"
+)
+
+TIAFOE_CONTEXT = (
+    "Tennis match on 2026-09-04 (ATP):\n"
+    "  Valentin Vacherot: S1=4 S2=2 S3=4\n"
+    "  Frances Tiafoe: S1=6 S2=6 S3=6 [WINNER]"
 )
 
 failures = []
@@ -131,7 +146,34 @@ def main():
     FakeAsyncClient.comps = [comp_final]
     check("unknown player → SKIP", fetch("Novak Djokovic", "2026-09-08"), SKIP)
 
-    # 6. build_context maps the sentinel to CONTEXT_PENDING (no attempt burned).
+    # 6. The 2026-09-04 incident: "Francis Tiafoe" must find ESPN's
+    #    "Frances Tiafoe" — exact surname, first name one edit off.
+    fx2 = json.load(open(FIXTURE_TIAFOE))
+    tiafoe_final = fx2["comp_final"]
+    FakeAsyncClient.linescores = {**fx["linescores"], **fx2["linescores"]}
+    FakeAsyncClient.comps = [tiafoe_final]
+    check("near-miss first name grades", fetch("Francis Tiafoe", "2026-09-04"), TIAFOE_CONTEXT)
+
+    # 7. Surname-only picks keep flowing through the exact matcher.
+    check("surname-only still exact", fetch("Tiafoe", "2026-09-04"), TIAFOE_CONTEXT)
+
+    # 8. An exact match outranks a same-window near-miss: with both Wang
+    #    sisters on the board, "Xinyu Wang" binds Xinyu, never Xiyu.
+    wang_a = copy.deepcopy(tiafoe_final)
+    wang_a["id"] = "777771"
+    wang_a["competitors"][0]["name"] = "Xiyu Wang"
+    wang_b = copy.deepcopy(tiafoe_final)
+    wang_b["id"] = "777772"
+    wang_b["competitors"][0]["name"] = "Xinyu Wang"
+    FakeAsyncClient.comps = [wang_a, wang_b]
+    got = fetch("Xinyu Wang", "2026-09-04")
+    check("exact beats near-miss", "Xinyu Wang" in got and "Xiyu Wang" not in got, True)
+
+    # 9. A spelling one edit from TWO different players is ambiguous → SKIP
+    #    (never guess which sister was meant).
+    check("ambiguous near-miss → SKIP", fetch("Xnyu Wang", "2026-09-04"), SKIP)
+
+    # 10. build_context maps the sentinel to CONTEXT_PENDING (no attempt burned).
     async def fake_fetch(player, date, skip):
         return "PENDING"
 
