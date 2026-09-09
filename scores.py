@@ -674,6 +674,10 @@ async def fetch_tennis_match_context(player: str, date: str, CONTEXT_SKIP: str) 
     Search ESPN core API for a tennis match involving `player` on `date`.
     Tries exact date first; falls back to ±1 day only if no exact match found.
     Returns a formatted string with player names, set scores, and winner.
+    Returns "PENDING" when the match exists but isn't final (scheduled or in
+    progress) — feeding an unfinished match to claude_grade burns the leg's
+    UNKNOWN-attempt cap before the match even starts (an evening match posted
+    in the afternoon exhausts all 6 tries pregame).
     Returns CONTEXT_SKIP if not found.
     """
     from datetime import date as _d
@@ -683,6 +687,8 @@ async def fetch_tennis_match_context(player: str, date: str, CONTEXT_SKIP: str) 
 
     async def _search(max_days: int) -> str | None:
         async with httpx.AsyncClient(timeout=20) as http:
+            # (abs day diff, 0 upcoming / 1 past, comp_date, league, base, comp_id, competitors)
+            candidates = []
             for league in ("atp", "wta"):
                 try:
                     r = await http.get(
@@ -710,7 +716,8 @@ async def fetch_tennis_match_context(player: str, date: str, CONTEXT_SKIP: str) 
                         for comp in data.get("items", []):
                             try:
                                 comp_date = _d.fromisoformat(comp.get("date", "")[:10])
-                                if abs((comp_date - pick_date_obj).days) > max_days:
+                                diff = (comp_date - pick_date_obj).days
+                                if abs(diff) > max_days:
                                     continue
                             except ValueError:
                                 continue
@@ -720,27 +727,40 @@ async def fetch_tennis_match_context(player: str, date: str, CONTEXT_SKIP: str) 
                             if not any(_team_matches(player_lower, c.get("name", "").lower()) for c in competitors):
                                 continue
 
-                            # Found the match — fetch set scores
-                            lines = [f"Tennis match on {comp_date.isoformat()} ({league.upper()}):"]
-                            for c in competitors:
-                                name = c.get("name", "?")
-                                winner = c.get("winner", False)
-                                athlete_id = c.get("id", "")
-                                try:
-                                    r3 = await http.get(f"{base}/competitions/{comp_id}/competitors/{athlete_id}/linescores")
-                                    r3.raise_for_status()
-                                    sets = r3.json().get("items", [])
-                                    set_str = " ".join(f"S{s['period']}={s['displayValue']}" for s in sets)
-                                except Exception:
-                                    set_str = "(no set data)"
-                                winner_flag = " [WINNER]" if winner else ""
-                                lines.append(f"  {name}: {set_str}{winner_flag}")
-                            return "\n".join(lines)
+                            candidates.append(
+                                (abs(diff), 0 if diff >= 0 else 1, comp_date,
+                                 league, base, comp_id, competitors))
 
                         if page >= data.get("pageCount", 1):
                             break
                         page += 1
-        return None
+
+            if not candidates:
+                return None
+            # One pick = one match: closest date wins, and on a tie the upcoming
+            # match beats the previous day's (a priced pick is pregame) — page
+            # order must not hand back yesterday's final for tomorrow's match.
+            candidates.sort(key=lambda c: (c[0], c[1]))
+            _, _, comp_date, league, base, comp_id, competitors = candidates[0]
+
+            if not any(c.get("winner") for c in competitors):
+                return "PENDING"
+
+            lines = [f"Tennis match on {comp_date.isoformat()} ({league.upper()}):"]
+            for c in competitors:
+                name = c.get("name", "?")
+                winner = c.get("winner", False)
+                athlete_id = c.get("id", "")
+                try:
+                    r3 = await http.get(f"{base}/competitions/{comp_id}/competitors/{athlete_id}/linescores")
+                    r3.raise_for_status()
+                    sets = r3.json().get("items", [])
+                    set_str = " ".join(f"S{s['period']}={s['displayValue']}" for s in sets)
+                except Exception:
+                    set_str = "(no set data)"
+                winner_flag = " [WINNER]" if winner else ""
+                lines.append(f"  {name}: {set_str}{winner_flag}")
+            return "\n".join(lines)
 
     # Exact date first, then ±1 day fallback
     result = await _search(max_days=0)

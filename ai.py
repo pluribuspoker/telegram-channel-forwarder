@@ -663,7 +663,10 @@ async def build_context(
         player_or_team = player or (teams[0] if teams else "")
         if not player_or_team:
             return CONTEXT_SKIP, date
-        return await fetch_tennis_match_context(player_or_team, date, CONTEXT_SKIP), date
+        ctx = await fetch_tennis_match_context(player_or_team, date, CONTEXT_SKIP)
+        if ctx == "PENDING":
+            return CONTEXT_PENDING, date
+        return ctx, date
 
     # Boxing: Odds API scores (free tier = last ~3 days only)
     if sport == "Boxing":

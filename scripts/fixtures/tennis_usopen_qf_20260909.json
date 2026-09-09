@@ -1,0 +1,74 @@
+{
+ "scoreboard_events": [
+  {
+   "id": "189-2026",
+   "name": "US Open"
+  }
+ ],
+ "comp_final": {
+  "id": "182780",
+  "date": "2026-09-09T03:00Z",
+  "competitors": [
+   {
+    "id": "9250",
+    "name": "Ben Shelton",
+    "winner": true
+   },
+   {
+    "id": "3782",
+    "name": "Carlos Alcaraz",
+    "winner": false
+   }
+  ]
+ },
+ "linescores": {
+  "9250": {
+   "items": [
+    {
+     "period": 1,
+     "displayValue": "6"
+    },
+    {
+     "period": 2,
+     "displayValue": "6"
+    },
+    {
+     "period": 3,
+     "displayValue": "6"
+    },
+    {
+     "period": 4,
+     "displayValue": "1"
+    },
+    {
+     "period": 5,
+     "displayValue": "7"
+    }
+   ]
+  },
+  "3782": {
+   "items": [
+    {
+     "period": 1,
+     "displayValue": "7"
+    },
+    {
+     "period": 2,
+     "displayValue": "1"
+    },
+    {
+     "period": 3,
+     "displayValue": "3"
+    },
+    {
+     "period": 4,
+     "displayValue": "6"
+    },
+    {
+     "period": 5,
+     "displayValue": "6"
+    }
+   ]
+  }
+ }
+}
