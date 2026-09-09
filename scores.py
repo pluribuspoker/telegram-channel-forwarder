@@ -256,8 +256,153 @@ CFL_TEAMS: dict[str, str] = {
 _CFL_ABBR = {v.lower(): k for k, v in CFL_TEAMS.items()}
 
 
+# cfl.ca fixture payloads key teams by their PIMS id. The page's own teams
+# payload provides the mapping too; this is the fallback when it's absent.
+_CFL_PIMS_ABBR: dict[int, str] = {
+    1: "BC", 6: "CGY", 7: "EDM", 8: "HAM", 11: "MTL",
+    13: "OTT", 17: "SSK", 19: "TOR", 20: "WPG",
+}
+
+# game_status values from the fixtures payload. Only "Finished" has been
+# observed on a final; the synonyms are unambiguous if they ever appear.
+# Anything not in either set (including unknown live statuses) maps to "pre",
+# which fails closed: the pick stays PENDING until the status turns final.
+_CFL_FINAL_STATUSES = {"finished", "final", "fulltime", "full time", "complete", "completed"}
+_CFL_LIVE_STATUSES = {"inprogress", "in progress", "playing", "live", "halftime", "half time"}
+
+
+def _devalue(nodes: list, i, memo: dict, depth: int = 0):
+    """Resolve one entry of a Nuxt 3 __NUXT_DATA__ (devalue) flat array.
+
+    Objects map keys to node indexes; arrays hold node indexes; a list whose
+    first element is a string is a typed form (["Reactive", idx], ["Date", s]).
+    Unknown typed forms and negative indexes decode to None — every consumer
+    treats missing data as "not final / not matched", so failing soft is safe.
+    """
+    if depth > 200 or not isinstance(i, int) or i < 0 or i >= len(nodes):
+        return None
+    if i in memo:
+        return memo[i]
+    v = nodes[i]
+    if isinstance(v, dict):
+        out: dict = {}
+        memo[i] = out  # pre-register: payload graphs may be cyclic
+        for k, idx in v.items():
+            out[k] = _devalue(nodes, idx, memo, depth + 1)
+        return out
+    if isinstance(v, list):
+        if v and isinstance(v[0], str):
+            if len(v) == 2 and v[0] in (
+                    "Reactive", "ShallowReactive", "Ref", "ShallowRef"):
+                memo[i] = None
+                out = _devalue(nodes, v[1], memo, depth + 1)
+                memo[i] = out
+                return out
+            if len(v) == 2 and v[0] == "Date":
+                memo[i] = v[1]
+                return v[1]
+            memo[i] = None  # Map/Set/RegExp/…: nothing here needs them
+            return None
+        arr: list = []
+        memo[i] = arr
+        for idx in v:
+            arr.append(_devalue(nodes, idx, memo, depth + 1))
+        return arr
+    memo[i] = v
+    return v
+
+
+def _parse_cfl_schedule_payload(html: str) -> list[dict]:
+    """Parse the schedule out of the Nuxt __NUXT_DATA__ payload (2026 site).
+
+    cfl.ca's 2026-09 redesign dropped the server-rendered game cards; the data
+    now ships as a devalue-serialized payload whose `schedule-<season>` entry
+    lists fixtures with UTC kickoffs, PIMS team ids, final scores and a
+    game_status. Quarter scores are NOT in this payload, so `*_quarters` stay
+    empty — full-game bets grade from the finals, period bets stay pending
+    (both formatters already tolerate quarterless games).
+    """
+    games: list[dict] = []
+    m = re.search(
+        r'<script[^>]+type="application/json"[^>]*>(.*?)</script>', html, re.DOTALL)
+    if not m:
+        return games
+    try:
+        nodes = json.loads(m.group(1))
+        if not isinstance(nodes, list) or not nodes:
+            return games
+        root = _devalue(nodes, 0, {})
+        data = (root or {}).get("data") or {}
+
+        fixtures: list = []
+        pims_abbr = dict(_CFL_PIMS_ABBR)
+        for key, val in data.items():
+            if not isinstance(val, dict):
+                continue
+            if key.startswith("schedule") and isinstance(val.get("fixtures"), list):
+                fixtures = val["fixtures"]
+            if key.startswith("teams") and isinstance(val.get("teams"), list):
+                for t in val["teams"]:
+                    fields = t.get("fields") if isinstance(t, dict) else None
+                    if not isinstance(fields, dict):
+                        continue
+                    pid, code = fields.get("pimsId"), fields.get("shortCode")
+                    if isinstance(pid, int) and isinstance(code, str) and code:
+                        pims_abbr[pid] = code
+
+        for f in fixtures:
+            if not isinstance(f, dict):
+                continue
+            try:
+                start = _datetime.fromisoformat(str(f.get("start_at")))
+                game_date = start.astimezone(timezone.utc).strftime("%Y-%m-%d")
+            except (TypeError, ValueError):
+                continue
+            away_abbr = pims_abbr.get(f.get("away_team_id"))
+            home_abbr = pims_abbr.get(f.get("home_team_id"))
+            if not away_abbr or not home_abbr:
+                continue
+            status = str(f.get("game_status") or "").strip().lower()
+            away_score, home_score = f.get("away_team_score"), f.get("home_team_score")
+            # A "final" with no score can't be graded as one; demote to pending.
+            final = (status in _CFL_FINAL_STATUSES
+                     and away_score is not None and home_score is not None)
+            live = status in _CFL_LIVE_STATUSES
+            periods = f.get("total_periods")
+            games.append({
+                "date": game_date,
+                "away_abbr": away_abbr,
+                "home_abbr": home_abbr,
+                "away_name": CFL_TEAMS.get(away_abbr, away_abbr),
+                "home_name": CFL_TEAMS.get(home_abbr, home_abbr),
+                "away_quarters": [],
+                "home_quarters": [],
+                "away_total": str(away_score if away_score is not None else 0),
+                "home_total": str(home_score if home_score is not None else 0),
+                "final": final,
+                "ot": bool(final and isinstance(periods, int) and periods > 4),
+                "live": live,
+                # Live semantics of total_periods are unobserved — leave the
+                # period unknown so nothing early-grades (fails closed).
+                "current_period": None,
+            })
+    except Exception as exc:
+        print(f"    [CFL error] payload parse: {exc}")
+        return []
+    return games
+
+
 def _parse_cfl_schedule(html: str) -> list[dict]:
-    """Parse CFL.ca schedule page into a list of game dicts with quarter scores."""
+    """Parse the CFL.ca schedule page into game dicts, whichever era of markup.
+
+    The Nuxt payload (current site) is tried first; the legacy server-rendered
+    cards are the fallback so a rollback on their side costs us nothing.
+    """
+    return _parse_cfl_schedule_payload(html) or _parse_cfl_schedule_markup(html)
+
+
+def _parse_cfl_schedule_markup(html: str) -> list[dict]:
+    """Parse the pre-2026-09 server-rendered schedule cards (quarter tables)."""
     games: list[dict] = []
 
     # Split per game card. Do NOT split on the `int_timestamp` script: an
