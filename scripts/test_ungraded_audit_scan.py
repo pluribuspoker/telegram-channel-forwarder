@@ -12,6 +12,7 @@ import unittest
 from datetime import date
 
 from scripts.ungraded_audit import (
+    HeadlessInvoker,
     _card_id,
     _follow_up_prompt,
     _stale_reference_date,
@@ -305,6 +306,15 @@ class Prompt(unittest.TestCase):
         cache = {"-1002:10": entry(picks=[pick()])}
         group = scan(cache, {}, today_et=TODAY)[0]
         self.assertNotIn("fan-out copies", build_prompt(group, today_et=TODAY))
+
+
+class InvokerIsolation(unittest.TestCase):
+    def test_agent_command_loads_no_mcp_servers(self):
+        # The Telegram plugin's MCP server is a second Bot API poller on the
+        # interactive session's bot token; Telegram 409s one of them dead.
+        cmd = HeadlessInvoker("claude", oauth_token="tok").command("/investigate x")
+        self.assertIn("--strict-mcp-config", cmd)
+        self.assertIn("--no-session-persistence", cmd)
 
 
 if __name__ == "__main__":

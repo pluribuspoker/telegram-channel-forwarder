@@ -380,7 +380,11 @@ class HeadlessInvoker:
     post-investigate stop gate) stand down. --no-session-persistence keeps
     nightly transcripts out of ~/.claude/projects, where they would poison
     the resume-notify hook's previous-session lookup; the stream file IS the
-    durable transcript.
+    durable transcript. --strict-mcp-config stops the Telegram channel
+    plugin's MCP server from spawning under the agent — that server is a
+    Bot API poller, and a second poller on the token gets the interactive
+    session's poller 409'd to death (verified: the flag suppresses the bun
+    spawn entirely, claude-code 2.1.266).
     """
 
     def __init__(self, claude_bin: str, *, oauth_token: str,
@@ -402,6 +406,11 @@ class HeadlessInvoker:
             "--output-format", "stream-json",
             "--verbose",
             "--no-session-persistence",
+            # A plugin MCP server here is a second Bot API poller on the shared
+            # bot token; Telegram 409s one of the two dead — usually the
+            # interactive session's, whose supervisor then restarts it mid-run.
+            # Agents read Telegram via Telethon scripts, never MCP.
+            "--strict-mcp-config",
         ]
 
     def environment(self) -> dict[str, str]:

@@ -49,6 +49,19 @@ run clears the 06:00 auto-reboot window. Each agent:
   `~/.claude/projects/`, where the resume-notify hook would treat one as
   the channels session's "previous session". The stream-json file under
   `logs/ungraded_audit/<date>/` is the durable transcript instead;
+- `--strict-mcp-config`: without it the agent loads the Telegram channel
+  plugin's MCP server — a second Bot API poller on the same bot token, and
+  Telegram 409s one of the duelling pollers to death. Three times on
+  2026-09-09 (04:45, 08:10, ~08:19) the loser was the interactive session's
+  poller: `claude-channels`' supervisor sees "bun/telegram plugin gone" and
+  kill-restarts the whole session mid-conversation — and while the agent's
+  stray poller lives, it silently eats the operator's inbound DMs. Verified
+  on claude-code 2.1.266 that the flag suppresses the bun spawn entirely;
+  agents read Telegram via Telethon scripts and never need MCP. Same class
+  of rule as the god judge runner's isolation: **any unattended `claude -p`
+  on the VPS must pass `--strict-mcp-config` (or `--safe-mode`)** unless it
+  genuinely needs an MCP server. Pinned by `InvokerIsolation` in
+  `scripts/test_ungraded_audit_scan.py`;
 - prompt constraints (see `build_prompt`): no worktree, no push, never
   touch telegram-forwarder, stop grade-daemon around any parse_cache edit,
   commit only its own files with a `nightly-audit:` message prefix, pinned
