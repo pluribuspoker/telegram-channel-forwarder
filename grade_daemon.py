@@ -226,15 +226,27 @@ class _ESPNCache:
         self._ttl = ttl
         self._data: dict[tuple, tuple[float, list]] = {}  # key → (fetched_at, data)
 
-    async def get(self, sport: str, date_str: str) -> list:
+    async def get(
+        self, sport: str, date_str: str, include_soccer: bool = False,
+    ) -> list:
+        # Soccer lives outside ESPN_LEAGUES (per-league scoreboards), so
+        # fetch_espn returns None for it and every soccer result rendered
+        # compact/headerless despite a known final. Only the score-header
+        # lookup (_resolve_game_keys) opts into the merged SOCCER_LEAGUES
+        # scoreboard: the grading loop's call must keep getting None — its
+        # soccer grading runs through fetch_soccer_context (build_context
+        # ignores the scoreboard arg for Soccer), a non-None scoreboard
+        # would wake build_early_context's dormant soccer-period mid-game
+        # path, and a pending soccer pick would otherwise fan out ~26
+        # league fetches every TTL all day pregame. The guard sits before
+        # the cache so the header path's cached merged scoreboard can
+        # never leak into a grading call.
+        if sport == "Soccer" and not include_soccer:
+            return None
         key = (sport, date_str)
         cached = self._data.get(key)
         if cached and (time.monotonic() - cached[0]) < self._ttl:
             return cached[1]
-        # Soccer lives outside ESPN_LEAGUES (per-league scoreboards), so
-        # fetch_espn returns None for it and every soccer result rendered
-        # compact/headerless despite a known final — route it through the
-        # merged SOCCER_LEAGUES scoreboard instead.
         if sport == "Soccer":
             data = await fetch_soccer_scoreboard(date_str)
         else:
@@ -354,7 +366,7 @@ async def _resolve_game_keys(pending: list[dict], espn_cache: _ESPNCache) -> Non
         for leg in legs:
             sport, game_date, _ = leg["key"]
             try:
-                sb = await espn_cache.get(sport, game_date)
+                sb = await espn_cache.get(sport, game_date, include_soccer=True)
                 event = _find_event_for_pick(sb, leg["matchup"]) if sb else None
             except Exception as exc:
                 print(f"  [group] event lookup failed ({sport} {game_date}): {exc}")

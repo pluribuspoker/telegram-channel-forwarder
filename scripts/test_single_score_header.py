@@ -33,7 +33,10 @@ final): soccer lives outside ESPN_LEAGUES, so fetch_espn returns None for it and
 the event lookup never found a final — _ESPNCache must route Soccer through the
 merged SOCCER_LEAGUES scoreboard, and a lone soccer final renders the header:
 
- 11. _ESPNCache.get("Soccer", …)  -> fetch_soccer_scoreboard, never fetch_espn
+ 11. _ESPNCache.get("Soccer", …, include_soccer=True) -> fetch_soccer_scoreboard,
+     never fetch_espn; WITHOUT the flag (the grading loop's call) it stays None
+     with no fetch and no cache write — grading must not wake the dormant
+     soccer-period early path or fan out 26 leagues per cycle for pending picks
  12. lone Soccer result + completed event -> "⚽️ Atlético 1–2 Liverpool" header
 """
 import asyncio
@@ -69,7 +72,7 @@ class FakeESPNCache:
     def __init__(self, scoreboard):
         self.scoreboard = scoreboard
 
-    async def get(self, sport, game_date):
+    async def get(self, sport, game_date, include_soccer=False):
         return self.scoreboard
 
 
@@ -275,7 +278,11 @@ check("multi+live stays compact",
 SOCCER_SENTINEL = {"events": [{"id": "sentinel"}]}
 
 
+soccer_sb_calls = []
+
+
 async def _fake_soccer_sb(date_str):
+    soccer_sb_calls.append(date_str)
     return SOCCER_SENTINEL
 
 
@@ -288,10 +295,17 @@ _orig = gd.fetch_espn, gd.fetch_soccer_scoreboard
 gd.fetch_espn, gd.fetch_soccer_scoreboard = _fake_fetch_espn, _fake_soccer_sb
 try:
     cache_obj = gd._ESPNCache()
-    got_soccer = asyncio.run(cache_obj.get("Soccer", TODAY))
+    # Header lookup opts in and gets the merged soccer scoreboard...
+    got_header = asyncio.run(cache_obj.get("Soccer", TODAY, include_soccer=True))
+    # ...and the grading loop's bare call stays None even with that merged
+    # scoreboard sitting in the cache — no fetch, no cache read.
+    got_grading = asyncio.run(cache_obj.get("Soccer", TODAY))
     got_mlb = asyncio.run(cache_obj.get("MLB", TODAY))
-    check("Soccer routes to fetch_soccer_scoreboard", got_soccer is SOCCER_SENTINEL,
-          f"got {got_soccer!r}")
+    check("header lookup routes Soccer to fetch_soccer_scoreboard",
+          got_header is SOCCER_SENTINEL, f"got {got_header!r}")
+    check("grading call gets None for Soccer, no extra fetch",
+          got_grading is None and soccer_sb_calls == [TODAY],
+          f"got {got_grading!r}, calls={soccer_sb_calls}")
     check("other sports still route to fetch_espn", got_mlb == {"events": []},
           f"got {got_mlb!r}")
 finally:
