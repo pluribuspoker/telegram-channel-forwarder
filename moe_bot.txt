@@ -27,8 +27,9 @@ Picks implementation status
 - Compact game cards render both God arms and every approved expert conclusion
   directly from the persisted Sheet rows.
 - Consensus counts actual side selections and excludes side PASS rows.
-- Show full opinions and Hide full opinions are restricted to the MOE group.
-- Full persisted opinions are split safely into replies only on request.
+- Show full opinions edits the existing card into a paginated opinion reader.
+- Previous, Next, and Back to picks remain restricted to the MOE group.
+- Full persisted opinions are split safely into same-card pages.
 - Existing @nflguesser_bot-owned Picks cards are edited in place.
 - Review, Scores, and NFL Guesser private views remain unchanged.
 - Local validation and live-data rendering are complete; deployment restart
@@ -113,12 +114,13 @@ Do not automatically publish every full explanation during initial sync.
 Add channel-local controls:
 
 - Show full opinions
-- Hide full opinions
-- Refresh, only if a manual refresh proves useful
+- Previous / Next
+- Back to picks
 
-Show full opinions posts stable detail messages as replies beneath that game's
-card. Hide full opinions deletes only those tracked detail messages. Reopening
-the details recreates or updates them from the persisted moe_opinions rows.
+Show full opinions edits the existing game card to display the first persisted
+opinion page. Previous and Next edit that same card through every expert and
+long-text chunk. Back to picks restores the compact committee summary. No
+additional Telegram messages are created.
 
 Long details must:
 
@@ -127,7 +129,7 @@ Long details must:
 - Split below Telegram's 4096-character HTML limit.
 - Escape Telegram HTML safely.
 - Preserve one expert's sections together where possible.
-- Edit existing detail messages instead of reposting unchanged content.
+- Edit the existing game card rather than creating reply messages.
 - Never link to an NFL Guesser private chat.
 
 Review topic
@@ -219,9 +221,9 @@ Phase 2: redesign the cards
 ---------------------------
 
 1. Keep primary Review and Picks cards concise.
-2. Replace automatic full-detail bundles with lazy Show/Hide behavior.
-3. Track expansion state and detail message IDs per event/context.
-4. Reconcile expanded details when approved opinions change.
+2. Replace automatic full-detail bundles with same-card pagination.
+3. Track the selected opinion page per event.
+4. Reconcile the visible page when approved opinions change.
 5. Preserve current cards if an edit/send/delete fails; retry on the next pass.
 6. Delete stale Picks cards when approvals are revoked.
 7. Keep queue/week cards pinned and update them in place.
@@ -239,9 +241,9 @@ Required coverage:
 5. Unauthorized users cannot mutate reviews.
 6. Existing @nflguesser_bot-owned cards are edited rather than replaced.
 7. Initial synchronization does not auto-post full-opinion bundles.
-8. Show full opinions creates the expected detail messages.
-9. Repeated Show is idempotent.
-10. Hide removes all current and obsolete detail message IDs.
+8. Show full opinions edits the existing card and creates no messages.
+9. Previous/Next page through every persisted opinion and long-text chunk.
+10. Back to picks restores the compact card.
 11. Telegram limits and HTML escaping remain safe.
 12. Failed sends, edits, and deletes preserve retryable state.
 13. Revoked approvals remove stale Picks content.
@@ -310,8 +312,8 @@ configured MOE chat ID and test the negative path.
 Channel clutter
 ---------------
 
-Mitigation: compact primary cards plus lazy Show/Hide detail messages. Never
-auto-expand every opinion during synchronization.
+Mitigation: compact primary cards plus same-card opinion pagination. Never
+auto-post a reply bundle during synchronization.
 
 Two desk writers
 ----------------
@@ -347,8 +349,8 @@ DONE WHEN
 2. NFL Guesser private behavior remains unchanged during this phase.
 3. Review, Picks, and Scores operate directly inside the MOE supergroup.
 4. Primary game cards are compact and existing cards update in place.
-5. Full opinions appear only when Show full opinions is requested.
-6. Hide full opinions removes the tracked detail bundle safely.
+5. Full opinions appear as pages in the same card when requested.
+6. Back to picks restores the compact summary without creating messages.
 7. Review actions remain role-checked and hash-checked.
 8. MOE view changes do not alter private NFL Guesser behavior.
 9. The dedicated MOE service and bot are removed after verification.

@@ -477,14 +477,22 @@ class RenderTests(unittest.TestCase):
         )
         self.assertNotIn("t.me/nflguesser_bot", str(keyboard))
 
-        _, expanded_keyboard = render_picks_card(
+        detail_text, detail_keyboard = render_picks_card(
             desk,
             config=CONFIG,
-            expanded=True,
+            page=0,
         )
+        self.assertIn("🔎 <b>God Expert (Rules)</b>", detail_text)
+        self.assertIn("<blockquote expandable>", detail_text)
         self.assertEqual(
-            expanded_keyboard,
-            [[{"text": "Hide full opinions", "callback_data": "desk:hide:401"}]],
+            detail_keyboard,
+            [
+                [
+                    {"text": "1/6", "callback_data": "desk:page:401:0"},
+                    {"text": "Next", "callback_data": "desk:page:401:1"},
+                ],
+                [{"text": "Back to picks", "callback_data": "desk:hide:401"}],
+            ],
         )
 
     def test_picks_card_states_pending_or_missing_god(self) -> None:
@@ -639,30 +647,30 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(len(self.api.sent), sent)
         self.assertEqual(self.api.edits, [])
 
-    def test_show_and_hide_full_opinions_are_idempotent(self) -> None:
+    def test_full_opinions_paginate_on_the_same_card(self) -> None:
         rows = committee("401")
         self.sync(rows)
         picks_id = self.state["cards"]["picks:401"]["message_id"]
+        sent = len(self.api.sent)
 
-        self.state["expanded_picks"]["401"] = True
-        summary = self.sync(rows)
-        detail_keys = sorted(
-            key
-            for key in self.state["cards"]
-            if key.startswith("picks-detail:401:")
-        )
-        self.assertEqual(len(detail_keys), 4)
-        self.assertEqual(summary.posted, detail_keys)
+        self.state["expanded_picks"]["401"] = 0
+        summary = self.sync(rows, priority_event_id="401")
+        self.assertEqual(summary.posted, [])
         self.assertIn("picks:401", summary.edited)
-        detail_messages = [
-            message
-            for message in self.api.sent
-            if message["reply_to"] == picks_id
-        ]
-        self.assertEqual(len(detail_messages), 4)
-        self.assertTrue(
-            all("Approved committee" in message["text"] for message in detail_messages)
+        self.assertEqual(len(self.api.sent), sent)
+        self.assertEqual(
+            self.state["cards"]["picks:401"]["message_id"],
+            picks_id,
         )
+        self.assertIn("Schedule Expert", self.api.edits[-1]["text"])
+        self.assertFalse(
+            any(key.startswith("picks-detail:401:") for key in self.state["cards"])
+        )
+
+        self.state["expanded_picks"]["401"] = 1
+        summary = self.sync(rows)
+        self.assertIn("picks:401", summary.edited)
+        self.assertIn("Divisional Expert", self.api.edits[-1]["text"])
 
         summary = self.sync(rows)
         self.assertEqual(
@@ -670,132 +678,128 @@ class SyncTests(unittest.TestCase):
             ([], [], []),
         )
 
-        detail_ids = [
-            self.state["cards"][key]["message_id"] for key in detail_keys
-        ]
         self.state["expanded_picks"].pop("401")
         summary = self.sync(rows)
         self.assertIn("picks:401", summary.edited)
-        self.assertEqual(
-            sorted(summary.deleted),
-            detail_keys,
-        )
-        self.assertTrue(all(message_id in self.api.deleted for message_id in detail_ids))
-        self.assertFalse(
-            any(key.startswith("picks-detail:401:") for key in self.state["cards"])
-        )
+        self.assertIn("<b>GOD EXPERT</b>", self.api.edits[-1]["text"])
 
-    def test_priority_show_completes_details_before_other_cards(self) -> None:
-        rows = committee("401")
-        self.state["expanded_picks"]["401"] = True
-        summary = self.sync(
-            rows,
-            max_posts=1,
-            priority_event_id="401",
-        )
-        detail_keys = sorted(
-            key
-            for key in self.state["cards"]
-            if key.startswith("picks-detail:401:")
-        )
-        self.assertEqual(len(detail_keys), 4)
-        self.assertFalse(
-            any(key.startswith("picks-detail:401:") for key in summary.deferred)
-        )
-        self.assertIn("week", summary.deferred)
-
-    def test_failed_old_detail_delete_is_retained_for_retry(self) -> None:
+    def test_legacy_detail_replies_are_removed_without_new_posts(self) -> None:
         rows = committee("401")
         self.sync(rows)
-        self.state["expanded_picks"]["401"] = True
-        self.sync(rows, priority_event_id="401")
-        detail_key = "picks-detail:401:0"
-        old_detail_id = self.state["cards"][detail_key]["message_id"]
-        old_picks_id = self.state["cards"]["picks:401"]["message_id"]
-        self.api.missing.add(old_picks_id)
-        rows[0]["predicted_home_score"] = 25
+        self.state["cards"]["picks-detail:401:0"] = {
+            "message_id": 901,
+            "obsolete_message_ids": [902],
+            "topic": 22,
+            "reply_to": self.state["cards"]["picks:401"]["message_id"],
+        }
+        sent = len(self.api.sent)
+        summary = self.sync(rows)
+        self.assertEqual(len(self.api.sent), sent)
+        self.assertIn("picks-detail:401:0", summary.deleted)
+        self.assertIn(901, self.api.deleted)
+        self.assertIn(902, self.api.deleted)
+        self.assertNotIn("picks-detail:401:0", self.state["cards"])
+
+    def test_legacy_detail_replies_are_removed_when_picks_are_hidden(self) -> None:
+        rows = committee("401")
+        self.sync(rows)
+        self.state["cards"]["picks-detail:401:0"] = {
+            "message_id": 901,
+            "topic": 22,
+        }
+        summary = self.sync(rows[:1])
+        self.assertIn("picks-detail:401:0", summary.deleted)
+        self.assertIn(901, self.api.deleted)
+        self.assertNotIn("picks-detail:401:0", self.state["cards"])
+
+    def test_legacy_detail_replies_are_removed_when_game_leaves_slate(self) -> None:
+        rows = committee("401")
+        self.sync(rows)
+        self.state["cards"]["picks-detail:401:0"] = {
+            "message_id": 901,
+            "topic": 22,
+        }
+        summary = sync_desk(
+            config=CONFIG,
+            api=self.api,
+            state=self.state,
+            desks=[],
+            now=NOW,
+        )
+        self.assertIn("picks-detail:401:0", summary.deleted)
+        self.assertIn(901, self.api.deleted)
+        self.assertNotIn("picks-detail:401:0", self.state["cards"])
+
+    def test_failed_legacy_detail_delete_remains_retryable(self) -> None:
+        rows = committee("401")
+        self.sync(rows)
+        key = "picks-detail:401:0"
+        self.state["cards"][key] = {
+            "message_id": 901,
+            "obsolete_message_ids": [902],
+            "topic": 22,
+        }
         original_delete = self.api.delete
 
-        def fail_old_detail(chat_id, message_id):
-            if message_id == old_detail_id:
+        def fail_obsolete(chat_id, message_id):
+            if message_id == 902:
                 return False
             return original_delete(chat_id, message_id)
 
-        self.api.delete = fail_old_detail
-        summary = self.sync(rows, priority_event_id="401")
-        self.assertTrue(
-            any(detail_key in error for error in summary.errors)
-        )
-        self.assertEqual(
-            self.state["cards"][detail_key]["obsolete_message_ids"],
-            [old_detail_id],
-        )
+        self.api.delete = fail_obsolete
+        self.sync(rows, priority_event_id="401")
+        entry = self.state["cards"][key]
+        self.assertNotIn("message_id", entry)
+        self.assertEqual(entry["obsolete_message_ids"], [902])
+        self.assertIn(901, self.api.deleted)
 
         self.api.delete = original_delete
         self.sync(rows, priority_event_id="401")
-        self.assertNotIn(
-            "obsolete_message_ids",
-            self.state["cards"][detail_key],
-        )
-        self.assertIn(old_detail_id, self.api.deleted)
+        self.assertNotIn(key, self.state["cards"])
+        self.assertIn(902, self.api.deleted)
 
-    def test_hide_still_removes_details_after_kickoff(self) -> None:
+    def test_same_card_pagination_still_works_after_kickoff(self) -> None:
         rows = committee("401")
         self.sync(rows)
-        self.state["expanded_picks"]["401"] = True
-        self.sync(rows, priority_event_id="401")
-        detail_ids = [
-            entry["message_id"]
-            for key, entry in self.state["cards"].items()
-            if key.startswith("picks-detail:401:")
-        ]
-
-        self.state["expanded_picks"].pop("401")
+        picks_id = self.state["cards"]["picks:401"]["message_id"]
+        self.state["expanded_picks"]["401"] = 0
         summary = self.sync(
             rows,
             now=datetime.fromisoformat(SEA_KICKOFF) + timedelta(minutes=5),
             priority_event_id="401",
         )
+        self.assertIn("picks:401", summary.edited)
+        picks_edit = next(
+            edit for edit in self.api.edits if edit["id"] == picks_id
+        )
+        self.assertIn("Schedule Expert", picks_edit["text"])
 
-        self.assertTrue(
-            all(message_id in self.api.deleted for message_id in detail_ids)
-        )
-        self.assertFalse(
-            any(key.startswith("picks-detail:401:") for key in self.state["cards"])
-        )
-        self.assertFalse(
-            any(key.startswith("picks-detail:401:") for key in summary.errors)
-        )
-
-    def test_partial_hide_failure_keeps_obsolete_separate_from_current(self) -> None:
+    def test_callback_pagination_never_reposts_a_missing_card(self) -> None:
         rows = committee("401")
         self.sync(rows)
-        self.state["expanded_picks"]["401"] = True
-        self.sync(rows, priority_event_id="401")
-        key = "picks-detail:401:0"
-        current_id = self.state["cards"][key]["message_id"]
-        obsolete_id = 999
-        self.state["cards"][key]["obsolete_message_ids"] = [obsolete_id]
-        original_delete = self.api.delete
+        picks_id = self.state["cards"]["picks:401"]["message_id"]
+        self.api.missing.add(picks_id)
+        self.state["expanded_picks"]["401"] = 0
+        sent = len(self.api.sent)
 
-        def fail_obsolete(chat_id, message_id):
-            if message_id == obsolete_id:
-                return False
-            return original_delete(chat_id, message_id)
+        summary = self.sync(
+            rows,
+            priority_event_id="401",
+            edit_only_event_id="401",
+        )
 
-        self.api.delete = fail_obsolete
-        self.state["expanded_picks"].pop("401")
-        self.sync(rows, priority_event_id="401")
-        entry = self.state["cards"][key]
-        self.assertNotIn("message_id", entry)
-        self.assertEqual(entry["obsolete_message_ids"], [obsolete_id])
-        self.assertIn(current_id, self.api.deleted)
-
-        self.state["expanded_picks"]["401"] = True
-        self.sync(rows, priority_event_id="401")
-        entry = self.state["cards"][key]
-        self.assertNotEqual(entry["message_id"], obsolete_id)
-        self.assertEqual(entry["obsolete_message_ids"], [obsolete_id])
+        self.assertEqual(len(self.api.sent), sent)
+        self.assertEqual(summary.posted, [])
+        self.assertTrue(
+            any(
+                error.startswith("picks:401:")
+                for error in summary.errors
+            )
+        )
+        self.assertEqual(
+            self.state["cards"]["picks:401"]["message_id"],
+            picks_id,
+        )
 
     def test_a_review_edits_only_the_affected_cards(self) -> None:
         rows = committee("401")
@@ -1035,6 +1039,10 @@ class ConfigAndCallbackTests(unittest.TestCase):
         self.assertEqual(parse_callback("desk:okarms:401"), ("okarms", "401"))
         self.assertEqual(parse_callback("desk:show:401"), ("show", "401"))
         self.assertEqual(parse_callback("desk:hide:401"), ("hide", "401"))
+        self.assertEqual(
+            parse_callback("desk:page:401:2"),
+            ("page", "401:2"),
+        )
         self.assertIsNone(parse_callback("desk:zap:401"))
         self.assertIsNone(parse_callback("desk:ok:"))
         self.assertIsNone(parse_callback("moe:view:401:0"))

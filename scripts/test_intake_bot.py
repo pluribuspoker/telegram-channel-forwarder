@@ -44,7 +44,7 @@ from intake_bot import (
     requires_ak_projection,
     select_games,
     selected_market_context,
-    set_desk_picks_expanded,
+    update_desk_picks_view,
     side_buttons,
     snapshot_lean_submission,
     team_emoji,
@@ -67,24 +67,46 @@ from nfl_lines import (
 NOW = datetime(2026, 8, 4, 12, tzinfo=timezone.utc)
 
 
-class DeskExpansionStateTests(unittest.TestCase):
-    def test_expansion_update_returns_the_exact_prior_state(self) -> None:
+class DeskPicksViewTests(unittest.TestCase):
+    def test_same_card_update_edits_only_the_clicked_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = SimpleNamespace(
-                state_path=Path(tmp) / "moe_desk_state.json"
+                state_path=Path(tmp) / "moe_desk_state.json",
+                chat_id="-1001",
+                picks_topic=5,
             )
-            self.assertFalse(
-                set_desk_picks_expanded(config, "401", expanded=True)
-            )
-            self.assertTrue(
-                set_desk_picks_expanded(config, "401", expanded=True)
-            )
-            self.assertTrue(
-                set_desk_picks_expanded(config, "401", expanded=False)
-            )
-            self.assertFalse(
-                set_desk_picks_expanded(config, "401", expanded=False)
-            )
+            api = Mock()
+            api.edit.return_value = True
+            desk = SimpleNamespace(event_id="401", show_picks=True)
+            with (
+                patch.object(intake_bot, "load_cached_moe_opinions", return_value=[]),
+                patch.object(intake_bot, "load_intake_data", return_value=([], [], {})),
+                patch.object(intake_bot, "load_moe_registry", return_value={}),
+                patch.object(intake_bot, "build_desk_model", return_value=[desk]),
+                patch.object(intake_bot, "picks_opinion_pages", return_value=["detail"]),
+                patch.object(
+                    intake_bot,
+                    "render_picks_card",
+                    return_value=(
+                        "page text",
+                        [[{"text": "Next", "callback_data": "desk:page:401:1"}]],
+                    ),
+                ),
+            ):
+                previous, error = update_desk_picks_view(
+                    config,
+                    api,
+                    "401",
+                    page=0,
+                    message_id=30,
+                )
+            self.assertIsNone(previous)
+            self.assertIsNone(error)
+            api.edit.assert_called_once()
+            self.assertEqual([call[0] for call in api.method_calls], ["edit"])
+            state = intake_bot.load_desk_state(config.state_path)
+            self.assertEqual(state["expanded_picks"]["401"], 0)
+            self.assertEqual(state["cards"]["picks:401"]["message_id"], 30)
 
 
 def _game(event_id: str, days: int, away: str = "Miami Dolphins") -> dict:

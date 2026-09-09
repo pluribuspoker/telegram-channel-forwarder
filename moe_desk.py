@@ -1007,11 +1007,66 @@ def _why_block(desk: GameDesk) -> str:
     return text
 
 
+def picks_opinion_pages(desk: GameDesk) -> list[str]:
+    detail_rows = [
+        row
+        for row in (desk.rules, desk.judge, *desk.approved_voices)
+        if row is not None
+    ]
+    return render_opinion_details(
+        detail_rows,
+        context="Approved committee",
+    )
+
+
 def render_picks_card(
-    desk: GameDesk, *, config: DeskConfig, expanded: bool = False
+    desk: GameDesk,
+    *,
+    config: DeskConfig,
+    page: int | None = None,
 ) -> tuple[str, Keyboard]:
-    """Compact approved-opinion index with channel-local detail controls."""
+    """Compact index, or one paginated full opinion in the same message."""
     game = desk.game
+    details = picks_opinion_pages(desk)
+    if page is not None and details:
+        page = max(0, min(page, len(details) - 1))
+        lines = [
+            f"🏈 <b>{_esc(teams_label(game))}</b> · "
+            f"{kickoff_label(desk.kickoff)} ET",
+            "",
+            details[page],
+        ]
+        navigation: list[dict[str, str]] = []
+        if page > 0:
+            navigation.append(
+                _button(
+                    "Previous",
+                    callback=f"{CALLBACK_PREFIX}page:{desk.event_id}:{page - 1}",
+                )
+            )
+        navigation.append(
+            _button(
+                f"{page + 1}/{len(details)}",
+                callback=f"{CALLBACK_PREFIX}page:{desk.event_id}:{page}",
+            )
+        )
+        if page + 1 < len(details):
+            navigation.append(
+                _button(
+                    "Next",
+                    callback=f"{CALLBACK_PREFIX}page:{desk.event_id}:{page + 1}",
+                )
+            )
+        return "\n".join(lines), [
+            navigation,
+            [
+                _button(
+                    "Back to picks",
+                    callback=f"{CALLBACK_PREFIX}hide:{desk.event_id}",
+                )
+            ],
+        ]
+
     lines = [
         f"🏈 <b>{_esc(teams_label(game))}</b> · {kickoff_label(desk.kickoff)} ET",
         "",
@@ -1027,16 +1082,11 @@ def render_picks_card(
         consensus = consensus_line(desk)
         if consensus:
             lines += ["", consensus]
-    action = "hide" if expanded else "show"
-    label = "Hide full opinions" if expanded else "Show full opinions"
-    keyboard = [
-        [
-            _button(
-                label,
-                callback=f"{CALLBACK_PREFIX}{action}:{desk.event_id}",
-            )
-        ]
-    ]
+    keyboard = (
+        [[_button("Show full opinions", callback=f"{CALLBACK_PREFIX}show:{desk.event_id}")]]
+        if details
+        else []
+    )
     return "\n".join(lines), keyboard
 
 
@@ -1522,6 +1572,7 @@ def _upsert_card(
     summary: SyncSummary,
     pin: bool = False,
     reply_to: int | None = None,
+    edit_only: bool = False,
 ) -> int | None:
     digest = content_hash(text, keyboard, topic)
     entry = state["cards"].get(key)
@@ -1585,7 +1636,13 @@ def _upsert_card(
         except DeskApiError as exc:
             summary.errors.append(f"{key}: {exc}")
             return int(entry["message_id"])
+        if edit_only:
+            summary.errors.append(f"{key}: existing message could not be edited")
+            return None
         state["cards"].pop(key, None)
+    if edit_only:
+        summary.errors.append(f"{key}: existing message is not tracked")
+        return None
     if not budget.take():
         summary.deferred.append(key)
         return None
@@ -1618,50 +1675,17 @@ def _upsert_card(
     return message_id
 
 
-def _sync_picks_details(
+def _remove_legacy_picks_details(
     *,
-    desk: GameDesk,
-    picks_id: int | None,
     config: DeskConfig,
     api: BotApi,
     state: dict[str, Any],
-    budget: _Budget,
     summary: SyncSummary,
-) -> None:
-    prefix = f"picks-detail:{desk.event_id}:"
-    expanded = bool(state["expanded_picks"].get(desk.event_id))
-    rows = [
-        row
-        for row in (desk.rules, desk.judge, *desk.approved_voices)
-        if row is not None
-    ]
-    messages = (
-        render_opinion_details(rows, context="Approved committee")
-        if expanded and picks_id is not None
-        else []
-    )
-    active: set[str] = set()
-    for index, text in enumerate(messages):
-        key = f"{prefix}{index}"
-        active.add(key)
-        _upsert_card(
-            key=key,
-            topic=config.picks_topic,
-            text=text,
-            keyboard=[],
-            config=config,
-            api=api,
-            state=state,
-            budget=budget,
-            summary=summary,
-            reply_to=picks_id,
-        )
-    stale = [
-        key
-        for key in state["cards"]
-        if key.startswith(prefix) and key not in active
-    ]
-    for key in stale:
+) -> set[str]:
+    failed_events: set[str] = set()
+    for key in [
+        key for key in state["cards"] if key.startswith("picks-detail:")
+    ]:
         entry = state["cards"][key]
         if _delete_entry_messages(
             key=key,
@@ -1672,43 +1696,27 @@ def _sync_picks_details(
         ):
             state["cards"].pop(key, None)
             summary.deleted.append(key)
-
-
-def _cleanup_expired_picks_details(
-    *,
-    state: dict[str, Any],
-    now: datetime,
-    config: DeskConfig,
-    api: BotApi,
-    summary: SyncSummary,
-) -> set[str]:
-    failed_events: set[str] = set()
-    for event_id, kickoff in list(state["kickoffs"].items()):
-        try:
-            expired = _parse_time(kickoff) < now - RETENTION
-        except ValueError:
-            expired = True
-        if not expired:
-            continue
-        keys = [
-            key
-            for key in state["cards"]
-            if key.startswith(f"picks-detail:{event_id}:")
-        ]
-        for key in keys:
-            entry = state["cards"][key]
-            if _delete_entry_messages(
-                key=key,
-                entry=entry,
-                config=config,
-                api=api,
-                summary=summary,
-            ):
-                state["cards"].pop(key, None)
-                summary.deleted.append(key)
-            else:
+        else:
+            _, _, remainder = key.partition(":")
+            event_id, _, _ = remainder.partition(":")
+            if event_id:
                 failed_events.add(event_id)
     return failed_events
+
+
+def _selected_picks_page(
+    state: dict[str, Any],
+    event_id: str,
+) -> int | None:
+    raw = state["expanded_picks"].get(event_id)
+    if raw is True:
+        return 0
+    if raw is None or raw is False:
+        return None
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return None
 
 
 def _announce(
@@ -1756,6 +1764,7 @@ def sync_desk(
     team_abbrevs: dict[str, str] | None = None,
     max_posts: int = MAX_POSTS_PER_SYNC,
     priority_event_id: str | None = None,
+    edit_only_event_id: str | None = None,
 ) -> SyncSummary:
     """Reconcile the group with the model: post missing cards, edit changed
     ones, announce new bet legs and near locks once. Idempotent — an
@@ -1777,38 +1786,16 @@ def sync_desk(
                 desk
                 for desk in desks
                 if desk.event_id == priority_event_id
-                and state["expanded_picks"].get(desk.event_id)
             ),
             None,
         )
-        if priority is not None:
-            priority_rows = [
-                row
-                for row in (
-                    priority.rules,
-                    priority.judge,
-                    *priority.approved_voices,
-                )
-                if row is not None
-            ]
-            max_posts = max(
-                max_posts,
-                len(
-                    render_opinion_details(
-                        priority_rows,
-                        context="Approved committee",
-                    )
-                )
-                + 3,
-            )
         if not any(desk.event_id == priority_event_id for desk in desks):
             summary.errors.append(
                 f"picks:{priority_event_id}: game is no longer available"
             )
     budget = _Budget(max_posts)
-    preserve = _cleanup_expired_picks_details(
+    preserve = _remove_legacy_picks_details(
         state=state,
-        now=now,
         config=config,
         api=api,
         summary=summary,
@@ -1823,9 +1810,7 @@ def sync_desk(
                 text, keyboard = render_picks_card(
                     desk,
                     config=config,
-                    expanded=bool(
-                        state["expanded_picks"].get(desk.event_id)
-                    ),
+                    page=_selected_picks_page(state, desk.event_id),
                 )
                 picks_id = _upsert_card(
                     key=picks_key,
@@ -1837,15 +1822,7 @@ def sync_desk(
                     state=state,
                     budget=budget,
                     summary=summary,
-                )
-                _sync_picks_details(
-                    desk=desk,
-                    picks_id=picks_id,
-                    config=config,
-                    api=api,
-                    state=state,
-                    budget=budget,
-                    summary=summary,
+                    edit_only=edit_only_event_id == desk.event_id,
                 )
             elif priority_event_id == desk.event_id:
                 summary.errors.append(
@@ -1881,9 +1858,7 @@ def sync_desk(
             text, keyboard = render_picks_card(
                 desk,
                 config=config,
-                expanded=bool(
-                    state["expanded_picks"].get(desk.event_id)
-                ),
+                page=_selected_picks_page(state, desk.event_id),
             )
             picks_id = _upsert_card(
                 key=f"picks:{desk.event_id}",
@@ -1895,6 +1870,7 @@ def sync_desk(
                 state=state,
                 budget=budget,
                 summary=summary,
+                edit_only=edit_only_event_id == desk.event_id,
             )
             for arm_row in (desk.rules, desk.judge):
                 if arm_row is None:
@@ -1916,15 +1892,6 @@ def sync_desk(
                         summary=summary,
                         now=now,
                     )
-            _sync_picks_details(
-                desk=desk,
-                picks_id=picks_id,
-                config=config,
-                api=api,
-                state=state,
-                budget=budget,
-                summary=summary,
-            )
         if lock_warning_due(desk, config=config, now=now):
             _announce(
                 key=f"lock:{desk.event_id}",
@@ -2029,12 +1996,12 @@ def desk_ids_report(
 
 def parse_callback(data: str) -> tuple[str, str] | None:
     """``desk:ok:<opinion>`` → ``("ok", opinion)``; ``desk:no:<opinion>``;
-    ``desk:okarms:<event>``; ``desk:show:<event>``; ``desk:hide:<event>``.
-    Anything else ``None``."""
+    ``desk:okarms:<event>``; ``desk:show:<event>``; ``desk:hide:<event>``;
+    ``desk:page:<event>:<index>``. Anything else ``None``."""
     if not data.startswith(CALLBACK_PREFIX):
         return None
     action, _, target = data[len(CALLBACK_PREFIX):].partition(":")
-    if action not in {"ok", "no", "okarms", "show", "hide"} or not target:
+    if action not in {"ok", "no", "okarms", "show", "hide", "page"} or not target:
         return None
     return action, target
 

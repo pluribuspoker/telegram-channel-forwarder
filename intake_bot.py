@@ -69,12 +69,15 @@ from moe_ak import parse_ak_projection
 from moe_desk import (
     BotApi as DeskBotApi,
     build_desks as build_desk_model,
+    content_hash as desk_content_hash,
     desk_config_from_env,
     load_state as load_desk_state,
     parse_callback as parse_desk_callback,
     desk_ids_report,
     parse_start_param,
+    picks_opinion_pages,
     review_targets as desk_review_targets,
+    render_picks_card,
     topic_id_from_reply,
     save_state as save_desk_state,
     sync_desk,
@@ -1568,22 +1571,81 @@ def desk_sync_once(
     return summary
 
 
-def set_desk_picks_expanded(
+def update_desk_picks_view(
     config: Any,
+    api: Any,
     event_id: str,
     *,
-    expanded: bool,
-) -> bool:
-    """Persist a shared Picks-card expansion choice without racing the loop."""
+    page: int | None,
+    message_id: int,
+) -> tuple[int | None, str | None]:
+    """Atomically select and edit one existing Picks card; never post it."""
     with _DESK_SYNC_LOCK:
         state = load_desk_state(config.state_path)
-        previous = bool(state["expanded_picks"].get(event_id))
-        if expanded:
-            state["expanded_picks"][event_id] = True
+        raw_previous = state["expanded_picks"].get(event_id)
+        if raw_previous is True:
+            previous = 0
+        elif raw_previous is None or raw_previous is False:
+            previous = None
         else:
+            try:
+                previous = max(0, int(raw_previous))
+            except (TypeError, ValueError):
+                previous = None
+        now = datetime.now(timezone.utc)
+        rows = load_cached_moe_opinions()
+        games, _, _ = load_intake_data()
+        desks = build_desk_model(
+            games,
+            rows,
+            approved_moe_opinions(rows),
+            load_moe_registry(),
+            now=now,
+        )
+        desk = next(
+            (item for item in desks if item.event_id == event_id),
+            None,
+        )
+        if desk is None or not desk.show_picks:
+            return previous, "game is no longer available"
+        effective_page = page
+        if page is not None:
+            effective_page = min(
+                max(0, int(page)),
+                max(0, len(picks_opinion_pages(desk)) - 1),
+            )
+        text, keyboard = render_picks_card(
+            desk,
+            config=config,
+            page=effective_page,
+        )
+        try:
+            edited = api.edit(
+                config.chat_id,
+                int(message_id),
+                text,
+                keyboard=keyboard,
+            )
+        except Exception as exc:  # noqa: BLE001 - returned to callback logger
+            return previous, f"{type(exc).__name__}: {exc}"
+        if not edited:
+            return previous, "existing message could not be edited"
+        if effective_page is None:
             state["expanded_picks"].pop(event_id, None)
+        else:
+            state["expanded_picks"][event_id] = effective_page
+        state["cards"][f"picks:{event_id}"] = {
+            "message_id": int(message_id),
+            "hash": desk_content_hash(
+                text,
+                keyboard,
+                config.picks_topic,
+            ),
+            "topic": config.picks_topic,
+            "reply_to": None,
+        }
         save_desk_state(config.state_path, state)
-        return previous
+        return previous, None
 
 
 def desk_review(action: str, target: str, *, reviewer: str) -> tuple[str, bool]:
@@ -2087,8 +2149,20 @@ async def main() -> None:
             await event.answer("Unknown desk action.", alert=True)
             return
         action, target = parsed
-        if action in {"show", "hide"}:
-            key = f"view:{target}"
+        if action in {"show", "hide", "page"}:
+            event_id = target
+            desired_page: int | None = 0 if action == "show" else None
+            if action == "page":
+                event_id, separator, raw_page = target.rpartition(":")
+                if not separator or not event_id:
+                    await event.answer("Invalid opinion page.", alert=True)
+                    return
+                try:
+                    desired_page = max(0, int(raw_page))
+                except ValueError:
+                    await event.answer("Invalid opinion page.", alert=True)
+                    return
+            key = f"view:{event_id}"
             if key in desk_inflight:
                 await event.answer("Still updating this game.")
                 return
@@ -2096,28 +2170,28 @@ async def main() -> None:
             try:
                 await event.answer(
                     "Loading opinions…"
-                    if action == "show"
-                    else "Hiding opinions…"
+                    if desired_page is not None
+                    else "Returning to picks…"
                 )
-                previous = await asyncio.to_thread(
-                    set_desk_picks_expanded,
+                message_id = (
+                    getattr(event, "message_id", None)
+                    or getattr(event.query, "msg_id", None)
+                )
+                if message_id is None:
+                    print("desk: callback had no message id")
+                    return
+                _, problem = await asyncio.to_thread(
+                    update_desk_picks_view,
                     desk["config"],
-                    target,
-                    expanded=action == "show",
+                    desk["api"],
+                    event_id,
+                    page=desired_page,
+                    message_id=message_id,
                 )
-                problem = await resync_desk(priority_event_id=target)
                 if problem:
-                    await asyncio.to_thread(
-                        set_desk_picks_expanded,
-                        desk["config"],
-                        target,
-                        expanded=previous,
-                    )
-                    await resync_desk(priority_event_id=target)
-                    await desk_reply(
-                        event,
-                        f"Could not update the full opinions yet ({problem}); "
-                        "the previous view was restored.",
+                    print(
+                        "desk: same-card view failed without changing state: "
+                        f"{problem}"
                     )
             finally:
                 desk_inflight.discard(key)
