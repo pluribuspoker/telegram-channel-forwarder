@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from odds import (_find_event_id, _snapshot_time, _sport_key_candidates,  # noqa: E402
                   hist_rescues_msg_date, OddsResult)
+from scores import _team_matches  # noqa: E402
 
 PRESEASON = [
     {"id": "pre_car_ari", "sport_key": "americanfootball_nfl_preseason",
@@ -133,5 +134,33 @@ check("a price with no game binding proves nothing — keep current",
                             "2026-09-08"),
       False)
 
-print(f"\n{15 - len(failures)}/15 passed")
+# 8. Books and cappers say "Mississippi"; ESPN and the Odds API brand the team
+#    "Ole Miss". The parse's "Mississippi Rebels" found no event (no_game), so
+#    the pick never bound a game_date and CONTEXT_SKIP'd forever ("Mississippi
+#    u56", 2026-09-06). _TEAM_ALIASES must bridge the state-name variants
+#    WITHOUT letting bare "Mississippi" leak onto Mississippi State.
+NCAAF = [
+    {"id": "cfb_lou_olemiss", "sport_key": "americanfootball_ncaaf",
+     "commence_time": "2026-09-06T23:30:00Z",
+     "home_team": "Ole Miss Rebels", "away_team": "Louisville Cardinals"},
+    {"id": "cfb_ulm_msst", "sport_key": "americanfootball_ncaaf",
+     "commence_time": "2026-09-05T23:30:00Z",
+     "home_team": "Mississippi State Bulldogs", "away_team": "UL Monroe Warhawks"},
+]
+SEP6 = _snapshot_time("2026-09-06")
+check("'Mississippi Rebels' binds the Ole Miss game",
+      _find_event_id(NCAAF, ["Mississippi Rebels"], as_of=SEP6),
+      "cfb_lou_olemiss")
+check("bare 'Mississippi' binds the Ole Miss game",
+      _find_event_id(NCAAF, ["Mississippi"], as_of=SEP6),
+      "cfb_lou_olemiss")
+check("'Mississippi State' still binds its own game",
+      _find_event_id(NCAAF, ["Mississippi State"], as_of=SEP6),
+      "cfb_ulm_msst")
+check("'Southern Mississippi' matches the Golden Eagles, not Ole Miss",
+      _team_matches("Southern Mississippi", "Southern Miss Golden Eagles")
+      and not _team_matches("Southern Mississippi", "Ole Miss Rebels"),
+      True)
+
+print(f"\n{19 - len(failures)}/19 passed")
 sys.exit(1 if failures else 0)

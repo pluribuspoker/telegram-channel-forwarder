@@ -1312,6 +1312,13 @@ _TEAM_ALIASES: dict[str, str] = {
     "american":            "american university",
     "umkc":                "kansas city",
     "umkc roos":           "kansas city roos",
+    # Books/cappers say "Mississippi"; ESPN + Odds API brand them "Ole Miss".
+    # Bare "mississippi" must alias too, or it contiguous-matches
+    # "Mississippi Valley State" (the "valley" qualifier isn't in _QUALIFIERS).
+    "mississippi":         "ole miss",
+    "mississippi rebels":  "ole miss rebels",
+    "southern mississippi": "southern miss",
+    "southern mississippi golden eagles": "southern miss golden eagles",
     "fiu":                 "florida international",
     "fiu panthers":        "florida international panthers",
     "umass":               "massachusetts",
