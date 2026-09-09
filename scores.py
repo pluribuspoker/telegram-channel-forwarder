@@ -369,6 +369,7 @@ def _parse_cfl_schedule_payload(html: str) -> list[dict]:
                      and away_score is not None and home_score is not None)
             live = status in _CFL_LIVE_STATUSES
             periods = f.get("total_periods")
+            genius = f.get("genius")
             games.append({
                 "date": game_date,
                 "away_abbr": away_abbr,
@@ -385,6 +386,9 @@ def _parse_cfl_schedule_payload(html: str) -> list[dict]:
                 # Live semantics of total_periods are unobserved — leave the
                 # period unknown so nothing early-grades (fails closed).
                 "current_period": None,
+                # Genius Sports fixture id: the key into the gametracker widget,
+                # the only place quarter scores survive the 2026-09 redesign.
+                "genius_id": genius.get("id") if isinstance(genius, dict) else None,
             })
     except Exception as exc:
         print(f"    [CFL error] payload parse: {exc}")
@@ -607,6 +611,131 @@ async def _fetch_cfl_games() -> list[dict]:
     return games
 
 
+# ─── CFL quarter scores (Genius Sports gametracker widget) ──────────────────
+# The 2026-09 cfl.ca payload carries finals only. Quarter scores still exist in
+# the Genius Sports gametracker widget cfl.ca iframes on each game page: its
+# HTML server-renders the full initial state (`window['<uuid>'] = {...}`) with
+# a `scoreByPhases` object per side. One ~30KB GET per fixture, no auth.
+_CFL_GENIUS_WIDGET_URL = (
+    "https://gsm-widgets.betstream.betgenius.com/multisportgametracker/"
+    "?productName=democfl_light&fixtureId={genius_id}&widget=scoreboard"
+)
+_CFL_QUARTERS_TTL = 60
+_CFL_QUARTERS_FAIL_TTL = 15
+_cfl_quarters_cache: dict[int, tuple[float, dict | None]] = {}
+
+
+def _parse_cfl_genius_state(html: str) -> dict | None:
+    """Quarter scores (+ status) out of the gametracker widget's initial state.
+
+    Returns {"away": [...], "home": [...], "match_status", "current_phase"} or
+    None. Phase keys are `quarterN` — except OT, which has been observed as
+    `quarter5` on one side and `overtime1` on the OTHER side of the same game,
+    so both spellings map to the same positions after Q4. Unknown phase names
+    are dropped rather than guessed into a position (fails closed: a short list
+    can only under-settle, a misplaced one would grade wrong halves).
+    """
+    m = re.search(r'"scoreByPhases"\s*:\s*\{', html)
+    if not m:
+        return None
+    start = html.find("{", m.end() - 1)
+    depth = 0
+    for j in range(start, min(len(html), start + 20000)):
+        if html[j] == "{":
+            depth += 1
+        elif html[j] == "}":
+            depth -= 1
+            if depth == 0:
+                break
+    else:
+        return None
+    try:
+        phases = json.loads(html[start:j + 1])
+    except ValueError:
+        return None
+
+    def side(key: str) -> list[str]:
+        raw = phases.get(key)
+        if not isinstance(raw, dict):
+            return []
+        entries = []
+        for k, v in raw.items():
+            if not isinstance(v, (int, float)):
+                continue
+            qm = re.fullmatch(r"quarter(\d+)", k)
+            om = re.fullmatch(r"overtime(\d+)", k)
+            if qm:
+                pos = int(qm.group(1))
+            elif om:
+                pos = 4 + int(om.group(1))
+            else:
+                continue
+            entries.append((pos, str(int(v))))
+        return [v for _, v in sorted(entries)]
+
+    away, home = side("awayScore"), side("homeScore")
+    if not away and not home:
+        return None
+    ms = re.search(r'"matchStatus"\s*:\s*"([^"]*)"', html)
+    cp = re.search(r'"currentPhase"\s*:\s*"?(\d+)"?', html)
+    return {
+        "away": away,
+        "home": home,
+        "match_status": ms.group(1) if ms else None,
+        "current_phase": int(cp.group(1)) if cp else None,
+    }
+
+
+async def _fetch_cfl_quarters(genius_id: int) -> dict | None:
+    """Widget state for one fixture, cached briefly (failures too — the daemon
+    re-asks per unresolved pick per 10s cycle, same reasoning as the schedule)."""
+    cached = _cfl_quarters_cache.get(genius_id)
+    if cached:
+        age = time.monotonic() - cached[0]
+        ttl = _CFL_QUARTERS_TTL if cached[1] else _CFL_QUARTERS_FAIL_TTL
+        if age < ttl:
+            return cached[1]
+    state = None
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as http:
+        try:
+            r = await http.get(_CFL_GENIUS_WIDGET_URL.format(genius_id=genius_id))
+            r.raise_for_status()
+            state = _parse_cfl_genius_state(r.text)
+        except Exception as exc:
+            print(f"    [CFL error] genius widget fetch {genius_id}: {exc}")
+    _cfl_quarters_cache[genius_id] = (time.monotonic(), state)
+    return state
+
+
+async def _ensure_cfl_quarters(game: dict) -> None:
+    """Fill a parsed game's empty quarters from the Genius widget, in place.
+
+    Only fires for a game that has started (live/final) and only when the
+    schedule payload left the quarters empty — the legacy markup parser's
+    quarters pass through untouched. A live game also gets `current_period`
+    when the widget states a numeric phase (halftime renders non-numeric and
+    stays None, so the early-grade gate keeps failing closed there).
+    """
+    if game.get("away_quarters") or game.get("home_quarters"):
+        return
+    if not (game.get("final") or game.get("live")):
+        return
+    gid = game.get("genius_id")
+    if not gid:
+        return
+    state = await _fetch_cfl_quarters(gid)
+    if not state:
+        return
+    game["away_quarters"] = state["away"]
+    game["home_quarters"] = state["home"]
+    # 5+ phases on either side = overtime; the schedule's own total_periods has
+    # been observed wrong on a final (1), so the phase count is the truth here.
+    if game.get("final") and (len(state["away"]) > 4 or len(state["home"]) > 4):
+        game["ot"] = True
+    if game.get("live") and state.get("current_phase"):
+        game["current_period"] = state["current_phase"]
+
+
 async def fetch_cfl_scoreboard(date: str) -> dict:
     """CFL games near `date` as an ESPN-shaped scoreboard, for the math path.
 
@@ -634,6 +763,10 @@ async def fetch_cfl_scoreboard(date: str) -> dict:
                 continue
         except (ValueError, KeyError):
             continue
+        # The math path settles period bets from linescores; the schedule
+        # payload has none, so pull them from the Genius widget for started
+        # games (a handful per window, each cached — see _fetch_cfl_quarters).
+        await _ensure_cfl_quarters(g)
         events.append(_cfl_event(g, event_id=f"cfl-{g['date']}-{i}"))
     return {"events": events}
 
@@ -677,6 +810,10 @@ async def fetch_cfl_context(
                     continue
             except ValueError:
                 continue
+            # A period bet needs the quarter split the schedule payload lacks;
+            # full-game bets grade from the finals without the extra fetch.
+            if period != "game":
+                await _ensure_cfl_quarters(g)
             if g["final"]:
                 return _format_cfl_line_scores(g), g["date"]
             # Game still running: a period bet can settle as soon as ITS period
