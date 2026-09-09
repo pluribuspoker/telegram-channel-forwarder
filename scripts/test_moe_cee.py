@@ -481,6 +481,63 @@ class CeeInputTest(unittest.TestCase):
 
 
 class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
+    def test_accepts_numbers_from_cited_cee_rationales(self) -> None:
+        payload = build_cee_input(
+            _game(),
+            [],
+            [
+                {
+                    **_current_lean(),
+                    "lean_text": (
+                        "Champions are 16-4 in this spot over 20 years."
+                    ),
+                },
+                {
+                    **_spread_lean(),
+                    "lean_text": "Take Seattle -4 based on this angle.",
+                },
+            ],
+            _predictions(),
+            cee_user_id=CEE_ID,
+        )
+
+        moneyline = _normalize_cited_claim(
+            {
+                "claim": (
+                    "Cee cited a 16-4 record over 20 years in support of the "
+                    "moneyline pick."
+                ),
+                "evidence_paths": ["cee_submissions.moneyline"],
+            },
+            payload,
+            role="supporting factor",
+        )
+        spread = _normalize_cited_claim(
+            {
+                "claim": "Cee's spread rationale selected Seattle -4.",
+                "evidence_paths": ["decision_history.spread"],
+            },
+            payload,
+            role="supporting factor",
+        )
+
+        self.assertIn("16-4", moneyline["claim"])
+        self.assertIn("-4", spread["claim"])
+
+    def test_does_not_trust_numbers_from_other_freeform_prose(self) -> None:
+        with self.assertRaisesRegex(ValueError, "16-4"):
+            _normalize_cited_claim(
+                {
+                    "claim": "An uncited source claimed a 16-4 record.",
+                    "evidence_paths": ["other"],
+                },
+                {
+                    "game": _game(),
+                    "other": {"rationale": "The record was 16-4."},
+                },
+                role="supporting factor",
+            )
+
     def test_zero_eligible_calibration_is_valid_no_signal(self) -> None:
         payload = build_cee_input(
             _game(),

@@ -1074,6 +1074,31 @@ def _numeric_evidence_values(value: Any) -> list[float]:
     return []
 
 
+def _cee_rationale_texts(paths: list[str], evidence: list[Any]) -> list[str]:
+    texts: list[str] = []
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            rationale = value.get("rationale")
+            if isinstance(rationale, str):
+                texts.append(rationale)
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+
+    for path, value in zip(paths, evidence, strict=True):
+        if path in {
+            "cee_submissions.moneyline",
+            "cee_submissions.spread",
+            "decision_history.moneyline",
+            "decision_history.spread",
+        }:
+            collect(value)
+    return texts
+
+
 def _matching_record_paths(
     value: Any,
     record: tuple[int, ...],
@@ -1175,6 +1200,10 @@ def _validate_claim_numbers(
 ) -> None:
     normalized_claim = claim.replace("−", "-").replace("–", "-")
     remaining = normalized_claim
+    rationale_texts = [
+        text.replace("−", "-").replace("–", "-")
+        for text in _cee_rationale_texts(paths, evidence)
+    ]
     for match in list(
         re.finditer(r"\b(\d+)-(\d+)(?:-(\d+))?\b", normalized_claim)
     ):
@@ -1211,7 +1240,19 @@ def _validate_claim_numbers(
                 for value in evidence
             )
         )
-        if not record_matches and not scoreline_matches and not overlap_matches:
+        rationale_matches = any(
+            re.search(
+                rf"\b{re.escape(match.group(0))}\b",
+                rationale,
+            )
+            for rationale in rationale_texts
+        )
+        if (
+            not record_matches
+            and not scoreline_matches
+            and not overlap_matches
+            and not rationale_matches
+        ):
             candidates = _matching_record_paths(input_payload, record)
             raise ValueError(
                 f"Claim record, one-game scoreline, or integer-band overlap "
@@ -1223,6 +1264,14 @@ def _validate_claim_numbers(
     numeric_values = [
         number for value in evidence for number in _numeric_evidence_values(value)
     ]
+    for rationale in rationale_texts:
+        numeric_values.extend(
+            float(token.rstrip("%"))
+            for token in re.findall(
+                r"(?<![\w])[-+]?(?:\d+(?:\.\d+)?|\.\d+)%?(?![\w])",
+                rationale,
+            )
+        )
     path_numbers = [
         float(number)
         for path in paths

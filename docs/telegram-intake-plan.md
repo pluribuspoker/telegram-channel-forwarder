@@ -577,7 +577,11 @@ that informs the projected margin.
   moneyline plus an underdog spread is compatible; an underdog moneyline plus
   the favorite's negative spread is conflicting because both cannot win.
 - Rationale premises such as injuries or roster strength remain attributed to
-  Cee and are never presented as independently verified facts.
+  Cee and are never presented as independently verified facts. Numeric records,
+  lines, and other statistics inside Cee's exact rationale are accepted as
+  evidence only when the opinion cites that Cee submission or decision-history
+  path; they remain explicitly attributed to Cee. Free-form prose from every
+  other expert remains ineligible as numeric evidence.
 - Calibration uses only resolved, pre-kickoff Cee NFL moneyline picks and
   counts each historical game once using its final eligible submission. It
   reports the overall record plus matching season-order consistency,
