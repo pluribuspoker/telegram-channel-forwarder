@@ -269,6 +269,90 @@ def _submission_market(row: dict[str, Any]) -> dict[str, Any]:
     )["game"]
 
 
+def _latest_submission(
+    leans: Iterable[dict[str, Any]],
+    *,
+    game: dict[str, Any],
+    user_id: str,
+    market: str,
+) -> dict[str, Any] | None:
+    kickoff = _parse_time(game["commence_time_utc"])
+    teams = {
+        str(game["away_team"]),
+        str(game["home_team"]),
+    }
+    matching = [
+        row
+        for row in leans
+        if str(row.get("telegram_user_id") or "") == str(user_id)
+        and str(row.get("event_id") or "") == str(game["event_id"])
+        and str(row.get("period") or "").casefold() == "game"
+        and str(row.get("market") or "").casefold() == market
+        and _parse_time(row["submitted_at_utc"]) < kickoff
+        and str(row.get("side") or "") in teams
+    ]
+    if not matching:
+        return None
+    current = max(
+        matching,
+        key=lambda row: (
+            str(row.get("submitted_at_utc") or ""),
+            str(row.get("submission_id") or ""),
+        ),
+    )
+    return current
+
+
+def _submission_summary(row: dict[str, Any], *, market: str) -> dict[str, Any]:
+    return {
+        "submission_reference": _opaque_reference(
+            row.get("submission_id"),
+            row.get("submitted_at_utc"),
+        ),
+        "submitted_at_utc": str(row["submitted_at_utc"]),
+        "selected_market": market,
+        "selected_side": str(row["side"]),
+        "rationale": str(row.get("lean_text") or ""),
+    }
+
+
+def _market_relationship(
+    *,
+    game: dict[str, Any],
+    moneyline: dict[str, Any],
+    spread: dict[str, Any] | None,
+    spread_market: dict[str, Any] | None,
+) -> dict[str, Any]:
+    moneyline_side = str(moneyline["side"])
+    if spread is None or spread_market is None:
+        return {
+            "status": "moneyline_only",
+            "moneyline_side": moneyline_side,
+            "spread_side": None,
+            "selected_spread_line": None,
+        }
+    spread_side = str(spread["side"])
+    selected_spread_line = (
+        spread_market["away_spread"]
+        if spread_side == str(game["away_team"])
+        else spread_market["home_spread"]
+    )
+    if selected_spread_line is None:
+        raise ValueError("Cee spread submission has no spread line")
+    if spread_side == moneyline_side:
+        status = "same_side"
+    elif float(selected_spread_line) > 0:
+        status = "split_compatible"
+    else:
+        status = "split_conflicting"
+    return {
+        "status": status,
+        "moneyline_side": moneyline_side,
+        "spread_side": spread_side,
+        "selected_spread_line": selected_spread_line,
+    }
+
+
 def build_cee_input(
     game: dict[str, Any],
     history: list[dict[str, Any]],
@@ -278,35 +362,22 @@ def build_cee_input(
     cee_user_id: str,
 ) -> dict[str, Any]:
     """Build a whitelisted Cee Expert input for one game."""
-    matching = [
-        row
-        for row in leans
-        if str(row.get("telegram_user_id") or "") == str(cee_user_id)
-        and str(row.get("event_id") or "") == str(game["event_id"])
-        and str(row.get("period") or "").casefold() == "game"
-        and str(row.get("market") or "").casefold() == "moneyline"
-    ]
-    if not matching:
-        raise ValueError("Cee has no full-game moneyline pick for this event")
-    current = max(
-        matching,
-        key=lambda row: (
-            str(row.get("submitted_at_utc") or ""),
-            str(row.get("submission_id") or ""),
-        ),
+    moneyline = _latest_submission(
+        leans,
+        game=game,
+        user_id=cee_user_id,
+        market="moneyline",
     )
-    if _parse_time(current["submitted_at_utc"]) >= _parse_time(
-        game["commence_time_utc"]
-    ):
-        raise ValueError("Cee pick was submitted after kickoff")
-    selected_side = str(current.get("side") or "")
-    if selected_side not in {
-        str(game["away_team"]),
-        str(game["home_team"]),
-    }:
-        raise ValueError("Cee moneyline pick does not select either game team")
+    if moneyline is None:
+        raise ValueError("Cee has no full-game moneyline pick for this event")
+    spread = _latest_submission(
+        leans,
+        game=game,
+        user_id=cee_user_id,
+        market="spread",
+    )
     season = _season_context(
-        current,
+        moneyline,
         win_predictions,
         user_id=cee_user_id,
     )
@@ -315,14 +386,26 @@ def build_cee_input(
             "Cee Expert requires season-win predictions for both teams "
             "submitted before the game pick"
         )
+    spread_season = (
+        _season_context(spread, win_predictions, user_id=cee_user_id)
+        if spread is not None
+        else None
+    )
+    if spread is not None and spread_season is None:
+        raise ValueError(
+            "Cee Expert requires season-win predictions for both teams "
+            "submitted before the spread pick"
+        )
     calibration = _calibration(
-        current=current,
+        current=moneyline,
         current_season=season,
         leans=leans,
         predictions=win_predictions,
         history=history,
         user_id=cee_user_id,
     )
+    moneyline_market = _submission_market(moneyline)
+    spread_market = _submission_market(spread) if spread is not None else None
     return {
         "input_profile": "cee_calibration",
         "game": {
@@ -337,17 +420,28 @@ def build_cee_input(
             "away_team": str(game["away_team"]),
             "home_team": str(game["home_team"]),
         },
-        "cee_submission": {
-            "submission_reference": _opaque_reference(
-                current.get("submission_id"),
-                current.get("submitted_at_utc"),
+        "cee_submissions": {
+            "moneyline": _submission_summary(
+                moneyline,
+                market="moneyline",
             ),
-            "submitted_at_utc": str(current["submitted_at_utc"]),
-            "selected_market": "moneyline",
-            "selected_side": selected_side,
-            "rationale": str(current.get("lean_text") or ""),
+            "spread": (
+                _submission_summary(spread, market="spread")
+                if spread is not None
+                else None
+            ),
         },
         "season_predictions_at_submission": season,
-        "submission_market": _submission_market(current),
+        "spread_season_predictions_at_submission": spread_season,
+        "market_relationship": _market_relationship(
+            game=game,
+            moneyline=moneyline,
+            spread=spread,
+            spread_market=spread_market,
+        ),
+        "submission_markets": {
+            "moneyline": moneyline_market,
+            "spread": spread_market,
+        },
         "nfl_calibration": calibration,
     }

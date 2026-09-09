@@ -59,6 +59,20 @@ def _current_lean() -> dict:
     }
 
 
+def _spread_lean() -> dict:
+    return {
+        **_game(),
+        **_market_columns(),
+        "submission_id": "telegram:6097731988:435",
+        "submitted_at_utc": "2026-09-07T19:34:11+00:00",
+        "telegram_user_id": CEE_ID,
+        "period": "game",
+        "market": "spread",
+        "side": "Seattle Seahawks",
+        "lean_text": "Seattle should cover at home",
+    }
+
+
 def _prediction(
     revision_id: str,
     season: int,
@@ -162,7 +176,7 @@ class CeeInputTest(unittest.TestCase):
         payload = build_cee_input(
             _game(),
             _history(),
-            [_current_lean(), _prior_lean()],
+            [_current_lean(), _spread_lean(), _prior_lean()],
             _predictions(),
             cee_user_id=CEE_ID,
         )
@@ -176,8 +190,26 @@ class CeeInputTest(unittest.TestCase):
             "consistent",
         )
         self.assertEqual(
-            payload["cee_submission"]["rationale"],
+            payload["cee_submissions"]["moneyline"]["rationale"],
             "Because I took the spread",
+        )
+        self.assertEqual(
+            payload["cee_submissions"]["spread"]["selected_side"],
+            "Seattle Seahawks",
+        )
+        self.assertEqual(
+            payload["cee_submissions"]["spread"]["rationale"],
+            "Seattle should cover at home",
+        )
+        self.assertEqual(
+            payload["market_relationship"]["status"],
+            "split_conflicting",
+        )
+        self.assertEqual(
+            payload["spread_season_predictions_at_submission"][
+                "consistency_with_game_pick"
+            ],
+            "inconsistent",
         )
         calibration = payload["nfl_calibration"]
         self.assertEqual(calibration["overall"]["chronological_results"], "W")
@@ -188,8 +220,6 @@ class CeeInputTest(unittest.TestCase):
         self.assertEqual(calibration["matching_season_gap"]["games"], 0)
 
     def test_requires_full_game_moneyline(self) -> None:
-        lean = {**_current_lean(), "market": "spread"}
-
         with self.assertRaisesRegex(
             ValueError,
             "no full-game moneyline pick",
@@ -197,10 +227,60 @@ class CeeInputTest(unittest.TestCase):
             build_cee_input(
                 _game(),
                 [],
-                [lean],
+                [_spread_lean()],
                 _predictions(),
                 cee_user_id=CEE_ID,
             )
+
+    def test_selects_latest_submission_for_each_market(self) -> None:
+        old_spread = {
+            **_spread_lean(),
+            "submission_id": "telegram:6097731988:400",
+            "submitted_at_utc": "2026-09-06T19:34:11+00:00",
+            "side": "New England Patriots",
+            "lean_text": "Old spread position",
+        }
+
+        payload = build_cee_input(
+            _game(),
+            [],
+            [_current_lean(), old_spread, _spread_lean()],
+            _predictions(),
+            cee_user_id=CEE_ID,
+        )
+
+        self.assertEqual(
+            payload["cee_submissions"]["spread"]["rationale"],
+            "Seattle should cover at home",
+        )
+        self.assertEqual(
+            payload["market_relationship"]["status"],
+            "split_conflicting",
+        )
+
+    def test_latest_eligible_submission_ignores_post_kickoff_revision(
+        self,
+    ) -> None:
+        post_kickoff = {
+            **_spread_lean(),
+            "submission_id": "telegram:6097731988:999",
+            "submitted_at_utc": "2026-09-10T01:00:00+00:00",
+            "side": "New England Patriots",
+            "lean_text": "Too late",
+        }
+
+        payload = build_cee_input(
+            _game(),
+            [],
+            [_current_lean(), _spread_lean(), post_kickoff],
+            _predictions(),
+            cee_user_id=CEE_ID,
+        )
+
+        self.assertEqual(
+            payload["cee_submissions"]["spread"]["rationale"],
+            "Seattle should cover at home",
+        )
 
 
 class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
@@ -243,10 +323,16 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
             "confidence_stars": 2,
             "thesis": {
                 "claim": (
-                    "Cee selects the New England Patriots and describes the "
-                    "choice as following the spread position."
+                    "Cee selects the New England Patriots on the moneyline "
+                    "and the Seattle Seahawks -4 against the spread, a "
+                    "split_conflicting position that cannot also cash with "
+                    "a New England Patriots win."
                 ),
-                "evidence_paths": ["cee_submission"],
+                "evidence_paths": [
+                    "cee_submissions.moneyline",
+                    "cee_submissions.spread",
+                    "market_relationship",
+                ],
             },
             "supporting_factors": [
                 {
@@ -258,6 +344,17 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
                     ),
                     "evidence_paths": [
                         "season_predictions_at_submission"
+                    ],
+                },
+                {
+                    "claim": (
+                        "At the spread submission, Cee's 12-win New England "
+                        "Patriots projection ranked above the 11-win Seattle "
+                        "Seahawks projection, making the Seattle Seahawks "
+                        "spread pick inconsistent with the season ordering."
+                    ),
+                    "evidence_paths": [
+                        "spread_season_predictions_at_submission"
                     ],
                 },
                 {
@@ -287,10 +384,16 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
             "counterarguments": [
                 {
                     "claim": (
-                        "At submission Seattle was -190 on the moneyline "
-                        "with a -4 spread and a 45.5 total."
+                        "At the moneyline submission Seattle was -190 with "
+                        "a 45.5 total."
                     ),
-                    "evidence_paths": ["submission_market"],
+                    "evidence_paths": ["submission_markets.moneyline"],
+                },
+                {
+                    "claim": (
+                        "At the spread submission Seattle was -4 at -110."
+                    ),
+                    "evidence_paths": ["submission_markets.spread"],
                 }
             ],
             "no_signal_factors": [
@@ -321,7 +424,7 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
             expert_id="cee",
             game=_game(),
             history=_history(),
-            leans=[_current_lean(), _prior_lean()],
+            leans=[_current_lean(), _spread_lean(), _prior_lean()],
             win_predictions=_predictions(),
             cee_user_id=CEE_ID,
             store=store,
@@ -348,7 +451,7 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
             expert_id="cee",
             game=_game(),
             history=_history(),
-            leans=[_current_lean(), _prior_lean()],
+            leans=[_current_lean(), _spread_lean(), _prior_lean()],
             win_predictions=_predictions(),
             cee_user_id=CEE_ID,
             store=store,
@@ -364,14 +467,14 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_accepts_spelled_zero_calibration_counts(self) -> None:
         output = self._output()
-        output["supporting_factors"][1]["claim"] = (
+        output["supporting_factors"][2]["claim"] = (
             "Cee's NFL calibration contains zero resolved pre-kickoff "
             "full-game moneyline picks."
         )
-        output["supporting_factors"][2]["claim"] = (
+        output["supporting_factors"][3]["claim"] = (
             "The matching consistent-pick bucket is 0-0-0 across zero games."
         )
-        output["supporting_factors"][3]["claim"] = (
+        output["supporting_factors"][4]["claim"] = (
             "Calibration uses zero eligible resolved pre-kickoff Cee "
             "moneyline picks."
         )
@@ -385,7 +488,7 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
             expert_id="cee",
             game=_game(),
             history=[],
-            leans=[_current_lean()],
+            leans=[_current_lean(), _spread_lean()],
             win_predictions=_predictions(),
             cee_user_id=CEE_ID,
             store=MemoryStore(),
@@ -412,7 +515,29 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
                 expert_id="cee",
                 game=_game(),
                 history=_history(),
-                leans=[_current_lean(), _prior_lean()],
+                leans=[_current_lean(), _spread_lean(), _prior_lean()],
+                win_predictions=_predictions(),
+                cee_user_id=CEE_ID,
+                store=MemoryStore(),
+                create_fn=create_fn,
+            )
+
+    async def test_rejects_spread_pick_override(self) -> None:
+        output = self._output()
+        output["pick_market"] = "spread"
+        output["pick_side"] = "Seattle Seahawks -4"
+
+        async def create_fn(**_kwargs):
+            return SimpleNamespace(
+                content=[SimpleNamespace(text=json.dumps(output))]
+            )
+
+        with self.assertRaisesRegex(ValueError, "remain straight_up"):
+            await generate_opinion(
+                expert_id="cee",
+                game=_game(),
+                history=_history(),
+                leans=[_current_lean(), _spread_lean(), _prior_lean()],
                 win_predictions=_predictions(),
                 cee_user_id=CEE_ID,
                 store=MemoryStore(),
@@ -422,10 +547,10 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
     def test_expert_configuration_is_versioned(self) -> None:
         expert = load_expert("cee")
 
-        self.assertEqual(expert["version"], 1)
-        self.assertEqual(expert["prompt_version"], 1)
+        self.assertEqual(expert["version"], 2)
+        self.assertEqual(expert["prompt_version"], 2)
         self.assertEqual(expert["output_schema_version"], 3)
-        self.assertEqual(expert["prompt_path"], "moe/prompts/cee/v1.md")
+        self.assertEqual(expert["prompt_path"], "moe/prompts/cee/v2.md")
         self.assertEqual(
             expert["allowed_models"],
             [

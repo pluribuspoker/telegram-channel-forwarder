@@ -2636,25 +2636,46 @@ def validate_opinion(
             *opinion.get("counterarguments", []),
             *opinion.get("no_signal_factors", []),
         ]
+        supplied_pick_market = str(opinion.get("pick_market") or "")
+        supplied_pick_side = str(opinion.get("pick_side") or "")
+        if supplied_pick_market not in {"", "straight_up"}:
+            raise ValueError("Cee opinion must remain straight_up")
+        if supplied_pick_side and supplied_pick_side != str(
+            opinion.get("predicted_winner") or ""
+        ):
+            raise ValueError(
+                "Cee pick_side must match predicted_winner"
+            )
         cited_paths = {
             str(evidence["path"])
             for claim in claims
             for evidence in claim.get("evidence", [])
         }
         required_paths = {
-            "cee_submission",
+            "cee_submissions.moneyline",
             "season_predictions_at_submission",
-            "submission_market",
+            "market_relationship",
+            "submission_markets.moneyline",
             "nfl_calibration",
             "nfl_calibration.overall",
             "nfl_calibration.matching_consistency",
             "nfl_calibration.matching_season_gap",
         }
+        spread_submission = schedule_input["cee_submissions"].get("spread")
+        if spread_submission is not None:
+            required_paths.update(
+                {
+                    "cee_submissions.spread",
+                    "spread_season_predictions_at_submission",
+                    "submission_markets.spread",
+                }
+            )
         missing = required_paths - cited_paths
         if missing:
             raise ValueError(
-                "Cee opinion must cite the submission, season predictions, "
-                "submission market, and every calibration view; missing "
+                "Cee opinion must cite the submissions, season predictions, "
+                "market relationship, submission markets, and every "
+                "calibration view; missing "
                 f"paths: {sorted(missing)}"
             )
         rendered = " ".join(
@@ -2682,14 +2703,52 @@ def validate_opinion(
                 f"Cee opinion must state consistency={consistency}"
             )
         for required_text, label in (
-            (str(schedule_input["cee_submission"]["selected_side"]), "pick"),
+            (
+                str(
+                    schedule_input["cee_submissions"]["moneyline"][
+                        "selected_side"
+                    ]
+                ),
+                "moneyline pick",
+            ),
             (str(season["season_preferred_side"]), "season preferred side"),
             (str(season["season_gap_bucket"]), "season gap bucket"),
+            (
+                str(schedule_input["market_relationship"]["status"]),
+                "market relationship",
+            ),
         ):
             if required_text.casefold() not in rendered.casefold():
                 raise ValueError(
                     f"Cee opinion must state the supplied {label}: "
                     f"{required_text}"
+                )
+        if spread_submission is not None:
+            spread_season = schedule_input[
+                "spread_season_predictions_at_submission"
+            ]
+            for required_text, label in (
+                (str(spread_submission["selected_side"]), "spread pick"),
+                (
+                    str(spread_season["consistency_with_game_pick"]),
+                    "spread consistency",
+                ),
+            ):
+                if required_text.casefold() not in rendered.casefold():
+                    raise ValueError(
+                        f"Cee opinion must state the supplied {label}: "
+                        f"{required_text}"
+                    )
+            spread_line = float(
+                schedule_input["market_relationship"][
+                    "selected_spread_line"
+                ]
+            )
+            spread_line_text = f"{spread_line:+g}"
+            if spread_line_text not in rendered:
+                raise ValueError(
+                    "Cee opinion must state the selected spread line: "
+                    f"{spread_line_text}"
                 )
         calibration = schedule_input["nfl_calibration"]
         for path, summary in (
