@@ -7,7 +7,9 @@ def _overall_verdict(verdicts: list[tuple]) -> str:
     """
     Collapse per-pick verdicts into a single message verdict.
 
-    Parlay legs: ALL must WIN → WIN; any LOSS → LOSS; any UNKNOWN → UNKNOWN.
+    Parlay legs: any LOSS → LOSS; pushed legs drop out of the ticket, so any
+    WIN among the rest → WIN and only an all-push parlay is a PUSH (refund);
+    any UNKNOWN → UNKNOWN.
     Non-parlay:  all must agree (all WIN or all LOSS); mixed or any UNKNOWN → UNKNOWN.
     """
     if not verdicts:
@@ -24,7 +26,9 @@ def _overall_verdict(verdicts: list[tuple]) -> str:
             return "PENDING"
         if "UNKNOWN" in all_v:
             return "UNKNOWN"
-        if all(v == "WIN" for v in all_v):
+        # All legs resolved WIN/PUSH: a pushed leg is voided and the parlay
+        # reduces to the remaining legs, so any WIN left wins the ticket.
+        if "WIN" in all_v:
             return "WIN"
         if "PUSH" in all_v:
             return "PUSH"

@@ -12,6 +12,7 @@ from google.oauth2.service_account import Credentials
 
 from audit import _format_pick
 from common import VERDICT_EMOJI, parlay_combined_odds
+from tracker_grading import _overall_verdict
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 _gc: gspread.Client | None = None
@@ -135,11 +136,17 @@ async def append_pick_rows(
     rows_to_append: list[list] = []
     if is_parlay:
         sport = (resolved[0][0].get("sport") or "").upper()
-        legs_desc = " / ".join(_format_pick(p).upper() for p, _, _ in resolved)
-        combined = parlay_combined_odds([o for p, _, o in resolved if p.get("is_parlay_leg")])
-        overall_verdict = "LOSS" if any(v == "LOSS" for _, v, _ in resolved) else \
-                          "WIN" if all(v == "WIN" for _, v, _ in resolved) else \
-                          "PUSH"
+        legs_desc = " / ".join(
+            _format_pick(p).upper() + (" ♻️" if v == "PUSH" else "")
+            for p, v, _ in resolved
+        )
+        # Pushed legs are voided from the ticket: they drop out of the payout
+        # (all-push → no combined price) and out of the verdict (WIN+PUSH wins) —
+        # same rule as the broadcast (tracker_grading._overall_verdict).
+        combined = parlay_combined_odds(
+            [o for p, v, o in resolved if p.get("is_parlay_leg") and v != "PUSH"]
+        )
+        overall_verdict = _overall_verdict(resolved)
         emoji = VERDICT_EMOJI.get(overall_verdict, "")
         if combined is not None:
             sign = "+" if combined > 0 else ""

@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 import httpx
 
 from common import VERDICT_EMOJI, is_regulation_ml, parlay_combined_odds
+from tracker_grading import _overall_verdict
 
 
 # BTTS in any phrasing ("BTTS", "Both Teams To Score") — used to catch the
@@ -522,15 +523,13 @@ class AuditLog:
         _parlay_combined_odds = parlay_combined_odds
 
         def _overall_emoji(verdicts_only: list[str]) -> str:
-            if "LOSS" in verdicts_only:
-                return VERDICT_EMOJI["LOSS"]
-            elif all(v == "WIN" for v in verdicts_only):
-                return VERDICT_EMOJI["WIN"]
-            elif any(v == "PENDING" for v in verdicts_only):
-                return VERDICT_EMOJI["PENDING"]
-            elif any(v == "PUSH" for v in verdicts_only):
-                return VERDICT_EMOJI["PUSH"]
-            return VERDICT_EMOJI["UNKNOWN"]
+            # One rule for the whole codebase (tracker_grading._overall_verdict):
+            # pushed legs drop out of the ticket, so WIN+PUSH is a WIN and only
+            # an all-push parlay is a PUSH.
+            overall = _overall_verdict(
+                [({"is_parlay_leg": True}, v) for v in verdicts_only]
+            )
+            return VERDICT_EMOJI.get(overall, VERDICT_EMOJI["UNKNOWN"])
 
         # Check is_parlay BEFORE the single-pick case: a parlay that settled on
         # a single lost leg (siblings still pending/dropped) has len(picks)==1 but
@@ -542,11 +541,20 @@ class AuditLog:
             parlay_all = [(p, v, o) for p, v, o in pick_results if p.get("is_parlay_leg")]
             verdicts_only = [v for _, v, _ in parlay_all if v in ("WIN", "LOSS", "PUSH")]
             overall_emoji = _overall_emoji(verdicts_only)
-            combined = _parlay_combined_odds([o for _, _, o in parlay_all])
+            # A pushed leg is voided from the ticket, so it can't multiply into
+            # the payout — price only the live legs (all-push → no price at all).
+            combined = _parlay_combined_odds(
+                [o for _, v, o in parlay_all if v != "PUSH"]
+            )
             combined_part = f" [{e(_fmt_odds(combined))}]" if combined is not None else ""
             # Inline the legs on a single line (Ko ML / Duncan ML) instead of one
             # bullet per leg, so the whole ticket reads as one compact result.
-            legs = " / ".join(e(_format_pick(p)) for p, _, _ in parlay_all)
+            # A pushed leg carries its ♻️ inline — that's what explains a ✅
+            # ticket paying less than the posted parlay price.
+            legs = " / ".join(
+                e(_format_pick(p)) + (" ♻️" if v == "PUSH" else "")
+                for p, v, _ in parlay_all
+            )
             text = f"{overall_emoji} {capper_linked} · Parlay: {legs}{combined_part}"
         elif len(picks) == 1:
             desc, verdict, odds_str = picks[0]
