@@ -83,13 +83,13 @@ class DeskPicksViewTests(unittest.TestCase):
                 patch.object(intake_bot, "load_intake_data", return_value=([], [], {})),
                 patch.object(intake_bot, "load_moe_registry", return_value={}),
                 patch.object(intake_bot, "build_desk_model", return_value=[desk]),
-                patch.object(intake_bot, "picks_opinion_pages", return_value=["detail"]),
+                patch.object(intake_bot, "resolve_picks_view", return_value="menu"),
                 patch.object(
                     intake_bot,
                     "render_picks_card",
                     return_value=(
-                        "page text",
-                        [[{"text": "Next", "callback_data": "desk:page:401:1"}]],
+                        "picker text",
+                        [[{"text": "God Rules", "callback_data": "desk:op:401:god_rules"}]],
                     ),
                 ),
             ):
@@ -97,7 +97,7 @@ class DeskPicksViewTests(unittest.TestCase):
                     config,
                     api,
                     "401",
-                    page=0,
+                    view="menu",
                     message_id=30,
                 )
             self.assertIsNone(previous)
@@ -105,7 +105,7 @@ class DeskPicksViewTests(unittest.TestCase):
             api.edit.assert_called_once()
             self.assertEqual([call[0] for call in api.method_calls], ["edit"])
             state = intake_bot.load_desk_state(config.state_path)
-            self.assertEqual(state["expanded_picks"]["401"], 0)
+            self.assertEqual(state["expanded_picks"]["401"], "menu")
             self.assertEqual(state["cards"]["picks:401"]["message_id"], 30)
 
 

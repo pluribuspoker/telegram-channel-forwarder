@@ -75,7 +75,7 @@ from moe_desk import (
     parse_callback as parse_desk_callback,
     desk_ids_report,
     parse_start_param,
-    picks_opinion_pages,
+    resolve_picks_view,
     review_targets as desk_review_targets,
     render_picks_card,
     topic_id_from_reply,
@@ -1576,22 +1576,14 @@ def update_desk_picks_view(
     api: Any,
     event_id: str,
     *,
-    page: int | None,
+    view: Any,
     message_id: int,
-) -> tuple[int | None, str | None]:
+) -> tuple[Any, str | None]:
     """Atomically select and edit one existing Picks card; never post it."""
     with _DESK_SYNC_LOCK:
         state = load_desk_state(config.state_path)
         raw_previous = state["expanded_picks"].get(event_id)
-        if raw_previous is True:
-            previous = 0
-        elif raw_previous is None or raw_previous is False:
-            previous = None
-        else:
-            try:
-                previous = max(0, int(raw_previous))
-            except (TypeError, ValueError):
-                previous = None
+        previous = raw_previous
         now = datetime.now(timezone.utc)
         rows = load_cached_moe_opinions()
         games, _, _ = load_intake_data()
@@ -1608,16 +1600,11 @@ def update_desk_picks_view(
         )
         if desk is None or not desk.show_picks:
             return previous, "game is no longer available"
-        effective_page = page
-        if page is not None:
-            effective_page = min(
-                max(0, int(page)),
-                max(0, len(picks_opinion_pages(desk)) - 1),
-            )
+        effective_view = resolve_picks_view(desk, view)
         text, keyboard = render_picks_card(
             desk,
             config=config,
-            page=effective_page,
+            view=effective_view,
         )
         try:
             edited = api.edit(
@@ -1630,10 +1617,10 @@ def update_desk_picks_view(
             return previous, f"{type(exc).__name__}: {exc}"
         if not edited:
             return previous, "existing message could not be edited"
-        if effective_page is None:
+        if effective_view is None:
             state["expanded_picks"].pop(event_id, None)
         else:
-            state["expanded_picks"][event_id] = effective_page
+            state["expanded_picks"][event_id] = effective_view
         state["cards"][f"picks:{event_id}"] = {
             "message_id": int(message_id),
             "hash": desk_content_hash(
@@ -2149,16 +2136,37 @@ async def main() -> None:
             await event.answer("Unknown desk action.", alert=True)
             return
         action, target = parsed
-        if action in {"show", "hide", "page"}:
+        if action in {"show", "hide", "op", "part", "page"}:
             event_id = target
-            desired_page: int | None = 0 if action == "show" else None
+            desired_view: Any = "menu" if action in {"show", "page"} else None
             if action == "page":
-                event_id, separator, raw_page = target.rpartition(":")
+                legacy_event_id, separator, _ = target.rpartition(":")
+                if separator and legacy_event_id:
+                    event_id = legacy_event_id
+            elif action == "op":
+                event_id, separator, expert = target.rpartition(":")
                 if not separator or not event_id:
+                    await event.answer("Invalid opinion.", alert=True)
+                    return
+                desired_view = {
+                    "mode": "opinion",
+                    "expert": expert,
+                    "chunk": 0,
+                }
+            elif action == "part":
+                event_and_expert, separator, raw_chunk = target.rpartition(":")
+                event_id, expert_separator, expert = (
+                    event_and_expert.rpartition(":")
+                )
+                if not separator or not expert_separator or not event_id:
                     await event.answer("Invalid opinion page.", alert=True)
                     return
                 try:
-                    desired_page = max(0, int(raw_page))
+                    desired_view = {
+                        "mode": "opinion",
+                        "expert": expert,
+                        "chunk": max(0, int(raw_chunk)),
+                    }
                 except ValueError:
                     await event.answer("Invalid opinion page.", alert=True)
                     return
@@ -2169,9 +2177,9 @@ async def main() -> None:
             desk_inflight.add(key)
             try:
                 await event.answer(
-                    "Loading opinions…"
-                    if desired_page is not None
-                    else "Returning to picks…"
+                    "Returning to picks…"
+                    if desired_view is None
+                    else "Loading opinions…"
                 )
                 message_id = (
                     getattr(event, "message_id", None)
@@ -2185,7 +2193,7 @@ async def main() -> None:
                     desk["config"],
                     desk["api"],
                     event_id,
-                    page=desired_page,
+                    view=desired_view,
                     message_id=message_id,
                 )
                 if problem:

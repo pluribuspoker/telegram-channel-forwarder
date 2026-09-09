@@ -27,8 +27,10 @@ Picks implementation status
 - Compact game cards render both God arms and every approved expert conclusion
   directly from the persisted Sheet rows.
 - Consensus counts actual side selections and excludes side PASS rows.
-- Show full opinions edits the existing card into a paginated opinion reader.
-- Previous, Next, and Back to picks remain restricted to the MOE group.
+- Show full opinions edits the existing card into an expert picker.
+- God Rules and God Judge are always the first two choices when available.
+- Each selected opinion opens on the same card with chunk navigation.
+- Back to opinions and Back to picks remain restricted to the MOE group.
 - Full persisted opinions are split safely into same-card pages.
 - Existing @nflguesser_bot-owned Picks cards are edited in place.
 - Review, Scores, and NFL Guesser private views remain unchanged.
@@ -114,13 +116,17 @@ Do not automatically publish every full explanation during initial sync.
 Add channel-local controls:
 
 - Show full opinions
+- One choice per available opinion, with God Rules and God Judge first
 - Previous / Next
+- Back to opinions
 - Back to picks
 
-Show full opinions edits the existing game card to display the first persisted
-opinion page. Previous and Next edit that same card through every expert and
-long-text chunk. Back to picks restores the compact committee summary. No
-additional Telegram messages are created.
+Show full opinions edits the existing game card into an opinion selector. God
+Rules and God Judge are listed first, followed by every approved non-God expert.
+Selecting an opinion opens it on the same card. Previous and Next navigate only
+that opinion's long-text chunks. Back to opinions restores the selector, and
+Back to picks restores the compact committee summary. No additional Telegram
+messages are created.
 
 Long details must:
 

@@ -42,6 +42,7 @@ from moe_desk import (
     render_review_card,
     render_week_card,
     review_targets,
+    resolve_picks_view,
     save_state,
     sync_desk,
     topic_id_from_reply,
@@ -477,10 +478,36 @@ class RenderTests(unittest.TestCase):
         )
         self.assertNotIn("t.me/nflguesser_bot", str(keyboard))
 
+        picker_text, picker_keyboard = render_picks_card(
+            desk,
+            config=CONFIG,
+            view="menu",
+        )
+        self.assertIn("<b>Select an opinion</b>", picker_text)
+        self.assertEqual(
+            [row[0]["text"] for row in picker_keyboard],
+            [
+                "God Rules",
+                "God Judge",
+                "Schedule",
+                "Divisional",
+                "AK",
+                "Elo",
+                "Back to picks",
+            ],
+        )
+        self.assertTrue(
+            all(
+                len(button["callback_data"].encode("utf-8")) <= 64
+                for row in picker_keyboard
+                for button in row
+            )
+        )
+
         detail_text, detail_keyboard = render_picks_card(
             desk,
             config=CONFIG,
-            page=0,
+            view={"mode": "opinion", "opinion": 0, "chunk": 0},
         )
         self.assertIn("🔎 <b>God Expert (Rules)</b>", detail_text)
         self.assertIn("<blockquote expandable>", detail_text)
@@ -488,10 +515,12 @@ class RenderTests(unittest.TestCase):
             detail_keyboard,
             [
                 [
-                    {"text": "1/6", "callback_data": "desk:page:401:0"},
-                    {"text": "Next", "callback_data": "desk:page:401:1"},
+                    {"text": "1/1", "callback_data": "desk:part:401:god_rules:0"},
                 ],
-                [{"text": "Back to picks", "callback_data": "desk:hide:401"}],
+                [
+                    {"text": "Back to opinions", "callback_data": "desk:show:401"},
+                    {"text": "Back to picks", "callback_data": "desk:hide:401"},
+                ],
             ],
         )
 
@@ -506,6 +535,18 @@ class RenderTests(unittest.TestCase):
         self.assertIn(
             "<b>Rules</b> · Side pass · Total pass\n<b>Judge</b> · —",
             render_picks_card(self.desk(rows), config=CONFIG)[0],
+        )
+
+    def test_selected_expert_survives_god_opinions_becoming_available(self) -> None:
+        without_god = self.desk(committee())
+        selected = resolve_picks_view(
+            without_god,
+            {"mode": "opinion", "expert": "divisional", "chunk": 0},
+        )
+        with_god = self.desk(committee(arms_status="approved"))
+        self.assertEqual(
+            resolve_picks_view(with_god, selected),
+            {"mode": "opinion", "expert": "divisional", "chunk": 0},
         )
 
     def test_full_opinions_use_persisted_text_and_safe_chunks(self) -> None:
@@ -525,6 +566,16 @@ class RenderTests(unittest.TestCase):
         self.assertTrue(all("&lt;" in message for message in messages))
         self.assertIn("part 1/5", messages[0])
         self.assertIn("Schedule Expert", messages[0])
+        detail_text, detail_keyboard = render_picks_card(
+            self.desk([approved]),
+            config=CONFIG,
+            view={"mode": "opinion", "opinion": 0, "chunk": 0},
+        )
+        self.assertIn("part 1/5", detail_text)
+        self.assertIn(
+            {"text": "Next", "callback_data": "desk:part:401:schedule:1"},
+            detail_keyboard[0],
+        )
 
     def test_picks_card_needs_two_voices_or_an_arm(self) -> None:
         lone = [row("a4", "401", "rating_elo", status="approved", model="deterministic")]
@@ -662,15 +713,20 @@ class SyncTests(unittest.TestCase):
             self.state["cards"]["picks:401"]["message_id"],
             picks_id,
         )
-        self.assertIn("Schedule Expert", self.api.edits[-1]["text"])
+        self.assertIn("Select an opinion", self.api.edits[-1]["text"])
+        self.assertEqual(self.state["expanded_picks"]["401"], "menu")
         self.assertFalse(
             any(key.startswith("picks-detail:401:") for key in self.state["cards"])
         )
 
-        self.state["expanded_picks"]["401"] = 1
+        self.state["expanded_picks"]["401"] = {
+            "mode": "opinion",
+            "opinion": 0,
+            "chunk": 0,
+        }
         summary = self.sync(rows)
         self.assertIn("picks:401", summary.edited)
-        self.assertIn("Divisional Expert", self.api.edits[-1]["text"])
+        self.assertIn("Schedule Expert", self.api.edits[-1]["text"])
 
         summary = self.sync(rows)
         self.assertEqual(
@@ -762,7 +818,11 @@ class SyncTests(unittest.TestCase):
         rows = committee("401")
         self.sync(rows)
         picks_id = self.state["cards"]["picks:401"]["message_id"]
-        self.state["expanded_picks"]["401"] = 0
+        self.state["expanded_picks"]["401"] = {
+            "mode": "opinion",
+            "opinion": 0,
+            "chunk": 0,
+        }
         summary = self.sync(
             rows,
             now=datetime.fromisoformat(SEA_KICKOFF) + timedelta(minutes=5),
@@ -779,7 +839,7 @@ class SyncTests(unittest.TestCase):
         self.sync(rows)
         picks_id = self.state["cards"]["picks:401"]["message_id"]
         self.api.missing.add(picks_id)
-        self.state["expanded_picks"]["401"] = 0
+        self.state["expanded_picks"]["401"] = "menu"
         sent = len(self.api.sent)
 
         summary = self.sync(
@@ -1042,6 +1102,14 @@ class ConfigAndCallbackTests(unittest.TestCase):
         self.assertEqual(
             parse_callback("desk:page:401:2"),
             ("page", "401:2"),
+        )
+        self.assertEqual(
+            parse_callback("desk:op:401:schedule"),
+            ("op", "401:schedule"),
+        )
+        self.assertEqual(
+            parse_callback("desk:part:401:schedule:1"),
+            ("part", "401:schedule:1"),
         )
         self.assertIsNone(parse_callback("desk:zap:401"))
         self.assertIsNone(parse_callback("desk:ok:"))

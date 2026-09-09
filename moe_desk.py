@@ -1007,68 +1007,161 @@ def _why_block(desk: GameDesk) -> str:
     return text
 
 
-def picks_opinion_pages(desk: GameDesk) -> list[str]:
-    detail_rows = [
-        row
-        for row in (desk.rules, desk.judge, *desk.approved_voices)
+def picks_opinion_groups(
+    desk: GameDesk,
+) -> list[tuple[str, str, list[str]]]:
+    """Selectable opinions, with both God arms fixed above other experts."""
+    labeled_rows: list[tuple[str, dict[str, Any] | None]] = [
+        ("God Rules", desk.rules),
+        ("God Judge", desk.judge),
+    ]
+    labeled_rows.extend(
+        (voice_name(row), row) for row in desk.approved_voices
+    )
+    return [
+        (
+            str(row.get("expert_id") or ""),
+            label,
+            render_opinion_details([row], context="Approved committee"),
+        )
+        for label, row in labeled_rows
         if row is not None
     ]
-    return render_opinion_details(
-        detail_rows,
-        context="Approved committee",
-    )
+
+
+def resolve_picks_view(
+    desk: GameDesk,
+    raw: Any,
+) -> str | dict[str, Any] | None:
+    """Normalize persisted Picks view state, including the old flat pager."""
+    if raw is True or (isinstance(raw, int) and not isinstance(raw, bool)):
+        return "menu"
+    if raw == "menu":
+        return "menu"
+    if not isinstance(raw, dict) or raw.get("mode") != "opinion":
+        return None
+    groups = picks_opinion_groups(desk)
+    if not groups:
+        return None
+    try:
+        expert = str(raw.get("expert") or "")
+        if expert:
+            opinion = next(
+                index
+                for index, (key, _, _) in enumerate(groups)
+                if key == expert
+            )
+        else:
+            opinion = max(
+                0,
+                min(int(raw.get("opinion", 0)), len(groups) - 1),
+            )
+        chunks = groups[opinion][2]
+        chunk = max(0, min(int(raw.get("chunk", 0)), len(chunks) - 1))
+    except (StopIteration, TypeError, ValueError):
+        return "menu"
+    return {
+        "mode": "opinion",
+        "expert": groups[opinion][0],
+        "chunk": chunk,
+    }
 
 
 def render_picks_card(
     desk: GameDesk,
     *,
     config: DeskConfig,
-    page: int | None = None,
+    view: Any = None,
 ) -> tuple[str, Keyboard]:
-    """Compact index, or one paginated full opinion in the same message."""
+    """Compact index, opinion picker, or one opinion in the same message."""
     game = desk.game
-    details = picks_opinion_pages(desk)
-    if page is not None and details:
-        page = max(0, min(page, len(details) - 1))
+    groups = picks_opinion_groups(desk)
+    selected = resolve_picks_view(desk, view)
+    header = (
+        f"🏈 <b>{_esc(teams_label(game))}</b> · "
+        f"{kickoff_label(desk.kickoff)} ET"
+    )
+    if selected == "menu" and groups:
+        keyboard = [
+            [
+                _button(
+                    label,
+                    callback=f"{CALLBACK_PREFIX}op:{desk.event_id}:{expert}",
+                )
+            ]
+            for expert, label, _ in groups
+        ]
+        keyboard.append(
+            [
+                _button(
+                    "Back to picks",
+                    callback=f"{CALLBACK_PREFIX}hide:{desk.event_id}",
+                )
+            ]
+        )
+        return "\n".join(
+            [header, "", "<b>Select an opinion</b>"]
+        ), keyboard
+    if isinstance(selected, dict) and groups:
+        expert = selected["expert"]
+        opinion = next(
+            index
+            for index, (key, _, _) in enumerate(groups)
+            if key == expert
+        )
+        chunk = selected["chunk"]
+        _, _, details = groups[opinion]
         lines = [
-            f"🏈 <b>{_esc(teams_label(game))}</b> · "
-            f"{kickoff_label(desk.kickoff)} ET",
+            header,
             "",
-            details[page],
+            details[chunk],
         ]
         navigation: list[dict[str, str]] = []
-        if page > 0:
+        if chunk > 0:
             navigation.append(
                 _button(
                     "Previous",
-                    callback=f"{CALLBACK_PREFIX}page:{desk.event_id}:{page - 1}",
+                    callback=(
+                        f"{CALLBACK_PREFIX}part:{desk.event_id}:"
+                        f"{expert}:{chunk - 1}"
+                    ),
                 )
             )
         navigation.append(
             _button(
-                f"{page + 1}/{len(details)}",
-                callback=f"{CALLBACK_PREFIX}page:{desk.event_id}:{page}",
+                f"{chunk + 1}/{len(details)}",
+                callback=(
+                    f"{CALLBACK_PREFIX}part:{desk.event_id}:"
+                    f"{expert}:{chunk}"
+                ),
             )
         )
-        if page + 1 < len(details):
+        if chunk + 1 < len(details):
             navigation.append(
                 _button(
                     "Next",
-                    callback=f"{CALLBACK_PREFIX}page:{desk.event_id}:{page + 1}",
+                    callback=(
+                        f"{CALLBACK_PREFIX}part:{desk.event_id}:"
+                        f"{expert}:{chunk + 1}"
+                    ),
                 )
             )
         return "\n".join(lines), [
             navigation,
             [
                 _button(
+                    "Back to opinions",
+                    callback=f"{CALLBACK_PREFIX}show:{desk.event_id}",
+                ),
+                _button(
                     "Back to picks",
                     callback=f"{CALLBACK_PREFIX}hide:{desk.event_id}",
-                )
+                ),
             ],
         ]
 
     lines = [
-        f"🏈 <b>{_esc(teams_label(game))}</b> · {kickoff_label(desk.kickoff)} ET",
+        header,
         "",
         "<b>GOD EXPERT</b>",
         *god_pick_lines(desk),
@@ -1084,7 +1177,7 @@ def render_picks_card(
             lines += ["", consensus]
     keyboard = (
         [[_button("Show full opinions", callback=f"{CALLBACK_PREFIX}show:{desk.event_id}")]]
-        if details
+        if groups
         else []
     )
     return "\n".join(lines), keyboard
@@ -1704,19 +1797,19 @@ def _remove_legacy_picks_details(
     return failed_events
 
 
-def _selected_picks_page(
+def _selected_picks_view(
     state: dict[str, Any],
-    event_id: str,
-) -> int | None:
-    raw = state["expanded_picks"].get(event_id)
-    if raw is True:
-        return 0
-    if raw is None or raw is False:
-        return None
-    try:
-        return max(0, int(raw))
-    except (TypeError, ValueError):
-        return None
+    desk: GameDesk,
+) -> str | dict[str, Any] | None:
+    selected = resolve_picks_view(
+        desk,
+        state["expanded_picks"].get(desk.event_id),
+    )
+    if selected is None:
+        state["expanded_picks"].pop(desk.event_id, None)
+    else:
+        state["expanded_picks"][desk.event_id] = selected
+    return selected
 
 
 def _announce(
@@ -1810,7 +1903,7 @@ def sync_desk(
                 text, keyboard = render_picks_card(
                     desk,
                     config=config,
-                    page=_selected_picks_page(state, desk.event_id),
+                    view=_selected_picks_view(state, desk),
                 )
                 picks_id = _upsert_card(
                     key=picks_key,
@@ -1858,7 +1951,7 @@ def sync_desk(
             text, keyboard = render_picks_card(
                 desk,
                 config=config,
-                page=_selected_picks_page(state, desk.event_id),
+                view=_selected_picks_view(state, desk),
             )
             picks_id = _upsert_card(
                 key=f"picks:{desk.event_id}",
@@ -1997,11 +2090,21 @@ def desk_ids_report(
 def parse_callback(data: str) -> tuple[str, str] | None:
     """``desk:ok:<opinion>`` → ``("ok", opinion)``; ``desk:no:<opinion>``;
     ``desk:okarms:<event>``; ``desk:show:<event>``; ``desk:hide:<event>``;
-    ``desk:page:<event>:<index>``. Anything else ``None``."""
+    ``desk:op:<event>:<expert>``; ``desk:part:<event>:<expert>:<chunk>``.
+    Anything else returns ``None``."""
     if not data.startswith(CALLBACK_PREFIX):
         return None
     action, _, target = data[len(CALLBACK_PREFIX):].partition(":")
-    if action not in {"ok", "no", "okarms", "show", "hide", "page"} or not target:
+    if action not in {
+        "ok",
+        "no",
+        "okarms",
+        "show",
+        "hide",
+        "op",
+        "part",
+        "page",
+    } or not target:
         return None
     return action, target
 
