@@ -559,7 +559,9 @@ position that informs the projected margin.
 
 - The input is whitelisted and hash-bound. Each market carries its exact
   selected side, rationale, submission-time market snapshot, and separately
-  time-frozen season predictions.
+  time-frozen season predictions. If both team projections did not yet exist
+  when the spread was submitted, that context is explicitly marked
+  unavailable rather than dropping the spread or blocking the expert.
 - A deterministic `market_relationship` labels the positions `same_side`,
   `split_compatible`, `split_conflicting`, or `moneyline_only`. A favorite
   moneyline plus an underdog spread is compatible; an underdog moneyline plus

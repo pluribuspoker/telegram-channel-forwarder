@@ -2727,13 +2727,24 @@ def validate_opinion(
             spread_season = schedule_input[
                 "spread_season_predictions_at_submission"
             ]
-            for required_text, label in (
+            required_spread_text = [
                 (str(spread_submission["selected_side"]), "spread pick"),
-                (
-                    str(spread_season["consistency_with_game_pick"]),
-                    "spread consistency",
-                ),
-            ):
+            ]
+            if "consistency_with_game_pick" in spread_season:
+                required_spread_text.append(
+                    (
+                        str(spread_season["consistency_with_game_pick"]),
+                        "spread consistency",
+                    )
+                )
+            else:
+                required_spread_text.append(
+                    (
+                        str(spread_season["status"]),
+                        "spread season-context status",
+                    )
+                )
+            for required_text, label in required_spread_text:
                 if required_text.casefold() not in rendered.casefold():
                     raise ValueError(
                         f"Cee opinion must state the supplied {label}: "

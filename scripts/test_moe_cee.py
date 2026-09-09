@@ -282,6 +282,36 @@ class CeeInputTest(unittest.TestCase):
             "Seattle should cover at home",
         )
 
+    def test_spread_survives_without_prior_season_predictions(self) -> None:
+        predictions = [
+            {
+                **row,
+                "submitted_at_utc": (
+                    "2026-09-07T19:50:00+00:00"
+                    if row["season"] == 2026
+                    else row["submitted_at_utc"]
+                ),
+            }
+            for row in _predictions()
+        ]
+
+        payload = build_cee_input(
+            _game(),
+            [],
+            [_current_lean(), _spread_lean()],
+            predictions,
+            cee_user_id=CEE_ID,
+        )
+
+        self.assertEqual(
+            payload["cee_submissions"]["spread"]["selected_side"],
+            "Seattle Seahawks",
+        )
+        self.assertEqual(
+            payload["spread_season_predictions_at_submission"],
+            {"status": "unavailable_before_submission"},
+        )
+
 
 class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
     def test_zero_eligible_calibration_is_valid_no_signal(self) -> None:

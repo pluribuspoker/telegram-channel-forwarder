@@ -392,10 +392,9 @@ def build_cee_input(
         else None
     )
     if spread is not None and spread_season is None:
-        raise ValueError(
-            "Cee Expert requires season-win predictions for both teams "
-            "submitted before the spread pick"
-        )
+        spread_season = {
+            "status": "unavailable_before_submission",
+        }
     calibration = _calibration(
         current=moneyline,
         current_season=season,
