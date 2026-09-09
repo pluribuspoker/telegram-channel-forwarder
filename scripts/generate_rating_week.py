@@ -48,8 +48,6 @@ from moe import (
 )
 from moe_god import (
     DETERMINISTIC_BACKEND,
-    VALIDATION_REVIEW_NOTE,
-    VALIDATION_REVIEWER,
     canonical_json,
     review_policy,
     sha256_text,
@@ -58,7 +56,6 @@ from moe_rating import RATING_EXPERT_ID, build_rating_input
 from nfl_game_history import GAME_HISTORY_HEADERS, GAME_HISTORY_TAB
 from nfl_lines import GAME_HEADERS, get_gspread_client
 from scripts.generate_moe_opinion import current_season_finals
-from scripts.review_moe_opinion import approve_rows, week_rows
 
 
 def describe_game(game: dict[str, Any]) -> str:
@@ -118,7 +115,6 @@ async def generate_week(
     summary: dict[str, list[dict[str, Any]]] = {
         "persisted": [],
         "up_to_date": [],
-        "approved_earlier": [],
         "failed": [],
     }
     prefix = "dry run: " if dry_run else ""
@@ -176,46 +172,10 @@ async def generate_week(
         summary["persisted"].append(
             {"event_id": event_id, "opinion_id": str(row["opinion_id"])}
         )
-    if validation:
-        # Valid rows of this week that are still pending predate the policy
-        # (or came from a single-game run); the same validation approves
-        # them, through the store's hash-checked review.
-        earlier = week_rows(
-            opinion_rows, expert_id=RATING_EXPERT_ID, week=week, season=season
-        )
-        if earlier and dry_run:
-            print(
-                f"dry run: would approve {len(earlier)} earlier valid pending "
-                "row(s) on validation: "
-                + ", ".join(str(row.get("opinion_id")) for row in earlier)
-            )
-            summary["approved_earlier"] = [
-                {"opinion_id": str(row.get("opinion_id")), "dry_run": True}
-                for row in earlier
-            ]
-        elif earlier:
-            approved = approve_rows(
-                store,
-                earlier,
-                reviewed_by=VALIDATION_REVIEWER,
-                note=VALIDATION_REVIEW_NOTE,
-            )
-            print(
-                f"approved {len(approved)} earlier valid pending row(s) on "
-                "validation: " + ", ".join(approved)
-            )
-            summary["approved_earlier"] = [
-                {
-                    "opinion_id": opinion_id,
-                    "event_id": str(row.get("event_id") or ""),
-                }
-                for opinion_id, row in zip(approved, earlier)
-            ]
     print(
         f"rating week {season} wk{week}: {len(summary['persisted'])} persisted"
         f"{' (approved on validation)' if validation else ''}, "
         f"{len(summary['up_to_date'])} up to date, "
-        f"{len(summary['approved_earlier'])} earlier rows approved, "
         f"{len(summary['failed'])} failed"
     )
     return summary

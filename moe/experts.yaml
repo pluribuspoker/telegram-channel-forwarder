@@ -162,9 +162,9 @@ experts:
       - deterministic
     # Side only: its projected total is the league scoring rate, no signal.
     markets: [side]
-    # Approved at generation, hash-bound: the response is arithmetic checked
-    # against the input's own estimate (decided 2026-09-07). Only mode: model
-    # experts may declare this; every other expert keeps the human gate.
+    # All valid generated opinions are approved at generation. This explicit
+    # value documents that the deterministic rating voice follows the global
+    # policy too.
     review: validation
     enabled: true
     initial_weight: 1.0

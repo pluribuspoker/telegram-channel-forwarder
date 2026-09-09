@@ -30,10 +30,10 @@ and billing.
   change the supplied input.
 - Persist every raw response through `scripts/generate_moe_opinion.py`; never
   write directly to the Sheet.
-- Never approve an opinion automatically. Review the persisted opinion with the
-  user under the normal hash-bound approval workflow. The one exception is
-  the rating voice, whose rows are approved on validation at generation
-  (see "Rating voice"); no agent-generated row is ever auto-approved.
+- Every valid generated opinion is approved automatically at generation and
+  bound to its exact output hash. Invalid and sample rows remain excluded.
+  Fix any bad-but-valid output at the prompt, input, or validator layer and
+  regenerate it rather than editing the persisted opinion.
 - Store temporary inputs and responses outside the repository and remove them
   after persistence.
 
@@ -109,10 +109,11 @@ and billing.
    - `model=<selected-model>`
    - `generation_backend=agent_runtime`
    - `generation_effort=<actual-agent-effort>`
-   - `review_status=pending`
+   - `review_status=approved`
+   - `reviewed_by=validation`
 
-9. Review factual accuracy and policy compliance one section at a time. Approve
-   only the exact persisted opinion using `scripts/review_moe_opinion.py`.
+9. Review the automatically published result when needed. If a real issue made
+   it through validation, correct the root cause and regenerate.
 
 ## God Expert
 
@@ -149,9 +150,10 @@ prompt, from an empty directory whose environment holds no sheet
 credentials), persists the judge row with backend `claude_headless`, and
 DMs the reviewer through the watchdog bot. It dedupes on the committee key
 (voice opinion ids plus the latest lines and prices), stops two hours before
-kickoff, gives up on a committee after two invalid judge rows, and never
-approves anything. `python scripts/god_judge_runner.py --dry-run` prints the
-plan without persisting or calling anything.
+kickoff and gives up on a committee after two invalid judge rows. Valid rules
+and judge rows are approved automatically by the normal generation policy.
+`python scripts/god_judge_runner.py --dry-run` prints the plan without
+persisting or calling anything.
 
 With `GOD_JUDGE_SAMPLES=N` (`--samples`, 1–5, default 1) the runner makes N
 calls per game — the judge ensemble of roadmap WP9. Every sampled response
@@ -192,28 +194,25 @@ state, so the judge no longer races the 30-minute lines fetcher:
    --generation-effort <effort>` persists the judge row; the backend is
    `agent_runtime` by default (`--generation-backend claude_headless` only
    for a response captured from a headless `claude -p` call).
-6. Review each row with `python scripts/review_moe_opinion.py --opinion-id
-   <id> --status approved --reviewed-by <you>`.
+6. Confirm both valid rows landed approved and hash-bound.
 
 ### Rating voice
 
 `rating_elo` never uses an agent either: it is Elo arithmetic on the
 committed prior `moe/priors/nfl_elo_v1.json` and this season's finals
-(`moe_rating.py`, spec `moe/prompts/rating_elo/v1.md`). One game:
+(`moe_rating.py`, spec `moe/prompts/rating_elo/v1.md`). Like every other valid
+generated opinion, its row is approved automatically. One game:
 `python scripts/generate_moe_opinion.py --event-id <id> --expert rating_elo
 --deterministic` (`--show-input` prints the rating input). The weekly path
 is `python scripts/generate_rating_week.py --season <S> --week <N>` (one
 row per upcoming game of the week, deduped on the input hash). Its rows are
-approved on validation at generation (registry `review: validation`,
-decided 2026-09-07): the response is arithmetic that
+approved on validation at generation: the response is arithmetic that
 `normalize_rating_opinion` checks against the input's own estimate, so the
 approval is hash-bound exactly like a human one (`reviewed_by=validation`)
-and needs no review step; the same run also approves any earlier valid
-pending rating rows of the week. `review_moe_opinion.py --expert rating_elo
---week <N>` still lists, and with `--approve` approves, legacy pending rows.
-No other expert may declare `review: validation` (the registry loader
-refuses it outside `mode: model`). The judge runner needs the approved
-rating row before it judges a game. Refit the prior each offseason with
+and needs no review step. `review_moe_opinion.py --expert rating_elo --week
+<N>` still lists, and with `--approve` approves, legacy pending rows.
+The judge runner needs the approved rating row before it judges a game. Refit
+the prior each offseason with
 `python scripts/fit_nfl_elo.py --check-season <season just played>`.
 
 ## Runtime notes

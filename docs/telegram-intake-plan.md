@@ -381,13 +381,13 @@ on the same file while opening and appending; replay holds it exclusively across
 rotation, reading, and cleanup, so a writer cannot append to an inode that the
 replayer is about to unlink.
 
-Structurally valid output begins with `review_status=pending`. It is excluded
-from bot views until a human reviews the exact persisted text and marks it
-`approved`; rejected output remains preserved but hidden. Review metadata
-includes UTC timestamp, reviewer, note, and the hash of the exact approved
-output, event, expert, prompt, model, source, and input identity. Bot reads
-recompute that hash and hide any row changed or reassigned after approval.
-Manual review:
+Structurally valid output is approved automatically at generation with
+`reviewed_by=validation`. Invalid and sample rows remain excluded. Approval
+metadata includes UTC timestamp, reviewer, note, and the hash of the exact
+approved output, event, expert, prompt, model, source, and input identity. Bot
+reads recompute that hash and hide any row changed or reassigned after
+approval. `review: human` remains an explicit registry opt-out, and legacy
+pending rows can still be reviewed manually:
 
 ```bash
 python scripts/review_moe_opinion.py \
@@ -653,7 +653,7 @@ either person sees or does.
   `<blockquote expandable>` each viewer opens on their own screen;
   👁 Full opinions deep-links to the game's MOE view in the DM. A pinned
   card lists only decided games (an approved arm) with their legs.
-  📥 Review is the to-do list: a card exists only while a game has rows
+  📥 Review is the legacy/manual-opt-out to-do list: a card exists only while a game has rows
   worth a decision — a pending row that is the latest valid row for its
   expert and model (older drafts superseded by a newer row are hidden, since
   the aggregator only reads the latest approved row; audit and sample rows
@@ -673,7 +673,7 @@ either person sees or does.
   in-process caches; bot-based reviews patch the opinion cache immediately,
   while Refresh opinions is the explicit cache bust for externally generated
   rows. The sheet cache serves its last good value through 5xx and 429. Each
-  target row is confirmed still pending with a single-row read
+  manually reviewed target row is confirmed still pending with a single-row read
   (`GoogleSheetsMoeOpinionStore.fetch`), the cached rows are patched after
   the review so the cards re-render without a full tab read, the reviewer
   list is kept warm by the sync loop. ✅ ❌ are checked against the `reviewer` role in
@@ -685,7 +685,7 @@ either person sees or does.
   both arms" appears only when both God arms are pending
   (`desk:okarms:<event>`, rules then judge) — bulk approval stays per game
   for the two arms and per row for the voices, as decided on the options
-  page. Pending and rejected rows are visible to both reviewers in the group
+  page. Legacy pending and rejected rows are visible to both reviewers in the group
   and, through the deep link, in their DMs; the DM browser
   (`/guess_nfl_game` → 🧠) stays approved-only.
 - Loud and silent. Every card post and edit is silent. Loud replies: under
@@ -693,7 +693,7 @@ either person sees or does.
   (`bet:<opinion>:<side|total>`), under the review card once per game when
   the judge lock (kickoff − 2 h, the runner's cutoff) is within
   `MOE_DESK_LOCK_WARN_HOURS` (default 2) and rows are still pending. The
-  runner's own "rows pending" DM is silenced with `GOD_JUDGE_PENDING_DM=0`
+  runner's own completion DM is silenced with `GOD_JUDGE_PENDING_DM=0`
   (`run_once(pending_dm=False)`); its failure and stall DMs are unchanged.
 - State: `moe_desk_state.json` (gitignored; `MOE_DESK_STATE_PATH` to move
   it) holds message ids and content hashes per card, announcements and
@@ -1256,21 +1256,16 @@ every row still passes the human gate — in bulk, one week per command.
   row is approved; until the week's rating rows are approved the runner
   skips every game with "committee incomplete, no approved row for
   rating_elo".
-- Changed 2026-09-07 (night), user decision: the rating voice's rows are
-  approved on validation, not by a person. Registry `review: validation`
-  on `rating_elo` (`moe_god.review_policy`: `human` by default, `validation`
-  allowed only for `mode: model` experts, so LLM rows and both God Expert
-  arms keep the gate; `load_registry` and `load_expert` refuse anything
-  else). `generate_opinion` approves such a row in the same step that
+- Changed 2026-09-08, user decision: every valid generated opinion is approved
+  on validation, not by a person. `moe_god.review_policy` defaults to
+  `validation`, with `review: human` retained as an explicit opt-out.
+  `generate_opinion` approves a valid row in the same step that
   validated it — `review_status=approved`, `reviewed_by=validation`, a
   fixed note, `approved_output_sha256` = the output hash, so
   `approved_opinions` verifies it exactly like a human approval — and
-  `generate_rating_week.py` also approves the week's earlier valid pending
-  rating rows through the store's hash-checked review (dry run says what
-  it would approve). The bulk review mode remains for legacy rows and
-  prints a hint. Tests: registry policy map, the policy guard, generation
-  lands approved, the weekly sweep. The first weekly run after the phase-3
-  deploy approves the 17 pending Week 1 rows.
+  The bulk review mode remains for legacy rows, which are not migrated
+  automatically. Invalid and sample rows remain unapproved; a
+  bad-but-valid result is corrected by fixing its root cause and regenerating.
 - Data: `data/nfl_lines_history.csv` widened to 1999–2025 (6,967 games,
   807 KB; the 2016–2025 rows are byte-identical to the earlier file;
   moneylines start in 2006 and are complete from 2010, spreads and totals

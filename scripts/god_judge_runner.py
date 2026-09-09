@@ -26,13 +26,13 @@ for every enabled non-aggregator expert -- it:
    (``moe_god.ensemble_response``); when no sample validated the first
    response persists as an ordinary invalid judge row, so the stall cap
    below counts the trigger exactly as a single-sample one;
-5. deletes the temp directory and DMs the reviewer through the watchdog bot
-   that new pending rows exist. The runner never approves anything.
+5. deletes the temp directory and DMs the operator through the watchdog bot
+   that the valid rows were approved automatically.
 
 Dedupe is by committee key (``moe_god.committee_key``: the sorted voice
 opinion ids plus the latest full-game lines and prices, never the capture
 timestamp). A game is skipped inside two hours of kickoff, when its
-committee is incomplete, when a valid judge row that the reviewer has not
+committee is incomplete, when a valid judge row that has not been manually
 rejected already carries the current key, or when two invalid judge rows
 carry it (the judge failed twice on this committee; the reviewer is told once
 per invocation). A rejected judge row does not block: rejection is the
@@ -326,26 +326,17 @@ def pending_message(
     valid_samples: int = 0,
     failures: Iterable[str] = (),
 ) -> str:
-    """The reviewer's DM. With an ensemble the judge row is named as the
-    mean of its valid samples and every failed call or sample is listed;
-    the sample rows are audit rows and get no review command."""
+    """The completion DM for automatically approved God Expert rows."""
     judge_text = f"judge {judge_id}"
     if samples > 1:
         judge_text += f" (mean of {valid_samples} of {samples} samples)"
     lines = [
-        f"pickbot: new God Expert rows pending for {describe_game(game)}: "
+        f"pickbot: new God Expert rows approved for {describe_game(game)}: "
         f"rules {rules_id}, {judge_text}"
     ]
     failures = list(failures)
     if failures:
         lines.append("sample failures: " + "; ".join(failures))
-    for opinion_id in (rules_id, judge_id):
-        if opinion_id != "existing":
-            lines.append(
-                "python scripts/review_moe_opinion.py "
-                f"--opinion-id {opinion_id} --status approved "
-                "--reviewed-by <you>"
-            )
     return "\n".join(lines)
 
 
@@ -433,9 +424,8 @@ async def run_once(
 
     ``samples`` is the number of claude calls per game: 1 (the default) is
     the single-sample path, 2 to ``MAX_SAMPLES`` the judge ensemble described
-    in the module docstring. ``pending_dm=False`` keeps the "rows pending"
-    DM quiet (the desk group's review card carries the same rows with
-    buttons); failure and stall DMs are unaffected.
+    in the module docstring. ``pending_dm=False`` keeps the completion DM
+    quiet; failure and stall DMs are unaffected.
     """
     if not 1 <= int(samples) <= MAX_SAMPLES:
         raise ValueError(f"samples must be between 1 and {MAX_SAMPLES}")

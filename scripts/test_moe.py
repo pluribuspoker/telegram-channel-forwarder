@@ -720,7 +720,12 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("bookmaker", row["input_json"])
         self.assertIn("Schedule Expert v15", captured["system"])
         self.assertEqual(row["generation_status"], "valid")
-        self.assertEqual(row["review_status"], "pending")
+        self.assertEqual(row["review_status"], "approved")
+        self.assertEqual(row["reviewed_by"], "validation")
+        self.assertEqual(
+            row["approved_output_sha256"],
+            row["output_sha256"],
+        )
         self.assertEqual(store.rows, [row])
 
     async def test_agent_generation_can_record_actual_effort_override(

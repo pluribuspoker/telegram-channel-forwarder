@@ -3458,10 +3458,9 @@ async def generate_opinion(
             )
         row["output_sha256"] = opinion_output_sha256(row)
         if not sample and review_policy(expert) == "validation":
-            # A deterministic expert's row is approved by its validation:
-            # the response just passed the normalizer, which requires every
-            # number to equal the input's own estimate. Hash-bound like a
-            # human approval, so approved_opinions verifies it the same way.
+            # The response passed its expert-specific normalizer and
+            # validator. Bind approval to that exact output so later edits
+            # remain hidden by approved_opinions.
             row.update(
                 {
                     "review_status": "approved",

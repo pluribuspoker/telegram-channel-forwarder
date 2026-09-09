@@ -272,7 +272,8 @@ class RunnerTests(_HarnessCase):
         self.assertEqual(judge["generation_backend"], "claude_headless")
         self.assertEqual(judge["generation_effort"], "max")
         self.assertEqual(judge["generation_status"], "valid")
-        self.assertEqual(judge["review_status"], "pending")
+        self.assertEqual(rules["review_status"], "approved")
+        self.assertEqual(judge["review_status"], "approved")
         payload = self._payload()
         request = build_judge_request(payload)
         judge_input = json.loads(judge["input_json"])
@@ -308,16 +309,12 @@ class RunnerTests(_HarnessCase):
         self.assertEqual(env["LANG"], "C.UTF-8")
         self.assertEqual(list(self.harness.work_root.iterdir()), [])
 
-        # The DM names both rows and gives the review commands.
+        # The DM names both automatically approved rows.
         self.assertEqual(len(self.harness.notifications), 1)
         message = self.harness.notifications[0]
-        self.assertTrue(message.startswith("pickbot: new God Expert rows pending for New England Patriots @ Seattle Seahawks"))
+        self.assertTrue(message.startswith("pickbot: new God Expert rows approved for New England Patriots @ Seattle Seahawks"))
         self.assertIn(f"rules {rules['opinion_id']}, judge {judge['opinion_id']}", message)
-        for row in rows:
-            self.assertIn(
-                f"python scripts/review_moe_opinion.py --opinion-id {row['opinion_id']} --status approved --reviewed-by <you>",
-                message,
-            )
+        self.assertNotIn("review_moe_opinion.py", message)
 
         # One usage line per call.
         runs = self.harness.runs()
@@ -358,7 +355,7 @@ class RunnerTests(_HarnessCase):
             by_expert.setdefault(row["expert_id"], []).append(row)
         self.assertEqual(len(by_expert["god_judge"]), 2)
         self.assertEqual(len(by_expert["god_rules"]), 1)
-        self.assertEqual(by_expert["god_judge"][-1]["review_status"], "pending")
+        self.assertEqual(by_expert["god_judge"][-1]["review_status"], "approved")
 
     async def test_price_move_makes_a_new_committee_key(self) -> None:
         await self.harness.run([_game()], _committee())
@@ -564,7 +561,7 @@ class EnsembleRunnerTests(_HarnessCase):
             self.assertEqual(json.loads(row["raw_response"])["expected_home_margin"], [2.0, 4.0, 3.0][index])
         sample_ids = [row["opinion_id"] for row in samples]
         self.assertEqual(len(set(sample_ids)), 3)
-        self.assertEqual((judge["generation_status"], judge["review_status"]), ("valid", "pending"))
+        self.assertEqual((judge["generation_status"], judge["review_status"]), ("valid", "approved"))
         self.assertEqual((judge["home_win_probability"], judge["expected_home_margin"]), (0.61, 3.0))
         self.assertEqual(judge["predicted_away_score"] + judge["predicted_home_score"], 45)
         self.assertEqual(judge["input_json"], canonical_json(request))
@@ -601,7 +598,7 @@ class EnsembleRunnerTests(_HarnessCase):
         self.assertNotIn("sample failures", message)
         for sample_id in sample_ids:
             self.assertNotIn(sample_id, message)
-        self.assertIn(f"--opinion-id {judge['opinion_id']} --status approved", message)
+        self.assertNotIn("review_moe_opinion.py", message)
         self.assertEqual(list(self.harness.work_root.iterdir()), [])
 
         # The next pass finds the valid judge row on the same committee.

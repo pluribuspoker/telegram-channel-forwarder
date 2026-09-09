@@ -243,39 +243,28 @@ def load_registry() -> dict[str, Any]:
     return config
 
 
-# How a persisted row reaches ``approved``. ``human`` (the default) is the
-# review gate every model row passes through. ``validation`` approves a row
-# at generation, hash-bound exactly like a human approval, because the
-# response is arithmetic that ``normalize_rating_opinion`` has already checked
-# against the input's own estimate; it is allowed only for ``mode: model``
-# experts (the rating voice), never for an agent expert or either God Expert
-# arm. Decided 2026-09-07 (night), superseding the phase-2 "human gate for
-# every row" for the deterministic voice.
+# How a persisted row reaches ``approved``. ``validation`` is the default:
+# every structurally valid generated opinion is approved at generation and
+# hash-bound exactly like a human approval. ``human`` remains available as an
+# explicit registry opt-out. Invalid and sample rows are never approved.
+# Decided 2026-09-08, replacing the manual gate so committee and God Expert
+# updates do not wait on a reviewer.
 REVIEW_POLICIES = ("human", "validation")
-VALIDATION_REVIEW_MODES = ("model",)
 VALIDATION_REVIEWER = "validation"
 VALIDATION_REVIEW_NOTE = (
-    "deterministic expert: approved on validation; the response equals the "
-    "input's own estimate"
+    "approved automatically after input-bound schema validation"
 )
 
 
 def review_policy(config: dict[str, Any]) -> str:
-    """The registry's ``review`` for an expert: ``human`` unless declared."""
+    """The registry's ``review`` policy; validation is the default."""
     raw = config.get("review")
     if raw is None:
-        return "human"
+        return "validation"
     policy = str(raw)
     if policy not in REVIEW_POLICIES:
         raise ValueError(
             f"review must be one of {list(REVIEW_POLICIES)}: {raw!r}"
-        )
-    if (
-        policy == "validation"
-        and str(config.get("mode") or "") not in VALIDATION_REVIEW_MODES
-    ):
-        raise ValueError(
-            "review: validation is only allowed for mode: model experts"
         )
     return policy
 

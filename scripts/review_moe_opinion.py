@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-"""Approve or reject persisted MOE opinions.
+"""Approve or reject legacy or human-gated MOE opinions.
 
-Two modes, both a human's command; nothing here approves on its own.
+Valid generated opinions are approved automatically. These commands remain for
+legacy pending rows and experts explicitly configured with ``review: human``.
 
 Single row (unchanged)::
 
     python scripts/review_moe_opinion.py --opinion-id <id> \\
         --status approved --reviewed-by <you> [--note ...]
 
-Bulk review of one expert's week (for experts under the human gate; the
-rating voice is approved on validation at generation, so its bulk list is
-normally empty -- ``generate_rating_week.py`` also approves any earlier
-pending rating rows)::
+Bulk review of one expert's week::
 
     python scripts/review_moe_opinion.py --expert rating_elo --week 3 \\
         [--season 2026] --reviewed-by <you>            # list only
@@ -225,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
     if review_policy(load_expert(args.expert)) == "validation":
         print(
             f"{args.expert} is approved on validation at generation; "
-            "generate_rating_week.py approves earlier pending rows too."
+            "only legacy pending rows should normally appear here."
         )
     if not rows:
         return 0
