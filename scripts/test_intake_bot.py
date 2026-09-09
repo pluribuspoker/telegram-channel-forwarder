@@ -728,6 +728,40 @@ class GameSelectionTest(unittest.TestCase):
                 raw_text="Chiefs Bills over 50.5",
             )
 
+    def test_freeform_second_half_total_is_retained(self):
+        raw = "Love second half game total under 21.5"
+        parsed = {
+            "sport": "NFL",
+            "picks": [
+                {
+                    "bet_type": "total",
+                    "period": "2h",
+                    "teams": ["Miami Dolphins", "Las Vegas Raiders"],
+                    "line": 21.5,
+                    "direction": "under",
+                    "sport": None,
+                }
+            ],
+        }
+
+        submissions = build_freeform_celebrity_submissions(
+            submitted_at=NOW,
+            user_id=1,
+            username="operator",
+            message_id=99,
+            game=_game("miami", 1),
+            parsed=parsed,
+            raw_text=raw,
+        )
+
+        self.assertEqual(len(submissions), 1)
+        self.assertEqual(submissions[0]["period"], "second_half")
+        self.assertEqual(submissions[0]["market"], "total")
+        self.assertEqual(submissions[0]["market_family"], "total")
+        self.assertEqual(submissions[0]["side"], "Under")
+        self.assertEqual(submissions[0]["line"], 21.5)
+        self.assertEqual(submissions[0]["raw_pick_text"], raw)
+
     def test_lean_row_is_compact_and_duplicate_key_is_deterministic(self):
         row = build_lean_row(
             submitted_at=NOW,

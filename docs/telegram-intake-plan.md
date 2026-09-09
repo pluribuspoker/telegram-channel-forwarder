@@ -641,7 +641,9 @@ distribution is descriptive context, not the goal.
   distinct pick hash, so one source message can contribute both a side and a
   total signal without losing their shared rationale. The optional structured
   `Subject / Market / Pick` form remains available as a deterministic manual
-  override.
+  override. Free-form period normalization supports full game, both halves,
+  and all four quarters; partial-game rows remain tracked but ungraded until
+  compatible deterministic period results exist.
 - The deterministic input separately reports the active picks, side and total
   distributions, individual records, pairwise agreement records, and each
   celebrity's record specifically when a pair disagreed. Exact-permutation

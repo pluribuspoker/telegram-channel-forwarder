@@ -105,6 +105,13 @@ PERIOD_LABELS = {
     "first_half": "First half",
     "first_quarter": "First quarter",
 }
+CELEBRITY_PERIOD_LABELS = {
+    **PERIOD_LABELS,
+    "second_half": "Second half",
+    "second_quarter": "Second quarter",
+    "third_quarter": "Third quarter",
+    "fourth_quarter": "Fourth quarter",
+}
 TEAM_EMOJI_TAB = "team_emojis"
 TEAM_EMOJI_HEADERS = ["team_name", "emoji"]
 SUGGESTIONS_TAB = "suggestions"
@@ -926,7 +933,11 @@ def build_freeform_celebrity_submissions(
     period_map = {
         "game": "game",
         "1h": "first_half",
+        "2h": "second_half",
         "1q": "first_quarter",
+        "2q": "second_quarter",
+        "3q": "third_quarter",
+        "4q": "fourth_quarter",
     }
     away = str(game["away_team"])
     home = str(game["home_team"])
@@ -959,8 +970,8 @@ def build_freeform_celebrity_submissions(
         period = period_map.get(str(pick.get("period") or "game"))
         if period is None:
             raise ValueError(
-                "Free-form celebrity picks support full game, first half, "
-                "and first quarter only"
+                "Free-form celebrity picks support full game, halves, "
+                "and quarters only"
             )
         bet_type = str(pick.get("bet_type") or "")
         parsed_team_names = [
@@ -2847,7 +2858,7 @@ async def main() -> None:
             )
             summary = "\n".join(
                 (
-                    f"{PERIOD_LABELS[str(row['period'])]} · "
+                    f"{CELEBRITY_PERIOD_LABELS[str(row['period'])]} · "
                     f"{str(row['market_family']).replace('_', ' ').title()} · "
                     f"{html.escape(str(row['subject']))} · "
                     f"{html.escape(str(row['selection_text']))}"
