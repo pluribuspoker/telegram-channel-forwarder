@@ -73,6 +73,20 @@ def _spread_lean() -> dict:
     }
 
 
+def _earlier_current_moneyline(
+    *,
+    side: str = "Seattle Seahawks",
+    submitted_at: str = "2026-09-06T20:34:11+00:00",
+) -> dict:
+    return {
+        **_current_lean(),
+        "submission_id": "telegram:6097731988:400",
+        "submitted_at_utc": submitted_at,
+        "side": side,
+        "lean_text": "Earlier moneyline position",
+    }
+
+
 def _prediction(
     revision_id: str,
     season: int,
@@ -148,6 +162,21 @@ def _prior_lean() -> dict:
     }
 
 
+def _prior_spread_lean(
+    *,
+    submission_id: str = "telegram:6097731988:101",
+    submitted_at: str = "2025-09-07T21:00:00+00:00",
+) -> dict:
+    return {
+        **_prior_lean(),
+        "submission_id": submission_id,
+        "submitted_at_utc": submitted_at,
+        "market": "spread",
+        "side": "Seattle Seahawks",
+        "lean_text": "Seattle should cover.",
+    }
+
+
 def _history() -> list[dict]:
     return [
         {
@@ -206,6 +235,14 @@ class CeeInputTest(unittest.TestCase):
             "split_conflicting",
         )
         self.assertEqual(
+            payload["decision_history"]["moneyline"]["decision_pattern"],
+            "initial_only",
+        )
+        self.assertEqual(
+            payload["decision_history"]["moneyline"]["submission_count"],
+            1,
+        )
+        self.assertEqual(
             payload["spread_season_predictions_at_submission"][
                 "consistency_with_game_pick"
             ],
@@ -218,6 +255,16 @@ class CeeInputTest(unittest.TestCase):
             "W",
         )
         self.assertEqual(calibration["matching_season_gap"]["games"], 0)
+        self.assertEqual(
+            calibration["matching_decision_pattern"][
+                "chronological_results"
+            ],
+            "W",
+        )
+        self.assertEqual(
+            calibration["matching_spread_decision_pattern"]["games"],
+            0,
+        )
 
     def test_requires_full_game_moneyline(self) -> None:
         with self.assertRaisesRegex(
@@ -257,6 +304,126 @@ class CeeInputTest(unittest.TestCase):
             payload["market_relationship"]["status"],
             "split_conflicting",
         )
+        self.assertEqual(
+            payload["decision_history"]["spread"]["decision_pattern"],
+            "changed",
+        )
+        self.assertEqual(
+            payload["decision_history"]["spread"]["initial_side"],
+            "New England Patriots",
+        )
+        self.assertEqual(
+            payload["decision_history"]["spread"]["final_side"],
+            "Seattle Seahawks",
+        )
+
+    def test_classifies_reaffirmed_and_changed_decisions(self) -> None:
+        earlier_spread = {
+            **_spread_lean(),
+            "submission_id": "telegram:6097731988:410",
+            "submitted_at_utc": "2026-09-06T19:34:11+00:00",
+            "lean_text": "Earlier Seattle spread position",
+        }
+
+        payload = build_cee_input(
+            _game(),
+            [],
+            [
+                _earlier_current_moneyline(),
+                _current_lean(),
+                earlier_spread,
+                _spread_lean(),
+            ],
+            _predictions(),
+            cee_user_id=CEE_ID,
+        )
+
+        moneyline = payload["decision_history"]["moneyline"]
+        self.assertEqual(moneyline["decision_pattern"], "changed")
+        self.assertEqual(moneyline["change_count"], 1)
+        self.assertEqual(moneyline["reaffirmation_count"], 0)
+        self.assertEqual(moneyline["initial_side"], "Seattle Seahawks")
+        self.assertEqual(moneyline["final_side"], "New England Patriots")
+        self.assertEqual(
+            [row["selected_side"] for row in moneyline["submissions"]],
+            ["Seattle Seahawks", "New England Patriots"],
+        )
+
+        spread = payload["decision_history"]["spread"]
+        self.assertEqual(spread["decision_pattern"], "reaffirmed")
+        self.assertEqual(spread["change_count"], 0)
+        self.assertEqual(spread["reaffirmation_count"], 1)
+        self.assertEqual(spread["submission_count"], 2)
+
+    def test_calibration_counts_each_game_once_by_final_decision(self) -> None:
+        prior_reaffirmation = {
+            **_prior_lean(),
+            "submission_id": "telegram:6097731988:90",
+            "submitted_at_utc": "2025-09-06T20:00:00+00:00",
+            "lean_text": "Earlier Seattle moneyline position.",
+        }
+
+        payload = build_cee_input(
+            _game(),
+            _history(),
+            [
+                _earlier_current_moneyline(side="New England Patriots"),
+                _current_lean(),
+                prior_reaffirmation,
+                _prior_lean(),
+            ],
+            _predictions(),
+            cee_user_id=CEE_ID,
+        )
+
+        calibration = payload["nfl_calibration"]
+        self.assertEqual(calibration["overall"]["games"], 1)
+        self.assertEqual(calibration["overall"]["chronological_results"], "W")
+        self.assertEqual(
+            calibration["matching_decision_pattern"]["decision_pattern"],
+            "reaffirmed",
+        )
+        self.assertEqual(
+            calibration["matching_decision_pattern"][
+                "chronological_results"
+            ],
+            "W",
+        )
+
+    def test_calibrates_reaffirmed_spread_decisions_at_submitted_line(
+        self,
+    ) -> None:
+        earlier_current_spread = {
+            **_spread_lean(),
+            "submission_id": "telegram:6097731988:410",
+            "submitted_at_utc": "2026-09-06T19:34:11+00:00",
+        }
+        earlier_prior_spread = _prior_spread_lean(
+            submission_id="telegram:6097731988:91",
+            submitted_at="2025-09-06T21:00:00+00:00",
+        )
+
+        payload = build_cee_input(
+            _game(),
+            _history(),
+            [
+                _current_lean(),
+                earlier_current_spread,
+                _spread_lean(),
+                _prior_lean(),
+                earlier_prior_spread,
+                _prior_spread_lean(),
+            ],
+            _predictions(),
+            cee_user_id=CEE_ID,
+        )
+
+        spread = payload["nfl_calibration"][
+            "matching_spread_decision_pattern"
+        ]
+        self.assertEqual(spread["decision_pattern"], "reaffirmed")
+        self.assertEqual(spread["games"], 1)
+        self.assertEqual(spread["chronological_results"], "T")
 
     def test_latest_eligible_submission_ignores_post_kickoff_revision(
         self,
@@ -410,6 +577,29 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
                     ),
                     "evidence_paths": ["nfl_calibration"],
                 },
+                {
+                    "claim": (
+                        "Cee's moneyline decision pattern is initial_only "
+                        "across 1 submission."
+                    ),
+                    "evidence_paths": ["decision_history.moneyline"],
+                },
+                {
+                    "claim": (
+                        "Cee's spread decision pattern is initial_only "
+                        "across 1 submission."
+                    ),
+                    "evidence_paths": ["decision_history.spread"],
+                },
+                {
+                    "claim": (
+                        "The matching initial_only decision-pattern bucket "
+                        "is 1-0 across 1 game."
+                    ),
+                    "evidence_paths": [
+                        "nfl_calibration.matching_decision_pattern"
+                    ],
+                },
             ],
             "counterarguments": [
                 {
@@ -434,6 +624,15 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
                     ),
                     "evidence_paths": [
                         "nfl_calibration.matching_season_gap"
+                    ],
+                },
+                {
+                    "claim": (
+                        "The matching initial_only spread decision-pattern "
+                        "bucket has 0 games, so it provides no ATS signal."
+                    ),
+                    "evidence_paths": [
+                        "nfl_calibration.matching_spread_decision_pattern"
                     ],
                 },
             ],
@@ -508,6 +707,10 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
             "Calibration uses zero eligible resolved pre-kickoff Cee "
             "moneyline picks."
         )
+        output["supporting_factors"][7]["claim"] = (
+            "The matching initial_only decision-pattern bucket has zero "
+            "games, so it provides no signal."
+        )
 
         async def create_fn(**_kwargs):
             return SimpleNamespace(
@@ -577,10 +780,10 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
     def test_expert_configuration_is_versioned(self) -> None:
         expert = load_expert("cee")
 
-        self.assertEqual(expert["version"], 2)
-        self.assertEqual(expert["prompt_version"], 2)
+        self.assertEqual(expert["version"], 3)
+        self.assertEqual(expert["prompt_version"], 3)
         self.assertEqual(expert["output_schema_version"], 3)
-        self.assertEqual(expert["prompt_path"], "moe/prompts/cee/v2.md")
+        self.assertEqual(expert["prompt_path"], "moe/prompts/cee/v3.md")
         self.assertEqual(
             expert["allowed_models"],
             [

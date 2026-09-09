@@ -2677,6 +2677,7 @@ def validate_opinion(
         }
         required_paths = {
             "cee_submissions.moneyline",
+            "decision_history.moneyline",
             "season_predictions_at_submission",
             "market_relationship",
             "submission_markets.moneyline",
@@ -2684,14 +2685,17 @@ def validate_opinion(
             "nfl_calibration.overall",
             "nfl_calibration.matching_consistency",
             "nfl_calibration.matching_season_gap",
+            "nfl_calibration.matching_decision_pattern",
         }
         spread_submission = schedule_input["cee_submissions"].get("spread")
         if spread_submission is not None:
             required_paths.update(
                 {
                     "cee_submissions.spread",
+                    "decision_history.spread",
                     "spread_season_predictions_at_submission",
                     "submission_markets.spread",
+                    "nfl_calibration.matching_spread_decision_pattern",
                 }
             )
         missing = required_paths - cited_paths
@@ -2785,8 +2789,44 @@ def validate_opinion(
                     "Cee opinion must state the selected spread line: "
                     f"{spread_line_text}"
                 )
+        decision_history = schedule_input["decision_history"]
+        decision_views = [
+            ("decision_history.moneyline", decision_history["moneyline"]),
+        ]
+        if spread_submission is not None:
+            decision_views.append(
+                ("decision_history.spread", decision_history["spread"])
+            )
+        for path, summary in decision_views:
+            matching_claims = [
+                claim
+                for claim in claims
+                if any(
+                    str(evidence["path"]) == path
+                    for evidence in claim.get("evidence", [])
+                )
+            ]
+            path_text = " ".join(
+                str(claim.get("claim") or "") for claim in matching_claims
+            )
+            pattern = str(summary["decision_pattern"])
+            if pattern.casefold() not in path_text.casefold():
+                raise ValueError(
+                    f"Cee opinion must state {path} decision_pattern={pattern}"
+                )
+            submission_count = int(summary["submission_count"])
+            if not re.search(
+                rf"(?<!\d){submission_count}(?!\d)"
+                rf"(?:\s+[\w-]+){{0,5}}\s+(?:submissions?|picks?)\b",
+                path_text,
+                re.IGNORECASE,
+            ):
+                raise ValueError(
+                    f"Cee opinion must state {path} "
+                    f"submission_count={submission_count}"
+                )
         calibration = schedule_input["nfl_calibration"]
-        for path, summary in (
+        calibration_views = [
             ("nfl_calibration.overall", calibration["overall"]),
             (
                 "nfl_calibration.matching_consistency",
@@ -2796,7 +2836,19 @@ def validate_opinion(
                 "nfl_calibration.matching_season_gap",
                 calibration["matching_season_gap"],
             ),
-        ):
+            (
+                "nfl_calibration.matching_decision_pattern",
+                calibration["matching_decision_pattern"],
+            ),
+        ]
+        if spread_submission is not None:
+            calibration_views.append(
+                (
+                    "nfl_calibration.matching_spread_decision_pattern",
+                    calibration["matching_spread_decision_pattern"],
+                )
+            )
+        for path, summary in calibration_views:
             matching_claims = [
                 claim
                 for claim in claims

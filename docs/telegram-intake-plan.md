@@ -549,29 +549,41 @@ a +2 total gap. No resolved AK NFL calibration observations exist yet; the
 matching WNBA side prior is 4-2, while the total maps to the WNBA 0–<6 band
 that finished Under in 3/4 fresh games.
 
-### Implemented locally — 2026-09-08: Cee expert v2
+### Implemented locally — 2026-09-09: Cee expert v3
 
 The Cee Expert is a separate human-interpretation voice rather than an AK
-variant. It produces a side-only opinion from Cee's latest full-game moneyline
-pick and, when available, latest full-game spread pick. It treats the
-moneyline as the outright-winner position and the spread as the expected-cover
-position that informs the projected margin.
+variant. It produces a side-only opinion from Cee's final full-game moneyline
+pick and, when available, final full-game spread pick. It treats the moneyline
+as the outright-winner position and the spread as the expected-cover position
+that informs the projected margin.
 
 - The input is whitelisted and hash-bound. Each market carries its exact
-  selected side, rationale, submission-time market snapshot, and separately
-  time-frozen season predictions. If both team projections did not yet exist
-  when the spread was submitted, that context is explicitly marked
+  final selected side, rationale, submission-time market snapshot, and
+  separately time-frozen season predictions. If both team projections did not
+  yet exist when the spread was submitted, that context is explicitly marked
   unavailable rather than dropping the spread or blocking the expert.
+- Every eligible pre-kickoff moneyline and spread revision is retained in
+  chronological order under `decision_history`. Each market is classified as
+  `initial_only`, `reaffirmed` (multiple submissions with no side change), or
+  `changed` (at least one side transition, including a later change back).
+  Counts, initial/final sides, exact rationales, and opaque submission
+  references are supplied so the agent can distinguish a late reconsideration
+  from repeated conviction without treating either pattern as inherently
+  predictive.
 - A deterministic `market_relationship` labels the positions `same_side`,
   `split_compatible`, `split_conflicting`, or `moneyline_only`. A favorite
   moneyline plus an underdog spread is compatible; an underdog moneyline plus
   the favorite's negative spread is conflicting because both cannot win.
 - Rationale premises such as injuries or roster strength remain attributed to
   Cee and are never presented as independently verified facts.
-- Calibration uses only resolved, pre-kickoff Cee NFL moneyline picks. It
-  reports the overall record plus matching season-order consistency and
-  season-win-gap buckets. It is explicitly not an ATS record, and there is no
-  cross-sport prior.
+- Calibration uses only resolved, pre-kickoff Cee NFL moneyline picks and
+  counts each historical game once using its final eligible submission. It
+  reports the overall record plus matching season-order consistency,
+  season-win-gap, and moneyline decision-pattern buckets. This measures whether
+  prior initial, reaffirmed, or changed final moneyline decisions won
+  outright. When a current spread exists, a separate matching spread
+  decision-pattern bucket grades historical final spread revisions ATS at
+  their submitted lines. There is no cross-sport prior.
 - Zero resolved calibration games cap confidence at two stars; one or two cap
   it at three.
 - The expert uses output schema v3, participates only in the God Expert's side
