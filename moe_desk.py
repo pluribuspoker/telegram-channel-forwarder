@@ -1312,8 +1312,14 @@ def render_lock_warning(desk: GameDesk, *, now: datetime) -> str:
 
 
 def render_scores_notice(text: str) -> str:
-    """The grading digest is aligned plain text; keep the columns."""
-    return f"<pre>{_esc(text)}</pre>"
+    """Proportional text with a bold first line — never <pre>.
+
+    The digest is phone-width prose lines now; the aligned-columns era
+    rendered as <pre>, which a mobile bubble (~24 monospace chars) wrapped
+    mid-number into soup (operator-reported, 2026-09-10).
+    """
+    head, sep, rest = _esc(text).partition("\n")
+    return f"<b>{head}</b>{sep}{rest}"
 
 
 # --------------------------------------------------------------------------

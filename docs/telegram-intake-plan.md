@@ -1762,16 +1762,27 @@ Prototype issue log:
   a game by days, hence daily rather than game days only; an idle run is
   four reads and an exit. `Persistent=true`, `TimeoutStartSec=1200`
   (two `_call_with_retry`-wrapped Sheets calls at ~6 min worst case).
-- `--notify` DMs the operator through the watchdog bot
-  (`send_watchdog_dm`, the judge runner's helper) only when rows were
-  appended: the season header with the ledger delta, the finals those
-  rows cover (deduped, capped at 20), and one scoreboard line per expert
-  (`notification_text`, kept under Telegram's 4096 characters). It is a
-  no-op without `--write` or without new rows. A failed DM after a
-  successful append exits non-zero so the healthcheck `/fail` ping
-  carries the log tail — the append never repeats, so the DM is the
-  operator's only signal. `MOE_GRADE_HEALTHCHECK_URL` in `.env`;
-  `ping_hc` no-ops unset.
+- `--notify` posts the digest (Scores topic when configured, else the
+  watchdog DM) only when rows were appended: the season header with the
+  ledger delta, then one block per graded game (ledger order, capped at
+  20) — the final score, the closing spread/total the picks were graded
+  against (`closing_market` over the snapshots), and one line per expert
+  spelling out its projected score, the side and line of its ATS/O-U
+  grades with ✅/❌/♻️ results, and its actual bet legs with CLV (or an
+  explicit `bet: PASS` when its declared picks graded no leg; only the
+  latest row shows for an expert the arms re-graded per committee) — then
+  the season scoreboard, one compact `expert · n · B · ats · ou` line
+  each (2026-09-10, operator-requested redesign: the old aligned columns
+  wrapped mid-number inside a mobile `<pre>` bubble, and the digest named
+  neither the closing lines nor any pick's side; `render_scores_notice`
+  now sends proportional text, bold first line, never `<pre>`). When the
+  full text would pass Telegram's 4096-character cap, trailing game
+  blocks degrade to their bare score-header line before anything is
+  truncated (`notification_text`). It is a no-op without `--write` or
+  without new rows. A failed delivery after a successful append exits
+  non-zero so the healthcheck `/fail` ping carries the log tail — the
+  append never repeats, so the digest is the operator's only signal.
+  `MOE_GRADE_HEALTHCHECK_URL` in `.env`; `ping_hc` no-ops unset.
 - The judge runner recomputes the scoreboard live from finals and
   snapshots for every input, so this ledger feeds humans and the
   disagreement report, never the Hedge weights or voice selection.

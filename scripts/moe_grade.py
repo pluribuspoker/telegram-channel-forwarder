@@ -9,11 +9,14 @@ with its standard error, the leg agreement rate, and the disagreement
 record. With --write, appends one row per graded opinion to the append-only
 ``moe_grades`` tab, then one ``mean_of_arms`` row per paired game (the
 bake-off's free third row: a ledger row, never an expert), skipping opinion
-ids already present. With --notify as well, posts the digest to the desk
-group's Scores topic when one is configured (moe_desk.py), else DMs the
-operator through the watchdog bot, only when rows were appended (the run
-``moe-grade.timer`` makes daily); a digest that reaches neither after a
-successful append exits non-zero so the healthcheck alerts.
+ids already present. With --notify as well, posts the digest — per game:
+the final, the closing spread/total the picks were graded against, and
+each expert's graded side, line, and bet legs with ✅/❌/♻️ results, then
+the season scoreboard — to the desk group's Scores topic when one is
+configured (moe_desk.py), else DMs the operator through the watchdog bot,
+only when rows were appended (the run ``moe-grade.timer`` makes daily); a
+digest that reaches neither after a successful append exits non-zero so
+the healthcheck alerts.
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ from moe_god import (
     aggregator_policy,
     arm_pairs,
     build_scoreboard,
+    closing_market,
     disagreement_report,
     format_disagreement_report,
     grade_all,
@@ -77,23 +81,137 @@ def deliver_notification(text: str) -> bool:
 NOTIFY_MAX_CHARS = 4000
 NOTIFY_MAX_GAMES = 20
 
+# The pipeline's verdict emojis (VERDICT_EMOJI in common.py keys on
+# WIN/LOSS/PUSH; the grade ledger stores W/L/P).
+_RESULT_EMOJI = {"W": "✅", "L": "❌", "P": "♻️"}
+
+
+def _nick(team: str) -> str:
+    """'Seattle Seahawks' → 'Seahawks'. NFL nicknames are one word."""
+    return str(team or "").rsplit(" ", 1)[-1]
+
+
+def _num(value) -> float | None:
+    """A sheet cell as a float, or None — cells arrive as '', str, int, float."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
 
 def _record_line(expert_id: str, record: dict) -> str:
-    ats = record["ats"]
-    ou = record["ou"]
-    legs = record["legs"]
-    brier = "—" if record["brier"] is None else f"{record['brier']:.4f}"
-    clv = (
-        "—"
-        if record["clv_points_mean"] is None
-        else f"{record['clv_points_mean']:+.2f} over {record['clv_legs']}"
-    )
-    return (
-        f"{expert_id:<12} n={record['resolved']:<3} brier={brier:<7} "
-        f"ats={ats['w']}-{ats['l']}-{ats['p']:<3} "
-        f"ou={ou['w']}-{ou['l']}-{ou['p']:<3} "
-        f"legs={legs['w']}-{legs['l']}-{legs['p']:<3} clv={clv}"
-    )
+    """One season-to-date line per expert, phone-width (no aligned columns)."""
+    parts = [f"n{record['resolved']}"]
+    if record["brier"] is not None:
+        parts.append(f"B {record['brier']:.4f}")
+    ats, ou, legs = record["ats"], record["ou"], record["legs"]
+    parts.append(f"ats {ats['w']}-{ats['l']}-{ats['p']}")
+    parts.append(f"ou {ou['w']}-{ou['l']}-{ou['p']}")
+    if any(legs.values()):
+        parts.append(f"legs {legs['w']}-{legs['l']}-{legs['p']}")
+    if record["clv_points_mean"] is not None:
+        parts.append(f"clv {record['clv_points_mean']:+.2f}/{record['clv_legs']}")
+    return f"{expert_id} · " + " · ".join(parts)
+
+
+def _passed_pick(value) -> bool:
+    """True when a persisted pick json explicitly declares selection PASS."""
+    if value in (None, ""):
+        return False
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return False
+    return isinstance(parsed, dict) and str(parsed.get("selection")) == "PASS"
+
+
+def _bet_line(row: dict, opinion: dict) -> str | None:
+    """'↳ bet: Seahawks -3 ♻️ (clv +0)' from the row's graded legs.
+
+    Legs are the actual policy bets (the God arms, leg-bearing voices like
+    AK); a row whose opinion declared picks but graded no leg bet nothing —
+    that PASS is worth a line, silence is not.
+    """
+    legs: list[str] = []
+    side_sel = str(row.get("side_selection") or "")
+    if side_sel:
+        line = _num(row.get("side_line"))
+        part = _nick(side_sel) + (f" {line:+g}" if line is not None else "")
+        part += f" {_RESULT_EMOJI.get(str(row.get('side_result') or ''), '')}"
+        clv = _num(row.get("side_clv_points"))
+        if clv is not None:
+            part += f" (clv {clv:+.1f})"
+        legs.append(part.strip())
+    total_sel = str(row.get("total_selection") or "")
+    if total_sel:
+        line = _num(row.get("total_line"))
+        label = {"Over": "O", "Under": "U"}.get(total_sel, total_sel)
+        part = label + (f" {line:g}" if line is not None else "")
+        part += f" {_RESULT_EMOJI.get(str(row.get('total_result') or ''), '')}"
+        clv = _num(row.get("total_clv_points"))
+        if clv is not None:
+            part += f" (clv {clv:+.1f})"
+        legs.append(part.strip())
+    if legs:
+        return "↳ bet: " + " · ".join(legs)
+    if _passed_pick(opinion.get("side_pick_json")) or _passed_pick(
+        opinion.get("total_pick_json")
+    ):
+        return "↳ bet: PASS"
+    return None
+
+
+def _expert_lines(
+    row: dict, opinion: dict, closing: dict | None, away: str, home: str
+) -> list[str]:
+    """One stance line per graded row — the side and line it was graded on.
+
+    ATS is the predicted winner taken at that side's closing spread; O/U is
+    the projected-total lean against the closing total (the exact grading
+    rules in moe_god.grade_opinion_row) — so what reads '{expert} 20-24:
+    Seahawks -3 ♻️ · U 44.5 ✅ · B 0.1444' IS the grade, spelled out.
+    """
+    parts: list[str] = []
+    winner = str(opinion.get("predicted_winner") or "")
+    ats = str(row.get("ats_at_close") or "")
+    if ats:
+        spread = None
+        if closing is not None and winner in (away, home):
+            spread = _num(
+                closing.get("home_spread")
+                if winner == home
+                else closing.get("away_spread")
+            )
+        label = (
+            f"{_nick(winner)} {spread:+g}"
+            if spread is not None
+            else (_nick(winner) if winner else "ats")
+        )
+        parts.append(f"{label} {_RESULT_EMOJI.get(ats, ats)}")
+    ou = str(row.get("ou_at_close") or "")
+    if ou:
+        total = _num((closing or {}).get("total"))
+        away_proj = _num(opinion.get("predicted_away_score"))
+        home_proj = _num(opinion.get("predicted_home_score"))
+        lean = ""
+        if total is not None and away_proj is not None and home_proj is not None:
+            lean = "O" if away_proj + home_proj > total else "U"
+        label = f"{lean} {total:g}" if lean and total is not None else "o/u"
+        parts.append(f"{label} {_RESULT_EMOJI.get(ou, ou)}")
+    brier = _num(row.get("brier"))
+    if brier is not None:
+        parts.append(f"B {brier:.4f}")
+    proj = ""
+    away_proj = _num(opinion.get("predicted_away_score"))
+    home_proj = _num(opinion.get("predicted_home_score"))
+    if away_proj is not None and home_proj is not None:
+        proj = f" {away_proj:g}-{home_proj:g}"
+    head = f"{row['expert_id']}{proj}: " + (" · ".join(parts) if parts else "graded")
+    lines = [head]
+    bet = _bet_line(row, opinion)
+    if bet:
+        lines.append(bet)
+    return lines
 
 
 def notification_text(
@@ -102,53 +220,153 @@ def notification_text(
     scoreboard: dict,
     new_rows: list[dict],
     finals: list[dict] | None = None,
+    opinions: list[dict] | None = None,
+    snapshots: list[dict] | None = None,
 ) -> str:
-    """The watchdog DM for a run that appended rows.
+    """The grading digest for a run that appended rows.
 
-    Season header with the ledger delta, the finals those rows cover (in
-    ledger order, deduped, capped at NOTIFY_MAX_GAMES), then one scoreboard
-    line per expert — the same lines the terminal run prints. Always under
-    Telegram's message limit.
+    Season header with the ledger delta, then one block per graded game (in
+    ledger order, capped at NOTIFY_MAX_GAMES): the final, the closing spread
+    and total the picks were graded against, and one line per expert — its
+    projected score, the side and line of its ATS/O-U grades with ✅/❌/♻️
+    results, and its actual bet legs (or PASS) where it placed any. When a
+    game produced several rows for one expert (the arms re-run per
+    committee), only the latest shows. The season-to-date scoreboard closes
+    the message. Blocks degrade to bare header lines from the end when the
+    full text would pass Telegram's limit.
     """
+    opinions = list(opinions or [])
+    by_id = {str(op.get("opinion_id") or ""): op for op in opinions}
     mean_count = sum(1 for row in new_rows if row["expert_id"] == MEAN_OF_ARMS_ID)
     finals_by_event = {
         str(row.get("event_id")): row for row in (finals or [])
     }
-    games: list[str] = []
-    footnotes: list[str] = []
+
+    rows_by_event: dict[str, list[dict]] = {}
+    event_order: list[str] = []
     for row in new_rows:
-        final = finals_by_event.get(str(row.get("event_id")), {})
-        annotations = list(final.get("game_annotations") or [])
-        marker = "*" if annotations else ""
-        label = (
-            f"{row['away_team']} @ {row['home_team']}{marker} {row['final']}"
+        event_id = str(row.get("event_id"))
+        if event_id not in rows_by_event:
+            event_order.append(event_id)
+        rows_by_event.setdefault(event_id, []).append(row)
+
+    def _closing_for(event_id: str) -> dict | None:
+        if not snapshots:
+            return None
+        opinion = next(
+            (
+                op
+                for op in opinions
+                if str(op.get("event_id")) == event_id
+                and op.get("commence_time_utc")
+            ),
+            None,
         )
-        if label not in games:
-            games.append(label)
+        if opinion is None:
+            return None
+        try:
+            return closing_market(
+                event_id, str(opinion["commence_time_utc"]), snapshots
+            )
+        except Exception:
+            return None
+
+    def _latest_per_expert(rows: list[dict]) -> list[dict]:
+        best: dict[str, tuple[tuple[str, str], dict]] = {}
+        for row in rows:
+            opinion = by_id.get(str(row.get("opinion_id") or "")) or {}
+            key = (
+                str(opinion.get("generated_at_utc") or ""),
+                str(row.get("opinion_id") or ""),
+            )
+            expert_id = str(row.get("expert_id"))
+            if expert_id not in best or key > best[expert_id][0]:
+                best[expert_id] = (key, row)
+        return [
+            row
+            for _, row in sorted(
+                best.values(),
+                key=lambda item: (
+                    item[1]["expert_id"] == MEAN_OF_ARMS_ID,
+                    item[1]["expert_id"],
+                ),
+            )
+        ]
+
+    footnotes: list[str] = []
+    blocks: list[list[str]] = []
+    for event_id in event_order[:NOTIFY_MAX_GAMES]:
+        rows = rows_by_event[event_id]
+        final_ctx = finals_by_event.get(event_id, {})
+        annotations = list(final_ctx.get("game_annotations") or [])
         for annotation in annotations:
             note = f"* {annotation['summary']}"
             if note not in footnotes:
                 footnotes.append(note)
-    lines = [
-        f"pickbot: MOE grades, season {season}: "
-        f"{scoreboard['resolved_games']} resolved games, "
+        first = rows[0]
+        away, home = str(first["away_team"]), str(first["home_team"])
+        away_score, _, home_score = str(first.get("final") or "").partition("-")
+        marker = "*" if annotations else ""
+        header = (
+            f"🏈 {_nick(away)} {away_score} @ {_nick(home)} {home_score}{marker}"
+        )
+        week = first.get("week")
+        if week not in (None, ""):
+            header += f" · Week {week}"
+        closing = _closing_for(event_id)
+        home_spread = _num((closing or {}).get("home_spread"))
+        total = _num((closing or {}).get("total"))
+        close_parts = [
+            part
+            for part in (
+                f"{_nick(home)} {home_spread:+g}" if home_spread is not None else "",
+                f"total {total:g}" if total is not None else "",
+            )
+            if part
+        ]
+        block = [
+            header,
+            "close: " + (" · ".join(close_parts) if close_parts else "unavailable"),
+        ]
+        for row in _latest_per_expert(rows):
+            opinion = by_id.get(str(row.get("opinion_id") or "")) or {}
+            block.extend(_expert_lines(row, opinion, closing, away, home))
+        blocks.append(block)
+
+    header_lines = [
+        f"pickbot: MOE grades · season {season}",
+        f"{scoreboard['resolved_games']} resolved "
+        f"game{'s' if scoreboard['resolved_games'] != 1 else ''} · "
         f"{scoreboard['graded_opinions']} graded opinions",
         f"+{len(new_rows) - mean_count} opinion rows, +{mean_count} mean-of-arms "
-        f"appended to {GRADES_TAB}",
-        "",
+        f"→ {GRADES_TAB}",
     ]
-    lines.extend(games[:NOTIFY_MAX_GAMES])
-    if len(games) > NOTIFY_MAX_GAMES:
-        lines.append(f"+{len(games) - NOTIFY_MAX_GAMES} more games")
-    if footnotes:
-        lines.extend(["", *footnotes])
-    lines.append("")
-    for expert_id, record in sorted(scoreboard["by_expert"].items()):
-        lines.append(_record_line(expert_id, record))
-    text = "\n".join(lines)
-    if len(text) > NOTIFY_MAX_CHARS:
-        text = text[: NOTIFY_MAX_CHARS - 1] + "…"
-    return text
+    extra_games = len(event_order) - len(blocks)
+    season_lines = ["season so far:"] + [
+        _record_line(expert_id, record)
+        for expert_id, record in sorted(scoreboard["by_expert"].items())
+    ]
+
+    def _assemble(detailed: int) -> str:
+        lines = list(header_lines)
+        for i, block in enumerate(blocks):
+            lines.append("")
+            lines.extend(block if i < detailed else block[:1])
+        if extra_games:
+            lines.append(f"+{extra_games} more games")
+        if footnotes:
+            lines.extend(["", *footnotes])
+        lines.extend(["", *season_lines])
+        return "\n".join(lines)
+
+    # Full detail if it fits; otherwise degrade trailing games to their bare
+    # score-header line (never drop a game), and hard-truncate only as the
+    # last resort.
+    for detailed in range(len(blocks), -1, -1):
+        text = _assemble(detailed)
+        if len(text) <= NOTIFY_MAX_CHARS:
+            return text
+    return text[: NOTIFY_MAX_CHARS - 1] + "…"
 
 
 def main() -> None:
@@ -302,6 +520,8 @@ def main() -> None:
             scoreboard=scoreboard,
             new_rows=new_rows,
             finals=finals,
+            opinions=approved,
+            snapshots=snapshots,
         )
     ):
         # The append succeeded and will not repeat (opinion-id dedupe), so a

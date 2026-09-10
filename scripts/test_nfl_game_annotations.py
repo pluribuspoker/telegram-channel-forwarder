@@ -154,7 +154,7 @@ class GameAnnotationTest(unittest.TestCase):
         )
 
         self.assertIn(
-            "New England Patriots @ Seattle Seahawks* 20-23",
+            "🏈 Patriots 20 @ Seahawks 23*",
             text,
         )
         self.assertIn(f"* {_annotation()['summary']}", text)

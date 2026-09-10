@@ -1229,7 +1229,10 @@ class BotApiTests(unittest.TestCase):
         with self.assertRaisesRegex(DeskApiError, "down"):
             BotApi("tok", opener=opener).get_me()
 
-    def test_scores_notice_posts_pre_block_or_declines(self) -> None:
+    def test_scores_notice_posts_proportional_text_or_declines(self) -> None:
+        # Never <pre>: the digest is phone-width prose; a mobile <pre> bubble
+        # wrapped the old aligned columns mid-number (2026-09-10). The first
+        # line (the "pickbot:" header) is bold, the rest escaped as-is.
         api = FakeApi()
         env = {
             "INTAKE_BOT_TOKEN": "t",
@@ -1238,9 +1241,9 @@ class BotApiTests(unittest.TestCase):
             "MOE_DESK_PICKS_TOPIC": "2",
             "MOE_DESK_SCORES_TOPIC": "3",
         }
-        self.assertTrue(post_scores_notice("a <b> c", environ=env, api=api))
+        self.assertTrue(post_scores_notice("a <b> c\nline 2", environ=env, api=api))
         self.assertEqual(api.sent[0]["topic"], 3)
-        self.assertEqual(api.sent[0]["text"], "<pre>a &lt;b&gt; c</pre>")
+        self.assertEqual(api.sent[0]["text"], "<b>a &lt;b&gt; c</b>\nline 2")
         self.assertTrue(api.sent[0]["silent"])
         self.assertFalse(post_scores_notice("x", environ={**env, "MOE_DESK_SCORES_TOPIC": ""}, api=api))
         self.assertFalse(post_scores_notice("x", environ={}, api=api))
