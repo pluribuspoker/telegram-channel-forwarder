@@ -1758,6 +1758,46 @@ other values keep their integer text). Stored hashes are unchanged because
 generation always hashed the empty spelling. Test:
 `ApprovalHashNormalizationTests` in `scripts/test_moe.py`.
 
+### Implemented — 2026-09-10: per-voice generation-time board in the judge request
+
+Decision (SS + AK, via the Claude channel): voices should NOT regenerate as
+lines move — the market's job stays with God, which already re-runs on every
+committee change. Instead the judge is told what each voice was looking at,
+so it can discount a stale market-anchored voice itself. Regeneration on
+material input change (weekly-extreme set, spread-favorite flip, AK bucket
+change) stays a possible step 2 only if stale anchors show up as a real
+problem in judge reasons.
+
+- `moe_god.market_at_generation(event_id, generated_at_utc, snapshots)`:
+  the latest `nfl_line_snapshots` row at or before the voice row's
+  `generated_at_utc`, decoded to the full-game `MARKET_FIELDS` plus
+  `captured_at`. Like `closing_market` it does not filter on bookmaker.
+  None when the row has no generation time or no snapshot precedes it — a
+  missing board never discounts a voice (fail open).
+- `build_aggregator_input` stamps every voice with `market_at_generation`
+  and `movement_since_generation` (`movement_since_open(board, latest)`,
+  the exact shape of the market block's own movement). The keys are always
+  present on new inputs, None when unavailable. `committee_key` is
+  untouched (opinion ids + latest lines only), so the deploy itself
+  triggers zero judge re-runs and the runner's dedupe is unchanged.
+- `build_judge_request` copies both fields onto the masked voice only when
+  the input carries them — a request derived from a legacy input stays
+  byte-identical (same rule as the WP5 `overlap`/`markets`/`hedge_weight`
+  fields; `test_week1_requests_derive_from_the_full_input` still locks it).
+- Judge prompt bumped to `god_judge/v3.md` (registry version 3 /
+  prompt_version 3): describes the two fields, points the existing "line
+  movement the voices could not see" reason at `movement_since_generation`,
+  and adds the lens rule — a market-reading lens argued from its
+  generation-time board and may be describing a line that no longer
+  exists; a "no lines" lens is never stale for movement reasons.
+  `god_rules` stays at v2: the deterministic algorithm ignores the new
+  fields and its spec names no exhaustive voice-field list.
+- Tests: `GenerationBoardTests` in `scripts/test_moe_god.py` (right
+  snapshot per voice, movement arithmetic, fail-open, committee-key
+  stability, label-copy, legacy request without the keys); registry and
+  end-to-end pins moved to v3. Full twelve-module suite green on a VPS
+  scratch clone (408 tests).
+
 ### Implemented locally — 2026-09-04: authoritative NFL week metadata
 
 `nfl_games.week` previously remained blank because `new_game_row()` hardcoded

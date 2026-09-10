@@ -198,9 +198,9 @@ experts:
   god_judge:
     name: God Expert (Judge)
     mode: aggregator_judge
-    version: 2
-    prompt_version: 2
-    prompt: prompts/god_judge/v2.md
+    version: 3
+    prompt_version: 3
+    prompt: prompts/god_judge/v3.md
     input_profile: aggregator
     output_schema_version: 8
     default_model: claude-fable-5-1

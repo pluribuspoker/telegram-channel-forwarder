@@ -820,6 +820,38 @@ def closing_market(
     )
 
 
+def market_at_generation(
+    event_id: str,
+    generated_at_utc: str,
+    snapshots: Iterable[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Latest full-game snapshot at or before a voice's generation time.
+
+    The board as it stood when the voice formed its opinion, so the judge
+    can see exactly the movement each voice could not. Like
+    ``closing_market`` this does not filter on bookmaker. None when the
+    row has no generation time or no snapshot precedes it — a missing
+    board never discounts a voice (fail open).
+    """
+    if not str(generated_at_utc or "").strip():
+        return None
+    generated = _parse_time(generated_at_utc)
+    eligible = [
+        row
+        for row in snapshots
+        if str(row.get("event_id")) == str(event_id)
+        and _parse_time(row["captured_at"]) <= generated
+    ]
+    if not eligible:
+        return None
+    snapshot = max(eligible, key=lambda row: _parse_time(row["captured_at"]))
+    decoded = _market_from_snapshot(snapshot)
+    return {
+        **{field: decoded.get(field) for field in MARKET_FIELDS},
+        "captured_at": str(snapshot["captured_at"]),
+    }
+
+
 # --------------------------------------------------------------------------
 # Voices
 
@@ -2141,6 +2173,16 @@ def build_aggregator_input(
                 ),
             )
         )
+    for voice in voices:
+        board = market_at_generation(
+            event_id, voice["generated_at_utc"], snapshots
+        )
+        voice["market_at_generation"] = board
+        voice["movement_since_generation"] = (
+            None
+            if board is None
+            else movement_since_open(board, market["latest"])
+        )
     weighting = hedge_weights(
         scoreboard, [voice["voice_id"] for voice in voices], policy
     )
@@ -2206,6 +2248,12 @@ def build_judge_request(input_payload: dict[str, Any]) -> dict[str, Any]:
             extra["markets"] = list(voice["markets"])
         if hedge_weights is not None:
             extra["hedge_weight"] = hedge_weights[voice["voice_id"]]
+        # Generation-time board, present only on inputs that carry it.
+        if "market_at_generation" in voice:
+            extra["market_at_generation"] = voice["market_at_generation"]
+            extra["movement_since_generation"] = voice[
+                "movement_since_generation"
+            ]
         masked_voices.append(
             {
                 **extra,

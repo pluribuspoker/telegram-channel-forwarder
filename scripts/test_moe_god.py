@@ -61,6 +61,7 @@ from moe_god import (
     hedge_weights,
     ledger_row,
     load_registry,
+    market_at_generation,
     mean_of_arms_results,
     movement_since_open,
     normalize_aggregator_opinion,
@@ -802,6 +803,104 @@ class InputTests(unittest.TestCase):
         self.assertTrue(all(len(item) <= self.policy["factor_chars"] for item in factors["items"]))
 
 
+class GenerationBoardTests(unittest.TestCase):
+    """Per-voice generation-time board and the movement each voice missed."""
+
+    OLD_BOARD = {
+        "away": "4,-110,175|nodata,nodata,nodata|nodata,nodata,nodata",
+        "home": "-4,-110,-200|nodata,nodata,nodata|nodata,nodata,nodata",
+        "totals": "43.5,-110,-110|nodata,nodata,nodata|nodata,nodata,nodata",
+    }
+    # Matches _game()'s latest columns, so movement since it is zero.
+    LATEST_BOARD = {
+        "away": "3.5,-120,158|nodata,nodata,nodata|nodata,nodata,nodata",
+        "home": "-3.5,100,-181|nodata,nodata,nodata|nodata,nodata,nodata",
+        "totals": "44.5,-105,-115|nodata,nodata,nodata|nodata,nodata,nodata",
+    }
+
+    def setUp(self) -> None:
+        self.registry = load_registry()
+        self.policy = aggregator_policy(self.registry)
+        self.snapshots = [
+            _snapshot(EVENT_ID, "2026-09-04T12:00:00Z", **self.OLD_BOARD),
+            _snapshot(EVENT_ID, "2026-09-06T12:00:00Z", **self.LATEST_BOARD),
+            _snapshot("other-event", "2026-09-01T12:00:00Z", **self.OLD_BOARD),
+        ]
+        self.rows = [
+            _opinion("schedule", model="claude-opus-4-8", probability=0.66, margin=6, away_score=20, home_score=26),
+            _opinion("divisional", model="claude-opus-4-8", probability=0.70, margin=5, away_score=19, home_score=24),
+            # Generated after the second snapshot; the other voices before it.
+            _opinion(
+                "win_total",
+                model="claude-opus-4-8",
+                probability=0.57,
+                margin=1,
+                away_score=23,
+                home_score=24,
+                generated_at="2026-09-06T13:00:00+00:00",
+            ),
+            _opinion("ak", model="claude-opus-4-8", probability=0.62, margin=6, away_score=21, home_score=27),
+        ]
+        self.payload = build_aggregator_input(
+            _game(), approved_opinions=self.rows, finals=[], snapshots=self.snapshots, registry=self.registry, policy=self.policy
+        )
+        self.voices = {voice["voice_id"]: voice for voice in self.payload["voices"]}
+
+    def test_each_voice_gets_the_board_at_its_generation_time(self) -> None:
+        early = self.voices["schedule"]["market_at_generation"]
+        self.assertEqual(early["captured_at"], "2026-09-04T12:00:00Z")
+        self.assertEqual(early["home_spread"], -4.0)
+        self.assertEqual(early["total"], 43.5)
+        self.assertEqual(early["home_moneyline"], -200.0)
+        late = self.voices["win_total"]["market_at_generation"]
+        self.assertEqual(late["captured_at"], "2026-09-06T12:00:00Z")
+        self.assertEqual(late["home_spread"], -3.5)
+
+    def test_movement_since_generation_is_latest_minus_board(self) -> None:
+        moved = self.voices["schedule"]["movement_since_generation"]
+        self.assertEqual(moved["home_spread"], 0.5)
+        self.assertEqual(moved["away_spread"], -0.5)
+        self.assertEqual(moved["total"], 1.0)
+        self.assertEqual(moved["home_moneyline"], 19.0)
+        settled = self.voices["win_total"]["movement_since_generation"]
+        self.assertEqual(settled["home_spread"], 0.0)
+        self.assertEqual(settled["total"], 0.0)
+
+    def test_missing_board_fails_open(self) -> None:
+        payload = build_aggregator_input(
+            _game(), approved_opinions=self.rows, finals=[], snapshots=[self.snapshots[2]], registry=self.registry, policy=self.policy
+        )
+        for voice in payload["voices"]:
+            self.assertIsNone(voice["market_at_generation"])
+            self.assertIsNone(voice["movement_since_generation"])
+        self.assertIsNone(market_at_generation(EVENT_ID, "", self.snapshots))
+        self.assertIsNone(market_at_generation(EVENT_ID, "2026-09-01T00:00:00Z", self.snapshots))
+
+    def test_committee_key_ignores_the_generation_board(self) -> None:
+        bare = build_aggregator_input(
+            _game(), approved_opinions=self.rows, finals=[], snapshots=[], registry=self.registry, policy=self.policy
+        )
+        self.assertEqual(bare["committee_key"], self.payload["committee_key"])
+
+    def test_judge_request_carries_the_board_by_label(self) -> None:
+        request = build_judge_request(self.payload)
+        by_label = {voice["label"]: voice for voice in request["voices"]}
+        for label, voice_id in self.payload["judge_view"]["labels"].items():
+            full = self.voices[voice_id]
+            self.assertEqual(by_label[label]["market_at_generation"], full["market_at_generation"])
+            self.assertEqual(by_label[label]["movement_since_generation"], full["movement_since_generation"])
+
+    def test_legacy_input_request_carries_no_board(self) -> None:
+        stripped = json.loads(json.dumps(self.payload))
+        for voice in stripped["voices"]:
+            del voice["market_at_generation"]
+            del voice["movement_since_generation"]
+        request = build_judge_request(stripped)
+        for voice in request["voices"]:
+            self.assertNotIn("market_at_generation", voice)
+            self.assertNotIn("movement_since_generation", voice)
+
+
 class RulesArmTests(unittest.TestCase):
     def test_rules_response_normalizes_and_validates(self) -> None:
         registry = load_registry()
@@ -1055,7 +1154,7 @@ class GenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["generation_backend"], "agent_runtime")
         self.assertEqual(row["generation_effort"], "max")
         self.assertEqual(captured["model"], "claude-fable-5-1")
-        self.assertIn("God Expert Judge v2", captured["system"])
+        self.assertIn("God Expert Judge v3", captured["system"])
         persisted_input = json.loads(row["input_json"])
         self.assertEqual(persisted_input["input_profile"], JUDGE_REQUEST_PROFILE)
         self.assertEqual(persisted_input, request)
@@ -1471,9 +1570,11 @@ class RegistryTests(unittest.TestCase):
         self.assertIn("Evidence overlap", rules["prompt_text"])
         self.assertIn("adverse move", rules["prompt_text"])
         self.assertEqual(judge["mode"], "aggregator_judge")
-        self.assertEqual((judge["version"], judge["prompt_version"]), (2, 2))
-        self.assertEqual(judge["prompt_path"], "moe/prompts/god_judge/v2.md")
-        self.assertIn("God Expert Judge v2", judge["prompt_text"])
+        # v3 of the judge prompt: the per-voice generation-time board.
+        self.assertEqual((judge["version"], judge["prompt_version"]), (3, 3))
+        self.assertEqual(judge["prompt_path"], "moe/prompts/god_judge/v3.md")
+        self.assertIn("God Expert Judge v3", judge["prompt_text"])
+        self.assertIn("`market_at_generation`", judge["prompt_text"])
         self.assertIn("`overlap`", judge["prompt_text"])
         self.assertEqual(judge["default_model"], "claude-fable-5-1")
         self.assertEqual(judge["allowed_models"], ["claude-fable-5-1"])
