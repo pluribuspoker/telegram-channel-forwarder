@@ -141,6 +141,57 @@ class MemoryStore:
 
 
 class CelebrityInputTest(unittest.TestCase):
+    def test_standard_pick_uses_user_line_and_retains_betonline(self) -> None:
+        row = build_celebrity_rows(
+            submission={
+                "submission_id": "anthony-1",
+                "submitted_at_utc": "2026-09-09T18:00:00+00:00",
+                "event_id": EVENT_ID,
+                "season": 2026,
+                "week": 1,
+                "commence_time_utc": _game()["commence_time_utc"],
+                "away_team": _game()["away_team"],
+                "home_team": _game()["home_team"],
+                "period": "game",
+                "market": "spread",
+                "side": "New England Patriots",
+                "latest_selected_line": 3,
+                "latest_selected_price": -105,
+                "user_selected_line": 3.5,
+                "user_selected_price": -110,
+                "user_terms_source": "entered",
+            },
+            names=["Anthony Dabbundo"],
+        )[0]
+
+        self.assertEqual(row["line"], 3.5)
+        self.assertEqual(row["price"], -110)
+        self.assertEqual(row["betonline_line"], 3)
+        self.assertEqual(row["betonline_price"], -105)
+        self.assertEqual(row["line_source"], "entered")
+
+    def test_entered_line_does_not_inherit_unaccepted_betonline_price(
+        self,
+    ) -> None:
+        row = build_celebrity_rows(
+            submission={
+                "submission_id": "anthony-2",
+                "period": "game",
+                "market": "spread",
+                "side": "New England Patriots",
+                "latest_selected_line": 3,
+                "latest_selected_price": -105,
+                "user_selected_line": 3.5,
+                "user_selected_price": "nodata",
+                "user_terms_source": "entered",
+            },
+            names=["Anthony Dabbundo"],
+        )[0]
+
+        self.assertEqual(row["line"], 3.5)
+        self.assertEqual(row["price"], "nodata")
+        self.assertEqual(row["betonline_price"], -105)
+
     def test_tracks_props_and_side_distribution(self) -> None:
         payload = build_celebrity_input(
             _game(),

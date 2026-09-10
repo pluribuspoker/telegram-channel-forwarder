@@ -32,6 +32,7 @@ from intake_bot import (
     custom_market_buttons,
     custom_pick_prompt,
     edit_callback,
+    ensure_lean_worksheet,
     game_browser,
     game_celebrity_picker,
     game_detail,
@@ -44,6 +45,7 @@ from intake_bot import (
     market_side_summary,
     page_games,
     period_market_summary,
+    parse_user_terms,
     requires_ak_projection,
     select_games,
     selected_market_context,
@@ -58,6 +60,7 @@ from intake_bot import (
 )
 from nfl_lines import (
     LEAN_HEADERS,
+    LEAN_HEADERS_V1,
     LATEST_AWAY_COLUMN,
     LATEST_HOME_COLUMN,
     LATEST_TOTALS_COLUMN,
@@ -787,6 +790,50 @@ class GameSelectionTest(unittest.TestCase):
         self.assertEqual(row["opening_selected_price"], -110)
         self.assertEqual(row["lean_text"], "Over, but only at 40.5 or better.")
         self.assertEqual(row["prediction_parse_status"], "not_applicable")
+        self.assertEqual(row["user_selected_line"], "nodata")
+        self.assertEqual(row["user_terms_source"], "")
+
+    def test_lean_row_stores_user_and_betonline_terms_separately(self):
+        row = build_lean_row(
+            submitted_at=NOW,
+            user_id=123,
+            username="guesser",
+            first_name="NFL",
+            last_name="Fan",
+            message_id=790,
+            game=_game("miami", 1),
+            period="game",
+            market="spread",
+            side="away",
+            lean_text="Dolphins keep it close.",
+            user_selected_line=4.5,
+            user_selected_price=-115,
+            user_terms_source="entered",
+        )
+
+        self.assertEqual(row["latest_selected_line"], 3.5)
+        self.assertEqual(row["latest_selected_price"], -105)
+        self.assertEqual(row["user_selected_line"], 4.5)
+        self.assertEqual(row["user_selected_price"], -115)
+        self.assertEqual(row["user_terms_source"], "entered")
+
+    def test_parse_user_terms_by_market(self):
+        self.assertEqual(
+            parse_user_terms("Patriots +3.5 (-110)", market="spread"),
+            (3.5, -110),
+        )
+        self.assertEqual(
+            parse_user_terms("44.5 -105", market="total"),
+            (44.5, -105),
+        )
+        self.assertEqual(
+            parse_user_terms("Seahawks ML -175", market="moneyline"),
+            (None, -175),
+        )
+
+    def test_parse_user_terms_rejects_ambiguous_lines(self):
+        with self.assertRaisesRegex(ValueError, "one wager line"):
+            parse_user_terms("+3.5 or +4.5", market="spread")
 
     def test_ak_lean_row_stores_normalized_score(self):
         row = build_lean_row(
@@ -831,6 +878,9 @@ class GameSelectionTest(unittest.TestCase):
             "side": "away",
             "prompt_msg_id": 456,
             "celebrity": {"id": -123, "name": "LeBron James"},
+            "user_selected_line": 4.5,
+            "user_selected_price": -115,
+            "user_terms_source": "entered",
         }
 
         status, submission = snapshot_lean_submission(
@@ -852,6 +902,7 @@ class GameSelectionTest(unittest.TestCase):
             submission["celebrity"],
             {"id": -123, "name": "LeBron James"},
         )
+        self.assertEqual(submission["user_selected_line"], 4.5)
 
     def test_ak_projection_required_only_for_own_submission(self):
         self.assertTrue(requires_ak_projection(123, "123", None))
@@ -1311,6 +1362,15 @@ class CelebrityPickTest(unittest.TestCase):
         self.assertIs(migrated, worksheet)
         self.assertEqual(worksheet.row_values(1), CELEBRITY_HEADERS)
         self.assertEqual(worksheet.resized_cols, len(CELEBRITY_HEADERS))
+
+    def test_current_lean_header_expands_with_user_terms(self):
+        worksheet = _FakeWorksheet([LEAN_HEADERS_V1])
+
+        migrated = ensure_lean_worksheet(_FakeSpreadsheet(worksheet))
+
+        self.assertIs(migrated, worksheet)
+        self.assertEqual(worksheet.row_values(1), LEAN_HEADERS)
+        self.assertEqual(worksheet.resized_cols, len(LEAN_HEADERS))
 
     def test_celebrity_user_id_is_stable_negative_and_distinct(self):
         # Same person (any case/spacing) -> one id; negative so it can never

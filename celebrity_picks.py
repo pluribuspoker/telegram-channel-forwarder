@@ -25,7 +25,7 @@ LEGACY_CELEBRITY_HEADERS = [
     "side",
     "celebrity_name",
 ]
-CELEBRITY_HEADERS = [
+CELEBRITY_HEADERS_V1 = [
     *LEGACY_CELEBRITY_HEADERS,
     "commence_time_utc",
     "pick_id",
@@ -38,6 +38,12 @@ CELEBRITY_HEADERS = [
     "price",
     "selection_text",
     "raw_pick_text",
+]
+CELEBRITY_HEADERS = [
+    *CELEBRITY_HEADERS_V1,
+    "betonline_line",
+    "betonline_price",
+    "line_source",
 ]
 CUSTOM_MARKET_FAMILIES = {
     "player_prop",
@@ -85,12 +91,39 @@ def _standard_pick_fields(submission: dict[str, Any]) -> dict[str, Any]:
     market = str(submission.get("market") or "")
     side = str(submission.get("side") or "")
     period = str(submission.get("period") or "")
-    line = submission.get("latest_selected_line", "")
-    if line in ("", "nodata", None):
+    explicit_source = str(
+        submission.get("user_terms_source")
+        or submission.get("line_source")
+        or ""
+    )
+    if explicit_source in {"entered", "betonline"}:
+        line = submission.get("user_selected_line", submission.get("line", ""))
+        price = submission.get(
+            "user_selected_price", submission.get("price", "")
+        )
+        if explicit_source == "betonline":
+            if line in ("", "nodata", None):
+                line = submission.get("latest_selected_line", "")
+            if price in ("", "nodata", None):
+                price = submission.get("latest_selected_price", "")
+    else:
         line = submission.get("line", "")
-    price = submission.get("latest_selected_price", "")
-    if price in ("", "nodata", None):
+        if line in ("", "nodata", None):
+            line = submission.get("latest_selected_line", "")
         price = submission.get("price", "")
+        if price in ("", "nodata", None):
+            price = submission.get("latest_selected_price", "")
+    betonline_line = submission.get(
+        "betonline_line",
+        submission.get("latest_selected_line", ""),
+    )
+    betonline_price = submission.get(
+        "betonline_price",
+        submission.get("latest_selected_price", ""),
+    )
+    line_source = explicit_source or (
+        "entered" if submission.get("line") not in ("", None) else ""
+    )
     if market in {"spread", "moneyline"}:
         market_family = "side"
         subject = "game"
@@ -123,6 +156,9 @@ def _standard_pick_fields(submission: dict[str, Any]) -> dict[str, Any]:
         "price": price,
         "selection_text": selection,
         "raw_pick_text": str(submission.get("raw_pick_text") or ""),
+        "betonline_line": betonline_line,
+        "betonline_price": betonline_price,
+        "line_source": line_source,
         "canonical_key": canonical_pick_key(
             period=period,
             market_family=market_family,

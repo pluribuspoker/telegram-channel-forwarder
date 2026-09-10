@@ -8,7 +8,7 @@ import unittest
 from types import SimpleNamespace
 
 from moe import _normalize_cited_claim, generate_opinion, load_expert
-from moe_cee import build_cee_input
+from moe_cee import _grade_spread_pick, build_cee_input
 from nfl_lines import (
     LATEST_AWAY_COLUMN,
     LATEST_HOME_COLUMN,
@@ -201,6 +201,39 @@ class MemoryStore:
 
 
 class CeeInputTest(unittest.TestCase):
+    def test_user_spread_line_overrides_betonline_for_relationship_and_grade(
+        self,
+    ) -> None:
+        spread = {
+            **_spread_lean(),
+            "user_selected_line": -2.5,
+            "user_selected_price": -115,
+            "user_terms_source": "entered",
+        }
+        payload = build_cee_input(
+            _game(),
+            _history(),
+            [_current_lean(), spread],
+            _predictions(),
+            cee_user_id=CEE_ID,
+        )
+
+        self.assertEqual(
+            payload["market_relationship"]["selected_spread_line"],
+            -2.5,
+        )
+        self.assertEqual(
+            payload["cee_submissions"]["spread"]["terms_source"],
+            "entered",
+        )
+        self.assertEqual(
+            _grade_spread_pick(
+                spread,
+                {"away_score": 20, "home_score": 23},
+            ),
+            "W",
+        )
+
     def test_builds_time_frozen_season_and_nfl_calibration(self) -> None:
         payload = build_cee_input(
             _game(),

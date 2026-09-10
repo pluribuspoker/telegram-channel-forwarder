@@ -142,6 +142,18 @@ def _enriched_rows(
                         "latest_selected_price",
                         "",
                     ),
+                    "user_selected_line": lean.get(
+                        "user_selected_line",
+                        "",
+                    ),
+                    "user_selected_price": lean.get(
+                        "user_selected_price",
+                        "",
+                    ),
+                    "user_terms_source": lean.get(
+                        "user_terms_source",
+                        "",
+                    ),
                     "raw_pick_text": lean.get("lean_text", ""),
                 },
                 names=[str(row.get("celebrity_name") or "")],
@@ -771,6 +783,9 @@ def build_celebrity_input(
                 "direction": str(row.get("direction") or ""),
                 "line": _number(row.get("line")),
                 "price": _number(row.get("price")),
+                "betonline_line": _number(row.get("betonline_line")),
+                "betonline_price": _number(row.get("betonline_price")),
+                "line_source": str(row.get("line_source") or ""),
                 "selection_text": str(row.get("selection_text") or ""),
                 "raw_pick_text": str(row.get("raw_pick_text") or ""),
             }

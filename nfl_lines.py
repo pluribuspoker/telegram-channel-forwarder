@@ -113,7 +113,7 @@ LINE_FIELDS = (
 )
 PERIOD_PREFIXES = ("first_half", "first_quarter")
 
-LEAN_HEADERS = [
+LEAN_HEADERS_V1 = [
     "submission_id",
     "submitted_at_utc",
     "submitted_at_et",
@@ -152,6 +152,43 @@ LEAN_HEADERS = [
     "prediction_parse_version",
     "prediction_parse_status",
 ]
+USER_TERMS_HEADERS = [
+    "user_selected_line",
+    "user_selected_price",
+    "user_terms_source",
+]
+LEAN_HEADERS = [*LEAN_HEADERS_V1, *USER_TERMS_HEADERS]
+
+
+def submission_terms(
+    row: dict[str, Any],
+    *,
+    use_betonline: bool = False,
+) -> dict[str, Any]:
+    """Return accepted wager terms, or the BO snapshot when requested."""
+
+    def value(name: str) -> Any:
+        candidate = row.get(name)
+        return None if candidate in (None, "", "nodata") else candidate
+
+    if use_betonline:
+        return {
+            "line": value("latest_selected_line"),
+            "price": value("latest_selected_price"),
+            "source": "betonline",
+        }
+    source = str(row.get("user_terms_source") or "")
+    if source in {"entered", "betonline"}:
+        return {
+            "line": value("user_selected_line"),
+            "price": value("user_selected_price"),
+            "source": source,
+        }
+    return {
+        "line": value("latest_selected_line"),
+        "price": value("latest_selected_price"),
+        "source": "legacy_betonline",
+    }
 
 
 @dataclass(frozen=True)

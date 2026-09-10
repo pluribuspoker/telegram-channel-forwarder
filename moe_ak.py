@@ -22,6 +22,7 @@ from nfl_lines import (
     OPENING_TOTALS_COLUMN,
     TOTALS_SNAPSHOT_COLUMN,
     decode_packed_markets,
+    submission_terms,
 )
 from nfl_win_predictions import TEAM_ABBREVIATIONS
 
@@ -776,6 +777,7 @@ def build_ak_input(
             "submitted_at_utc": str(current["submitted_at_utc"]),
             "selected_market": str(current["market"]),
             "selected_side": str(current["side"]),
+            "wager_terms": submission_terms(current),
             "rationale": str(current["lean_text"]),
             "projection": projection,
         },

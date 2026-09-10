@@ -22,7 +22,7 @@ from moe_identity import (
     resolve_moe_expert_user_id_from_spreadsheet,
 )
 from moe import OPINION_HEADERS, OPINIONS_TAB
-from nfl_lines import LEAN_HEADERS, get_gspread_client
+from nfl_lines import LEAN_HEADERS, LEAN_HEADERS_V1, get_gspread_client
 
 
 NORMALIZED_HEADERS = [
@@ -122,9 +122,9 @@ def main() -> None:
     worksheet = spreadsheet.worksheet("nfl_leans")
     values = worksheet.get_all_values()
     headers = values[0] if values else []
-    old_headers = LEAN_HEADERS[: -len(NORMALIZED_HEADERS)]
+    old_headers = LEAN_HEADERS_V1[: -len(NORMALIZED_HEADERS)]
     if args.migrate:
-        append_headers(worksheet, LEAN_HEADERS, NORMALIZED_HEADERS)
+        append_headers(worksheet, LEAN_HEADERS_V1, NORMALIZED_HEADERS)
         append_headers(
             spreadsheet.worksheet(OPINIONS_TAB),
             OPINION_HEADERS,
@@ -132,7 +132,7 @@ def main() -> None:
         )
         values = worksheet.get_all_values()
         headers = values[0]
-    if headers != old_headers and headers != LEAN_HEADERS:
+    if headers not in (old_headers, LEAN_HEADERS_V1, LEAN_HEADERS):
         raise RuntimeError("nfl_leans headers do not match old or new schema")
     records = [
         (row_number, dict(zip(headers, row)))
@@ -180,9 +180,9 @@ def main() -> None:
     print(json.dumps({"rows": len(report), "statuses": counts}, sort_keys=True))
     if not args.apply:
         return
-    if headers != LEAN_HEADERS:
+    if headers not in (LEAN_HEADERS_V1, LEAN_HEADERS):
         raise RuntimeError("Run with --migrate before --apply")
-    start_col = len(LEAN_HEADERS) - len(NORMALIZED_HEADERS) + 1
+    start_col = headers.index("predicted_away_score") + 1
     for item in report:
         if item["status"] != "parsed":
             continue

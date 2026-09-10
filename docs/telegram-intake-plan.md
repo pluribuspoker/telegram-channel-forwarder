@@ -101,8 +101,9 @@ Adopted slate behavior:
   spread, moneyline, and total before asking for the market. After selecting a
   market, it displays opening/latest values for both valid sides before asking
   for the side.
-- After the structured choices, a ForceReply prompt captures the only free-text
-  guess input: the lean, reasoning, and line/price where the preference changes.
+- After the structured choices, the user explicitly chooses either the displayed
+  BetOnline terms or a different wager line/price. A ForceReply then captures
+  the rationale.
 - The final selected period/market/side and opening/latest prices are displayed
   in a Telegram blockquote, providing a native bordered summary immediately
   above the ForceReply prompt.
@@ -112,6 +113,35 @@ Adopted slate behavior:
 - Every structured step has reverse navigation: side → market → period/game
   detail → game list. Returning from the free-text stage deletes and invalidates
   its ForceReply prompt so a stale reply cannot be submitted accidentally.
+
+### Implemented — 2026-09-09: user wager terms are distinct from BetOnline
+
+Standard game submissions no longer treat the latest BetOnline line as the
+user's wager. After period, market, and side selection, the bot offers:
+
+- **Use BO ...**: explicitly accepts the displayed BetOnline line and price.
+- **Enter different line**: captures the actual line and optional American
+  price before asking for the rationale.
+
+`nfl_leans` retains `opening_selected_*` and `latest_selected_*` as immutable
+BetOnline context and adds `user_selected_line`, `user_selected_price`, and
+`user_terms_source`. New rows require `user_terms_source` to be `entered` or
+`betonline`; there is no silent BetOnline substitution. Legacy rows with blank
+user-term fields continue to resolve to their historical BetOnline value until
+they are reviewed.
+
+`celebrity_picks.line` and `.price` remain the authoritative attributed wager
+terms. New standard rows populate them from the explicit user selection and
+also retain `betonline_line`, `betonline_price`, and `line_source`. Cee spread
+relationships and historical ATS calibration now use the user terms. The Cee
+input still exposes the complete submission-time BetOnline market separately.
+AK's market-gap calibration deliberately continues to use the BetOnline
+snapshot because comparison with the market is that expert's stated purpose;
+AK's actual wager terms are also included separately in its input.
+
+Existing rows are not automatically inferred from rationale text. They require
+the planned operator review because text can contain an accepted line, a
+change threshold, and secondary markets in the same submission.
 
 ### Completed — 2026-08-10: Season-win prediction flow
 

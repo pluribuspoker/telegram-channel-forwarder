@@ -32,6 +32,7 @@ from telethon.tl.types import (
 from ai import claude_parse
 from celebrity_picks import (
     CELEBRITY_HEADERS,
+    CELEBRITY_HEADERS_V1,
     CELEBRITY_TAB,
     CUSTOM_MARKET_FAMILIES,
     LEGACY_CELEBRITY_HEADERS,
@@ -41,6 +42,7 @@ from celebrity_picks import (
 )
 from nfl_lines import (
     LEAN_HEADERS,
+    LEAN_HEADERS_V1,
     LATEST_AWAY_COLUMN,
     LATEST_HOME_COLUMN,
     LATEST_TOTALS_COLUMN,
@@ -702,6 +704,73 @@ def selection_price_text(
     return f"{side_label} {_signed(line)} ({_signed(price)})"
 
 
+def parse_user_terms(raw_text: str, *, market: str) -> tuple[Any, Any]:
+    """Parse the explicitly entered wager line and optional American price."""
+    tokens = re.findall(r"(?<![\w.])([+-]?\d+(?:\.\d+)?)", raw_text)
+    values = [(token, float(token)) for token in tokens]
+    prices = [
+        int(value)
+        for token, value in values
+        if token[:1] in {"+", "-"}
+        and value.is_integer()
+        and abs(value) >= 100
+    ]
+    if len(prices) > 1:
+        raise ValueError("Enter at most one American price, such as -110.")
+    price = prices[0] if prices else None
+    if market == "moneyline":
+        if price is None:
+            raise ValueError(
+                "Enter the moneyline price, such as +155 or -175."
+            )
+        return None, price
+    if market == "spread":
+        lines = [
+            value
+            for token, value in values
+            if token[:1] in {"+", "-"} and abs(value) < 100
+        ]
+        example = "+3.5 -110"
+    elif market == "total":
+        lines = [value for _, value in values if 0 < value < 100]
+        example = "44.5 -110"
+    else:
+        raise ValueError(f"Unsupported market: {market}")
+    if len(lines) != 1:
+        raise ValueError(f"Enter one wager line, such as {example}.")
+    return lines[0], price
+
+
+def wager_terms_buttons(
+    *, market: str, line: Any, price: Any
+) -> list[list[Button]]:
+    if market == "moneyline":
+        label = f"Use BO {_signed(price)}"
+    else:
+        label = f"Use BO {_signed(line)} ({_signed(price)})"
+    return [
+        [Button.inline(label, b"terms:betonline")],
+        [Button.inline("Enter different line", b"terms:entered")],
+        [Button.inline("← Back to sides", b"back:sides")],
+    ]
+
+
+def rationale_prompt_text(
+    state: dict[str, Any],
+    *,
+    user_id: int,
+    ak_user_id: str,
+) -> str:
+    if requires_ak_projection(user_id, ak_user_id, state.get("celebrity")):
+        return (
+            "Enter one exact team-labeled projected score and your reasoning. "
+            "Example:\n"
+            f"{ak_projection_example(state['game'])}\n"
+            "Rationale: your game analysis."
+        )
+    return "Enter your rationale for this wager:"
+
+
 def period_market_summary(
     game: dict[str, Any],
     *,
@@ -812,6 +881,9 @@ def build_lean_row(
     side: str,
     lean_text: str,
     prediction: dict[str, Any] | None = None,
+    user_selected_line: Any = None,
+    user_selected_price: Any = None,
+    user_terms_source: str = "",
 ) -> dict[str, Any]:
     context = selected_market_context(
         game, period=period, market=market, side=side
@@ -863,6 +935,9 @@ def build_lean_row(
         ),
         "prediction_parse_version": 1 if prediction else "",
         "prediction_parse_status": "parsed" if prediction else "not_applicable",
+        "user_selected_line": stored(user_selected_line),
+        "user_selected_price": stored(user_selected_price),
+        "user_terms_source": user_terms_source,
     }
 
 
@@ -916,6 +991,7 @@ def build_custom_celebrity_submission(
         "price": parsed["price"],
         "selection_text": parsed["selection_text"],
         "raw_pick_text": parsed["raw_pick_text"],
+        "line_source": "entered",
     }
 
 
@@ -965,6 +1041,7 @@ def build_freeform_celebrity_submissions(
         "pick_id": "",
         "price": "",
         "raw_pick_text": raw_text,
+        "line_source": "entered",
     }
     submissions = []
     for pick in parsed_picks:
@@ -1123,6 +1200,10 @@ def snapshot_lean_submission(
             and state.get("custom_market_family")
             not in CUSTOM_MARKET_FAMILIES
         )
+        or (
+            market != "custom"
+            and state.get("user_terms_source") not in {"entered", "betonline"}
+        )
     ):
         return "invalid", None
 
@@ -1134,6 +1215,9 @@ def snapshot_lean_submission(
             "market": market,
             "side": side,
             "custom_market_family": state.get("custom_market_family"),
+            "user_selected_line": state.get("user_selected_line"),
+            "user_selected_price": state.get("user_selected_price"),
+            "user_terms_source": state.get("user_terms_source", ""),
             "prompt_msg_id": state["prompt_msg_id"],
             "days": int(state.get("days", 10)),
             "page": int(state.get("page", 0)),
@@ -1972,19 +2056,24 @@ def append_suggestion(row: dict[str, Any]) -> None:
     )
 
 
-def append_lean(row: dict[str, Any]) -> bool:
-    credentials = os.environ["GOOGLE_CREDENTIALS"]
-    sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
-    worksheet = (
-        get_gspread_client(credentials)
-        .open_by_key(sheet_id)
-        .worksheet("nfl_leans")
-    )
+def ensure_lean_worksheet(spreadsheet: Any) -> Any:
+    worksheet = spreadsheet.worksheet("nfl_leans")
     headers = worksheet.row_values(1)
-    if headers != LEAN_HEADERS:
+    if headers == LEAN_HEADERS_V1:
+        worksheet.resize(cols=len(LEAN_HEADERS))
+        worksheet.update([LEAN_HEADERS])
+    elif headers != LEAN_HEADERS:
         raise RuntimeError(
             "nfl_leans headers do not match the finalized schema"
         )
+    return worksheet
+
+
+def append_lean(row: dict[str, Any]) -> bool:
+    credentials = os.environ["GOOGLE_CREDENTIALS"]
+    sheet_id = os.environ["NFL_INTAKE_SHEET_ID"]
+    spreadsheet = get_gspread_client(credentials).open_by_key(sheet_id)
+    worksheet = ensure_lean_worksheet(spreadsheet)
     submission_id = str(row["submission_id"])
     if submission_id in set(worksheet.col_values(1)[1:]):
         return False
@@ -2015,7 +2104,7 @@ def _celebrity_worksheet(spreadsheet: Any) -> Any:
     if not header:
         worksheet.resize(cols=len(CELEBRITY_HEADERS))
         worksheet.update([CELEBRITY_HEADERS])
-    elif header == LEGACY_CELEBRITY_HEADERS:
+    elif header in (LEGACY_CELEBRITY_HEADERS, CELEBRITY_HEADERS_V1):
         worksheet.resize(cols=len(CELEBRITY_HEADERS))
         worksheet.update([CELEBRITY_HEADERS])
     elif header != CELEBRITY_HEADERS:
@@ -2246,8 +2335,11 @@ async def main() -> None:
     allowed = allowed_user_ids()
     if not allowed:
         raise RuntimeError("INTAKE_ALLOWED_USER_IDS is empty")
+    spreadsheet = _intake_spreadsheet()
+    ensure_lean_worksheet(spreadsheet)
+    _celebrity_worksheet(spreadsheet)
     ak_user_id = resolve_moe_expert_user_id_from_spreadsheet(
-        _intake_spreadsheet(),
+        spreadsheet,
         "ak",
     )
 
@@ -2723,6 +2815,42 @@ async def main() -> None:
             return
 
         state = guess_states.get(event.sender_id)
+        if (
+            state is not None
+            and state.get("terms_prompt_msg_id") == event.reply_to_msg_id
+        ):
+            try:
+                line, price = parse_user_terms(
+                    event.raw_text,
+                    market=str(state["market"]),
+                )
+            except ValueError as exc:
+                prompt = await event.respond(
+                    f"{exc}\n\nEnter the line and optional American price.",
+                    buttons=Button.force_reply(
+                        single_use=True,
+                        placeholder="Example: +3.5 -110",
+                    ),
+                )
+                state["terms_prompt_msg_id"] = prompt.id
+                return
+            state.pop("terms_prompt_msg_id", None)
+            state["user_selected_line"] = line
+            state["user_selected_price"] = price
+            state["user_terms_source"] = "entered"
+            prompt = await event.respond(
+                rationale_prompt_text(
+                    state,
+                    user_id=event.sender_id,
+                    ak_user_id=ak_user_id,
+                ),
+                buttons=Button.force_reply(
+                    single_use=True,
+                    placeholder="Explain your wager",
+                ),
+            )
+            state["prompt_msg_id"] = prompt.id
+            return
         # Reply with the free-text lean itself (guarded against stale state).
         submission_status, submission = snapshot_lean_submission(
             state,
@@ -2884,6 +3012,9 @@ async def main() -> None:
                 side=submission["side"],
                 lean_text=lean_text,
                 prediction=prediction,
+                user_selected_line=submission["user_selected_line"],
+                user_selected_price=submission["user_selected_price"],
+                user_terms_source=submission["user_terms_source"],
             )
             appended = await asyncio.to_thread(append_lean, row)
             if isinstance(celebrity, dict):
@@ -2908,6 +3039,9 @@ async def main() -> None:
                         "side": row["side"],
                         "latest_selected_line": row["latest_selected_line"],
                         "latest_selected_price": row["latest_selected_price"],
+                        "user_selected_line": row["user_selected_line"],
+                        "user_selected_price": row["user_selected_price"],
+                        "user_terms_source": row["user_terms_source"],
                         "raw_pick_text": raw_lean_text,
                     },
                     names=[str(celebrity["name"])],
@@ -2921,6 +3055,22 @@ async def main() -> None:
                 f"{PERIOD_LABELS[submission['period']]} · "
                 f"{submission['market'].title()} · "
                 f"{html.escape(str(row['side']))}"
+            )
+            user_terms = selection_price_text(
+                str(row["market"]),
+                str(row["side"]),
+                row["user_selected_line"],
+                row["user_selected_price"],
+            )
+            betonline_terms = selection_price_text(
+                str(row["market"]),
+                str(row["side"]),
+                row["latest_selected_line"],
+                row["latest_selected_price"],
+            )
+            summary += (
+                f"\nYour wager: {html.escape(user_terms)}"
+                f"\nBetOnline at submission: {html.escape(betonline_terms)}"
             )
         status = "✅ Guess saved." if appended else "✅ Guess was already saved."
         saved_summary = f"{status}\n{summary}"
@@ -3588,7 +3738,15 @@ async def main() -> None:
             prompt_msg_id = state.pop("prompt_msg_id", None)
             if prompt_msg_id is not None:
                 await client.delete_messages(event.chat_id, [prompt_msg_id])
+            terms_prompt_msg_id = state.pop("terms_prompt_msg_id", None)
+            if terms_prompt_msg_id is not None:
+                await client.delete_messages(
+                    event.chat_id, [terms_prompt_msg_id]
+                )
             state.pop("side", None)
+            state.pop("user_selected_line", None)
+            state.pop("user_selected_price", None)
+            state.pop("user_terms_source", None)
             game = state["game"]
             text = market_side_summary(
                 game,
@@ -3610,6 +3768,81 @@ async def main() -> None:
                     str(game["home_team"]),
                 ),
             )
+            return
+        if data.startswith("terms:"):
+            state = guess_states.get(event.sender_id)
+            if (
+                state is None
+                or state.get("market") not in {"spread", "moneyline", "total"}
+                or state.get("side") not in {"away", "home", "over", "under"}
+            ):
+                await event.answer(
+                    "This guess expired. Choose the game again.", alert=True
+                )
+                return
+            choice = data.split(":", 1)[1]
+            for prompt_key in ("prompt_msg_id", "terms_prompt_msg_id"):
+                prompt_id = state.pop(prompt_key, None)
+                if prompt_id is not None:
+                    await client.delete_messages(event.chat_id, [prompt_id])
+            if choice == "betonline":
+                context = selected_market_context(
+                    state["game"],
+                    period=state["period"],
+                    market=state["market"],
+                    side=state["side"],
+                )
+                state["user_selected_line"] = context["latest_line"]
+                state["user_selected_price"] = context["latest_price"]
+                state["user_terms_source"] = "betonline"
+                await event.answer("Using the displayed BetOnline terms.")
+                prompt = await event.respond(
+                    rationale_prompt_text(
+                        state,
+                        user_id=event.sender_id,
+                        ak_user_id=ak_user_id,
+                    ),
+                    buttons=Button.force_reply(
+                        single_use=True,
+                        placeholder="Explain your wager",
+                    ),
+                )
+                state["prompt_msg_id"] = prompt.id
+                return
+            if choice == "entered":
+                await event.answer()
+                context = selected_market_context(
+                    state["game"],
+                    period=state["period"],
+                    market=state["market"],
+                    side=state["side"],
+                )
+                side_label = selection_side_label(
+                    state["game"], state["market"], state["side"]
+                )
+                reference = selection_price_text(
+                    state["market"],
+                    side_label,
+                    context["latest_line"],
+                    context["latest_price"],
+                )
+                prompt = await event.respond(
+                    "Enter your actual wager line and optional American price.\n"
+                    f"BetOnline reference: {reference}",
+                    buttons=Button.force_reply(
+                        single_use=True,
+                        placeholder=(
+                            "+155"
+                            if state["market"] == "moneyline"
+                            else "+3.5 -110"
+                            if state["market"] == "spread"
+                            else "44.5 -110"
+                        ),
+                    ),
+                )
+                state["terms_prompt_msg_id"] = prompt.id
+                return
+            await event.answer("Invalid wager-term choice.", alert=True)
             return
         if data.startswith("period:"):
             state = guess_states.get(event.sender_id)
@@ -3745,6 +3978,11 @@ async def main() -> None:
                 await event.answer("Invalid side.", alert=True)
                 return
             state["side"] = side
+            state.pop("prompt_msg_id", None)
+            state.pop("terms_prompt_msg_id", None)
+            state.pop("user_selected_line", None)
+            state.pop("user_selected_price", None)
+            state.pop("user_terms_source", None)
             game = state["game"]
             side_label = selection_side_label(game, market, side)
             context = selected_market_context(
@@ -3783,31 +4021,12 @@ async def main() -> None:
             await edit_callback(
                 event,
                 selection,
-                [[Button.inline("← Back to sides", b"back:sides")]],
-            )
-            prompt_text = (
-                "Enter one exact team-labeled projected score and your "
-                "reasoning. Example:\n"
-                f"{ak_projection_example(state['game'])}\n"
-                "Rationale: your game analysis."
-                if requires_ak_projection(
-                    event.sender_id,
-                    ak_user_id,
-                    state.get("celebrity"),
-                )
-                else (
-                    "Enter your lean, reasoning, and the line or price where "
-                    "your preference changes:"
-                )
-            )
-            prompt = await event.respond(
-                prompt_text,
-                buttons=Button.force_reply(
-                    single_use=True,
-                    placeholder="Type your NFL lean",
+                wager_terms_buttons(
+                    market=market,
+                    line=context["latest_line"],
+                    price=context["latest_price"],
                 ),
             )
-            state["prompt_msg_id"] = prompt.id
 
     await client.start(bot_token=token)
     await client(

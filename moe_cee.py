@@ -12,6 +12,7 @@ from nfl_lines import (
     LATEST_HOME_COLUMN,
     LATEST_TOTALS_COLUMN,
     decode_packed_markets,
+    submission_terms,
 )
 
 
@@ -302,20 +303,35 @@ def _submission_market(row: dict[str, Any]) -> dict[str, Any]:
     )["game"]
 
 
+def _selected_spread_terms(row: dict[str, Any]) -> dict[str, Any]:
+    terms = submission_terms(row)
+    if terms["line"] is not None or terms["source"] != "legacy_betonline":
+        return terms
+    market = _submission_market(row)
+    side = str(row.get("side") or "")
+    if side == str(row.get("away_team") or ""):
+        line = market["away_spread"]
+    elif side == str(row.get("home_team") or ""):
+        line = market["home_spread"]
+    else:
+        line = None
+    return {**terms, "line": line}
+
+
 def _grade_spread_pick(
     lean: dict[str, Any],
     result: dict[str, Any],
 ) -> str | None:
-    market = _submission_market(lean)
+    terms = _selected_spread_terms(lean)
     selected_side = str(lean["side"])
     away_team = str(lean["away_team"])
     home_team = str(lean["home_team"])
     if selected_side == away_team:
-        line = market["away_spread"]
+        line = terms["line"]
         selected_score = int(result["away_score"])
         opponent_score = int(result["home_score"])
     elif selected_side == home_team:
-        line = market["home_spread"]
+        line = terms["line"]
         selected_score = int(result["home_score"])
         opponent_score = int(result["away_score"])
     else:
@@ -436,6 +452,11 @@ def _eligible_submissions(
 
 
 def _submission_summary(row: dict[str, Any], *, market: str) -> dict[str, Any]:
+    terms = (
+        _selected_spread_terms(row)
+        if market == "spread"
+        else submission_terms(row)
+    )
     return {
         "submission_reference": _opaque_reference(
             row.get("submission_id"),
@@ -444,6 +465,9 @@ def _submission_summary(row: dict[str, Any], *, market: str) -> dict[str, Any]:
         "submitted_at_utc": str(row["submitted_at_utc"]),
         "selected_market": market,
         "selected_side": str(row["side"]),
+        "selected_line": terms["line"],
+        "selected_price": terms["price"],
+        "terms_source": terms["source"],
         "rationale": str(row.get("lean_text") or ""),
     }
 
@@ -485,10 +509,9 @@ def _market_relationship(
     game: dict[str, Any],
     moneyline: dict[str, Any],
     spread: dict[str, Any] | None,
-    spread_market: dict[str, Any] | None,
 ) -> dict[str, Any]:
     moneyline_side = str(moneyline["side"])
-    if spread is None or spread_market is None:
+    if spread is None:
         return {
             "status": "moneyline_only",
             "moneyline_side": moneyline_side,
@@ -496,11 +519,7 @@ def _market_relationship(
             "selected_spread_line": None,
         }
     spread_side = str(spread["side"])
-    selected_spread_line = (
-        spread_market["away_spread"]
-        if spread_side == str(game["away_team"])
-        else spread_market["home_spread"]
-    )
+    selected_spread_line = _selected_spread_terms(spread)["line"]
     if selected_spread_line is None:
         raise ValueError("Cee spread submission has no spread line")
     if spread_side == moneyline_side:
@@ -624,7 +643,6 @@ def build_cee_input(
             game=game,
             moneyline=moneyline,
             spread=spread,
-            spread_market=spread_market,
         ),
         "submission_markets": {
             "moneyline": moneyline_market,
