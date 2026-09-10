@@ -101,6 +101,7 @@ from moe_god import (
     sha256_text,
 )
 from nfl_game_history import GAME_HISTORY_HEADERS, GAME_HISTORY_TAB
+from nfl_game_annotations import attach_game_annotations, load_game_annotations
 from nfl_lines import GAME_HEADERS, SNAPSHOT_HEADERS, get_gspread_client
 from scripts.generate_moe_opinion import current_season_finals
 
@@ -846,6 +847,8 @@ def main(argv: list[str] | None = None) -> int:
     history = spreadsheet.worksheet(GAME_HISTORY_TAB).get_all_records(
         expected_headers=GAME_HISTORY_HEADERS
     )
+    annotation_rows = load_game_annotations(spreadsheet)
+    history = attach_game_annotations(history, annotation_rows)
     snapshots = spreadsheet.worksheet("nfl_line_snapshots").get_all_records(
         expected_headers=SNAPSHOT_HEADERS
     )
@@ -860,7 +863,9 @@ def main(argv: list[str] | None = None) -> int:
         }
     )
     finals = [
-        row for season in seasons for row in current_season_finals(history, season)
+        row
+        for season in seasons
+        for row in current_season_finals(history, season, annotation_rows)
     ]
     registry = load_registry()
     policy = aggregator_policy(registry)

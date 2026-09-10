@@ -53,6 +53,11 @@ from nfl_game_history import (
     build_game_history,
     fetch_regular_season_events,
 )
+from nfl_game_annotations import (
+    attach_game_annotations,
+    game_annotation_context,
+    load_game_annotations,
+)
 from nfl_lines import SNAPSHOT_HEADERS, _call_with_retry, get_gspread_client
 from nfl_win_predictions import ensure_worksheet
 from scripts.generate_moe_opinion import _latest_alignment
@@ -92,7 +97,11 @@ def _record_line(expert_id: str, record: dict) -> str:
 
 
 def notification_text(
-    *, season: int, scoreboard: dict, new_rows: list[dict]
+    *,
+    season: int,
+    scoreboard: dict,
+    new_rows: list[dict],
+    finals: list[dict] | None = None,
 ) -> str:
     """The watchdog DM for a run that appended rows.
 
@@ -102,11 +111,24 @@ def notification_text(
     Telegram's message limit.
     """
     mean_count = sum(1 for row in new_rows if row["expert_id"] == MEAN_OF_ARMS_ID)
+    finals_by_event = {
+        str(row.get("event_id")): row for row in (finals or [])
+    }
     games: list[str] = []
+    footnotes: list[str] = []
     for row in new_rows:
-        label = f"{row['away_team']} @ {row['home_team']} {row['final']}"
+        final = finals_by_event.get(str(row.get("event_id")), {})
+        annotations = list(final.get("game_annotations") or [])
+        marker = "*" if annotations else ""
+        label = (
+            f"{row['away_team']} @ {row['home_team']}{marker} {row['final']}"
+        )
         if label not in games:
             games.append(label)
+        for annotation in annotations:
+            note = f"* {annotation['summary']}"
+            if note not in footnotes:
+                footnotes.append(note)
     lines = [
         f"pickbot: MOE grades, season {season}: "
         f"{scoreboard['resolved_games']} resolved games, "
@@ -118,6 +140,8 @@ def notification_text(
     lines.extend(games[:NOTIFY_MAX_GAMES])
     if len(games) > NOTIFY_MAX_GAMES:
         lines.append(f"+{len(games) - NOTIFY_MAX_GAMES} more games")
+    if footnotes:
+        lines.extend(["", *footnotes])
     lines.append("")
     for expert_id, record in sorted(scoreboard["by_expert"].items()):
         lines.append(_record_line(expert_id, record))
@@ -169,6 +193,8 @@ def main() -> None:
     history = spreadsheet.worksheet(GAME_HISTORY_TAB).get_all_records(
         expected_headers=GAME_HISTORY_HEADERS
     )
+    annotation_rows = load_game_annotations(spreadsheet)
+    history = attach_game_annotations(history, annotation_rows)
     rows = configured_opinion_store().list()
     approved = approved_opinions(rows)
     seasons = sorted(
@@ -176,11 +202,14 @@ def main() -> None:
     )
     season = args.season or (seasons[-1] if seasons else datetime.now().year)
     events = fetch_regular_season_events(season, expected_games=None)
-    finals = build_game_history(
-        {season: events},
-        {season: _latest_alignment(history)},
-        validate=False,
-        require_complete_divisional_pairs=False,
+    finals = attach_game_annotations(
+        build_game_history(
+            {season: events},
+            {season: _latest_alignment(history)},
+            validate=False,
+            require_complete_divisional_pairs=False,
+        ),
+        annotation_rows,
     )
     snapshots = spreadsheet.worksheet("nfl_line_snapshots").get_all_records(
         expected_headers=SNAPSHOT_HEADERS
@@ -213,6 +242,10 @@ def main() -> None:
                     "scoreboard": scoreboard,
                     "disagreement": report,
                     "mean_of_arms": means,
+                    "game_annotation_context": game_annotation_context(
+                        finals,
+                        deterministic_treatment="include",
+                    ),
                 },
                 indent=2,
                 sort_keys=True,
@@ -229,6 +262,12 @@ def main() -> None:
         print()
         for line in format_disagreement_report(report):
             print(line)
+        for game in finals:
+            for annotation in game.get("game_annotations") or []:
+                print(
+                    f"* {game['away_team']} @ {game['home_team']}: "
+                    f"{annotation['summary']}"
+                )
     if not args.write:
         return
     worksheet = ensure_worksheet(spreadsheet, GRADES_TAB, GRADE_HEADERS)
@@ -258,7 +297,12 @@ def main() -> None:
         f"({mean_count} mean-of-arms)."
     )
     if args.notify and not deliver_notification(
-        notification_text(season=season, scoreboard=scoreboard, new_rows=new_rows)
+        notification_text(
+            season=season,
+            scoreboard=scoreboard,
+            new_rows=new_rows,
+            finals=finals,
+        )
     ):
         # The append succeeded and will not repeat (opinion-id dedupe), so a
         # lost DM is the operator's only signal — fail the run and let the

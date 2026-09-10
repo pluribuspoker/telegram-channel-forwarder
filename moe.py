@@ -24,6 +24,7 @@ import gspread
 from gspread.exceptions import WorksheetNotFound
 
 from ai import _claude_create_with_retry
+from nfl_game_annotations import with_game_annotation_context
 from nfl_lines import _call_with_retry, get_gspread_client
 from nfl_win_predictions import ensure_worksheet
 from moe_ak import WNBA_PRIOR_PATH, build_ak_input
@@ -220,6 +221,7 @@ def _source_sha256(expert: dict[str, Any]) -> str:
         ROOT / "moe.py",
         ROOT / "ai.py",
         ROOT / "nfl_lines.py",
+        ROOT / "nfl_game_annotations.py",
         ROOT / "nfl_win_predictions.py",
         ROOT / "scripts" / "generate_moe_opinion.py",
         EXPERTS_PATH,
@@ -3493,8 +3495,24 @@ async def generate_opinion(
         raise NotImplementedError(
             f"Unsupported input profile: {expert['input_profile']}"
         )
-    input_json = _canonical_json(input_payload)
     expert_mode = str(expert.get("mode") or "")
+    if prebuilt_input is None:
+        deterministic_treatment = (
+            "include"
+            if expert["input_profile"] in {AGGREGATOR_PROFILE, RATING_PROFILE}
+            else "not_applicable"
+        )
+        annotation_games = (
+            list(current_season_results or [])
+            if expert["input_profile"] in {AGGREGATOR_PROFILE, RATING_PROFILE}
+            else [*history, *(current_season_results or [])]
+        )
+        input_payload = with_game_annotation_context(
+            input_payload,
+            annotation_games,
+            deterministic_treatment=deterministic_treatment,
+        )
+    input_json = _canonical_json(input_payload)
     if expert_mode == JUDGE_MODE:
         # The judge reads a masked, seeded-shuffled request, and that request
         # is the exact input persisted with its row. The full aggregator input

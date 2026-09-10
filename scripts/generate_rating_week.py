@@ -53,6 +53,11 @@ from moe_god import (
     sha256_text,
 )
 from moe_rating import RATING_EXPERT_ID, build_rating_input
+from nfl_game_annotations import (
+    attach_game_annotations,
+    load_game_annotations,
+    with_game_annotation_context,
+)
 from nfl_game_history import GAME_HISTORY_HEADERS, GAME_HISTORY_TAB
 from nfl_lines import GAME_HEADERS, get_gspread_client
 from scripts.generate_moe_opinion import current_season_finals
@@ -122,7 +127,11 @@ async def generate_week(
     for game in week_games(games, season=season, week=week):
         event_id = str(game["event_id"])
         try:
-            payload = build_rating_input(game, finals)
+            payload = with_game_annotation_context(
+                build_rating_input(game, finals),
+                finals,
+                deterministic_treatment="include",
+            )
         except ValueError as exc:
             print(f"{prefix}{describe_game(game)}: input could not be built ({exc})")
             summary["failed"].append({"event_id": event_id, "error": str(exc)})
@@ -204,8 +213,10 @@ def main(argv: list[str] | None = None) -> int:
     history = spreadsheet.worksheet(GAME_HISTORY_TAB).get_all_records(
         expected_headers=GAME_HISTORY_HEADERS
     )
+    annotation_rows = load_game_annotations(spreadsheet)
+    history = attach_game_annotations(history, annotation_rows)
     store = configured_opinion_store()
-    finals = current_season_finals(history, args.season)
+    finals = current_season_finals(history, args.season, annotation_rows)
     asyncio.run(
         generate_week(
             games=games,

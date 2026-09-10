@@ -46,6 +46,11 @@ from moe_identity import (
 )
 from moe_rating import RATING_MODE, RATING_PROFILE, build_rating_input
 from moe_win_total import build_win_total_input
+from nfl_game_annotations import (
+    attach_game_annotations,
+    load_game_annotations,
+    with_game_annotation_context,
+)
 from intake_bot import (
     CELEBRITY_HEADERS,
     CELEBRITY_TAB,
@@ -87,17 +92,24 @@ def _latest_alignment(history: list[dict]) -> list[dict]:
     return list(alignment.values())
 
 
-def current_season_finals(history: list[dict], season: int) -> list[dict]:
+def current_season_finals(
+    history: list[dict],
+    season: int,
+    annotation_rows: list[dict] | None = None,
+) -> list[dict]:
     """ESPN finals for one season, shaped like nfl_game_history rows.
 
     Shared by the aggregator branch below and scripts/god_judge_runner.py.
     """
     events = fetch_regular_season_events(season, expected_games=None)
-    return build_game_history(
-        {season: events},
-        {season: _latest_alignment(history)},
-        validate=False,
-        require_complete_divisional_pairs=False,
+    return attach_game_annotations(
+        build_game_history(
+            {season: events},
+            {season: _latest_alignment(history)},
+            validate=False,
+            require_complete_divisional_pairs=False,
+        ),
+        annotation_rows or [],
     )
 
 
@@ -205,6 +217,8 @@ async def main() -> None:
     history = spreadsheet.worksheet(GAME_HISTORY_TAB).get_all_records(
         expected_headers=GAME_HISTORY_HEADERS
     )
+    annotation_rows = load_game_annotations(spreadsheet)
+    history = attach_game_annotations(history, annotation_rows)
     game = next(
         (
             row
@@ -274,7 +288,11 @@ async def main() -> None:
     store = configured_opinion_store()
 
     def _current_results() -> list[dict]:
-        return current_season_finals(history, int(game["season"]))
+        return current_season_finals(
+            history,
+            int(game["season"]),
+            annotation_rows,
+        )
 
     if expert["input_profile"] == "divisional":
         schedule = spreadsheet.worksheet(SCHEDULE_TAB).get_all_records(
@@ -415,6 +433,23 @@ async def main() -> None:
             raise NotImplementedError(
                 f"Unsupported input profile: {expert['input_profile']}"
             )
+        if prebuilt is None:
+            annotation_games = (
+                list(current_results or [])
+                if expert["input_profile"]
+                in {AGGREGATOR_PROFILE, RATING_PROFILE}
+                else [*history, *(current_results or [])]
+            )
+            input_payload = with_game_annotation_context(
+                input_payload,
+                annotation_games,
+                deterministic_treatment=(
+                    "include"
+                    if expert["input_profile"]
+                    in {AGGREGATOR_PROFILE, RATING_PROFILE}
+                    else "not_applicable"
+                ),
+            )
         print(
             json.dumps(
                 input_payload,
@@ -460,7 +495,8 @@ async def main() -> None:
         game=game,
         history=(
             [*history, *(current_results or [])]
-            if expert["input_profile"] == "celebrity_patterns"
+            if expert["input_profile"]
+            in {"celebrity_patterns", "cee_calibration"}
             else history
         ),
         games=games,

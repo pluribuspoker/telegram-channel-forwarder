@@ -604,6 +604,29 @@ that informs the projected margin.
   Sonnet 4.6, and Haiku 4.5. It is committee-optional, so games without a Cee
   submission do not block the automated God Expert.
 
+### Implemented locally — 2026-09-09: NFL game annotations
+
+`nfl_game_annotations` is the append-only source of truth for unusual events
+that can make a completed game's result unrepresentative for some analytical
+lenses. Existing game, opinion, and grade schemas remain unchanged.
+
+- Approved active annotations join to ESPN and historical finals by
+  `event_id`. Approved correction rows supersede earlier annotation ids;
+  pending or rejected corrections do not alter the active record.
+- Every generated MOE input carries `game_annotation_context`, including the
+  affected final score, exact approved summaries, and the invariant that
+  official grading remains unchanged. Agent consumers choose and state whether
+  an annotation is relevant to their lens. Deterministic consumers declare
+  their treatment; Elo and the God arms currently include official finals.
+- The God committee key and judge request include the annotation context, so an
+  annotation change produces new hash-bound aggregator inputs rather than
+  silently reusing a committee that did not know about it.
+- MOE grading still records official Brier, ATS, totals, and units. Human
+  output marks annotated finals with `*` and prints the approved summary.
+- The first approved annotation is the Patriots-Seahawks 2026 Week 1 game:
+  `Seahawks starting quarterback injury in first quarter. Seahawks offense
+  tarnished, constantly punting`.
+
 ### Implemented locally — 2026-09-09: Hi Lo Expert v1 / prompt v2
 
 The Hi Lo Expert is a committee-optional market-structure voice. It receives

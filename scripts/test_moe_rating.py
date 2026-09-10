@@ -78,6 +78,7 @@ from moe_rating import (
     stars_for_margin,
     win_probability,
 )
+from nfl_game_annotations import with_game_annotation_context
 from nfl_win_predictions import TEAM_ABBREVIATIONS
 from scripts.generate_rating_week import existing_row, generate_week, week_games
 from scripts.god_judge_runner import committee_experts
@@ -560,7 +561,14 @@ class GenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(row), set(OPINION_HEADERS))
         self.assertEqual(row["output_sha256"], opinion_output_sha256(row))
         persisted = json.loads(row["input_json"])
-        self.assertEqual(persisted, build_rating_input(_game(), _finals()))
+        self.assertEqual(
+            persisted,
+            with_game_annotation_context(
+                build_rating_input(_game(), _finals()),
+                _finals(),
+                deterministic_treatment="include",
+            ),
+        )
         self.assertEqual(row["input_sha256"], sha256_text(canonical_json(persisted)))
         self.assertEqual(json.loads(row["raw_response"])["home_win_probability"], row["home_win_probability"])
         self.assertTrue(row["thesis"].startswith("Elo ratings:"))

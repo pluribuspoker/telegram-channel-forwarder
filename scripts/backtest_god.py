@@ -70,6 +70,10 @@ def _sheet_ledger_inputs(season: int | None) -> tuple[list[dict], list[dict], li
     load_dotenv(ROOT / ".env.local")
     load_dotenv(ROOT / ".env")
     from moe import configured_opinion_store
+    from nfl_game_annotations import (
+        attach_game_annotations,
+        load_game_annotations,
+    )
     from nfl_game_history import GAME_HISTORY_HEADERS, GAME_HISTORY_TAB
     from nfl_lines import SNAPSHOT_HEADERS, get_gspread_client
     from scripts.generate_moe_opinion import current_season_finals
@@ -85,6 +89,8 @@ def _sheet_ledger_inputs(season: int | None) -> tuple[list[dict], list[dict], li
     history = spreadsheet.worksheet(GAME_HISTORY_TAB).get_all_records(
         expected_headers=GAME_HISTORY_HEADERS
     )
+    annotation_rows = load_game_annotations(spreadsheet)
+    history = attach_game_annotations(history, annotation_rows)
     rows = configured_opinion_store().list()
     seasons = sorted(
         {
@@ -98,7 +104,7 @@ def _sheet_ledger_inputs(season: int | None) -> tuple[list[dict], list[dict], li
         if not seasons:
             raise SystemExit("No god_rules rows in the sheet")
         season = seasons[-1]
-    finals = current_season_finals(history, season)
+    finals = current_season_finals(history, season, annotation_rows)
     snapshots = spreadsheet.worksheet("nfl_line_snapshots").get_all_records(
         expected_headers=SNAPSHOT_HEADERS
     )

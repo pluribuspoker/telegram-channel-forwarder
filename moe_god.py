@@ -29,6 +29,7 @@ from typing import Any, Iterable, Iterator
 
 import yaml
 
+from nfl_game_annotations import with_game_annotation_context
 from moe_ak import (
     _grade_side,
     _grade_total,
@@ -2136,27 +2137,31 @@ def build_aggregator_input(
         voices, market, policy, weighting, home_team=str(game["home_team"])
     )
     week = game.get("week")
-    payload = {
-        "input_profile": AGGREGATOR_PROFILE,
-        "policy": policy,
-        "game": {
-            "event_id": event_id,
-            "season": int(game["season"]),
-            "week": int(week) if str(week or "").strip() else None,
-            "away_team": str(game["away_team"]),
-            "home_team": str(game["home_team"]),
-            "commence_time_utc": kickoff.isoformat(),
-            "commence_time_et": str(game.get("commence_time_et") or ""),
+    payload = with_game_annotation_context(
+        {
+            "input_profile": AGGREGATOR_PROFILE,
+            "policy": policy,
+            "game": {
+                "event_id": event_id,
+                "season": int(game["season"]),
+                "week": int(week) if str(week or "").strip() else None,
+                "away_team": str(game["away_team"]),
+                "home_team": str(game["home_team"]),
+                "commence_time_utc": kickoff.isoformat(),
+                "commence_time_et": str(game.get("commence_time_et") or ""),
+            },
+            "market": market,
+            "voices": voices,
+            "feature_block": feature_block,
+            "scoreboard": scoreboard,
+            # None under the normal model; the table's identity when empirical,
+            # so the input hash changes with the table the way it does with the
+            # policy knobs.
+            "margin_table": margin_table_descriptor(margin_table_for(policy)),
         },
-        "market": market,
-        "voices": voices,
-        "feature_block": feature_block,
-        "scoreboard": scoreboard,
-        # None under the normal model; the table's identity when empirical,
-        # so the input hash changes with the table the way it does with the
-        # policy knobs.
-        "margin_table": margin_table_descriptor(margin_table_for(policy)),
-    }
+        finals,
+        deterministic_treatment="include",
+    )
     payload["committee_key"] = committee_key(payload)
     seed = sha256_text(canonical_json(payload))[:16]
     order = [voice["voice_id"] for voice in voices]
@@ -2265,6 +2270,10 @@ def build_judge_request(input_payload: dict[str, Any]) -> dict[str, Any]:
         },
         "voices": masked_voices,
     }
+    if input_payload.get("game_annotation_context"):
+        request["game_annotation_context"] = input_payload[
+            "game_annotation_context"
+        ]
     if input_payload.get("margin_table"):
         request["margin_table"] = input_payload["margin_table"]
     return request
