@@ -551,7 +551,7 @@ a +2 total gap. No resolved AK NFL calibration observations exist yet; the
 matching WNBA side prior is 4-2, while the total maps to the WNBA 0–<6 band
 that finished Under in 3/4 fresh games.
 
-### Implemented locally — 2026-09-09: Cee expert v3
+### Implemented locally — 2026-09-09: Cee expert v4
 
 The Cee Expert is a separate human-interpretation voice rather than an AK
 variant. It produces a side-only opinion from Cee's final full-game moneyline
@@ -594,6 +594,9 @@ that informs the projected margin.
   their submitted lines. There is no cross-sport prior.
 - Cee validation accepts the unambiguous words `one` and `single` as a
   submission count of 1; other counts remain numeric and exact.
+- Prompt v4 makes the schema's numeric provenance rules explicit: generated
+  output scores are not repeated as cited input evidence, and uncited
+  `discarded_considerations` contain no numeric tokens.
 - Zero resolved calibration games cap confidence at two stars; one or two cap
   it at three.
 - The expert uses output schema v3, participates only in the God Expert's side

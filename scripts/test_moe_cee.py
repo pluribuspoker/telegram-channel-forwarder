@@ -848,10 +848,14 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
     def test_expert_configuration_is_versioned(self) -> None:
         expert = load_expert("cee")
 
-        self.assertEqual(expert["version"], 3)
-        self.assertEqual(expert["prompt_version"], 3)
+        self.assertEqual(expert["version"], 4)
+        self.assertEqual(expert["prompt_version"], 4)
         self.assertEqual(expert["output_schema_version"], 3)
-        self.assertEqual(expert["prompt_path"], "moe/prompts/cee/v3.md")
+        self.assertEqual(expert["prompt_path"], "moe/prompts/cee/v4.md")
+        self.assertIn(
+            "discarded-consideration string must contain no digits",
+            expert["prompt_text"],
+        )
         self.assertEqual(
             expert["allowed_models"],
             [
