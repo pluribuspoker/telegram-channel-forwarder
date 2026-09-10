@@ -2090,10 +2090,21 @@ def build_aggregator_input(
     registry = registry if registry is not None else load_registry()
     policy = policy if policy is not None else aggregator_policy(registry)
     rows = list(approved_opinions)
-    finals = list(finals)
     snapshots = list(snapshots)
     event_id = str(game["event_id"])
     kickoff = _parse_time(game["commence_time_utc"])
+    finals = [
+        final
+        for final in finals
+        if _parse_time(
+            str(
+                final.get("kickoff_utc")
+                or final.get("commence_time_utc")
+                or ""
+            )
+        )
+        < kickoff
+    ]
     as_of = as_of or str(
         game.get("latest_captured_at") or game["commence_time_utc"]
     )

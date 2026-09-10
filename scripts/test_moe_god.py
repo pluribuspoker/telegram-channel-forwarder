@@ -722,6 +722,55 @@ class InputTests(unittest.TestCase):
         self.assertEqual(self.payload["scoreboard"]["resolved_games"], 0)
         self.assertEqual(self.payload["input_profile"], AGGREGATOR_PROFILE)
 
+    def test_scoreboard_uses_only_finals_before_target_kickoff(self) -> None:
+        prior_kickoff = "2026-09-08T00:20:00+00:00"
+        prior_row = _opinion(
+            "schedule",
+            model="claude-opus-4-8",
+            probability=0.7,
+            margin=5,
+            away_score=20,
+            home_score=25,
+            event_id="prior-event",
+            kickoff=prior_kickoff,
+        )
+        finals = [
+            {
+                "event_id": "prior-event",
+                "kickoff_utc": prior_kickoff,
+                "away_team": AWAY,
+                "home_team": HOME,
+                "away_score": 20,
+                "home_score": 25,
+            },
+            {
+                "event_id": EVENT_ID,
+                "kickoff_utc": KICKOFF,
+                "away_team": AWAY,
+                "home_team": HOME,
+                "away_score": 10,
+                "home_score": 13,
+            },
+            {
+                "event_id": "future-event",
+                "kickoff_utc": "2026-09-11T00:20:00+00:00",
+                "away_team": AWAY,
+                "home_team": HOME,
+                "away_score": 14,
+                "home_score": 21,
+            },
+        ]
+        payload = build_aggregator_input(
+            _game(),
+            approved_opinions=_committee() + [prior_row],
+            finals=finals,
+            snapshots=[],
+            registry=self.registry,
+            policy=self.policy,
+        )
+        self.assertEqual(payload["scoreboard"]["resolved_games"], 1)
+        self.assertEqual(payload["scoreboard"]["graded_opinions"], 1)
+
     def test_judge_request_is_masked_and_deterministic(self) -> None:
         request = build_judge_request(self.payload)
         rendered = json.dumps(request)

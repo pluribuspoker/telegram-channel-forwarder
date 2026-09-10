@@ -751,9 +751,8 @@ input containing no final score, injury annotation, post-kickoff line, or grade.
 The corrected pregame input also included Sean Perry's Seahawks moneyline,
 submitted one minute before kickoff. The replay kept Seattle 24-20, Seattle -3,
 and total PASS, but changed home-win probability from 60% to 62% and side
-confidence from one star to two. That fails the agreed exact replacement gate,
-so the Celebrity row and its dependent God Rules/Judge rows remain unchanged
-while reconciliation is paused.
+confidence from one star to two. The reviewer accepted that corrected replay as
+canonical rather than preserve the contaminated source package.
 
 The replay also proved that complete artifacts can outgrow one Google Sheets
 cell: its canonical input was 60,232 characters versus the 50,000-character
@@ -772,13 +771,28 @@ across partial failures and spool replay. The rail covers `input_json`,
 pick legs, calibration summaries, and nondeterministic-analysis artifacts.
 Short bounded fields such as review metadata retain explicit per-cell limits.
 
-After chunking is deployed, repeat the controlled Celebrity replay. Continue
-to dependent God Rules and Fable Judge replays only when every grading-relevant
-Celebrity field matches the original. A successful replacement leaves one
-active opinion and one grade per expert; superseded raw rows remain hidden
-audit history and are excluded from display, committee selection, grading, and
-scoreboard counts. A changed replay is not substituted into postgame
-performance.
+The dependent God replay exposed a separate time-travel bug: the ordinary
+postgame aggregator builder supplied every current-season final to the
+scoreboard, including the target game's result, even though `scoreboard.as_of`
+was pre-kickoff. `build_aggregator_input()` now filters finals to kickoff times
+strictly before the target kickoff before constructing either the scoreboard or
+game-annotation context. A regression test supplies one prior final, the target
+final, and one later final and verifies that only the prior game is graded.
+
+The Patriots-Seahawks replacement used a pinned result-free input with zero
+resolved games, the final pre-kickoff BetOnline snapshot, and the corrected
+latest committee. Rules moved from Seattle 23-20, 60.69%, margin +3.0 to
+Seattle 24-20, 61.52%, margin +3.38; Judge kept Seattle 24-20 and 61% while
+moving margin from +3.0 to +3.2. Both arms remained PASS on side and total.
+The first isolated Fable response used `5-6` to describe cohort sizes, which
+the citation validator correctly read as an unsupported W-L record; the one
+permitted fresh targeted repair changed only that phrase. Canonical ids are
+Celebrity `500648e3-f986-40b0-963a-bd5d8fd30c8a`, Rules
+`124eb863-2840-4ef8-9bf0-1b55607bf6cc`, and Judge
+`b4b0fdef-7a5b-4a49-9320-875e068dd45c`. Superseded approved rows are rejected
+as hidden audit history, and their ledger rows are replaced so display,
+committee selection, grading, and scoreboard counts use one canonical row per
+expert for this game.
 
 `emergency_migration.txt` now documents the implementation requirements,
 lossless export/import format, one-day service freeze and SQLite cutover,
