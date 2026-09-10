@@ -2955,7 +2955,8 @@ def validate_opinion(
             )
             if not re.search(
                 rf"(?<!\d){count_pattern}(?!\d)"
-                rf"(?:\s+[\w-]+){{0,8}}\s+(?:games?|picks?)\b",
+                rf"(?:\s+[\w-]+){{0,8}}\s+"
+                rf"(?:games?|picks?|predictions?)\b",
                 path_text,
                 re.IGNORECASE,
             ):

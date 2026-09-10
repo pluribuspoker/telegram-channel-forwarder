@@ -798,6 +798,31 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(row["generation_status"], "valid")
 
+    async def test_accepts_prediction_as_calibration_count_noun(self) -> None:
+        output = self._output()
+        output["supporting_factors"][2]["claim"] = (
+            "Cee's resolved NFL moneyline record is 1-0 across 1 eligible "
+            "prediction."
+        )
+
+        async def create_fn(**_kwargs):
+            return SimpleNamespace(
+                content=[SimpleNamespace(text=json.dumps(output))]
+            )
+
+        row = await generate_opinion(
+            expert_id="cee",
+            game=_game(),
+            history=_history(),
+            leans=[_current_lean(), _spread_lean(), _prior_lean()],
+            win_predictions=_predictions(),
+            cee_user_id=CEE_ID,
+            store=MemoryStore(),
+            create_fn=create_fn,
+        )
+
+        self.assertEqual(row["generation_status"], "valid")
+
     async def test_rejects_missing_season_gap_bucket(self) -> None:
         output = self._output()
         output["supporting_factors"][0]["claim"] = (
