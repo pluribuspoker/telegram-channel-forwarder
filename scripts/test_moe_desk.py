@@ -1245,6 +1245,16 @@ class BotApiTests(unittest.TestCase):
         self.assertEqual(api.sent[0]["topic"], 3)
         self.assertEqual(api.sent[0]["text"], "<b>a &lt;b&gt; c</b>\nline 2")
         self.assertTrue(api.sent[0]["silent"])
+        # A pre-rendered HTML digest is sent as-is, the plain text unused.
+        self.assertTrue(
+            post_scores_notice(
+                "plain", html="<b>hdr</b>\n<blockquote>x</blockquote>",
+                environ=env, api=api,
+            )
+        )
+        self.assertEqual(
+            api.sent[1]["text"], "<b>hdr</b>\n<blockquote>x</blockquote>"
+        )
         self.assertFalse(post_scores_notice("x", environ={**env, "MOE_DESK_SCORES_TOPIC": ""}, api=api))
         self.assertFalse(post_scores_notice("x", environ={}, api=api))
 

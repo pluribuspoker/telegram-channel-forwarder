@@ -2038,16 +2038,29 @@ def sync_desk(
     return summary
 
 
-def post_scores_notice(text: str, *, environ: Any = None, api: BotApi | None = None) -> bool:
+def post_scores_notice(
+    text: str,
+    *,
+    html: str | None = None,
+    environ: Any = None,
+    api: BotApi | None = None,
+) -> bool:
     """Post the grading digest into the Scores topic. ``False`` when the desk
     or its Scores topic is not configured, or the post failed — the caller
-    falls back to the watchdog DM."""
+    falls back to the watchdog DM. ``html`` is a pre-rendered Bot API HTML
+    digest sent as-is; without it, ``text`` goes through
+    ``render_scores_notice``."""
     config = desk_config_from_env(environ)
     if config is None or not config.scores_topic:
         return False
     api = api or BotApi(config.bot_token)
     try:
-        api.send(config.chat_id, config.scores_topic, render_scores_notice(text), silent=True)
+        api.send(
+            config.chat_id,
+            config.scores_topic,
+            html if html else render_scores_notice(text),
+            silent=True,
+        )
     except DeskApiError as exc:
         print(f"desk: scores post failed: {exc}", file=sys.stderr)
         return False

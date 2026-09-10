@@ -26,6 +26,7 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from html import escape as _escape_html
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -68,11 +69,15 @@ from scripts.generate_moe_opinion import _latest_alignment
 from scripts.god_judge_runner import send_watchdog_dm
 
 
-def deliver_notification(text: str) -> bool:
-    """The desk group's Scores topic when configured, else the watchdog DM."""
+def deliver_notification(text: str, html: str | None = None) -> bool:
+    """The desk group's Scores topic when configured, else the watchdog DM.
+
+    The Scores post prefers the pre-rendered ``html`` digest; the watchdog
+    DM is sent without a parse mode, so it always gets the plain ``text``.
+    """
     from moe_desk import post_scores_notice
 
-    if post_scores_notice(text):
+    if post_scores_notice(text, html=html):
         return True
     return send_watchdog_dm(text)
 
@@ -222,6 +227,7 @@ def notification_text(
     finals: list[dict] | None = None,
     opinions: list[dict] | None = None,
     snapshots: list[dict] | None = None,
+    html: bool = False,
 ) -> str:
     """The grading digest for a run that appended rows.
 
@@ -234,6 +240,14 @@ def notification_text(
     committee), only the latest shows. The season-to-date scoreboard closes
     the message. Blocks degrade to bare header lines from the end when the
     full text would pass Telegram's limit.
+
+    ``html=True`` renders the Bot API HTML the Scores topic gets — the same
+    content visually chunked (operator-asked, 2026-09-10: the flat version
+    still read as one wall): bold section and game headers, each game's
+    expert lines in a <blockquote> (Telegram's indent bar separates the
+    games), the expert bolded at the start of its line, and the season
+    scoreboard collapsed into a <blockquote expandable>. Plain mode is what
+    the watchdog-DM fallback sends, tag-free.
     """
     opinions = list(opinions or [])
     by_id = {str(op.get("opinion_id") or ""): op for op in opinions}
@@ -347,25 +361,72 @@ def notification_text(
         for expert_id, record in sorted(scoreboard["by_expert"].items())
     ]
 
+    esc = _escape_html if html else (lambda value: value)
+
+    def _bold(line: str) -> str:
+        return f"<b>{esc(line)}</b>" if html else line
+
+    def _expert_html(line: str) -> str:
+        # '↳ bet: …' stays plain; 'ak 20-24: …' bolds its prefix through the
+        # colon so each expert anchors its own line inside the quote.
+        if line.startswith("↳"):
+            return esc(line)
+        head, sep, rest = line.partition(": ")
+        if not sep:
+            return esc(line)
+        return f"<b>{esc(head)}:</b> {esc(rest)}"
+
     def _assemble(detailed: int) -> str:
-        lines = list(header_lines)
+        lines = [_bold(header_lines[0])]
+        lines.extend(esc(line) for line in header_lines[1:])
         for i, block in enumerate(blocks):
             lines.append("")
-            lines.extend(block if i < detailed else block[:1])
+            lines.append(_bold(block[0]))
+            if i >= detailed:
+                continue
+            if html:
+                lines.append(esc(block[1]))
+                if block[2:]:
+                    quoted = "\n".join(_expert_html(line) for line in block[2:])
+                    lines.append(f"<blockquote>{quoted}</blockquote>")
+            else:
+                lines.extend(block[1:])
         if extra_games:
-            lines.append(f"+{extra_games} more games")
+            lines.append(esc(f"+{extra_games} more games"))
         if footnotes:
-            lines.extend(["", *footnotes])
-        lines.extend(["", *season_lines])
+            lines.extend(["", *(esc(note) for note in footnotes)])
+        if html:
+            season_records = "\n".join(
+                f"<b>{esc(head)}</b> · {esc(rest)}" if sep else esc(line)
+                for line in season_lines[1:]
+                for head, sep, rest in [line.partition(" · ")]
+            )
+            lines.extend(
+                ["", _bold("season so far"),
+                 f"<blockquote expandable>{season_records}</blockquote>"]
+            )
+        else:
+            lines.extend(["", *season_lines])
         return "\n".join(lines)
 
     # Full detail if it fits; otherwise degrade trailing games to their bare
     # score-header line (never drop a game), and hard-truncate only as the
-    # last resort.
+    # last resort. A hard truncation could cut an HTML tag open, so the html
+    # mode's last resort is the tag-free plain render instead — parse_mode
+    # HTML shows it as-is (the digest never contains <, > or &).
     for detailed in range(len(blocks), -1, -1):
         text = _assemble(detailed)
         if len(text) <= NOTIFY_MAX_CHARS:
             return text
+    if html:
+        return notification_text(
+            season=season,
+            scoreboard=scoreboard,
+            new_rows=new_rows,
+            finals=finals,
+            opinions=opinions,
+            snapshots=snapshots,
+        )
     return text[: NOTIFY_MAX_CHARS - 1] + "…"
 
 
@@ -514,15 +575,17 @@ def main() -> None:
         f"Appended {len(new_rows)} graded rows to {GRADES_TAB} "
         f"({mean_count} mean-of-arms)."
     )
+    digest_kwargs = dict(
+        season=season,
+        scoreboard=scoreboard,
+        new_rows=new_rows,
+        finals=finals,
+        opinions=approved,
+        snapshots=snapshots,
+    )
     if args.notify and not deliver_notification(
-        notification_text(
-            season=season,
-            scoreboard=scoreboard,
-            new_rows=new_rows,
-            finals=finals,
-            opinions=approved,
-            snapshots=snapshots,
-        )
+        notification_text(**digest_kwargs),
+        html=notification_text(**digest_kwargs, html=True),
     ):
         # The append succeeded and will not repeat (opinion-id dedupe), so a
         # lost DM is the operator's only signal — fail the run and let the

@@ -277,6 +277,76 @@ class GameBlockTests(unittest.TestCase):
         )
 
 
+class HtmlDigestTests(GameBlockTests):
+    """html=True: the same content, visually chunked for the Scores topic."""
+
+    def test_html_bolds_headers_and_quotes_the_game_block(self) -> None:
+        text = self._text(html=True)
+        self.assertTrue(text.startswith("<b>pickbot: MOE grades · season 2026</b>"))
+        self.assertIn("<b>🏈 Patriots 10 @ Seahawks 13 · Week 1</b>", text)
+        # The close line stays outside the quote; the expert lines live in
+        # ONE blockquote per game, each expert bolded through its colon.
+        self.assertIn(
+            "close: Seahawks -3 · total 44.5\n<blockquote><b>ak 20-24:</b> "
+            "Seahawks -3 ♻️ · U 44.5 ✅ · B 0.1444",
+            text,
+        )
+        self.assertIn("↳ bet: Seahawks -3 ♻️ (clv +0.0)", text)
+        self.assertIn("<b>mean_of_arms:</b> ats ♻️ · o/u ✅ · B 0.1534</blockquote>", text)
+
+    def test_html_season_board_is_an_expandable_quote(self) -> None:
+        text = self._text(html=True)
+        self.assertIn("<b>season so far</b>", text)
+        self.assertIn(
+            "<blockquote expandable><b>god_rules</b> · n2 · B 0.1530", text
+        )
+        self.assertTrue(text.endswith("</blockquote>"))
+
+    def test_html_degraded_games_keep_only_the_bold_header(self) -> None:
+        rows = []
+        for game in range(8):
+            for i in range(25):
+                rows.append(
+                    _row(
+                        f"o{game}-{i}",
+                        f"expert_{i:02d}",
+                        away=f"Away Team{game}",
+                        home=f"Home Team{game}",
+                        final="10-13",
+                        event_id=f"ev{game}",
+                    )
+                )
+        board = {
+            "resolved_games": 8,
+            "graded_opinions": len(rows),
+            "by_expert": {f"expert_{i:02d}": _record(1, 0.25) for i in range(25)},
+        }
+        text = notification_text(
+            season=2026, scoreboard=board, new_rows=rows, html=True
+        )
+        self.assertLessEqual(len(text), NOTIFY_MAX_CHARS)
+        self.assertIn("<b>🏈 Team7 10 @ Team7 13 · Week 1</b>", text)
+        # Balanced tags — a degraded game contributes no quote at all.
+        self.assertEqual(text.count("<blockquote"), text.count("</blockquote>"))
+
+    def test_html_last_resort_is_the_tag_free_plain_render(self) -> None:
+        board = {
+            "resolved_games": 1,
+            "graded_opinions": 120,
+            "by_expert": {f"expert_{i:03d}": _record(1, 0.25) for i in range(120)},
+        }
+        text = notification_text(
+            season=2026,
+            scoreboard=board,
+            new_rows=[_row("o1", "schedule")],
+            html=True,
+        )
+        self.assertEqual(len(text), NOTIFY_MAX_CHARS)
+        self.assertTrue(text.endswith("…"))
+        self.assertNotIn("<b>", text)
+        self.assertNotIn("<blockquote", text)
+
+
 class BudgetTests(unittest.TestCase):
     def _board(self, experts: int) -> dict:
         return {
