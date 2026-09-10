@@ -848,6 +848,7 @@ def odds_api_context(fighter: str, events: list[dict]) -> str:
 
 async def fetch_soccer_context(
     teams: list[str], date: str, include_stats: bool = False,
+    include_linescores: bool = False,
 ) -> tuple[str, str]:
     """Search ESPN soccer leagues for score context.
 
@@ -855,6 +856,10 @@ async def fetch_soccer_context(
     exists but isn't finished yet, or "" if not found at all.
     When include_stats is True, also fetches match summary for team stats
     (corners, shots, etc.).
+    When include_linescores is True, appends the half-by-half line scores from
+    the match summary — the soccer scoreboard endpoints ship `linescores`
+    empty, so a period bet (1H total, ...) graded off the scoreboard alone
+    sees only the final and returns UNKNOWN every attempt.
     """
     if not teams:
         return "", date
@@ -883,10 +888,17 @@ async def fetch_soccer_context(
                 if matched:
                     display = {"events": [e for e in completed if e.get("id") in set(matched)]}
                     ctx = scoreboard_text(display, "Soccer")
-                    if include_stats:
-                        stats = await _fetch_soccer_stats(http, category, league, matched[0])
-                        if stats:
-                            ctx += "\n" + stats
+                    if include_stats or include_linescores:
+                        summary = await _fetch_soccer_summary(http, category, league, matched[0])
+                        if summary:
+                            if include_linescores:
+                                ls = line_scores_text(summary, "Soccer")
+                                if ls != "No line score data available":
+                                    ctx += "\n" + ls
+                            if include_stats:
+                                stats = _soccer_stats_text(summary)
+                                if stats:
+                                    ctx += "\n" + stats
                     return ctx, search_date
                 if find_event_ids(sb.get("events", []), teams):
                     return "PENDING", search_date
@@ -923,15 +935,19 @@ async def fetch_soccer_scoreboard(date: str) -> dict | None:
     return {"events": [e for sb in results if sb for e in sb.get("events", [])]}
 
 
-async def _fetch_soccer_stats(http: httpx.AsyncClient, category: str, league: str, event_id: str) -> str:
-    """Fetch team statistics from ESPN summary for a soccer match."""
+async def _fetch_soccer_summary(http: httpx.AsyncClient, category: str, league: str, event_id: str) -> dict | None:
+    """Fetch the ESPN match summary for a soccer event."""
     url = f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/summary"
     try:
         r = await http.get(url, params={"event": event_id}, timeout=10)
         r.raise_for_status()
-        data = r.json()
+        return r.json()
     except Exception:
-        return ""
+        return None
+
+
+def _soccer_stats_text(data: dict) -> str:
+    """Format team statistics (corners, shots, ...) from a soccer match summary."""
     box_teams = data.get("boxscore", {}).get("teams", [])
     if not box_teams:
         return ""

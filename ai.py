@@ -703,7 +703,13 @@ async def build_context(
         if not teams:
             return CONTEXT_SKIP, date
         needs_stats = bool(pick.get("prop_stat"))
-        ctx, game_date = await fetch_soccer_context(teams, date, include_stats=needs_stats)
+        # Period bets grade off the summary's half scores — the soccer
+        # scoreboards ship linescores empty, so a finished 1H total graded
+        # from the scoreboard alone reads final-only and stays UNKNOWN.
+        needs_halves = bool(period) and period != "game"
+        ctx, game_date = await fetch_soccer_context(
+            teams, date, include_stats=needs_stats,
+            include_linescores=needs_halves)
         if ctx == "PENDING":
             return CONTEXT_PENDING, game_date
         return (ctx if ctx else CONTEXT_SKIP), game_date
