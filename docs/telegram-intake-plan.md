@@ -725,18 +725,25 @@ distribution is descriptive context, not the goal.
   and all four quarters; partial-game rows remain tracked but ungraded until
   compatible deterministic period results exist.
 - The deterministic input separately reports the active picks, side and total
-  distributions, individual records, pairwise agreement records, and each
-  celebrity's record specifically when a pair disagreed. Exact-permutation
-  history matches celebrity identity plus home/away or Over/Under roles, rather
-  than merely matching the number of participants or the majority label. Only
-  the latest pre-kickoff revision of each bet and results available before the
-  target kickoff enter calibration. Full-game side, total, and team-total bets
-  can settle from final scores. Partial-game, player-prop, and other picks
+  distributions, and individual and pairwise records for composite team
+  direction, spread, moneyline, and total markets. Composite `side` preserves
+  the fact that celebrities backed the same team across spread and moneyline,
+  but produces a same-game grade only when those wagers settle compatibly;
+  spread and moneyline calibration always remain distinct.
+- Pairwise agreement and disagreement records include W-L-P, total games,
+  decided bets, win rate excluding pushes, and conditional lift versus each
+  celebrity's own market-specific baseline. All sample sizes remain visible
+  and no hard minimum suppresses a small sample; the prompt requires the model
+  to weigh its uncertainty. Exact-permutation history matches the full current
+  participant set by identity plus home/away, spread favorite/underdog, or
+  Over/Under role. It does not mine arbitrary triples or other subsets.
+- Only the latest pre-kickoff revision of each bet and results available before
+  the target kickoff enter calibration. Full-game side, total, and team-total
+  bets can settle from final scores. Partial-game, player-prop, and other picks
   remain tracked but ungraded until compatible deterministic results exist.
-  Calibration records persist W-L-P counts and game totals but omit unused
-  duplicate chronological-result strings; the evidence catalog already
-  preserves every record the model can cite, keeping growing participant
-  slates within the Google Sheets cell limit.
+  Calibration omits duplicate chronological-result strings; the evidence
+  catalog contains every record the model may cite, and the complete generated
+  input and output persist in SQLite.
 - The opinion may recommend the current full-game spread side and/or total, or
   PASS either leg. Props and other markets may be displayed or used as
   counterevidence but cannot directly support a game side or total. A

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from celebrity_picks import build_celebrity_rows, parse_custom_pick_text
 from moe import generate_opinion, load_expert
-from moe_celebrity import build_celebrity_input
+from moe_celebrity import _conditional_lift, _record, build_celebrity_input
 from nfl_lines import (
     LATEST_AWAY_COLUMN,
     LATEST_HOME_COLUMN,
@@ -355,6 +355,238 @@ class CelebrityInputTest(unittest.TestCase):
             side["records_by_celebrity"]["Cousin Sal"]["losses"],
             1,
         )
+        calibration = payload["nfl_calibration"]
+        self.assertEqual(
+            calibration["individual"]["Bill Simmons"]["moneyline"]["wins"],
+            1,
+        )
+        self.assertEqual(
+            calibration["individual"]["Bill Simmons"]["spread"]["games"],
+            0,
+        )
+        self.assertEqual(
+            calibration["individual"]["Cousin Sal"]["spread"]["losses"],
+            1,
+        )
+        self.assertEqual(
+            calibration["exact_current_permutation"]["spread"]["pattern"],
+            {"Cousin Sal": "home_favorite"},
+        )
+
+    def test_pairwise_lift_uses_market_baseline_and_sample_counts(self) -> None:
+        current = _current_rows()
+        bill_spread = _standard(
+            submission_id="bill-spread",
+            celebrity="Bill Simmons",
+            submitted_at="2026-09-07T18:10:00+00:00",
+            market="spread",
+            side="Seattle Seahawks",
+            line=-3.5,
+        )
+        current.append(bill_spread)
+
+        agreement_rows = []
+        for row in current:
+            past = dict(row)
+            past["event_id"] = "spread-agreement"
+            past["commence_time_utc"] = "2026-09-08T00:20:00+00:00"
+            agreement_rows.append(past)
+        bill_loss = dict(bill_spread)
+        bill_loss["event_id"] = "bill-baseline-loss"
+        bill_loss["commence_time_utc"] = "2026-09-09T00:20:00+00:00"
+        history = [
+            {
+                "event_id": "spread-agreement",
+                "kickoff_utc": "2026-09-08T00:20:00+00:00",
+                "away_team": _game()["away_team"],
+                "home_team": _game()["home_team"],
+                "away_score": 17,
+                "home_score": 24,
+                "completed": True,
+            },
+            {
+                "event_id": "bill-baseline-loss",
+                "kickoff_utc": "2026-09-09T00:20:00+00:00",
+                "away_team": _game()["away_team"],
+                "home_team": _game()["home_team"],
+                "away_score": 20,
+                "home_score": 21,
+                "completed": True,
+            },
+        ]
+
+        payload = build_celebrity_input(
+            _game(),
+            history,
+            current + agreement_rows + [bill_loss],
+            [],
+        )
+
+        spread = payload["nfl_calibration"]["pairwise"][0]["spread"]
+        bill_lift = spread["agreement_lift_by_celebrity"]["Bill Simmons"]
+        self.assertEqual(spread["current_relation"], "agreement")
+        self.assertEqual(spread["agreement_record"]["games"], 1)
+        self.assertEqual(bill_lift["baseline_games"], 2)
+        self.assertEqual(bill_lift["baseline_decisions"], 2)
+        self.assertEqual(bill_lift["conditional_games"], 1)
+        self.assertEqual(bill_lift["lift"], 0.5)
+        pair_item = next(
+            item
+            for item in payload["evidence_catalog"]
+            if item["id"] == "pair_01_spread"
+        )
+        self.assertTrue(pair_item["supporting_allowed"])
+
+    def test_agreement_tracks_each_celebritys_actual_line(self) -> None:
+        current = _current_rows()
+        current.append(
+            _standard(
+                submission_id="bill-spread",
+                celebrity="Bill Simmons",
+                submitted_at="2026-09-07T18:10:00+00:00",
+                market="spread",
+                side="Seattle Seahawks",
+                line=-3.5,
+            )
+        )
+        past_rows = []
+        for row in current:
+            past = dict(row)
+            past["event_id"] = "different-spread-lines"
+            past["commence_time_utc"] = "2026-09-08T00:20:00+00:00"
+            if (
+                past["celebrity_name"] == "Bill Simmons"
+                and past["market"] == "spread"
+            ):
+                past["line"] = -2
+            past_rows.append(past)
+        history = [
+            {
+                "event_id": "different-spread-lines",
+                "kickoff_utc": "2026-09-08T00:20:00+00:00",
+                "away_team": _game()["away_team"],
+                "home_team": _game()["home_team"],
+                "away_score": 17,
+                "home_score": 20,
+                "completed": True,
+            }
+        ]
+
+        payload = build_celebrity_input(
+            _game(),
+            history,
+            current + past_rows,
+            [],
+        )
+
+        spread = payload["nfl_calibration"]["pairwise"][0]["spread"]
+        self.assertEqual(spread["agreement_record"]["games"], 0)
+        self.assertEqual(spread["first_record_when_agreeing"]["wins"], 1)
+        self.assertEqual(spread["second_record_when_agreeing"]["losses"], 1)
+        self.assertEqual(
+            spread["agreement_lift_by_celebrity"]["Bill Simmons"][
+                "conditional_decisions"
+            ],
+            1,
+        )
+        self.assertEqual(
+            spread["agreement_lift_by_celebrity"]["Cousin Sal"][
+                "conditional_decisions"
+            ],
+            1,
+        )
+
+    def test_push_only_record_cannot_support_a_recommendation(self) -> None:
+        bill_moneyline = next(
+            row
+            for row in _current_rows()
+            if row["celebrity_name"] == "Bill Simmons"
+            and row["market"] == "moneyline"
+        )
+        past = dict(bill_moneyline)
+        past["event_id"] = "moneyline-push"
+        past["commence_time_utc"] = "2026-09-08T00:20:00+00:00"
+        history = [
+            {
+                "event_id": "moneyline-push",
+                "kickoff_utc": "2026-09-08T00:20:00+00:00",
+                "away_team": _game()["away_team"],
+                "home_team": _game()["home_team"],
+                "away_score": 20,
+                "home_score": 20,
+                "completed": True,
+            }
+        ]
+
+        payload = build_celebrity_input(
+            _game(),
+            history,
+            _current_rows() + [past],
+            [],
+        )
+
+        item = next(
+            catalog_item
+            for catalog_item in payload["evidence_catalog"]
+            if catalog_item["id"] == "individual_01_moneyline"
+        )
+        self.assertFalse(item["supporting_allowed"])
+        self.assertEqual(payload["confidence_cap"], 2)
+
+    def test_pair_support_matches_the_current_relation(self) -> None:
+        past_rows = []
+        for row in _current_rows():
+            past = dict(row)
+            past["event_id"] = "historical-disagreement"
+            past["commence_time_utc"] = "2026-09-08T00:20:00+00:00"
+            if (
+                past["celebrity_name"] == "Bill Simmons"
+                and past["market"] == "moneyline"
+            ):
+                past["direction"] = "New England Patriots"
+                past["side"] = "New England Patriots"
+            past_rows.append(past)
+        history = [
+            {
+                "event_id": "historical-disagreement",
+                "kickoff_utc": "2026-09-08T00:20:00+00:00",
+                "away_team": _game()["away_team"],
+                "home_team": _game()["home_team"],
+                "away_score": 17,
+                "home_score": 24,
+                "completed": True,
+            }
+        ]
+
+        payload = build_celebrity_input(
+            _game(),
+            history,
+            _current_rows() + past_rows,
+            [],
+        )
+
+        pair = payload["nfl_calibration"]["pairwise"][0]["side"]
+        self.assertEqual(pair["current_relation"], "agreement")
+        self.assertEqual(pair["agreement_record"]["decisions"], 0)
+        self.assertGreater(
+            pair["first_record_when_disagreeing"]["decisions"],
+            0,
+        )
+        item = next(
+            catalog_item
+            for catalog_item in payload["evidence_catalog"]
+            if catalog_item["id"] == "pair_01_side"
+        )
+        self.assertFalse(item["supporting_allowed"])
+
+    def test_zero_decision_records_have_no_rate_or_lift(self) -> None:
+        push_only = _record(["P"])
+        empty = _record([])
+
+        self.assertEqual(push_only["games"], 1)
+        self.assertEqual(push_only["decisions"], 0)
+        self.assertIsNone(push_only["win_rate"])
+        self.assertIsNone(_conditional_lift(push_only, empty)["lift"])
 
     def test_pairwise_disagreement_tracks_each_celebrity(self) -> None:
         current = _current_rows()
@@ -462,8 +694,9 @@ class CelebrityGenerationTest(unittest.IsolatedAsyncioTestCase):
         expert = load_expert("celebrity")
 
         self.assertEqual(expert["name"], "Celebrity Expert")
-        self.assertEqual(expert["version"], 2)
-        self.assertEqual(expert["prompt_version"], 2)
+        self.assertEqual(expert["version"], 3)
+        self.assertEqual(expert["prompt_version"], 3)
+        self.assertEqual(expert["prompt"], "prompts/celebrity/v3.md")
         self.assertEqual(expert["input_profile"], "celebrity_patterns")
         self.assertEqual(expert["allowed_models"], ["claude-opus-4-8"])
         self.assertTrue(expert["committee_optional"])

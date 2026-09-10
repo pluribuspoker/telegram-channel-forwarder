@@ -136,9 +136,9 @@ experts:
   celebrity:
     name: Celebrity Expert
     mode: agent
-    version: 2
-    prompt_version: 2
-    prompt: prompts/celebrity/v2.md
+    version: 3
+    prompt_version: 3
+    prompt: prompts/celebrity/v3.md
     input_profile: celebrity_patterns
     output_schema_version: 5
     default_model: claude-opus-4-8
