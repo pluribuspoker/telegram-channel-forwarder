@@ -82,6 +82,16 @@ class GameAnnotationTest(unittest.TestCase):
             ["annotation-1"],
         )
 
+    def test_correction_cannot_supersede_another_game(self) -> None:
+        correction = _annotation(
+            annotation_id="annotation-2",
+            event_id="event-2",
+            supersedes_annotation_id="annotation-1",
+        )
+
+        with self.assertRaisesRegex(ValueError, "same event_id"):
+            active_approved_annotations([_annotation(), correction])
+
     def test_attaches_annotation_and_builds_consumer_context(self) -> None:
         games = attach_game_annotations(
             [

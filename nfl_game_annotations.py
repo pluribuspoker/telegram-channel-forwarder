@@ -110,12 +110,24 @@ def active_approved_annotations(
     ids = [row["annotation_id"] for row in normalized]
     if len(ids) != len(set(ids)):
         raise ValueError("Duplicate game annotation_id")
+    by_id = {row["annotation_id"]: row for row in normalized}
     approved = [row for row in normalized if row["review_status"] == "approved"]
-    superseded = {
-        row["supersedes_annotation_id"]
-        for row in approved
-        if row["supersedes_annotation_id"]
-    }
+    superseded: set[str] = set()
+    for row in approved:
+        supersedes = row["supersedes_annotation_id"]
+        if not supersedes:
+            continue
+        target = by_id.get(supersedes)
+        if target is None:
+            raise ValueError(
+                f"Unknown supersedes_annotation_id: {supersedes}"
+            )
+        if target["event_id"] != row["event_id"]:
+            raise ValueError(
+                "A game annotation can only supersede an annotation for the "
+                "same event_id"
+            )
+        superseded.add(supersedes)
     return [row for row in approved if row["annotation_id"] not in superseded]
 
 
