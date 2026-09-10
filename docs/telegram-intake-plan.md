@@ -742,6 +742,44 @@ distribution is descriptive context, not the goal.
 - The approved voice enters only the God pools for non-PASS legs. Games with no
   celebrity opinion remain eligible for the automated God Expert.
 
+### Implemented locally — 2026-09-10: Oversized MOE artifacts and Seahawks reconciliation
+
+The Patriots-Seahawks Celebrity Expert opinion was generated before reviewed
+user terms replaced legacy BetOnline fallbacks. A controlled postgame replay
+used a fresh isolated Opus 4.8 agent at max effort, with tools disabled and an
+input containing no final score, injury annotation, post-kickoff line, or grade.
+The corrected pregame input also included Sean Perry's Seahawks moneyline,
+submitted one minute before kickoff. The replay kept Seattle 24-20, Seattle -3,
+and total PASS, but changed home-win probability from 60% to 62% and side
+confidence from one star to two. That fails the agreed exact replacement gate,
+so the Celebrity row and its dependent God Rules/Judge rows remain unchanged
+while reconciliation is paused.
+
+The replay also proved that complete artifacts can outgrow one Google Sheets
+cell: its canonical input was 60,232 characters versus the 50,000-character
+cell limit. `GoogleSheetsMoeOpinionStore` now preserves exact replayability
+rather than truncating model evidence. Oversized fields are split into
+40,000-character rows in `moe_artifact_chunks`, keyed by a stable artifact id,
+opinion id, artifact type, zero-based chunk index, chunk count, and
+whole-artifact SHA-256. `moe_opinions` appends `artifact_refs_json` through a
+guarded trailing-header migration while legacy inline rows remain readable.
+Readers reconstruct chunks in order and verify identity, count, metadata, and
+hash before returning the original string; missing, duplicated, reordered, or
+changed chunks fail closed. Chunk reads disable Sheets numeric conversion so a
+numeric-looking substring cannot lose leading zeroes. Writes are idempotent
+across partial failures and spool replay. The rail covers `input_json`,
+`raw_response`, complete rendered opinions, cited factor JSON, both structured
+pick legs, calibration summaries, and nondeterministic-analysis artifacts.
+Short bounded fields such as review metadata retain explicit per-cell limits.
+
+After chunking is deployed, repeat the controlled Celebrity replay. Continue
+to dependent God Rules and Fable Judge replays only when every grading-relevant
+Celebrity field matches the original. A successful replacement leaves one
+active opinion and one grade per expert; superseded raw rows remain hidden
+audit history and are excluded from display, committee selection, grading, and
+scoreboard counts. A changed replay is not substituted into postgame
+performance.
+
 `emergency_migration.txt` now documents the implementation requirements,
 lossless export/import format, one-day service freeze and SQLite cutover,
 verification gates, backups, and rollback with post-cutover delta replay. It

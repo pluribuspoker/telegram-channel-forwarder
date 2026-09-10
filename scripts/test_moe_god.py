@@ -2674,7 +2674,7 @@ class SampleRowTests(unittest.IsolatedAsyncioTestCase):
         values = [row[header] for header in OPINION_HEADERS]
         worksheet = SimpleNamespace(
             col_values=lambda column: ["opinion_id", "sample-1"],
-            row_values=lambda number: values,
+            row_values=lambda number: OPINION_HEADERS if number == 1 else values,
             update=lambda *args, **kwargs: self.fail("a sample row was updated"),
         )
         store._spreadsheet_instance = SimpleNamespace(worksheet=lambda name: worksheet)

@@ -66,13 +66,24 @@ MOE_PENDING_PATH = ROOT / "logs" / "moe_pending.jsonl"
 MOE_PENDING_LOCK_PATH = ROOT / "logs" / "moe_pending.lock"
 ET = ZoneInfo("America/New_York")
 MAX_SHEET_CELL_CHARS = 50_000
+ARTIFACT_CHUNK_CHARS = 40_000
 MAX_THESIS_CHARS = 500
 MAX_THESIS_RENDERED_CHARS = 500
 TELEGRAM_DETAIL_CHARS = 2_800
 TELEGRAM_EXPERTS_PER_PAGE = 5
 
 OPINIONS_TAB = "moe_opinions"
-OPINION_HEADERS = [
+ARTIFACTS_TAB = "moe_artifact_chunks"
+ARTIFACT_HEADERS = [
+    "artifact_id",
+    "opinion_id",
+    "artifact_type",
+    "chunk_index",
+    "chunk_count",
+    "artifact_sha256",
+    "content",
+]
+OPINION_HEADERS_V1 = [
     "opinion_id",
     "generated_at_utc",
     "generated_at_et",
@@ -133,6 +144,23 @@ OPINION_HEADERS = [
     "total_pick_json",
     "calibration_summary_json",
 ]
+OPINION_HEADERS = [*OPINION_HEADERS_V1, "artifact_refs_json"]
+CHUNKABLE_ARTIFACT_FIELDS = (
+    "supporting_factors_json",
+    "counterarguments_json",
+    "full_opinion",
+    "input_json",
+    "raw_response",
+    "generation_error",
+    "no_signal_factors_json",
+    "discarded_considerations_json",
+    "nondeterministic_analysis_raw",
+    "nondeterministic_analysis_usable",
+    "nondeterministic_factuality_json",
+    "side_pick_json",
+    "total_pick_json",
+    "calibration_summary_json",
+)
 
 FORBIDDEN_SCHEDULE_INPUT_KEYS = {
     "bookmaker",
@@ -182,6 +210,128 @@ def _canonical_json(value: Any) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def _artifact_storage_rows(
+    row: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Replace oversized artifact cells with verified chunk references."""
+    stored = dict(row)
+    chunks: list[dict[str, Any]] = []
+    refs: dict[str, dict[str, Any]] = {}
+    opinion_id = str(row.get("opinion_id") or "")
+    if not opinion_id:
+        raise ValueError("Chunked MOE artifacts require opinion_id")
+    for field in CHUNKABLE_ARTIFACT_FIELDS:
+        value = stored.get(field)
+        if value in (None, ""):
+            continue
+        text = str(value)
+        if len(text) < MAX_SHEET_CELL_CHARS:
+            continue
+        artifact_sha256 = _sha256_text(text)
+        artifact_id = hashlib.sha256(
+            f"{opinion_id}\0{field}\0{artifact_sha256}".encode("utf-8")
+        ).hexdigest()
+        parts = [
+            text[start : start + ARTIFACT_CHUNK_CHARS]
+            for start in range(0, len(text), ARTIFACT_CHUNK_CHARS)
+        ]
+        refs[field] = {
+            "artifact_id": artifact_id,
+            "chunk_count": len(parts),
+            "sha256": artifact_sha256,
+        }
+        stored[field] = ""
+        chunks.extend(
+            {
+                "artifact_id": artifact_id,
+                "opinion_id": opinion_id,
+                "artifact_type": field,
+                "chunk_index": index,
+                "chunk_count": len(parts),
+                "artifact_sha256": artifact_sha256,
+                "content": content,
+            }
+            for index, content in enumerate(parts)
+        )
+    stored["artifact_refs_json"] = _canonical_json(refs) if refs else ""
+    return stored, chunks
+
+
+def _artifact_refs(row: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw = row.get("artifact_refs_json")
+    if raw in (None, ""):
+        return {}
+    try:
+        refs = json.loads(str(raw))
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid MOE artifact_refs_json") from exc
+    if not isinstance(refs, dict):
+        raise ValueError("MOE artifact_refs_json must be an object")
+    unknown = set(refs) - set(CHUNKABLE_ARTIFACT_FIELDS)
+    if unknown:
+        raise ValueError(
+            "Unknown chunked MOE artifact fields: " + ", ".join(sorted(unknown))
+        )
+    return refs
+
+
+def _restore_artifact_rows(
+    rows: Iterable[dict[str, Any]],
+    chunk_rows: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Reassemble chunked artifacts and fail closed on missing or changed data."""
+    chunks_by_id: dict[str, list[dict[str, Any]]] = {}
+    for chunk in chunk_rows:
+        artifact_id = str(chunk.get("artifact_id") or "")
+        if artifact_id:
+            chunks_by_id.setdefault(artifact_id, []).append(chunk)
+
+    restored_rows: list[dict[str, Any]] = []
+    for source in rows:
+        row = dict(source)
+        opinion_id = str(row.get("opinion_id") or "")
+        for field, ref in _artifact_refs(row).items():
+            if not isinstance(ref, dict):
+                raise ValueError(f"Invalid chunk reference for {field}")
+            artifact_id = str(ref.get("artifact_id") or "")
+            expected_sha256 = str(ref.get("sha256") or "")
+            try:
+                expected_count = int(ref.get("chunk_count"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Invalid chunk count for {field}") from exc
+            if not artifact_id or not expected_sha256 or expected_count < 1:
+                raise ValueError(f"Incomplete chunk reference for {field}")
+            artifact_chunks = chunks_by_id.get(artifact_id, [])
+            by_index: dict[int, dict[str, Any]] = {}
+            for chunk in artifact_chunks:
+                try:
+                    index = int(chunk.get("chunk_index"))
+                    chunk_count = int(chunk.get("chunk_count"))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Invalid stored chunk metadata for {field}"
+                    ) from exc
+                if index in by_index:
+                    raise ValueError(f"Duplicate stored chunk {index} for {field}")
+                if (
+                    str(chunk.get("opinion_id") or "") != opinion_id
+                    or str(chunk.get("artifact_type") or "") != field
+                    or chunk_count != expected_count
+                    or str(chunk.get("artifact_sha256") or "")
+                    != expected_sha256
+                ):
+                    raise ValueError(f"Stored chunk metadata mismatch for {field}")
+                by_index[index] = chunk
+            if set(by_index) != set(range(expected_count)):
+                raise ValueError(f"Missing stored chunks for {field}")
+            text = "".join(str(by_index[index].get("content") or "") for index in range(expected_count))
+            if _sha256_text(text) != expected_sha256:
+                raise ValueError(f"Stored chunk hash mismatch for {field}")
+            row[field] = text
+        restored_rows.append(row)
+    return restored_rows
 
 
 def _sha256_text(value: str) -> str:
@@ -2385,8 +2535,6 @@ async def _fact_check_nondeterministic_analysis(
         )
     normalized_claims = [claim.strip() for claim in claims]
     raw_analysis = "\n".join(normalized_claims)
-    if len(raw_analysis) >= MAX_SHEET_CELL_CHARS:
-        raise ValueError("nondeterministic analysis exceeds the Sheet limit")
     prompt = FACTUALITY_PROMPT_PATH.read_text(encoding="utf-8")
     response = await create_fn(
         model=model,
@@ -3215,8 +3363,6 @@ def validate_opinion(
     for field in ("thesis", "full_opinion"):
         if not str(opinion.get(field) or "").strip():
             raise ValueError(f"{field} is required")
-        if len(str(opinion[field])) >= MAX_SHEET_CELL_CHARS:
-            raise ValueError(f"{field} exceeds the Google Sheets cell limit")
     if len(str(opinion["thesis"])) > MAX_THESIS_CHARS:
         raise ValueError(
             f"thesis must not exceed {MAX_THESIS_CHARS} characters"
@@ -3518,8 +3664,6 @@ async def generate_opinion(
         # is the exact input persisted with its row. The full aggregator input
         # stays recoverable through aggregator_input_sha256 and the rules row.
         input_json = _canonical_json(build_judge_request(input_payload))
-    if len(input_json) >= MAX_SHEET_CELL_CHARS:
-        raise ValueError("MOE input exceeds the Google Sheets cell limit")
     if expected_input_sha256 and _sha256_text(input_json) != str(
         expected_input_sha256
     ):
@@ -3649,6 +3793,7 @@ async def generate_opinion(
         "full_opinion": "",
         "input_json": input_json,
         "raw_response": "",
+        "artifact_refs_json": "",
         "generation_status": "started",
         "generation_error": "",
         "git_dirty": _git_dirty(),
@@ -3711,10 +3856,6 @@ async def generate_opinion(
             )
             raw_response = str(response.content[0].text).strip()
         row["raw_response"] = raw_response
-        if len(raw_response) >= MAX_SHEET_CELL_CHARS:
-            raise ValueError(
-                "MOE response exceeds the Google Sheets cell limit"
-            )
         opinion = _parse_response(raw_response)
         if int(expert["output_schema_version"]) == 3:
             opinion = _normalize_cited_opinion(opinion, input_payload)
@@ -3901,42 +4042,157 @@ class GoogleSheetsMoeOpinionStore:
                 ).open_by_key(self._sheet_id)
             return self._spreadsheet_instance
 
-    def append(self, row: dict[str, Any]) -> None:
+    def _opinion_worksheet(self, *, create: bool = True) -> Any:
         spreadsheet = self._spreadsheet()
-        worksheet = ensure_worksheet(
-            spreadsheet, OPINIONS_TAB, OPINION_HEADERS
+        try:
+            worksheet = spreadsheet.worksheet(OPINIONS_TAB)
+        except WorksheetNotFound:
+            if not create:
+                raise
+            return ensure_worksheet(spreadsheet, OPINIONS_TAB, OPINION_HEADERS)
+        headers = _call_with_retry(worksheet.row_values, 1)
+        if headers == OPINION_HEADERS:
+            return worksheet
+        if headers != OPINION_HEADERS_V1:
+            raise RuntimeError(
+                f"{OPINIONS_TAB} headers do not match expected schema"
+            )
+        _call_with_retry(worksheet.resize, cols=len(OPINION_HEADERS))
+        end = gspread.utils.rowcol_to_a1(1, len(OPINION_HEADERS))
+        _call_with_retry(
+            worksheet.update,
+            [OPINION_HEADERS],
+            f"A1:{end}",
+            value_input_option="RAW",
         )
+        if _call_with_retry(worksheet.row_values, 1) != OPINION_HEADERS:
+            raise RuntimeError(f"{OPINIONS_TAB} header migration failed")
+        return worksheet
+
+    def _artifact_worksheet(self) -> Any:
+        return ensure_worksheet(
+            self._spreadsheet(), ARTIFACTS_TAB, ARTIFACT_HEADERS
+        )
+
+    def _append_artifact_chunks(
+        self, chunk_rows: list[dict[str, Any]]
+    ) -> None:
+        if not chunk_rows:
+            return
+        worksheet = self._artifact_worksheet()
+        existing = _call_with_retry(
+            worksheet.get_all_records,
+            expected_headers=ARTIFACT_HEADERS,
+            numericise_ignore=["all"],
+        )
+        by_key: dict[tuple[str, int], dict[str, Any]] = {}
+        for chunk in existing:
+            artifact_id = str(chunk.get("artifact_id") or "")
+            if not artifact_id:
+                continue
+            try:
+                index = int(chunk.get("chunk_index"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Invalid stored MOE artifact chunk index") from exc
+            key = (artifact_id, index)
+            if key in by_key:
+                raise ValueError("Duplicate stored MOE artifact chunk")
+            by_key[key] = chunk
+
+        missing: list[list[Any]] = []
+        for chunk in chunk_rows:
+            key = (str(chunk["artifact_id"]), int(chunk["chunk_index"]))
+            current = by_key.get(key)
+            if current is not None:
+                comparable = {
+                    header: str(current.get(header, ""))
+                    for header in ARTIFACT_HEADERS
+                }
+                expected = {
+                    header: str(chunk.get(header, ""))
+                    for header in ARTIFACT_HEADERS
+                }
+                if comparable != expected:
+                    raise ValueError("Stored MOE artifact chunk changed")
+                continue
+            missing.append(
+                [chunk.get(header, "") for header in ARTIFACT_HEADERS]
+            )
+        if missing:
+            _call_with_retry(
+                worksheet.append_rows,
+                missing,
+                value_input_option="RAW",
+            )
+
+    def _restore_rows(
+        self, rows: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        needed_ids = {
+            str(ref.get("artifact_id") or "")
+            for row in rows
+            for ref in _artifact_refs(row).values()
+            if isinstance(ref, dict)
+        }
+        needed_ids.discard("")
+        if not needed_ids:
+            return rows
+        try:
+            worksheet = self._spreadsheet().worksheet(ARTIFACTS_TAB)
+        except WorksheetNotFound as exc:
+            raise ValueError("MOE artifact chunks worksheet is missing") from exc
+        chunks = _call_with_retry(
+            worksheet.get_all_records,
+            expected_headers=ARTIFACT_HEADERS,
+            numericise_ignore=["all"],
+        )
+        return _restore_artifact_rows(
+            rows,
+            [
+                chunk
+                for chunk in chunks
+                if str(chunk.get("artifact_id") or "") in needed_ids
+            ],
+        )
+
+    def append(self, row: dict[str, Any]) -> None:
+        worksheet = self._opinion_worksheet()
         opinion_id = str(row["opinion_id"])
         existing_ids = set(
             _call_with_retry(worksheet.col_values, 1)[1:]
         )
         if opinion_id in existing_ids:
             return
+        stored_row, chunk_rows = _artifact_storage_rows(row)
+        self._append_artifact_chunks(chunk_rows)
         _call_with_retry(
             worksheet.append_row,
-            [row.get(header, "") for header in OPINION_HEADERS],
+            [stored_row.get(header, "") for header in OPINION_HEADERS],
             value_input_option="RAW",
         )
 
     def list(self, event_id: str | None = None) -> list[dict[str, Any]]:
         try:
-            worksheet = self._spreadsheet().worksheet(OPINIONS_TAB)
+            worksheet = self._opinion_worksheet(create=False)
         except WorksheetNotFound:
             return []
-        rows = worksheet.get_all_records(expected_headers=OPINION_HEADERS)
-        if event_id is None:
-            return rows
-        return [
-            row
-            for row in rows
-            if str(row.get("event_id")) == str(event_id)
-        ]
+        rows = _call_with_retry(
+            worksheet.get_all_records,
+            expected_headers=OPINION_HEADERS,
+        )
+        if event_id is not None:
+            rows = [
+                row
+                for row in rows
+                if str(row.get("event_id")) == str(event_id)
+            ]
+        return self._restore_rows(rows)
 
     def fetch(self, opinion_id: str) -> dict[str, Any] | None:
         """One row as the sheet holds it now (raw cell strings), or ``None``
         when the id is absent or duplicated. Two small reads, so a button can
         confirm a row is still pending without re-reading the whole tab."""
-        worksheet = self._spreadsheet().worksheet(OPINIONS_TAB)
+        worksheet = self._opinion_worksheet()
         ids = _call_with_retry(
             worksheet.col_values, OPINION_HEADERS.index("opinion_id") + 1
         )
@@ -3948,12 +4204,13 @@ class GoogleSheetsMoeOpinionStore:
         if len(matches) != 1:
             return None
         values = _call_with_retry(worksheet.row_values, matches[0])
-        return dict(
+        row = dict(
             zip(
                 OPINION_HEADERS,
                 values + [""] * (len(OPINION_HEADERS) - len(values)),
             )
         )
+        return self._restore_rows([row])[0]
 
     def review(
         self,
@@ -3965,7 +4222,13 @@ class GoogleSheetsMoeOpinionStore:
     ) -> None:
         if status not in {"approved", "rejected"}:
             raise ValueError("Review status must be approved or rejected")
-        worksheet = self._spreadsheet().worksheet(OPINIONS_TAB)
+        for field, value in (
+            ("reviewed_by", reviewed_by),
+            ("review note", note),
+        ):
+            if len(str(value)) >= MAX_SHEET_CELL_CHARS:
+                raise ValueError(f"{field} exceeds the Google Sheets cell limit")
+        worksheet = self._opinion_worksheet()
         ids = worksheet.col_values(
             OPINION_HEADERS.index("opinion_id") + 1
         )
@@ -3979,13 +4242,9 @@ class GoogleSheetsMoeOpinionStore:
                 f"Expected one opinion_id match, found {len(matches)}"
             )
         row_number = matches[0]
-        values = worksheet.row_values(row_number)
-        current = dict(
-            zip(
-                OPINION_HEADERS,
-                values + [""] * (len(OPINION_HEADERS) - len(values)),
-            )
-        )
+        current = self.fetch(opinion_id)
+        if current is None:
+            raise ValueError("Opinion row disappeared during review")
         if current["generation_status"] != "valid":
             raise ValueError("Only valid opinions can be reviewed")
         current_output_sha256 = opinion_output_sha256(current)

@@ -12,8 +12,19 @@ from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
+from gspread.exceptions import WorksheetNotFound
+
 from moe import (
+    ARTIFACT_CHUNK_CHARS,
+    ARTIFACTS_TAB,
+    ARTIFACT_HEADERS,
+    GoogleSheetsMoeOpinionStore,
+    MAX_SHEET_CELL_CHARS,
+    OPINIONS_TAB,
     OPINION_HEADERS,
+    OPINION_HEADERS_V1,
+    _artifact_storage_rows,
+    _restore_artifact_rows,
     build_divisional_input,
     build_schedule_input,
     generate_opinion,
@@ -52,6 +63,200 @@ class MemoryStore:
 class FailingStore(MemoryStore):
     def append(self, row: dict) -> None:
         raise RuntimeError("sheet unavailable")
+
+
+class ArtifactChunkingTest(unittest.TestCase):
+    def test_oversized_artifact_round_trips_exactly(self) -> None:
+        input_json = "x" * 60_232
+        row = {
+            "opinion_id": "opinion-1",
+            "input_json": input_json,
+            "raw_response": "{}",
+        }
+
+        stored, chunks = _artifact_storage_rows(row)
+        restored = _restore_artifact_rows([stored], chunks)[0]
+
+        self.assertEqual(OPINION_HEADERS[:-1], OPINION_HEADERS_V1)
+        self.assertEqual(stored["input_json"], "")
+        self.assertTrue(stored["artifact_refs_json"])
+        self.assertEqual(len(chunks), 2)
+        self.assertTrue(
+            all(len(chunk["content"]) <= ARTIFACT_CHUNK_CHARS for chunk in chunks)
+        )
+        self.assertEqual(restored["input_json"], input_json)
+        self.assertEqual(restored["raw_response"], "{}")
+
+    def test_small_artifacts_remain_inline(self) -> None:
+        row = {
+            "opinion_id": "opinion-1",
+            "input_json": "x" * (MAX_SHEET_CELL_CHARS - 1),
+        }
+
+        stored, chunks = _artifact_storage_rows(row)
+
+        self.assertEqual(stored["input_json"], row["input_json"])
+        self.assertEqual(stored["artifact_refs_json"], "")
+        self.assertEqual(chunks, [])
+
+    def test_missing_chunk_fails_closed(self) -> None:
+        stored, chunks = _artifact_storage_rows(
+            {
+                "opinion_id": "opinion-1",
+                "input_json": "x" * 60_232,
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "Missing stored chunks"):
+            _restore_artifact_rows([stored], chunks[:-1])
+
+    def test_changed_chunk_fails_hash_check(self) -> None:
+        stored, chunks = _artifact_storage_rows(
+            {
+                "opinion_id": "opinion-1",
+                "input_json": "x" * 60_232,
+            }
+        )
+        chunks[0] = {**chunks[0], "content": "changed"}
+
+        with self.assertRaisesRegex(ValueError, "hash mismatch"):
+            _restore_artifact_rows([stored], chunks)
+
+
+class _SheetWorksheet:
+    def __init__(self, title: str, rows: list[list] | None = None) -> None:
+        self.title = title
+        self.rows = [list(row) for row in (rows or [])]
+        self.numericise_ignore: list[str] | None = None
+
+    def row_values(self, row_number: int) -> list:
+        if row_number > len(self.rows):
+            return []
+        return list(self.rows[row_number - 1])
+
+    def col_values(self, column_number: int) -> list:
+        index = column_number - 1
+        return [
+            row[index] if index < len(row) else ""
+            for row in self.rows
+        ]
+
+    def resize(self, *, cols: int) -> None:
+        for row in self.rows:
+            row.extend([""] * max(0, cols - len(row)))
+
+    def update(
+        self,
+        values: list[list],
+        _range_name: str = "",
+        *,
+        value_input_option: str = "RAW",
+    ) -> None:
+        del value_input_option
+        if not self.rows:
+            self.rows = [list(values[0])]
+        else:
+            self.rows[0] = list(values[0])
+
+    def append_row(
+        self, row: list, *, value_input_option: str = "RAW"
+    ) -> None:
+        del value_input_option
+        self.rows.append(list(row))
+
+    def append_rows(
+        self, rows: list[list], *, value_input_option: str = "RAW"
+    ) -> None:
+        del value_input_option
+        self.rows.extend(list(row) for row in rows)
+
+    def get_all_records(
+        self,
+        *,
+        expected_headers: list[str],
+        numericise_ignore: list[str] | None = None,
+    ) -> list[dict]:
+        self.numericise_ignore = numericise_ignore
+        if not self.rows or self.rows[0] != expected_headers:
+            raise RuntimeError("unexpected headers")
+        return [
+            dict(
+                zip(
+                    expected_headers,
+                    row + [""] * (len(expected_headers) - len(row)),
+                )
+            )
+            for row in self.rows[1:]
+        ]
+
+
+class _SheetSpreadsheet:
+    def __init__(self, worksheets: dict[str, _SheetWorksheet]) -> None:
+        self.worksheets = worksheets
+
+    def worksheet(self, title: str) -> _SheetWorksheet:
+        try:
+            return self.worksheets[title]
+        except KeyError as exc:
+            raise WorksheetNotFound(title) from exc
+
+    def add_worksheet(
+        self, *, title: str, rows: int, cols: int
+    ) -> _SheetWorksheet:
+        del rows, cols
+        worksheet = _SheetWorksheet(title)
+        self.worksheets[title] = worksheet
+        return worksheet
+
+
+class GoogleSheetsArtifactStoreTest(unittest.TestCase):
+    def test_migrates_chunks_and_reconstructs_oversized_input(self) -> None:
+        opinions = _SheetWorksheet(OPINIONS_TAB, [OPINION_HEADERS_V1])
+        spreadsheet = _SheetSpreadsheet({OPINIONS_TAB: opinions})
+        store = GoogleSheetsMoeOpinionStore("credentials", "sheet")
+        store._spreadsheet_instance = spreadsheet
+        input_json = "x" * 60_232
+        row = {
+            header: ""
+            for header in OPINION_HEADERS
+        }
+        row.update(
+            {
+                "opinion_id": "opinion-1",
+                "event_id": "event-1",
+                "input_json": input_json,
+            }
+        )
+
+        store.append(row)
+        store.append(row)
+        loaded = store.list("event-1")
+
+        self.assertEqual(opinions.rows[0], OPINION_HEADERS)
+        self.assertEqual(len(opinions.rows), 2)
+        self.assertEqual(opinions.rows[1][OPINION_HEADERS.index("input_json")], "")
+        self.assertTrue(
+            opinions.rows[1][OPINION_HEADERS.index("artifact_refs_json")]
+        )
+        chunks = spreadsheet.worksheets[ARTIFACTS_TAB]
+        self.assertEqual(chunks.rows[0], ARTIFACT_HEADERS)
+        self.assertEqual(len(chunks.rows), 3)
+        self.assertEqual(chunks.numericise_ignore, ["all"])
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0]["input_json"], input_json)
+
+    def test_review_metadata_still_respects_single_cell_limit(self) -> None:
+        store = GoogleSheetsMoeOpinionStore("credentials", "sheet")
+
+        with self.assertRaisesRegex(
+            ValueError, "review note exceeds the Google Sheets cell limit"
+        ):
+            store.review(
+                "opinion-1",
+                status="rejected",
+                reviewed_by="tester",
+                note="x" * MAX_SHEET_CELL_CHARS,
+            )
 
 
 def _game() -> dict:
