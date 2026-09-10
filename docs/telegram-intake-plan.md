@@ -744,6 +744,16 @@ distribution is descriptive context, not the goal.
   Calibration omits duplicate chronological-result strings; the evidence
   catalog contains every record the model may cite, and the complete generated
   input and output persist in SQLite.
+- Every deterministically gradeable source wager also persists to the
+  append-only SQLite `celebrity_pick_grades` ledger. Each revision records the
+  canonical pick id, exact stated line and price, final score, W/L/P result,
+  source hash, and grading timestamp; it never substitutes the BetOnline close.
+  Re-running the grader is idempotent, while an in-place source or final-score
+  correction appends a new hash-bound revision and `list_latest()` selects it.
+  Celebrity calibration consumes a matching persisted result when available,
+  recomputes the same result independently, and fails closed on disagreement.
+  The daily MOE grading job maintains this ledger before updating
+  `moe_grades`; `scripts/grade_celebrity_picks.py` provides targeted backfill.
 - The opinion may recommend the current full-game spread side and/or total, or
   PASS either leg. Props and other markets may be displayed or used as
   counterevidence but cannot directly support a game side or total. A

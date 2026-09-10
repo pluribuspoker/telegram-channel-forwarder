@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import json
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -17,6 +18,25 @@ from nfl_lines import (
 )
 
 CALIBRATION_MARKETS = ("side", "spread", "moneyline", "total")
+CELEBRITY_GRADE_SOURCE_FIELDS = (
+    "pick_id",
+    "submission_id",
+    "event_id",
+    "celebrity_name",
+    "canonical_key",
+    "submitted_at_utc",
+    "commence_time_utc",
+    "away_team",
+    "home_team",
+    "period",
+    "market_family",
+    "market",
+    "subject",
+    "stat",
+    "direction",
+    "line",
+    "price",
+)
 
 
 def _parse_time(value: Any) -> datetime:
@@ -32,6 +52,10 @@ def _reference(*parts: Any) -> str:
 
 def _name(value: Any) -> str:
     return " ".join(str(value or "").split())
+
+
+def _text(value: Any) -> str:
+    return "" if value is None else str(value)
 
 
 def _record(results: Iterable[str]) -> dict[str, Any]:
@@ -75,7 +99,21 @@ def _number(value: Any) -> float | None:
         return None
 
 
-def _grade(
+def celebrity_grade_source_sha256(row: dict[str, Any]) -> str:
+    values = {
+        field: "" if row.get(field) is None else str(row.get(field))
+        for field in CELEBRITY_GRADE_SOURCE_FIELDS
+    }
+    encoded = json.dumps(
+        values,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _calculate_grade(
     row: dict[str, Any],
     result: dict[str, Any],
 ) -> str | None:
@@ -89,6 +127,8 @@ def _grade(
     direction = str(row.get("direction") or row.get("side") or "")
     line = _number(row.get("line"))
     if market == "moneyline":
+        if direction not in {away, home}:
+            return None
         if away_score == home_score:
             return "P"
         winner = away if away_score > home_score else home
@@ -112,6 +152,8 @@ def _grade(
         and direction in {"Over", "Under"}
         and line is not None
         and str(row.get("subject") or "") in {away, home}
+        and " ".join(str(row.get("stat") or "").casefold().split())
+        == "team total"
     ):
         score = away_score if row["subject"] == away else home_score
         if score == line:
@@ -119,6 +161,31 @@ def _grade(
         won = score > line if direction == "Over" else score < line
         return "W" if won else "L"
     return None
+
+
+def _grade(
+    row: dict[str, Any],
+    result: dict[str, Any],
+) -> str | None:
+    calculated = _calculate_grade(row, result)
+    persisted = row.get("_persisted_grade")
+    if not isinstance(persisted, dict):
+        return calculated
+    if persisted.get("source_sha256") != celebrity_grade_source_sha256(row):
+        return calculated
+    if (
+        _text(persisted.get("final_away_score"))
+        != _text(result.get("away_score"))
+        or _text(persisted.get("final_home_score"))
+        != _text(result.get("home_score"))
+    ):
+        return calculated
+    stored = str(persisted.get("result") or "")
+    if stored != calculated:
+        raise RuntimeError(
+            f"Persisted celebrity grade disagrees for {row.get('pick_id')}"
+        )
+    return stored
 
 
 def _enriched_rows(
@@ -685,6 +752,7 @@ def build_celebrity_input(
     history: list[dict[str, Any]],
     celebrity_rows: list[dict[str, Any]],
     leans: list[dict[str, Any]],
+    celebrity_grades: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build one whitelisted, time-aligned celebrity-pattern input."""
     rows = _latest_revisions(
@@ -693,6 +761,14 @@ def build_celebrity_input(
         if _parse_time(row["submitted_at_utc"])
         < _parse_time(row["commence_time_utc"])
     )
+    grades_by_pick = {
+        str(grade.get("pick_id") or ""): grade
+        for grade in celebrity_grades or []
+    }
+    for row in rows:
+        persisted = grades_by_pick.get(str(row.get("pick_id") or ""))
+        if persisted is not None:
+            row["_persisted_grade"] = persisted
     event_id = str(game["event_id"])
     kickoff = _parse_time(game["commence_time_utc"])
     current = [

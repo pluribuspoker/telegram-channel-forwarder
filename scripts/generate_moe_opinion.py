@@ -281,6 +281,7 @@ async def main() -> None:
     ak_user_id: str | None = None
     cee_user_id: str | None = None
     celebrity_picks: list[dict] | None = None
+    celebrity_grades: list[dict] | None = None
     win_totals: list[dict] | None = None
     win_predictions: list[dict] | None = None
     team_history: list[dict] | None = None
@@ -334,6 +335,8 @@ async def main() -> None:
             "nfl_win_predictions"
         ).get_all_records(expected_headers=PREDICTION_HEADERS)
     elif expert["input_profile"] == "celebrity_patterns":
+        from celebrity_grades import configured_celebrity_grade_store
+
         current_results = _current_results()
         leans = spreadsheet.worksheet("nfl_leans").get_all_records(
             expected_headers=LEAN_HEADERS
@@ -341,6 +344,9 @@ async def main() -> None:
         celebrity_picks = _celebrity_worksheet(
             spreadsheet
         ).get_all_records(expected_headers=CELEBRITY_HEADERS)
+        celebrity_grades = configured_celebrity_grade_store(
+            writable=False
+        ).list_latest()
     elif expert["input_profile"] == "win_total":
         win_totals = spreadsheet.worksheet(
             "nfl_win_totals"
@@ -393,6 +399,7 @@ async def main() -> None:
                 [*history, *(current_results or [])],
                 celebrity_picks or [],
                 leans or [],
+                celebrity_grades or [],
             )
         elif expert["input_profile"] == "win_total":
             input_payload = build_win_total_input(
@@ -507,6 +514,7 @@ async def main() -> None:
         ak_user_id=ak_user_id,
         cee_user_id=cee_user_id,
         celebrity_picks=celebrity_picks,
+        celebrity_grades=celebrity_grades,
         win_totals=win_totals,
         win_predictions=win_predictions,
         team_history=team_history,

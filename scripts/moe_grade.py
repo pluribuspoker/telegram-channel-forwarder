@@ -37,6 +37,12 @@ load_dotenv(ROOT / ".env.local")
 load_dotenv(ROOT / ".env")
 
 from moe import approved_opinions, configured_opinion_store
+from celebrity_grades import (
+    build_celebrity_grade_rows,
+    configured_celebrity_grade_store,
+)
+from celebrity_picks import CELEBRITY_HEADERS
+from intake_bot import _celebrity_worksheet
 from moe_god import (
     GRADE_HEADERS,
     GRADES_TAB,
@@ -63,7 +69,12 @@ from nfl_game_annotations import (
     game_annotation_context,
     load_game_annotations,
 )
-from nfl_lines import SNAPSHOT_HEADERS, _call_with_retry, get_gspread_client
+from nfl_lines import (
+    LEAN_HEADERS,
+    SNAPSHOT_HEADERS,
+    _call_with_retry,
+    get_gspread_client,
+)
 from nfl_win_predictions import ensure_worksheet
 from scripts.generate_moe_opinion import _latest_alignment
 from scripts.god_judge_runner import send_watchdog_dm
@@ -490,6 +501,20 @@ def main() -> None:
         ),
         annotation_rows,
     )
+    celebrity_rows = _celebrity_worksheet(spreadsheet).get_all_records(
+        expected_headers=CELEBRITY_HEADERS
+    )
+    leans = spreadsheet.worksheet("nfl_leans").get_all_records(
+        expected_headers=LEAN_HEADERS
+    )
+    celebrity_grades = build_celebrity_grade_rows(
+        celebrity_rows,
+        leans,
+        history,
+        preferred_finals=finals,
+        season=season,
+        graded_at_utc=datetime.now(timezone.utc).isoformat(),
+    )
     snapshots = spreadsheet.worksheet("nfl_line_snapshots").get_all_records(
         expected_headers=SNAPSHOT_HEADERS
     )
@@ -549,6 +574,14 @@ def main() -> None:
                 )
     if not args.write:
         return
+    celebrity_inserted = configured_celebrity_grade_store(
+        writable=True,
+        initialize=True,
+    ).append_rows(celebrity_grades)
+    print(
+        f"Celebrity grades: {len(celebrity_grades)} gradeable latest picks, "
+        f"{celebrity_inserted} appended."
+    )
     worksheet = ensure_worksheet(spreadsheet, GRADES_TAB, GRADE_HEADERS)
     existing = set(
         _call_with_retry(

@@ -8,6 +8,7 @@ import unittest
 from types import SimpleNamespace
 
 from celebrity_picks import build_celebrity_rows, parse_custom_pick_text
+from celebrity_grades import build_celebrity_grade_rows
 from moe import generate_opinion, load_expert
 from moe_celebrity import _conditional_lift, _record, build_celebrity_input
 from nfl_lines import (
@@ -587,6 +588,68 @@ class CelebrityInputTest(unittest.TestCase):
         self.assertEqual(push_only["decisions"], 0)
         self.assertIsNone(push_only["win_rate"])
         self.assertIsNone(_conditional_lift(push_only, empty)["lift"])
+
+    def test_persisted_grades_reproduce_dynamic_calibration(self) -> None:
+        past_rows = []
+        for row in _current_rows():
+            past = dict(row)
+            past["event_id"] = "persisted-grade-game"
+            past["commence_time_utc"] = "2026-09-08T00:20:00+00:00"
+            past_rows.append(past)
+        history = [
+            {
+                "event_id": "persisted-grade-game",
+                "kickoff_utc": "2026-09-08T00:20:00+00:00",
+                "away_team": _game()["away_team"],
+                "home_team": _game()["home_team"],
+                "away_score": 17,
+                "home_score": 24,
+                "completed": True,
+            }
+        ]
+        all_rows = _current_rows() + past_rows
+        grades = build_celebrity_grade_rows(all_rows, [], history)
+
+        dynamic = build_celebrity_input(_game(), history, all_rows, [])
+        persisted = build_celebrity_input(
+            _game(),
+            history,
+            all_rows,
+            [],
+            grades,
+        )
+
+        self.assertEqual(persisted, dynamic)
+
+    def test_persisted_grade_disagreement_fails_closed(self) -> None:
+        past = dict(_current_rows()[0])
+        past["event_id"] = "bad-persisted-grade"
+        past["commence_time_utc"] = "2026-09-08T00:20:00+00:00"
+        history = [
+            {
+                "event_id": "bad-persisted-grade",
+                "kickoff_utc": "2026-09-08T00:20:00+00:00",
+                "away_team": _game()["away_team"],
+                "home_team": _game()["home_team"],
+                "away_score": 17,
+                "home_score": 24,
+                "completed": True,
+            }
+        ]
+        grades = build_celebrity_grade_rows([past], [], history)
+        grades[0]["result"] = "L"
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Persisted celebrity grade disagrees",
+        ):
+            build_celebrity_input(
+                _game(),
+                history,
+                _current_rows() + [past],
+                [],
+                grades,
+            )
 
     def test_pairwise_disagreement_tracks_each_celebrity(self) -> None:
         current = _current_rows()

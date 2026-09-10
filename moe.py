@@ -389,6 +389,7 @@ def _source_sha256(expert: dict[str, Any]) -> str:
             (
                 ROOT / "moe_celebrity.py",
                 ROOT / "celebrity_picks.py",
+                ROOT / "celebrity_grades.py",
             )
         )
     if expert.get("input_profile") == "win_total":
@@ -3524,6 +3525,7 @@ async def generate_opinion(
     ak_user_id: str | None = None,
     cee_user_id: str | None = None,
     celebrity_picks: list[dict[str, Any]] | None = None,
+    celebrity_grades: list[dict[str, Any]] | None = None,
     win_totals: list[dict[str, Any]] | None = None,
     win_predictions: list[dict[str, Any]] | None = None,
     team_history: list[dict[str, Any]] | None = None,
@@ -3596,6 +3598,7 @@ async def generate_opinion(
             history,
             celebrity_picks,
             leans,
+            celebrity_grades,
         )
     elif expert["input_profile"] == "win_total":
         if (
@@ -4007,6 +4010,7 @@ async def generate_opinion(
                 ak_user_id=ak_user_id,
                 cee_user_id=cee_user_id,
                 celebrity_picks=celebrity_picks,
+                celebrity_grades=celebrity_grades,
                 win_totals=win_totals,
                 win_predictions=win_predictions,
                 team_history=team_history,
