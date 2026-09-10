@@ -23,10 +23,12 @@ from moe import (
     OPINIONS_TAB,
     OPINION_HEADERS,
     OPINION_HEADERS_V1,
+    SQLiteMoeOpinionStore,
     _artifact_storage_rows,
     _restore_artifact_rows,
     build_divisional_input,
     build_schedule_input,
+    configured_opinion_store,
     generate_opinion,
     latest_opinions,
     latest_model_opinions,
@@ -41,6 +43,7 @@ from moe import (
     _normalize_evidence_card_opinion,
     _persist_attempt,
 )
+from scripts.replay_moe_delta_to_sheets import chain_start
 
 
 class MemoryStore:
@@ -238,6 +241,7 @@ class GoogleSheetsArtifactStoreTest(unittest.TestCase):
         self.assertTrue(
             opinions.rows[1][OPINION_HEADERS.index("artifact_refs_json")]
         )
+        self.assertEqual(opinions.numericise_ignore, ["all"])
         chunks = spreadsheet.worksheets[ARTIFACTS_TAB]
         self.assertEqual(chunks.rows[0], ARTIFACT_HEADERS)
         self.assertEqual(len(chunks.rows), 3)
@@ -257,6 +261,142 @@ class GoogleSheetsArtifactStoreTest(unittest.TestCase):
                 reviewed_by="tester",
                 note="x" * MAX_SHEET_CELL_CHARS,
             )
+
+
+class SQLiteMoeOpinionStoreTest(unittest.TestCase):
+    def _row(self, opinion_id: str = "opinion-1") -> dict:
+        row = {header: "" for header in OPINION_HEADERS}
+        row.update(
+            {
+                "opinion_id": opinion_id,
+                "event_id": "event-1",
+                "generation_status": "valid",
+                "review_status": "pending",
+                "input_json": "x" * 60_232,
+                "raw_response": "{}",
+                "predicted_winner": "Seattle Seahawks",
+                "home_win_probability": "0.62",
+                "thesis": "Seattle has the edge.",
+            }
+        )
+        row["output_sha256"] = opinion_output_sha256(row)
+        return row
+
+    def test_stores_oversized_artifacts_inline_and_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "moe.sqlite3"
+            store = SQLiteMoeOpinionStore(path, create=True)
+            row = self._row()
+
+            store.append(row)
+            store.append(row)
+            loaded = store.list("event-1")
+
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0]["input_json"], row["input_json"])
+            self.assertEqual(loaded[0]["artifact_refs_json"], "")
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_review_is_hash_checked_and_transactional(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "moe.sqlite3"
+            store = SQLiteMoeOpinionStore(path, create=True)
+            row = self._row()
+            store.append(row)
+
+            store.review(
+                row["opinion_id"],
+                status="approved",
+                reviewed_by="tester",
+                note="verified",
+            )
+
+            reviewed = store.fetch(row["opinion_id"])
+            self.assertEqual(reviewed["review_status"], "approved")
+            self.assertEqual(
+                reviewed["approved_output_sha256"],
+                row["output_sha256"],
+            )
+            journal = store.journal_entries()
+            self.assertEqual(
+                [entry["operation"] for entry in journal],
+                ["append", "review"],
+            )
+            self.assertEqual(
+                json.loads(journal[-1]["after_json"]),
+                reviewed,
+            )
+
+    def test_readonly_store_refuses_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "moe.sqlite3"
+            SQLiteMoeOpinionStore(path, create=True)
+            store = SQLiteMoeOpinionStore(path, writable=False)
+
+            with self.assertRaisesRegex(RuntimeError, "readonly"):
+                store.append(self._row())
+            with self.assertRaisesRegex(RuntimeError, "readonly"):
+                store.review(
+                    "opinion-1",
+                    status="rejected",
+                    reviewed_by="tester",
+                    note="",
+                )
+
+    def test_configured_store_selects_sqlite_without_sheet_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "moe.sqlite3"
+            with patch.dict(
+                "os.environ",
+                {
+                    "MOE_STORAGE_BACKEND": "sqlite",
+                    "MOE_SQLITE_PATH": str(path),
+                    "MOE_STORAGE_ROLE": "primary",
+                },
+                clear=True,
+            ):
+                with self.assertRaises(FileNotFoundError):
+                    configured_opinion_store()
+                SQLiteMoeOpinionStore(path, create=True)
+                store = configured_opinion_store()
+
+            self.assertIsInstance(store, SQLiteMoeOpinionStore)
+
+    def test_primary_store_refuses_to_create_a_missing_database(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "missing.sqlite3"
+
+            with self.assertRaises(FileNotFoundError):
+                SQLiteMoeOpinionStore(path)
+
+    def test_primary_store_refuses_to_initialize_an_empty_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "empty.sqlite3"
+            path.touch()
+
+            with self.assertRaisesRegex(RuntimeError, "Invalid MOE SQLite"):
+                SQLiteMoeOpinionStore(path)
+
+    def test_delta_replay_resumes_after_an_intermediate_review(self) -> None:
+        pending = {"review_status": "pending"}
+        approved = {"review_status": "approved"}
+        rejected = {"review_status": "rejected"}
+        chain = [
+            {
+                "opinion_id": "opinion-1",
+                "before_json": json.dumps(pending),
+                "after_json": json.dumps(approved),
+            },
+            {
+                "opinion_id": "opinion-1",
+                "before_json": json.dumps(approved),
+                "after_json": json.dumps(rejected),
+            },
+        ]
+
+        self.assertEqual(chain_start(chain, pending), 0)
+        self.assertEqual(chain_start(chain, approved), 1)
+        self.assertEqual(chain_start(chain, rejected), 2)
 
 
 def _game() -> dict:

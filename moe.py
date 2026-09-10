@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import sqlite3
 import subprocess
 import threading
 import uuid
@@ -4028,11 +4029,22 @@ async def generate_opinion(
 
 
 class GoogleSheetsMoeOpinionStore:
-    def __init__(self, credentials: str, sheet_id: str) -> None:
+    def __init__(
+        self,
+        credentials: str,
+        sheet_id: str,
+        *,
+        writable: bool = True,
+    ) -> None:
         self._credentials = credentials
         self._sheet_id = sheet_id
+        self._writable = writable
         self._spreadsheet_instance: Any | None = None
         self._spreadsheet_lock = threading.Lock()
+
+    def _require_writable(self) -> None:
+        if not self._writable:
+            raise RuntimeError("MOE opinion store is readonly")
 
     def _spreadsheet(self) -> Any:
         with self._spreadsheet_lock:
@@ -4156,6 +4168,7 @@ class GoogleSheetsMoeOpinionStore:
         )
 
     def append(self, row: dict[str, Any]) -> None:
+        self._require_writable()
         worksheet = self._opinion_worksheet()
         opinion_id = str(row["opinion_id"])
         existing_ids = set(
@@ -4179,6 +4192,7 @@ class GoogleSheetsMoeOpinionStore:
         rows = _call_with_retry(
             worksheet.get_all_records,
             expected_headers=OPINION_HEADERS,
+            numericise_ignore=["all"],
         )
         if event_id is not None:
             rows = [
@@ -4220,6 +4234,7 @@ class GoogleSheetsMoeOpinionStore:
         reviewed_by: str,
         note: str,
     ) -> None:
+        self._require_writable()
         if status not in {"approved", "rejected"}:
             raise ValueError("Review status must be approved or rejected")
         for field, value in (
@@ -4274,14 +4289,321 @@ class GoogleSheetsMoeOpinionStore:
         )
 
 
+def _sqlite_opinion_row(row: dict[str, Any]) -> dict[str, str]:
+    """SQLite stores reconstructed artifacts inline; Sheet chunk refs stay archival."""
+    normalized = {
+        header: "" if row.get(header) is None else str(row.get(header))
+        for header in OPINION_HEADERS
+    }
+    normalized["artifact_refs_json"] = ""
+    return normalized
+
+
+class SQLiteMoeOpinionStore:
+    SCHEMA_VERSION = 1
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        writable: bool = True,
+        create: bool = False,
+    ) -> None:
+        self._path = Path(path).expanduser()
+        if not self._path.is_absolute():
+            raise ValueError("MOE_SQLITE_PATH must be absolute")
+        self._writable = writable
+        if not self._path.exists() and not create:
+            raise FileNotFoundError(self._path)
+        if create:
+            if not writable:
+                raise ValueError("A readonly MOE store cannot create a database")
+            self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.chmod(self._path.parent, 0o700)
+        self._initialize(create=create)
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self._path, timeout=30)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("PRAGMA busy_timeout=30000")
+        connection.execute("PRAGMA synchronous=FULL")
+        return connection
+
+    def _initialize(self, *, create: bool) -> None:
+        if not create:
+            with self._connect() as connection:
+                try:
+                    versions = connection.execute(
+                        "SELECT version FROM moe_schema_metadata"
+                    ).fetchall()
+                    opinion_columns = [
+                        row["name"]
+                        for row in connection.execute(
+                            "PRAGMA table_info(moe_opinions)"
+                        ).fetchall()
+                    ]
+                    journal_columns = [
+                        row["name"]
+                        for row in connection.execute(
+                            "PRAGMA table_info(moe_write_journal)"
+                        ).fetchall()
+                    ]
+                except sqlite3.DatabaseError as exc:
+                    raise RuntimeError("Invalid MOE SQLite database") from exc
+                if [int(row["version"]) for row in versions] != [
+                    self.SCHEMA_VERSION
+                ]:
+                    raise RuntimeError("Unsupported MOE SQLite schema version")
+                if opinion_columns != ["_row_order", *OPINION_HEADERS]:
+                    raise RuntimeError("Invalid MOE SQLite opinion schema")
+                if journal_columns != [
+                    "sequence",
+                    "committed_at_utc",
+                    "operation",
+                    "opinion_id",
+                    "before_json",
+                    "after_json",
+                ]:
+                    raise RuntimeError("Invalid MOE SQLite journal schema")
+            return
+        columns = ", ".join(
+            f'"{header}" TEXT NOT NULL DEFAULT \'\'' for header in OPINION_HEADERS
+        )
+        with self._connect() as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.executescript(
+                f"""
+                CREATE TABLE IF NOT EXISTS moe_schema_metadata (
+                    version INTEGER PRIMARY KEY,
+                    created_at_utc TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS moe_opinions (
+                    _row_order INTEGER PRIMARY KEY AUTOINCREMENT,
+                    {columns},
+                    UNIQUE(opinion_id)
+                );
+                CREATE INDEX IF NOT EXISTS moe_opinions_event_id
+                    ON moe_opinions(event_id, _row_order);
+                CREATE TABLE IF NOT EXISTS moe_write_journal (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    committed_at_utc TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    opinion_id TEXT NOT NULL,
+                    before_json TEXT NOT NULL,
+                    after_json TEXT NOT NULL
+                );
+                """
+            )
+            versions = connection.execute(
+                "SELECT version FROM moe_schema_metadata"
+            ).fetchall()
+            if not versions:
+                connection.execute(
+                    "INSERT INTO moe_schema_metadata(version, created_at_utc)"
+                    " VALUES (?, ?)",
+                    (
+                        self.SCHEMA_VERSION,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+            elif [int(row["version"]) for row in versions] != [
+                self.SCHEMA_VERSION
+            ]:
+                raise RuntimeError("Unsupported MOE SQLite schema version")
+        os.chmod(self._path, 0o600)
+
+    def _require_writable(self) -> None:
+        if not self._writable:
+            raise RuntimeError("MOE opinion store is readonly")
+
+    def append(self, row: dict[str, Any]) -> None:
+        self.append_rows([row])
+
+    def append_rows(
+        self,
+        rows: Iterable[dict[str, Any]],
+        *,
+        journal: bool = True,
+    ) -> None:
+        self._require_writable()
+        normalized_rows = [_sqlite_opinion_row(row) for row in rows]
+        if not normalized_rows:
+            return
+        columns = ", ".join(f'"{header}"' for header in OPINION_HEADERS)
+        placeholders = ", ".join("?" for _ in OPINION_HEADERS)
+        values = [
+            [row[header] for header in OPINION_HEADERS]
+            for row in normalized_rows
+        ]
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            for row, row_values in zip(normalized_rows, values):
+                cursor = connection.execute(
+                    f"INSERT OR IGNORE INTO moe_opinions ({columns})"
+                    f" VALUES ({placeholders})",
+                    row_values,
+                )
+                if journal and cursor.rowcount:
+                    connection.execute(
+                        """
+                        INSERT INTO moe_write_journal(
+                            committed_at_utc, operation, opinion_id,
+                            before_json, after_json
+                        ) VALUES (?, 'append', ?, '', ?)
+                        """,
+                        (
+                            datetime.now(timezone.utc).isoformat(),
+                            row["opinion_id"],
+                            _canonical_json(row),
+                        ),
+                    )
+
+    def list(self, event_id: str | None = None) -> list[dict[str, Any]]:
+        columns = ", ".join(f'"{header}"' for header in OPINION_HEADERS)
+        sql = f"SELECT {columns} FROM moe_opinions"
+        parameters: tuple[str, ...] = ()
+        if event_id is not None:
+            sql += " WHERE event_id = ?"
+            parameters = (str(event_id),)
+        sql += " ORDER BY _row_order"
+        with self._connect() as connection:
+            return [
+                {header: row[header] for header in OPINION_HEADERS}
+                for row in connection.execute(sql, parameters).fetchall()
+            ]
+
+    def fetch(self, opinion_id: str) -> dict[str, Any] | None:
+        columns = ", ".join(f'"{header}"' for header in OPINION_HEADERS)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT {columns} FROM moe_opinions WHERE opinion_id = ?",
+                (opinion_id,),
+            ).fetchall()
+        if len(rows) != 1:
+            return None
+        return {header: rows[0][header] for header in OPINION_HEADERS}
+
+    def review(
+        self,
+        opinion_id: str,
+        *,
+        status: str,
+        reviewed_by: str,
+        note: str,
+    ) -> None:
+        self._require_writable()
+        if status not in {"approved", "rejected"}:
+            raise ValueError("Review status must be approved or rejected")
+        for field, value in (
+            ("reviewed_by", reviewed_by),
+            ("review note", note),
+        ):
+            if len(str(value)) >= MAX_SHEET_CELL_CHARS:
+                raise ValueError(f"{field} exceeds the export cell limit")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT * FROM moe_opinions WHERE opinion_id = ?",
+                (opinion_id,),
+            ).fetchall()
+            if len(rows) != 1:
+                raise ValueError(
+                    f"Expected one opinion_id match, found {len(rows)}"
+                )
+            current = {
+                header: rows[0][header] for header in OPINION_HEADERS
+            }
+            if current["generation_status"] != "valid":
+                raise ValueError("Only valid opinions can be reviewed")
+            current_output_sha256 = opinion_output_sha256(current)
+            if current_output_sha256 != current["output_sha256"]:
+                raise ValueError(
+                    "Opinion content changed after generation; review refused"
+                )
+            reviewed_at = datetime.now(timezone.utc).isoformat()
+            connection.execute(
+                """
+                UPDATE moe_opinions
+                SET review_status = ?,
+                    reviewed_at_utc = ?,
+                    reviewed_by = ?,
+                    review_note = ?,
+                    output_sha256 = ?,
+                    approved_output_sha256 = ?
+                WHERE opinion_id = ?
+                """,
+                (
+                    status,
+                    reviewed_at,
+                    reviewed_by,
+                    note,
+                    current["output_sha256"],
+                    current_output_sha256 if status == "approved" else "",
+                    opinion_id,
+                ),
+            )
+            updated = {
+                **current,
+                "review_status": status,
+                "reviewed_at_utc": reviewed_at,
+                "reviewed_by": reviewed_by,
+                "review_note": note,
+                "output_sha256": current["output_sha256"],
+                "approved_output_sha256": (
+                    current_output_sha256 if status == "approved" else ""
+                ),
+            }
+            connection.execute(
+                """
+                INSERT INTO moe_write_journal(
+                    committed_at_utc, operation, opinion_id,
+                    before_json, after_json
+                ) VALUES (?, 'review', ?, ?, ?)
+                """,
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    opinion_id,
+                    _canonical_json(current),
+                    _canonical_json(updated),
+                ),
+            )
+
+    def journal_entries(self, after_sequence: int = 0) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            return [
+                dict(row)
+                for row in connection.execute(
+                    """
+                    SELECT sequence, committed_at_utc, operation, opinion_id,
+                           before_json, after_json
+                    FROM moe_write_journal
+                    WHERE sequence > ?
+                    ORDER BY sequence
+                    """,
+                    (after_sequence,),
+                ).fetchall()
+            ]
+
+
 def configured_opinion_store() -> MoeOpinionStore:
-    backend = os.getenv("MOE_STORAGE_BACKEND", "google_sheets")
-    if backend != "google_sheets":
-        raise ValueError(f"Unsupported MOE_STORAGE_BACKEND: {backend}")
-    return GoogleSheetsMoeOpinionStore(
-        os.environ["GOOGLE_CREDENTIALS"],
-        os.environ["NFL_INTAKE_SHEET_ID"],
-    )
+    backend = os.getenv("MOE_STORAGE_BACKEND", "google_sheets").strip().lower()
+    role = os.getenv("MOE_STORAGE_ROLE", "primary").strip().lower()
+    if role not in {"primary", "readonly"}:
+        raise ValueError(f"Unsupported MOE_STORAGE_ROLE: {role}")
+    writable = role == "primary"
+    if backend == "google_sheets":
+        return GoogleSheetsMoeOpinionStore(
+            os.environ["GOOGLE_CREDENTIALS"],
+            os.environ["NFL_INTAKE_SHEET_ID"],
+            writable=writable,
+        )
+    if backend == "sqlite":
+        path = os.getenv("MOE_SQLITE_PATH", "").strip()
+        if not path:
+            raise ValueError("MOE_SQLITE_PATH is required for sqlite storage")
+        return SQLiteMoeOpinionStore(path, writable=writable)
+    raise ValueError(f"Unsupported MOE_STORAGE_BACKEND: {backend}")
 
 
 def append_opinion(row: dict[str, Any]) -> None:

@@ -393,8 +393,10 @@ the input week is null. Nothing is silently truncated.
 `moe_opinions` is append-only and stores both normalized fields and the complete
 input/output artifacts. `GoogleSheetsMoeOpinionStore` sits behind the
 `MoeOpinionStore` protocol so generation and bot code are not coupled to
-worksheet calls. `MOE_STORAGE_BACKEND=google_sheets` is the initial backend;
-future SQLite migration can implement the same protocol.
+worksheet calls. The initial backend was Google Sheets. The production backend
+is now selected with `MOE_STORAGE_BACKEND=google_sheets|sqlite`;
+`MOE_SQLITE_PATH` names the SQLite file and `MOE_STORAGE_ROLE=primary|readonly`
+prevents an operator checkout from writing the archived Sheet after cutover.
 
 Every model attempt is written by the generation function itself, rather than
 by a later CLI step. Valid outputs use `generation_status=valid`; malformed or
@@ -770,6 +772,27 @@ across partial failures and spool replay. The rail covers `input_json`,
 `raw_response`, complete rendered opinions, cited factor JSON, both structured
 pick legs, calibration summaries, and nondeterministic-analysis artifacts.
 Short bounded fields such as review metadata retain explicit per-cell limits.
+
+The SQLite MOE migration reconstructs every chunk and stores each complete
+artifact directly in the `moe_opinions` table as `TEXT`; SQLite has no
+50,000-character cell boundary. `artifact_refs_json` remains blank in SQLite.
+The archived `moe_artifact_chunks` Sheet is retained unchanged for rollback but
+is not read by the SQLite runtime. Opinion rows preserve worksheet order and
+all public columns as text, with WAL, full synchronous writes, a 30-second busy
+timeout, hash-checked reviews, and idempotent opinion IDs. `moe_grades` remains
+the compact human-facing Sheet ledger. Migration writes a mode-0600 JSON export,
+verifies every reconstructed row and approved hash, and refuses to overwrite an
+existing database. A daily systemd timer uses SQLite's online backup API,
+verifies the backup, and retains 14 copies.
+
+Production opens only an existing schema-valid database; a wrong or deleted
+path fails startup rather than silently creating an empty authority. Every
+post-cutover append or review writes `moe_write_journal` in the same transaction.
+`scripts/export_moe_sqlite_delta.py` exports those mutations and
+`scripts/replay_moe_delta_to_sheets.py` verifies exact before-values before a
+rollback replay, reconstructing Sheet chunks only when an oversized appended
+row returns to Sheets. The replay is verify-only unless passed `--apply`, keeps
+the original review timestamp and approval hash, and refuses conflicts.
 
 The dependent God replay exposed a separate time-travel bug: the ordinary
 postgame aggregator builder supplied every current-season final to the

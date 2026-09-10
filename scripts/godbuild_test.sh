@@ -38,7 +38,7 @@ fi
 COUNT="$(wc -l < "$LIST" | tr -d ' ')"
 echo "overlay: ${COUNT} file(s) differ from origin/main"
 cat "$LIST"
-LOCAL_TAR="$(mktemp --suffix=.tgz)"
+LOCAL_TAR="$(mktemp -t godbuild-overlay.XXXXXX)"
 if [ "$COUNT" -gt 0 ]; then
   tar czf "$LOCAL_TAR" -T "$LIST"
 else

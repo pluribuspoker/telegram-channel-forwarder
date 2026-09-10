@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily verified backup of the MOE SQLite database
+
+[Timer]
+OnCalendar=*-*-* 04:40:00
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Back up and verify the MOE SQLite database
+
+[Service]
+Type=oneshot
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/scripts/backup_moe_sqlite.py
+TimeoutStartSec=300
