@@ -153,7 +153,9 @@ anywhere; judge runs bill the Claude Code subscription.
      allowed for `god_judge` next to `agent_runtime`, so the row says how it
      was produced). Delete the temp directory.
   5. DM the reviewer through the watchdog bot that new pending rows exist
-     for the game. The runner never approves anything.
+     for the game. The runner never approves anything. (Superseded
+     2026-09-09, commit 716a286: every valid row auto-approves at
+     generation and the DM reports the approval; rejection stays manual.)
   Units live in `deploy/systemd/god-judge.service` + `.timer` with a
   `run_god_judge.sh` runner (`set -o pipefail`, `TimeoutStartSec` above the
   worst case, its own healthcheck URL), per the infra rules in CLAUDE.md.

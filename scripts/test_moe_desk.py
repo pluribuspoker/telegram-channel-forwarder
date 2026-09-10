@@ -31,17 +31,13 @@ from moe_desk import (
     empty_state,
     leg_label,
     load_state,
-    lock_warning_due,
     parse_callback,
     parse_start_param,
     post_scores_notice,
     prune_state,
     render_opinion_details,
     render_picks_card,
-    render_queue_card,
-    render_review_card,
     render_week_card,
-    review_targets,
     resolve_picks_view,
     save_state,
     sync_desk,
@@ -72,7 +68,6 @@ REGISTRY = {
 CONFIG = DeskConfig(
     bot_token="token",
     chat_id="-1001",
-    review_topic=11,
     picks_topic=22,
     scores_topic=33,
     bot_username="nflguesser_bot",
@@ -298,13 +293,13 @@ class ModelTests(unittest.TestCase):
                 "divisional": "approved",
                 "rating_elo": "approved",
                 "schedule": "approved",
-                "win_total": "pending",
+                # a legacy unapproved row is not a committee row: missing
+                "win_total": "missing",
             },
         )
         self.assertNotIn("cee", statuses)  # optional and absent
         self.assertEqual((desk.required_approved, desk.required_total), (4, 5))
-        # arms first, then voices oldest first
-        self.assertEqual([r["opinion_id"] for r in desk.pending], ["c884d868-0000", "444bf3de-0000", "p1"])
+        self.assertEqual(desk.missing_required, ["win_total"])
         self.assertEqual([r["opinion_id"] for r in desk.reviewed], ["a3", "a2", "a4", "a1"])
         self.assertIsNone(desk.rules)
         self.assertFalse(desk.started)
@@ -319,7 +314,8 @@ class ModelTests(unittest.TestCase):
             now=NOW,
         )[0]
         self.assertIn(("cee", "rejected", False), desk.voices)
-        self.assertEqual(desk.missing_required, [])
+        # win_total only has an unapproved legacy row: still waiting on it
+        self.assertEqual(desk.missing_required, ["win_total"])
 
     def test_horizon_status_and_started_games(self) -> None:
         far = game("9", "A B", "C D", (NOW + timedelta(days=20)).isoformat())
@@ -330,22 +326,19 @@ class ModelTests(unittest.TestCase):
         self.assertEqual([d.event_id for d in desks], ["8"])
         self.assertTrue(desks[0].started)
 
-    def test_pending_means_latest_valid_row_per_expert_and_model(self) -> None:
+    def test_committee_selects_latest_approved_per_expert(self) -> None:
         rows = [
-            # an old pending draft superseded by a newer approved row: hidden
+            # legacy unapproved drafts and audit rows never join the committee
             row("draft", "401", "schedule", generated="2026-09-09T00:00:00+00:00"),
             row("old", "401", "schedule", status="approved", generated="2026-09-10T00:00:00+00:00"),
-            # a newer pending row on the same expert+model: actionable
             row("newer", "401", "schedule", generated="2026-09-11T00:00:00+00:00"),
             row("hk", "401", "schedule", status="approved", model="claude-haiku-4-5"),
             row("bad", "401", "schedule", generation_status="invalid"),
             row("sample", "401", "schedule", status="not_applicable", generation_status="sample"),
-            row("odd", "401", "schedule", status="not_applicable"),  # never reviewable either
+            row("odd", "401", "schedule", status="not_applicable"),
             row("pend", "401", "win_total"),
             row("rej", "401", "divisional", status="rejected"),
             arm_row("j-only", "401", "god_judge", PASS_PLAIN, PASS_PLAIN, generated="2026-09-10T00:00:00+00:00"),
-            arm_row("r-old", "401", "god_rules", PASS_PLAIN, PASS_PLAIN, generated="2026-09-11T00:00:00+00:00"),
-            arm_row("r-new", "401", "god_rules", PASS_PLAIN, PASS_PLAIN, generated="2026-09-12T00:00:00+00:00"),
         ]
         desk = build_desks(
             [game("401", "New England Patriots", "Seattle Seahawks", SEA_KICKOFF)],
@@ -354,8 +347,6 @@ class ModelTests(unittest.TestCase):
             REGISTRY,
             now=NOW,
         )[0]
-        # rules before judge whatever their generation order, then voices oldest first
-        self.assertEqual([r["opinion_id"] for r in desk.pending], ["r-new", "j-only", "newer", "pend"])
         # committee: one row per expert — latest approved on any model without a
         # registry default (hk is newer than old), the rejected divisional row
         self.assertEqual([r["opinion_id"] for r in desk.reviewed], ["rej", "hk"])
@@ -368,7 +359,8 @@ class ModelTests(unittest.TestCase):
             now=NOW,
         )[0]
         self.assertEqual([r["opinion_id"] for r in desk.reviewed], ["rej", "old"])
-        self.assertEqual([r["opinion_id"] for r in desk.review_rows][:4], ["r-new", "j-only", "newer", "pend"])
+        # an unapproved judge row is not a decided arm
+        self.assertIsNone(desk.judge)
 
 
 class RenderTests(unittest.TestCase):
@@ -390,54 +382,6 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(
             leg_label(OVER, kind="total", with_stars=False), "Over 44.5 (-105)"
         )
-
-    def test_review_card_lists_actionable_rows_arms_first_with_buttons(self) -> None:
-        rows = committee()
-        text, keyboard = render_review_card(self.desk(rows), config=CONFIG)
-        self.assertIn("📥 <b>Patriots @ Seahawks</b> · Sun Sep 13 · 4:05 PM ET", text)
-        self.assertIn("locks 2:05 PM ET · committee 4/5", text)
-        self.assertLess(text.index("God Expert (Rules)"), text.index("God Expert (Judge)"))
-        self.assertLess(text.index("God Expert (Judge)"), text.index("Win Total Expert"))
-        self.assertIn("1 · <b>God Expert (Rules)</b> · <code>c884d868</code>", text)
-        self.assertIn("2 · <b>God Expert (Judge)</b> · <code>444bf3de</code> · headless", text)
-        self.assertIn("3 · <b>Win Total Expert</b> · <code>opus-4-8</code>", text)
-        self.assertIn("Side PASS (adverse move) · Total PASS (ev floor) · p home .61", text)
-        self.assertIn("Seahawks 61% ★★ · 20-24 · “Seattle", text)
-        # the to-do card carries no approved opinions and no status board
-        self.assertNotIn("Schedule Expert", text)
-        self.assertNotIn("Committee", text)
-        self.assertEqual(len(keyboard), 4)
-        self.assertEqual([b["text"] for b in keyboard[2]], ["✅ 3", "❌ 3", "👁 3"])
-        self.assertEqual(keyboard[0][0]["callback_data"], "desk:ok:c884d868-0000")
-        self.assertEqual(keyboard[2][0]["callback_data"], "desk:ok:p1")
-        self.assertEqual(keyboard[2][1]["callback_data"], "desk:no:p1")
-        self.assertEqual(keyboard[2][2]["url"], "https://t.me/nflguesser_bot?start=op_p1")
-        self.assertEqual(keyboard[3][0]["callback_data"], "desk:okarms:401")
-        for row_buttons in keyboard:
-            for button in row_buttons:
-                if "callback_data" in button:
-                    self.assertLessEqual(len(button["callback_data"].encode()), 64)
-
-    def test_review_card_without_username_has_no_read_links(self) -> None:
-        rows = committee()
-        _, keyboard = render_review_card(
-            self.desk(rows), config=DeskConfig("t", "-1", 1, 2)
-        )
-        self.assertEqual([b["text"] for b in keyboard[0]], ["✅ 1", "❌ 1"])
-
-    def test_approve_both_arms_needs_both_pending(self) -> None:
-        rows = committee()
-        rows[-1]["review_status"] = "approved"
-        _, keyboard = render_review_card(self.desk(rows), config=CONFIG)
-        self.assertNotIn(
-            "desk:okarms:401", [b.get("callback_data") for r in keyboard for b in r]
-        )
-
-    def test_review_card_with_nothing_pending_says_so(self) -> None:
-        rows = [r for r in committee() if not is_arm(r) and r["opinion_id"] != "p1"]
-        text, keyboard = render_review_card(self.desk(rows), config=CONFIG)
-        self.assertIn("Nothing to review.", text)
-        self.assertEqual(keyboard, [])
 
     def test_picks_card_lists_god_and_every_approved_voice(self) -> None:
         rows = committee(arms_status="approved")
@@ -535,10 +479,12 @@ class RenderTests(unittest.TestCase):
             ],
         )
 
-    def test_picks_card_states_pending_or_missing_god(self) -> None:
-        desk = self.desk(committee())  # arms pending, four voices approved
+    def test_picks_card_states_missing_god(self) -> None:
+        # unapproved arm rows are no arms at all: review is automatic, so a
+        # valid arm row is either approved or a legacy audit row
+        desk = self.desk(committee())  # arms unapproved, four voices approved
         self.assertTrue(desk.show_picks)
-        self.assertIn("<i>Pending review</i>", render_picks_card(desk, config=CONFIG)[0])
+        self.assertIn("<i>Not available</i>", render_picks_card(desk, config=CONFIG)[0])
         rows = [r for r in committee() if not is_arm(r)]
         self.assertIn("<i>Not available</i>", render_picks_card(self.desk(rows), config=CONFIG)[0])
         rows = committee(arms_status="approved")
@@ -620,7 +566,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("<b>Consensus</b> · split 1–1", text)
         self.assertNotIn("Seahawks 2–1", text)
 
-    def test_queue_and_week_cards(self) -> None:
+    def test_week_card_lists_decided_games_and_waiting_voices(self) -> None:
         rows = committee("401") + [
             arm_row("r2", "402", "god_rules", SEA_SIDE, PASS_PLAIN, status="approved"),
         ]
@@ -636,31 +582,19 @@ class RenderTests(unittest.TestCase):
             now=NOW,
         )
         abbrevs = {"Seattle Seahawks": "SEA", "New England Patriots": "NE"}
-        text, keyboard = render_queue_card(desks, team_abbrevs=abbrevs)
+        text, keyboard = render_week_card(desks, team_abbrevs=abbrevs)
         self.assertEqual(keyboard, [])
-        self.assertEqual(
-            text.split("\n"),
-            [
-                "📥 <b>Review queue</b> · Weeks 1–2",
-                "To review: <b>NE @ SEA</b> 3",
-                "Committees: 0 of 3 complete · no row yet: AK 2 · Div 2 · Elo 2 · Sch 2 · WT 2",
-            ],
-        )
-        text, _ = render_week_card(desks, team_abbrevs=abbrevs)
         self.assertEqual(
             text.split("\n"),
             [
                 "🧠 <b>God Expert</b> · Weeks 1–2",
                 "<b>49ers @ Rams</b> Sun 4:25 PM · Seahawks -3.5 (+100) ★ 0.6u · pass · judge —",
+                # 401 waits on its win_total row; 402 and 403 on all five
+                "Waiting on: AK 2 · Div 2 · Elo 2 · Sch 2 · WT 3",
             ],
         )
 
     def test_empty_slate_cards(self) -> None:
-        text, _ = render_queue_card([])
-        self.assertEqual(
-            text.split("\n"),
-            ["📥 <b>Review queue</b>", "Nothing to review.", "Committees: 0 of 0 complete"],
-        )
         text, _ = render_week_card([])
         self.assertEqual(text.split("\n"), ["🧠 <b>God Expert</b>", "No decided games yet."])
 
@@ -687,16 +621,16 @@ class SyncTests(unittest.TestCase):
             **kwargs,
         )
 
-    def test_first_pass_posts_cards_and_pins_queue_and_week(self) -> None:
+    def test_first_pass_posts_cards_and_pins_week(self) -> None:
         rows = committee("401")
         summary = self.sync(rows)
-        self.assertEqual(summary.posted, ["review:401", "picks:401", "queue", "week"])
+        self.assertEqual(summary.posted, ["picks:401", "week"])
         self.assertEqual(summary.alerts, [])
         topics = [m["topic"] for m in self.api.sent]
-        self.assertEqual(topics, [11, 22, 11, 22])
+        self.assertEqual(topics, [22, 22])
         self.assertTrue(all(m["silent"] for m in self.api.sent))
-        self.assertEqual(self.api.pins, [103, 104])
-        self.assertEqual(self.state["cards"]["review:401"]["message_id"], 101)
+        self.assertEqual(self.api.pins, [102])
+        self.assertEqual(self.state["cards"]["picks:401"]["message_id"], 101)
         self.assertEqual(self.state["kickoffs"]["401"], SEA_KICKOFF)
         self.assertIn("402", self.state["kickoffs"])
 
@@ -872,25 +806,24 @@ class SyncTests(unittest.TestCase):
             picks_id,
         )
 
-    def test_a_review_edits_only_the_affected_cards(self) -> None:
+    def test_a_new_approved_row_edits_only_the_affected_cards(self) -> None:
         rows = committee("401")
         self.sync(rows)
         rows[2]["review_status"] = "approved"
-        rows[2]["reviewed_by"] = "AK"
+        rows[2]["reviewed_by"] = "validation"
         summary = self.sync(rows)
         self.assertEqual(summary.posted, [])
-        self.assertEqual(summary.edited, ["review:401", "picks:401", "queue"])
-        review_text, picks_text = self.api.edits[0]["text"], self.api.edits[1]["text"]
-        self.assertNotIn("Win Total", review_text)  # decided: off the to-do card
+        self.assertEqual(summary.edited, ["picks:401", "week"])
+        picks_text, week_text = self.api.edits[0]["text"], self.api.edits[1]["text"]
         self.assertIn("<b>Win Total</b> Seahawks 61% ★★ · 20-24", picks_text)
+        self.assertIn("WT 1", week_text)  # 401 no longer waits on it, 402 still does
+        self.assertNotIn("WT 2", week_text)
 
     def test_approved_arm_posts_the_picks_card_and_one_loud_bet_alert(self) -> None:
         rows = committee("401", arms_status="approved")
         rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
         summary = self.sync(rows)
-        self.assertEqual(
-            summary.posted, ["review:401", "picks:401", "queue", "week"]
-        )
+        self.assertEqual(summary.posted, ["picks:401", "week"])
         self.assertEqual(summary.alerts, ["bet:c884d868-0000:side"])
         alert = next(m for m in self.api.sent if not m["silent"])
         self.assertEqual(alert["topic"], 22)
@@ -902,77 +835,48 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(summary.alerts, [])
         self.assertEqual(sum(1 for m in self.api.sent if not m["silent"]), 1)
 
-    def test_lock_warning_fires_once_inside_the_window(self) -> None:
-        rows = committee("401")
-        kickoff = datetime.fromisoformat(SEA_KICKOFF)
-        before = kickoff - timedelta(hours=4, minutes=1)
-        inside = kickoff - timedelta(hours=3, minutes=30)
-        self.sync(rows, now=before)
-        self.assertEqual(sum(1 for m in self.api.sent if not m["silent"]), 0)
-        summary = self.sync(rows, now=inside)
-        self.assertEqual(summary.alerts, ["lock:401"])
-        alert = next(m for m in self.api.sent if not m["silent"])
-        self.assertEqual(alert["topic"], 11)
-        self.assertEqual(alert["reply_to"], self.state["cards"]["review:401"]["message_id"])
-        self.assertEqual(
-            alert["text"], "🔔 Patriots @ Seahawks locks for the judge in 1h 30m · 3 pending"
-        )
-        self.sync(rows, now=inside + timedelta(minutes=10))
-        self.assertEqual(sum(1 for m in self.api.sent if not m["silent"]), 1)
-        # no pending rows, no warning
-        quiet = [r for r in committee("402", arms_status="approved") if r["opinion_id"] != "p1"]
-        desk = self.desks(quiet, now=inside)[1]
-        self.assertFalse(lock_warning_due(desk, config=CONFIG, now=inside))
-
     def test_started_games_are_frozen_and_later_pruned(self) -> None:
-        rows = committee("401")
+        rows = committee("401", arms_status="approved")
         self.sync(rows)
         kickoff = datetime.fromisoformat(SEA_KICKOFF)
-        rows[2]["review_status"] = "approved"
         summary = self.sync(rows, now=kickoff + timedelta(minutes=5))
-        self.assertNotIn("review:401", summary.edited)
-        self.assertIn("review:401", self.state["cards"])
+        # started: off the week card, but the picks card entry survives
+        self.assertIn("week", summary.edited)
+        self.assertIn("picks:401", self.state["cards"])
         self.sync(rows, now=kickoff + timedelta(days=4))
-        self.assertNotIn("review:401", self.state["cards"])
+        self.assertNotIn("picks:401", self.state["cards"])
         self.assertNotIn("401", self.state["kickoffs"])
 
     def test_a_deleted_card_is_reposted(self) -> None:
         rows = committee("401")
         self.sync(rows)
-        self.api.missing.add(self.state["cards"]["review:401"]["message_id"])
-        rows[2]["review_status"] = "rejected"
+        self.api.missing.add(self.state["cards"]["picks:401"]["message_id"])
+        rows[2]["review_status"] = "approved"  # the card's content changes
         summary = self.sync(rows)
-        self.assertEqual(summary.posted, ["review:401"])
-        self.assertEqual(self.state["cards"]["review:401"]["message_id"], self.api.sent[-1]["id"])
+        self.assertEqual(summary.posted, ["picks:401"])
+        self.assertEqual(
+            self.state["cards"]["picks:401"]["message_id"], self.api.sent[-1]["id"]
+        )
 
     def test_post_budget_defers_the_rest_to_the_next_pass(self) -> None:
         rows = committee("401") + committee("402")
         summary = self.sync(rows, max_posts=2)
-        self.assertEqual(summary.posted, ["review:401", "picks:401"])
-        self.assertEqual(summary.deferred, ["review:402", "picks:402", "queue", "week"])
+        self.assertEqual(summary.posted, ["picks:401", "picks:402"])
+        self.assertEqual(summary.deferred, ["week"])
         summary = self.sync(rows, max_posts=2)
-        self.assertEqual(summary.posted, ["review:402", "picks:402"])
-        summary = self.sync(rows, max_posts=2)
-        self.assertEqual(summary.posted, ["queue", "week"])
+        self.assertEqual(summary.posted, ["week"])
 
-    def test_review_card_is_deleted_once_nothing_is_left_to_review(self) -> None:
-        rows = committee("401")
-        self.sync(rows)
-        review_id = self.state["cards"]["review:401"]["message_id"]
-        for r in rows:
-            if r["review_status"] == "pending":
-                r["review_status"] = "approved"
-                r["reviewed_by"] = "AK"
-        summary = self.sync(rows)
-        self.assertEqual(summary.deleted, ["review:401"])
-        self.assertEqual(self.api.deleted, [review_id])
+    def test_legacy_review_topic_state_is_dropped_without_api_calls(self) -> None:
+        # The Review topic was deleted 2026-09-10; its messages died with it,
+        # so the sync forgets those cards instead of trying to delete them.
+        self.state["cards"]["queue"] = {"message_id": 7, "hash": "h", "topic": 11}
+        self.state["cards"]["review:401"] = {"message_id": 8, "hash": "h", "topic": 11}
+        self.state["announced"]["lock:401"] = {"at": "", "event_id": "401"}
+        self.sync(committee("401"))
+        self.assertNotIn("queue", self.state["cards"])
         self.assertNotIn("review:401", self.state["cards"])
-        self.assertIn("picks:401", self.state["cards"])
-        # a fresh pending row brings the to-do card back
-        rows.append(row("p2", "401", "win_total", generated="2026-09-12T13:00:00+00:00"))
-        summary = self.sync(rows)
-        self.assertEqual(summary.posted, ["review:401"])
-        self.assertEqual(summary.deleted, [])
+        self.assertNotIn("lock:401", self.state["announced"])
+        self.assertEqual(self.api.deleted, [])
 
     def test_api_errors_are_collected_not_raised(self) -> None:
         class Broken(FakeApi):
@@ -982,7 +886,7 @@ class SyncTests(unittest.TestCase):
         self.api = Broken()
         summary = self.sync(committee("401"))
         self.assertEqual(summary.posted, [])
-        self.assertEqual(len(summary.errors), 4)
+        self.assertEqual(len(summary.errors), 2)
         self.assertEqual(self.state["cards"], {})
 
 
@@ -991,7 +895,7 @@ class StateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "nested" / "state.json"
             state = empty_state()
-            state["cards"]["queue"] = {"message_id": 5, "hash": "h", "topic": 1}
+            state["cards"]["week"] = {"message_id": 5, "hash": "h", "topic": 1}
             save_state(path, state)
             self.assertEqual(load_state(path), state)
             path.write_text("{not json", encoding="utf-8")
@@ -1025,17 +929,17 @@ class StateTests(unittest.TestCase):
             "new": (NOW - timedelta(days=1)).isoformat(),
         }
         state["cards"] = {
-            "review:old": {"message_id": 1},
+            "picks:old": {"message_id": 1},
             "picks:new": {"message_id": 2},
-            "queue": {"message_id": 3},
+            "week": {"message_id": 3},
         }
         state["announced"] = {
             "bet:x:side": {"at": "", "event_id": "old"},
-            "lock:new": {"at": "", "event_id": "new"},
+            "bet:y:side": {"at": "", "event_id": "new"},
         }
         prune_state(state, now=NOW)
-        self.assertEqual(sorted(state["cards"]), ["picks:new", "queue"])
-        self.assertEqual(list(state["announced"]), ["lock:new"])
+        self.assertEqual(sorted(state["cards"]), ["picks:new", "week"])
+        self.assertEqual(list(state["announced"]), ["bet:y:side"])
         self.assertEqual(list(state["kickoffs"]), ["new"])
 
     def test_content_hash_covers_topic_text_and_keyboard(self) -> None:
@@ -1046,25 +950,26 @@ class StateTests(unittest.TestCase):
 
 
 class ConfigAndCallbackTests(unittest.TestCase):
-    def test_config_from_env_requires_chat_and_both_topics(self) -> None:
+    def test_config_from_env_requires_chat_and_picks_topic(self) -> None:
         env = {
             "INTAKE_BOT_TOKEN": "t",
             "MOE_DESK_CHAT_ID": "-100123",
-            "MOE_DESK_REVIEW_TOPIC": "2",
             "MOE_DESK_PICKS_TOPIC": "3",
             "MOE_DESK_SCORES_TOPIC": "4",
             "MOE_DESK_SYNC_SECONDS": "5",
+            # obsolete since the Review topic was removed (2026-09-10):
+            # both are ignored if a .env still carries them
+            "MOE_DESK_REVIEW_TOPIC": "2",
             "MOE_DESK_LOCK_WARN_HOURS": "1.5",
         }
         config = desk_config_from_env(env)
         self.assertEqual(
-            (config.chat_id, config.review_topic, config.picks_topic, config.scores_topic),
-            ("-100123", 2, 3, 4),
+            (config.chat_id, config.picks_topic, config.scores_topic),
+            ("-100123", 3, 4),
         )
         self.assertEqual(config.sync_seconds, 15)  # floor
-        self.assertEqual(config.lock_warn_hours, 1.5)
         self.assertEqual(config.with_username("@nflguesser_bot").bot_username, "nflguesser_bot")
-        for missing in ("INTAKE_BOT_TOKEN", "MOE_DESK_CHAT_ID", "MOE_DESK_REVIEW_TOPIC", "MOE_DESK_PICKS_TOPIC"):
+        for missing in ("INTAKE_BOT_TOKEN", "MOE_DESK_CHAT_ID", "MOE_DESK_PICKS_TOPIC"):
             partial = {k: v for k, v in env.items() if k != missing}
             self.assertIsNone(desk_config_from_env(partial), missing)
         self.assertIsNone(desk_config_from_env({**env, "MOE_DESK_PICKS_TOPIC": "x"}))
@@ -1105,9 +1010,11 @@ class ConfigAndCallbackTests(unittest.TestCase):
         self.assertNotIn("topic id", basic)
 
     def test_parse_callback(self) -> None:
-        self.assertEqual(parse_callback("desk:ok:abc"), ("ok", "abc"))
-        self.assertEqual(parse_callback("desk:no:abc"), ("no", "abc"))
-        self.assertEqual(parse_callback("desk:okarms:401"), ("okarms", "401"))
+        # the removed review actions no longer parse (stale buttons answer
+        # "Unknown desk action" instead of acting)
+        self.assertIsNone(parse_callback("desk:ok:abc"))
+        self.assertIsNone(parse_callback("desk:no:abc"))
+        self.assertIsNone(parse_callback("desk:okarms:401"))
         self.assertEqual(parse_callback("desk:show:401"), ("show", "401"))
         self.assertEqual(parse_callback("desk:hide:401"), ("hide", "401"))
         self.assertEqual(
@@ -1127,21 +1034,8 @@ class ConfigAndCallbackTests(unittest.TestCase):
             ("refresh", "401"),
         )
         self.assertIsNone(parse_callback("desk:zap:401"))
-        self.assertIsNone(parse_callback("desk:ok:"))
+        self.assertIsNone(parse_callback("desk:show:"))
         self.assertIsNone(parse_callback("moe:view:401:0"))
-
-    def test_review_targets(self) -> None:
-        rows = committee("401")
-        self.assertEqual(review_targets("ok", "p1", rows), ([rows[2]], None))
-        self.assertEqual(review_targets("no", "zzz", rows)[1], "That row is no longer in the sheet.")
-        self.assertEqual(review_targets("ok", "a1", rows)[1], "Already approved by SS.")
-        rows.append(row("bad", "401", "schedule", generation_status="invalid"))
-        self.assertIn("audit row", review_targets("ok", "bad", rows)[1])
-        arms, error = review_targets("okarms", "401", rows)
-        self.assertIsNone(error)
-        self.assertEqual([r["expert_id"] for r in arms], ["god_rules", "god_judge"])
-        rows[6]["review_status"] = "approved"
-        self.assertEqual(review_targets("okarms", "401", rows)[1], "Both arms are no longer pending.")
 
 
 class _Response:
@@ -1237,7 +1131,6 @@ class BotApiTests(unittest.TestCase):
         env = {
             "INTAKE_BOT_TOKEN": "t",
             "MOE_DESK_CHAT_ID": "-1",
-            "MOE_DESK_REVIEW_TOPIC": "1",
             "MOE_DESK_PICKS_TOPIC": "2",
             "MOE_DESK_SCORES_TOPIC": "3",
         }

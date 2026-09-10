@@ -1,28 +1,31 @@
-"""Desk group: the shared Telegram supergroup where the two reviewers work the
-NFL MOE committee and read the God Expert.
+"""Desk group: the shared Telegram supergroup where the operators read the
+NFL MOE committee and the God Expert.
 
-One supergroup with forum topics, the intake bot as admin, both reviewers in
-it with the same rights. Every card is one message both of them see:
+One supergroup with forum topics, the intake bot as admin. Every card is one
+message everyone sees:
 
-- **Review topic** — one card per upcoming game listing that game's valid
-  opinion rows (pending first) with ✅ / ❌ callback buttons per pending row
-  and a 👁 deep link into the reviewer's own DM with the bot. A pinned queue
-  card summarises every upcoming game's committee (approved / pending /
-  missing per voice).
 - **Picks topic** — one card per game once a God Expert arm is approved:
   both arms' legs, the committee count, and a collapsed
   ``<blockquote expandable>`` "Why" each viewer opens on their own screen.
-  A pinned week card lists the legs for every game.
+  A pinned week card lists the legs for every game, plus which required
+  voices still have no approved row (those games the judge runner skips
+  as "committee incomplete").
 - **Scores topic** — the grading digest (``scripts/moe_grade.py --notify``).
 
-Loud (a notification) in two places only: a reply under the picks card when
-a bet leg is approved, and a reply under the review card when the judge lock
-is near with rows still pending. Everything else is posted silently and
-edited in place; Telegram edits never notify.
+Review is automatic: every structurally valid opinion row — voices and both
+God Expert arms — is approved at generation (``moe_god.review_policy``,
+2026-09-09), so the desk shows outcomes and never asks for a decision. The
+Review topic with its ✅/❌ cards, the pinned queue card and the judge-lock
+warning were removed 2026-09-10; rejecting a bad row remains possible with
+``scripts/review_moe_opinion.py``.
 
-Shared-message rules: a button either acts (approve / reject, checked against
-the reviewer list and signed with who tapped) or deep-links into the
-tapper's own DM; nothing navigates the shared message.
+Loud (a notification) in one place only: a reply under the picks card when
+a bet leg is approved. Everything else is posted silently and edited in
+place; Telegram edits never notify.
+
+Shared-message rules: a button either switches the shared card's view or
+deep-links into the tapper's own DM; nothing else navigates the shared
+message.
 
 This module owns the pure logic (model, renderers, sync decisions) and a thin
 Bot API transport; ``intake_bot.py`` wires it to the sheet, the Telethon
@@ -55,16 +58,10 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_STATE_PATH = ROOT / "moe_desk_state.json"
 STATE_VERSION = 1
 
-# The judge runner skips games inside two hours of kickoff
-# (scripts/god_judge_runner.py KICKOFF_CUTOFF); the lock warning counts back
-# from that moment.
-JUDGE_LOCK = timedelta(hours=2)
-DEFAULT_LOCK_WARN_HOURS = 2.0
 DEFAULT_SYNC_SECONDS = 120
 HORIZON = timedelta(days=10)
 RETENTION = timedelta(days=3)
 MAX_POSTS_PER_SYNC = 15
-MAX_REVIEW_ROWS = 12
 THESIS_CHARS = 160
 COMMITTEE_THESIS_CHARS = 110
 WHY_CHARS = 1800
@@ -97,12 +94,6 @@ VOICE_NAMES = {
     "celebrity": "Celebrity",
 }
 VOICE_DISPLAY_ORDER = ["schedule", "divisional", "win_total", "ak", "rating_elo", "cee", "celebrity"]
-STATUS_MARKS = {
-    "approved": "✓",
-    "pending": "⏳",
-    "rejected": "✗",
-    "missing": "—",
-}
 
 CALLBACK_PREFIX = "desk:"
 
@@ -120,12 +111,10 @@ def _esc(text: Any) -> str:
 class DeskConfig:
     bot_token: str
     chat_id: str
-    review_topic: int
     picks_topic: int
     scores_topic: int | None = None
     bot_username: str = ""
     sync_seconds: int = DEFAULT_SYNC_SECONDS
-    lock_warn_hours: float = DEFAULT_LOCK_WARN_HOURS
     state_path: Path = DEFAULT_STATE_PATH
 
     def with_username(self, username: str) -> "DeskConfig":
@@ -145,32 +134,24 @@ def _int_or_none(value: Any) -> int | None:
 def desk_config_from_env(
     environ: Any = None,
 ) -> DeskConfig | None:
-    """The desk is enabled when the chat id and both card topics are set;
-    otherwise ``None`` and nothing in the bot touches a group."""
+    """The desk is enabled when the chat id and the Picks topic are set;
+    otherwise ``None`` and nothing in the bot touches a group.
+    ``MOE_DESK_REVIEW_TOPIC`` / ``MOE_DESK_LOCK_WARN_HOURS`` are obsolete
+    (the Review topic was removed 2026-09-10) and are ignored if present."""
     environ = os.environ if environ is None else environ
     token = str(environ.get("INTAKE_BOT_TOKEN") or "").strip()
     chat_id = str(environ.get("MOE_DESK_CHAT_ID") or "").strip()
-    review = _int_or_none(environ.get("MOE_DESK_REVIEW_TOPIC"))
     picks = _int_or_none(environ.get("MOE_DESK_PICKS_TOPIC"))
-    if not (token and chat_id and review and picks):
+    if not (token and chat_id and picks):
         return None
     sync_seconds = _int_or_none(environ.get("MOE_DESK_SYNC_SECONDS"))
-    warn = environ.get("MOE_DESK_LOCK_WARN_HOURS")
-    try:
-        lock_warn_hours = (
-            float(warn) if str(warn or "").strip() else DEFAULT_LOCK_WARN_HOURS
-        )
-    except ValueError:
-        lock_warn_hours = DEFAULT_LOCK_WARN_HOURS
     state_path = str(environ.get("MOE_DESK_STATE_PATH") or "").strip()
     return DeskConfig(
         bot_token=token,
         chat_id=chat_id,
-        review_topic=review,
         picks_topic=picks,
         scores_topic=_int_or_none(environ.get("MOE_DESK_SCORES_TOPIC")),
         sync_seconds=max(15, sync_seconds or DEFAULT_SYNC_SECONDS),
-        lock_warn_hours=max(0.0, lock_warn_hours),
         state_path=Path(state_path) if state_path else DEFAULT_STATE_PATH,
     )
 
@@ -194,10 +175,6 @@ def review_status(row: dict[str, Any]) -> str:
     return str(row.get("review_status") or "pending").strip().lower()
 
 
-def is_pending_row(row: dict[str, Any]) -> bool:
-    return is_valid_row(row) and review_status(row) == "pending"
-
-
 def is_arm_row(row: dict[str, Any]) -> bool:
     return str(row.get("expert_id") or "") in ARM_IDS
 
@@ -212,10 +189,6 @@ def row_key(row: dict[str, Any]) -> tuple[str, str]:
 def latest_row(rows: Iterable[dict[str, Any]]) -> dict[str, Any] | None:
     rows = list(rows)
     return max(rows, key=row_key) if rows else None
-
-
-def short_id(row: dict[str, Any]) -> str:
-    return str(row.get("opinion_id") or "")[:8]
 
 
 def nickname(team: Any) -> str:
@@ -302,7 +275,6 @@ class GameDesk:
     kickoff: datetime
     started: bool
     rows: list[dict[str, Any]]
-    pending: list[dict[str, Any]]  # actionable: latest valid per expert+model
     approved: list[dict[str, Any]]
     reviewed: list[dict[str, Any]]  # one per expert, the aggregator's pick
     voices: list[tuple[str, str, bool]]  # (expert_id, status, required)
@@ -314,10 +286,6 @@ class GameDesk:
     @property
     def event_id(self) -> str:
         return str(self.game.get("event_id") or "")
-
-    @property
-    def review_rows(self) -> list[dict[str, Any]]:
-        return self.pending + self.reviewed
 
     @property
     def approved_voices(self) -> list[dict[str, Any]]:
@@ -353,38 +321,6 @@ class GameDesk:
             for expert_id, status, required in self.voices
             if required and status == "missing"
         ]
-
-
-def latest_valid_by_expert_model(
-    rows: Iterable[dict[str, Any]],
-) -> dict[tuple[str, str], dict[str, Any]]:
-    latest: dict[tuple[str, str], dict[str, Any]] = {}
-    for row in rows:
-        if not is_valid_row(row) or review_status(row) == "not_applicable":
-            continue
-        key = (str(row.get("expert_id") or ""), str(row.get("model") or ""))
-        current = latest.get(key)
-        if current is None or row_key(row) > row_key(current):
-            latest[key] = row
-    return latest
-
-
-def actionable_pending(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Pending rows still worth a decision: a pending row that is the latest
-    valid row for its expert and model. An older draft superseded by a
-    newer row on the same expert and model (approved, rejected or pending)
-    is hidden — the aggregator only ever reads the latest approved row, so
-    deciding a superseded draft changes nothing. God arms first, then
-    voices oldest first."""
-    latest = latest_valid_by_expert_model(rows)
-    pending = [row for row in latest.values() if review_status(row) == "pending"]
-    def order(row: dict[str, Any]) -> tuple[int, int, tuple[str, str]]:
-        expert_id = str(row.get("expert_id") or "")
-        if expert_id in ARM_IDS:
-            return (0, ARM_IDS.index(expert_id), row_key(row))
-        return (1, 0, row_key(row))
-
-    return sorted(pending, key=order)
 
 
 def committee_rows(
@@ -463,9 +399,7 @@ def build_desks(
         approved = [
             row for row in game_rows if str(row.get("opinion_id")) in approved_ids
         ]
-        pending = actionable_pending(game_rows)
         approved_experts = {str(row.get("expert_id")) for row in approved}
-        pending_experts = {str(row.get("expert_id")) for row in pending}
         rejected_experts = {
             str(row.get("expert_id"))
             for row in game_rows
@@ -475,8 +409,6 @@ def build_desks(
         def status_of(expert_id: str) -> str:
             if expert_id in approved_experts:
                 return "approved"
-            if expert_id in pending_experts:
-                return "pending"
             if expert_id in rejected_experts:
                 return "rejected"
             return "missing"
@@ -493,7 +425,6 @@ def build_desks(
                 kickoff=kickoff,
                 started=kickoff <= now,
                 rows=game_rows,
-                pending=pending,
                 approved=approved,
                 reviewed=committee_rows(
                     game_rows,
@@ -656,34 +587,9 @@ def row_summary(row: dict[str, Any], *, thesis_chars: int = THESIS_CHARS) -> str
     return " · ".join(parts)
 
 
-def _reviewed_mark(row: dict[str, Any]) -> str:
-    status = review_status(row)
-    mark = {"approved": "✅", "rejected": "❌"}.get(status)
-    if not mark:
-        return ""
-    who = _esc(str(row.get("reviewed_by") or "").strip())
-    when = ""
-    if row.get("reviewed_at_utc"):
-        try:
-            when = clock_label(_parse_time(row["reviewed_at_utc"]))
-        except ValueError:
-            when = ""
-    text = " ".join(part for part in (mark, who, when) if part)
-    note = _clip(row.get("review_note"), 80)
-    if status == "rejected" and note:
-        text += f" · “{_esc(note)}”"
-    return text
-
-
 def _model_text(row: dict[str, Any]) -> str:
     model = str(row.get("model") or "").strip()
     return model.replace("claude-", "") if model else ""
-
-
-def deep_link(config: DeskConfig, param: str) -> str | None:
-    if not config.bot_username:
-        return None
-    return f"https://t.me/{config.bot_username}?start={param}"
 
 
 def parse_start_param(text: str) -> tuple[str, str] | None:
@@ -705,62 +611,6 @@ def _button(text: str, *, callback: str | None = None, url: str | None = None) -
     if url:
         return {"text": text, "url": url}
     return {"text": text, "callback_data": callback or ""}
-
-
-def render_review_card(
-    desk: GameDesk, *, config: DeskConfig
-) -> tuple[str, Keyboard]:
-    """The to-do card: only the rows still worth a decision, God arms first,
-    each with its buttons. Nothing else — the opinions live on the picks
-    card, the status on the pinned queue."""
-    game = desk.game
-    lock = desk.kickoff - JUDGE_LOCK
-    lines = [
-        f"📥 <b>{_esc(teams_label(game))}</b> · {kickoff_label(desk.kickoff)} ET",
-        f"locks {clock_label(lock)} ET · committee {desk.required_approved}/{desk.required_total}",
-    ]
-    keyboard: Keyboard = []
-    visible = desk.pending[:MAX_REVIEW_ROWS]
-    if not visible:
-        lines.append("Nothing to review.")
-        return "\n".join(lines), keyboard
-    pending_arms: dict[str, str] = {}
-    for index, row in enumerate(visible, start=1):
-        name = _esc(str(row.get("expert_name") or row.get("expert_id") or ""))
-        head = f"{index} · <b>{name}</b>"
-        if is_arm_row(row):
-            head += f" · <code>{_esc(short_id(row))}</code>"
-            if str(row.get("generation_backend") or "") == "claude_headless":
-                head += " · headless"
-        else:
-            model = _model_text(row)
-            if model:
-                head += f" · <code>{_esc(model)}</code>"
-        lines += ["", head, row_summary(row)]
-        opinion_id = str(row.get("opinion_id") or "")
-        buttons = [
-            _button(f"✅ {index}", callback=f"{CALLBACK_PREFIX}ok:{opinion_id}"),
-            _button(f"❌ {index}", callback=f"{CALLBACK_PREFIX}no:{opinion_id}"),
-        ]
-        link = deep_link(config, f"op_{opinion_id}")
-        if link:
-            buttons.append(_button(f"👁 {index}", url=link))
-        keyboard.append(buttons)
-        if is_arm_row(row):
-            pending_arms.setdefault(str(row["expert_id"]), opinion_id)
-    hidden = len(desk.pending) - len(visible)
-    if hidden > 0:
-        lines += ["", f"<i>+{hidden} more to review</i>"]
-    if len(pending_arms) == 2:
-        keyboard.append(
-            [
-                _button(
-                    "✅ Approve both arms",
-                    callback=f"{CALLBACK_PREFIX}okarms:{desk.event_id}",
-                )
-            ]
-        )
-    return "\n".join(lines), keyboard
 
 
 def _factor_texts(value: Any, limit: int) -> list[str]:
@@ -902,26 +752,9 @@ def _labeled_legs(row: dict[str, Any]) -> str:
     )
 
 
-def god_line(desk: GameDesk) -> str:
-    """``God rules Seahawks -3.5 (+100) ★ 0.6u · pass | judge pass · pass``."""
-    if desk.rules is None and desk.judge is None:
-        if any(is_arm_row(row) for row in desk.pending):
-            return "<b>God</b> pending review"
-        return "<b>God</b> —"
-    parts = []
-    for label, row in (("rules", desk.rules), ("judge", desk.judge)):
-        parts.append(f"{label} —" if row is None else f"{label} {_short_legs(row)}")
-    return "<b>God</b> " + _esc(" | ".join(parts))
-
-
 def god_pick_lines(desk: GameDesk) -> list[str]:
     if desk.rules is None and desk.judge is None:
-        status = (
-            "Pending review"
-            if any(is_arm_row(row) for row in desk.pending)
-            else "Not available"
-        )
-        return [f"<i>{status}</i>"]
+        return ["<i>Not available</i>"]
     lines = []
     for label, row in (("Rules", desk.rules), ("Judge", desk.judge)):
         value = "—" if row is None else _labeled_legs(row)
@@ -1204,49 +1037,6 @@ def _teams_short(desk: GameDesk, team_abbrevs: dict[str, str] | None) -> str:
     return _esc(f"{away} @ {home}")
 
 
-def render_queue_card(
-    desks: Iterable[GameDesk],
-    *,
-    team_abbrevs: dict[str, str] | None = None,
-) -> tuple[str, Keyboard]:
-    """Three lines: what is to review, how many committees are complete, and
-    which required voices still have no row at all."""
-    active = [desk for desk in desks if not desk.started]
-    week = _week_label(active)
-    head = "📥 <b>Review queue</b>"
-    if week:
-        head += f" · {week}"
-    lines = [head]
-    to_review = [desk for desk in active if desk.pending]
-    if to_review:
-        lines.append(
-            "To review: "
-            + " · ".join(
-                f"<b>{_teams_short(desk, team_abbrevs)}</b> {len(desk.pending)}"
-                for desk in to_review
-            )
-        )
-    else:
-        lines.append("Nothing to review.")
-    complete = sum(
-        1
-        for desk in active
-        if desk.required_total and desk.required_approved == desk.required_total
-    )
-    line = f"Committees: {complete} of {len(active)} complete"
-    missing_counts: dict[str, int] = {}
-    for desk in active:
-        for expert_id in desk.missing_required:
-            missing_counts[expert_id] = missing_counts.get(expert_id, 0) + 1
-    if missing_counts:
-        line += " · no row yet: " + " · ".join(
-            f"{expert_abbreviation(expert_id)} {count}"
-            for expert_id, count in sorted(missing_counts.items())
-        )
-    lines.append(_esc(line))
-    return "\n".join(lines), []
-
-
 def _week_legs(desk: GameDesk) -> str:
     parts = []
     parts.append(_short_legs(desk.rules) if desk.rules is not None else "rules —")
@@ -1267,7 +1057,9 @@ def render_week_card(
     *,
     team_abbrevs: dict[str, str] | None = None,
 ) -> tuple[str, Keyboard]:
-    """Only decided games: one line per game with an approved God arm."""
+    """One line per decided game (an approved God arm), then which required
+    voices still have no approved row — those are the games the judge
+    runner skips as "committee incomplete"."""
     active = [desk for desk in desks if not desk.started]
     decided = [desk for desk in active if desk.rules is not None or desk.judge is not None]
     week = _week_label(active)
@@ -1277,11 +1069,24 @@ def render_week_card(
     lines = [head]
     if not decided:
         lines.append("No decided games yet.")
-        return "\n".join(lines), []
     for desk in decided:
         lines.append(
             f"<b>{_teams_short(desk, team_abbrevs)}</b> {short_kickoff(desk.kickoff)} · "
             f"{_esc(_week_legs(desk))}"
+        )
+    missing_counts: dict[str, int] = {}
+    for desk in active:
+        for expert_id in desk.missing_required:
+            missing_counts[expert_id] = missing_counts.get(expert_id, 0) + 1
+    if missing_counts:
+        lines.append(
+            _esc(
+                "Waiting on: "
+                + " · ".join(
+                    f"{expert_abbreviation(expert_id)} {count}"
+                    for expert_id, count in sorted(missing_counts.items())
+                )
+            )
         )
     return "\n".join(lines), []
 
@@ -1298,17 +1103,6 @@ def render_bet_alert(desk: GameDesk, arm_row: dict[str, Any], kind: str) -> str:
         other_arm = ARM_LABELS.get(str(other.get("expert_id")), "Arm").lower()
         text += f"\n{other_arm} arm: {leg_label(other_leg, kind=kind)}"
     return _esc(text)
-
-
-def render_lock_warning(desk: GameDesk, *, now: datetime) -> str:
-    remaining = desk.kickoff - JUDGE_LOCK - now
-    minutes = max(0, int(remaining.total_seconds() // 60))
-    hours, minutes = divmod(minutes, 60)
-    when = f"{hours}h {minutes:02d}m" if hours else f"{minutes}m"
-    return _esc(
-        f"🔔 {teams_label(desk.game)} locks for the judge in {when} · "
-        f"{len(desk.pending)} pending"
-    )
 
 
 def render_scores_notice(text: str) -> str:
@@ -1850,11 +1644,16 @@ def _announce(
     summary.alerts.append(key)
 
 
-def lock_warning_due(desk: GameDesk, *, config: DeskConfig, now: datetime) -> bool:
-    if not desk.pending or desk.started or config.lock_warn_hours <= 0:
-        return False
-    lock = desk.kickoff - JUDGE_LOCK
-    return lock - timedelta(hours=config.lock_warn_hours) <= now < lock
+def _drop_review_topic_state(state: dict[str, Any]) -> None:
+    """Forget the Review topic's cards (review:* and the pinned queue) and
+    its lock alerts without any API calls: the topic was deleted 2026-09-10
+    and its messages died with it, so a delete attempt could only fail."""
+    for key in list(state["cards"]):
+        if key == "queue" or key.startswith("review:"):
+            state["cards"].pop(key, None)
+    for key in list(state["announced"]):
+        if key.startswith("lock:"):
+            state["announced"].pop(key, None)
 
 
 def sync_desk(
@@ -1870,9 +1669,9 @@ def sync_desk(
     edit_only_event_id: str | None = None,
 ) -> SyncSummary:
     """Reconcile the group with the model: post missing cards, edit changed
-    ones, announce new bet legs and near locks once. Idempotent — an
-    unchanged model is a no-op — and bounded to ``max_posts`` new messages
-    per pass so a first run over a full slate spreads across passes."""
+    ones, announce new bet legs once. Idempotent — an unchanged model is a
+    no-op — and bounded to ``max_posts`` new messages per pass so a first
+    run over a full slate spreads across passes."""
     desks = list(desks)
     summary = SyncSummary()
     priority = None
@@ -1897,6 +1696,7 @@ def sync_desk(
                 f"picks:{priority_event_id}: game is no longer available"
             )
     budget = _Budget(max_posts)
+    _drop_review_topic_state(state)
     preserve = _remove_legacy_picks_details(
         state=state,
         config=config,
@@ -1932,30 +1732,6 @@ def sync_desk(
                     f"picks:{desk.event_id}: card is no longer available"
                 )
             continue
-        review_id = None
-        review_key = f"review:{desk.event_id}"
-        if desk.pending:
-            text, keyboard = render_review_card(desk, config=config)
-            review_id = _upsert_card(
-                key=review_key,
-                topic=config.review_topic,
-                text=text,
-                keyboard=keyboard,
-                config=config,
-                api=api,
-                state=state,
-                budget=budget,
-                summary=summary,
-            )
-        elif review_key in state["cards"]:
-            # Nothing left to decide: the to-do card goes away (silently).
-            entry = state["cards"].pop(review_key)
-            try:
-                message_id = int(entry.get("message_id") or 0)
-            except (TypeError, ValueError):
-                message_id = 0
-            if message_id and api.delete(config.chat_id, message_id):
-                summary.deleted.append(review_key)
         picks_id = None
         if desk.show_picks:
             text, keyboard = render_picks_card(
@@ -1995,33 +1771,6 @@ def sync_desk(
                         summary=summary,
                         now=now,
                     )
-        if lock_warning_due(desk, config=config, now=now):
-            _announce(
-                key=f"lock:{desk.event_id}",
-                event_id=desk.event_id,
-                topic=config.review_topic,
-                text=render_lock_warning(desk, now=now),
-                reply_to=review_id,
-                config=config,
-                api=api,
-                state=state,
-                budget=budget,
-                summary=summary,
-                now=now,
-            )
-    text, keyboard = render_queue_card(desks, team_abbrevs=team_abbrevs)
-    _upsert_card(
-        key="queue",
-        topic=config.review_topic,
-        text=text,
-        keyboard=keyboard,
-        config=config,
-        api=api,
-        state=state,
-        budget=budget,
-        summary=summary,
-        pin=True,
-    )
     text, keyboard = render_week_card(desks, team_abbrevs=team_abbrevs)
     _upsert_card(
         key="week",
@@ -2111,17 +1860,14 @@ def desk_ids_report(
 
 
 def parse_callback(data: str) -> tuple[str, str] | None:
-    """``desk:ok:<opinion>`` → ``("ok", opinion)``; ``desk:no:<opinion>``;
-    ``desk:okarms:<event>``; ``desk:show:<event>``; ``desk:hide:<event>``;
+    """``desk:show:<event>``; ``desk:hide:<event>``;
     ``desk:op:<event>:<expert>``; ``desk:part:<event>:<expert>:<chunk>``;
-    ``desk:refresh:<event>``. Anything else returns ``None``."""
+    ``desk:refresh:<event>``. Anything else — including the removed review
+    actions ``ok``/``no``/``okarms`` — returns ``None``."""
     if not data.startswith(CALLBACK_PREFIX):
         return None
     action, _, target = data[len(CALLBACK_PREFIX):].partition(":")
     if action not in {
-        "ok",
-        "no",
-        "okarms",
         "show",
         "hide",
         "op",
@@ -2131,34 +1877,3 @@ def parse_callback(data: str) -> tuple[str, str] | None:
     } or not target:
         return None
     return action, target
-
-
-def review_targets(
-    action: str,
-    target: str,
-    rows: Iterable[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], str | None]:
-    """The rows a callback acts on, or a refusal. Only pending valid rows are
-    reviewable; ``okarms`` needs both arms pending for the event."""
-    rows = list(rows)
-    if action in {"ok", "no"}:
-        row = next((row for row in rows if str(row.get("opinion_id")) == target), None)
-        if row is None:
-            return [], "That row is no longer in the sheet."
-        if not is_valid_row(row):
-            return [], "That row is an audit row and cannot be reviewed."
-        status = review_status(row)
-        if status != "pending":
-            by = str(row.get("reviewed_by") or "someone").strip()
-            return [], f"Already {status} by {by}."
-        return [row], None
-    arms = {
-        str(row["expert_id"]): row
-        for row in actionable_pending(
-            row for row in rows if str(row.get("event_id")) == target
-        )
-        if is_arm_row(row)
-    }
-    if len(arms) != 2:
-        return [], "Both arms are no longer pending."
-    return [arms[RULES_EXPERT_ID], arms[JUDGE_EXPERT_ID]], None

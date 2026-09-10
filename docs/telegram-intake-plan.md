@@ -768,29 +768,37 @@ either person sees or does.
   wires it: a sync task inside the bot process every
   `MOE_DESK_SYNC_SECONDS` (default 120, floor 15), the `desk:` callback
   branch, the `/start op_<opinion>` and `/start game_<event>` deep links,
-  and reviewers paging through pending rows in the DM detail view.
+  and reviewers paging through legacy unapproved rows in the DM detail view.
+- **Review topic removed 2026-09-10** (operator request, after review went
+  automatic on 2026-09-09): every structurally valid row — voices and both
+  God arms — approves at generation, so a to-do surface had nothing left to
+  ask. Gone with it: the per-game review card with ✅ ❌ / "Approve both
+  arms" buttons and their callbacks (`desk:ok|no|okarms`, now unknown
+  actions), `intake_bot.desk_review`/`review_targets`, the pinned queue
+  card, the judge-lock warning, and `DeskConfig.review_topic` /
+  `MOE_DESK_REVIEW_TOPIC` / `MOE_DESK_LOCK_WARN_HOURS` (both env keys are
+  ignored if a `.env` still carries them; drop them at leisure). The forum
+  topic itself was deleted via `deleteForumTopic`, which removed its
+  messages; `sync_desk` drops the legacy `queue`/`review:*`/`lock:*` state
+  entries without API calls. A row can still be rejected with
+  `scripts/review_moe_opinion.py`; the `reviewer` role now only opens the
+  DM views of unapproved rows.
 - Topics and cards (as redesigned on 2026-09-08 after the first live pass,
   when 17 status boards plus cards for games with nothing to do read as
   clutter and the voices' opinions were on no card at all).
   🏈 Picks is the reading surface: one card per game once two voices are
   approved or a God arm is — the God line on top (both arms' short legs,
-  "pending review" while the arms wait, "—" before they exist), then one
+  "—" until an arm row is approved), then one
   line per approved voice (pick, probability, stars, projected score) in a
   fixed order, and every thesis (arms first, with up to three supporting
   factors and two counterarguments) inside a collapsed
   `<blockquote expandable>` each viewer opens on their own screen;
   👁 Full opinions deep-links to the game's MOE view in the DM. A pinned
-  card lists only decided games (an approved arm) with their legs.
-  📥 Review is the legacy/manual-opt-out to-do list: a card exists only while a game has rows
-  worth a decision — a pending row that is the latest valid row for its
-  expert and model (older drafts superseded by a newer row are hidden, since
-  the aggregator only reads the latest approved row; audit and sample rows
-  never count), God arms first, each with ✅ ❌ callbacks and a 👁 deep link
-  into the tapper's own DM — and is deleted, silently, once nothing is left.
-  The pinned queue card is three lines: what is to review per game, how
-  many committees are complete, and which required voices still have no
-  row. 📊 Scores: `scripts/moe_grade.py --notify` posts the digest there
-  (`<pre>`, silent) when `MOE_DESK_SCORES_TOPIC` is set and falls back to
+  card lists decided games (an approved arm) with their legs, and a
+  "Waiting on" line counting the required voices that still have no
+  approved row per game — the games the judge runner skips as "committee
+  incomplete". 📊 Scores: `scripts/moe_grade.py --notify` posts the digest
+  there (silent) when `MOE_DESK_SCORES_TOPIC` is set and falls back to
   the watchdog DM.
 - Shared-message rules: Picks reading controls navigate by editing the existing
   shared game card and never create detail messages. Show full opinions keeps
@@ -798,29 +806,17 @@ either person sees or does.
   voices; Refresh opinions invalidates only the opinion cache and redraws that
   card. A tap is answered at once because Telegram discards a callback answer
   after a few seconds. `nfl_games` and `moe_opinions` both use one-hour
-  in-process caches; bot-based reviews patch the opinion cache immediately,
-  while Refresh opinions is the explicit cache bust for externally generated
-  rows. The sheet cache serves its last good value through 5xx and 429. Each
-  manually reviewed target row is confirmed still pending with a single-row read
-  (`GoogleSheetsMoeOpinionStore.fetch`), the cached rows are patched after
-  the review so the cards re-render without a full tab read, the reviewer
-  list is kept warm by the sync loop. ✅ ❌ are checked against the `reviewer` role in
-  `allowed_users` (`moe_identity.resolve_role_user_ids`; both reviewers hold
-  it, granted with `scripts/desk_setup.py --grant-reviewer`), re-read the
-  sheet (a write never trusts the display cache), refuse anything not pending
-  ("Already approved by AK."), run the store's hash-checked `review` signed
-  with the tapper's display name, and re-sync the card at once. "✅ Approve
-  both arms" appears only when both God arms are pending
-  (`desk:okarms:<event>`, rules then judge) — bulk approval stays per game
-  for the two arms and per row for the voices, as decided on the options
-  page. Legacy pending and rejected rows are visible to both reviewers in the group
-  and, through the deep link, in their DMs; the DM browser
+  in-process caches; Refresh opinions is the explicit cache bust for
+  externally generated rows. The sheet cache serves its last good value
+  through 5xx and 429. The reviewer list
+  (`moe_identity.resolve_role_user_ids` over `allowed_users`, granted with
+  `scripts/desk_setup.py --grant-reviewer`) is kept warm by the sync loop
+  for the DM views; legacy pending and rejected rows are visible to
+  reviewers through the deep link in their DMs, while the DM browser
   (`/guess_nfl_game` → 🧠) stays approved-only.
-- Loud and silent. Every card post and edit is silent. Loud replies: under
-  the picks card once per newly approved bet leg
-  (`bet:<opinion>:<side|total>`), under the review card once per game when
-  the judge lock (kickoff − 2 h, the runner's cutoff) is within
-  `MOE_DESK_LOCK_WARN_HOURS` (default 2) and rows are still pending. The
+- Loud and silent. Every card post and edit is silent. The one loud reply:
+  under the picks card once per newly approved bet leg
+  (`bet:<opinion>:<side|total>`). The
   runner's own completion DM is silenced with `GOD_JUDGE_PENDING_DM=0`
   (`run_once(pending_dm=False)`); its failure and stall DMs are unchanged.
 - State: `moe_desk_state.json` (gitignored; `MOE_DESK_STATE_PATH` to move
@@ -837,13 +833,14 @@ either person sees or does.
   topic) and says whether the group is a supergroup with Topics yet;
   commands reach a bot in groups even with privacy mode on — set
   `MOE_DESK_CHAT_ID`, then
-  `scripts/desk_setup.py --create-topics` (prints the three topic keys),
-  `--grant-reviewer <telegram_id>` for each reviewer, `--check [--post-test]`,
+  `scripts/desk_setup.py --create-topics` (prints the topic keys),
+  `--grant-reviewer <telegram_id>` (DM views of unapproved rows only),
+  `--check [--post-test]`,
   restart `telegram-intake.service` (the journal says "Desk group enabled"
   or why not). Keys live in `.env` (synced — add them locally first, since
   `syncenv` deletes server keys absent locally): `MOE_DESK_CHAT_ID`,
-  `MOE_DESK_REVIEW_TOPIC`, `MOE_DESK_PICKS_TOPIC`, `MOE_DESK_SCORES_TOPIC`,
-  `MOE_DESK_SYNC_SECONDS`, `MOE_DESK_LOCK_WARN_HOURS`, `GOD_JUDGE_PENDING_DM`.
+  `MOE_DESK_PICKS_TOPIC`, `MOE_DESK_SCORES_TOPIC`,
+  `MOE_DESK_SYNC_SECONDS`, `GOD_JUDGE_PENDING_DM`.
   Empty keys leave the desk disabled.
 - Deferred, per the options page: replies under a card as row notes; a
   two-signature rule for the arms (one tap decides a row today); a
@@ -852,8 +849,8 @@ either person sees or does.
   or not.
 - Tests: `scripts/test_moe_desk.py` (model, renderers, sync, state,
   transport; Windows), `ReviewerRoleTests` in `scripts/test_moe_identity.py`,
-  `DeskReviewTest` in `scripts/test_intake_bot.py`, the pending-DM gate in
-  `scripts/test_god_judge_runner.py`.
+  `DeskPicksViewTests` in `scripts/test_intake_bot.py`, the pending-DM gate
+  in `scripts/test_god_judge_runner.py`.
 
 ### Implemented locally — 2026-09-06: God Expert aggregator (rules + judge)
 
@@ -1034,7 +1031,8 @@ fresh VPS scratch clone across `scripts.test_moe_god`, `test_moe`,
   row carries the key), one `claude -p` call (Fable 5.1, max effort, no
   tools, registered prompt as the system prompt, request on stdin, empty
   cwd, no sheet credentials in the environment), persist the judge row,
-  delete the temp dir, DM the reviewer with the review commands. Dedupe by
+  delete the temp dir, DM the operator that the valid rows were approved
+  automatically (since 716a286; silenced by `GOD_JUDGE_PENDING_DM=0`). Dedupe by
   committee key; two invalid judge rows stop attempts on that key; at most
   `--max-games` (3) per pass; a failed call is logged and DMed, never
   retried (`run_god_judge.sh` is single-attempt). Usage per call in

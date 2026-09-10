@@ -6,22 +6,24 @@ Order of operations, once, when the group is created:
 
 1. In Telegram: create a private group, convert it to a supergroup with
    Topics enabled, add the intake bot (@nflguesser_bot) as an admin with
-   "Manage topics" and "Pin messages", add both reviewers.
+   "Manage topics" and "Pin messages".
 2. Send ``/desk`` inside the group: the bot replies with the chat id (and,
    inside a topic, that topic's id) and whether Topics are on. Set
    ``MOE_DESK_CHAT_ID=-100…`` in ``.env`` (both machines; it is synced).
-3. ``python scripts/desk_setup.py --create-topics`` — creates the Review,
-   Picks and Scores topics and prints the three ``MOE_DESK_*_TOPIC`` lines.
-4. ``python scripts/desk_setup.py --grant-reviewer <telegram_id>`` for each
-   reviewer (adds ``reviewer`` to that ``allowed_users`` row; VPS, needs the
-   sheet credentials).
+3. ``python scripts/desk_setup.py --create-topics`` — creates the Picks
+   and Scores topics and prints the ``MOE_DESK_*_TOPIC`` lines. (Review is
+   automatic since 2026-09-09; the Review topic was removed 2026-09-10.)
+4. ``python scripts/desk_setup.py --grant-reviewer <telegram_id>`` — adds
+   ``reviewer`` to that ``allowed_users`` row (VPS, needs the sheet
+   credentials). The role only opens the DM views of rows that are not
+   approved (legacy pending and rejected audit rows).
 5. ``python scripts/desk_setup.py --check`` — chat type, the bot's rights,
    topics, reviewers. ``--post-test`` also posts and deletes one message per
    configured topic.
 6. Restart ``telegram-intake.service``; the bot logs "Desk group enabled".
 
-Env: INTAKE_BOT_TOKEN, MOE_DESK_CHAT_ID, MOE_DESK_REVIEW_TOPIC,
-MOE_DESK_PICKS_TOPIC, MOE_DESK_SCORES_TOPIC (optional);
+Env: INTAKE_BOT_TOKEN, MOE_DESK_CHAT_ID, MOE_DESK_PICKS_TOPIC,
+MOE_DESK_SCORES_TOPIC (optional);
 GOOGLE_CREDENTIALS + NFL_INTAKE_SHEET_ID for the reviewer commands.
 """
 
@@ -49,7 +51,6 @@ from moe_identity import (  # noqa: E402
 )
 
 TOPICS = (
-    ("MOE_DESK_REVIEW_TOPIC", "📥 Review"),
     ("MOE_DESK_PICKS_TOPIC", "🏈 Picks"),
     ("MOE_DESK_SCORES_TOPIC", "📊 Scores"),
 )
@@ -113,17 +114,15 @@ def check(api: BotApi, chat_id: str, *, post_test: bool) -> int:
             problems += 1
     config = desk_config_from_env()
     if config is None:
-        print("topics: MOE_DESK_REVIEW_TOPIC / MOE_DESK_PICKS_TOPIC unset — desk disabled")
+        print("topics: MOE_DESK_PICKS_TOPIC unset — desk disabled")
         problems += 1
     else:
         print(
-            f"topics: review={config.review_topic} picks={config.picks_topic} "
-            f"scores={config.scores_topic or 'unset'} · sync every {config.sync_seconds}s · "
-            f"lock warning {config.lock_warn_hours}h before the judge lock"
+            f"topics: picks={config.picks_topic} "
+            f"scores={config.scores_topic or 'unset'} · sync every {config.sync_seconds}s"
         )
         if post_test:
             for label, topic in (
-                ("review", config.review_topic),
                 ("picks", config.picks_topic),
                 ("scores", config.scores_topic),
             ):
@@ -147,10 +146,9 @@ def check(api: BotApi, chat_id: str, *, post_test: bool) -> int:
     else:
         reviewers = resolve_role_user_ids(rows, REVIEWER_ROLE)
         names = ", ".join(sorted(reviewers.values())) or "none"
+        # Informational only: review is automatic; the role just opens the
+        # DM views of unapproved rows.
         print(f"reviewers: {len(reviewers)} ({names})")
-        if len(reviewers) < 2:
-            print("  ✗ both reviewers need the role: --grant-reviewer <telegram_id>")
-            problems += 1
     print("OK" if not problems else f"{problems} problem(s)")
     return 1 if problems else 0
 
