@@ -33,12 +33,17 @@ from scripts.god_judge_runner import (
     JudgeCallError,
     build_parser,
     committee_experts,
+    human_input_experts,
+    latest_human_input,
     main,
+    pending_message,
     row_committee_key,
     run_once,
+    stale_human_voices,
 )
 from scripts.test_moe_god import (
     EVENT_ID,
+    HOME,
     KICKOFF,
     MemoryStore,
     _game,
@@ -382,13 +387,26 @@ class RunnerTests(_HarnessCase):
 
     async def test_kickoff_cutoff_skips_the_game(self) -> None:
         summary = await self.harness.run(
-            [_game()], _committee(), now=_parse_time(KICKOFF) - timedelta(hours=1, minutes=59)
+            [_game()], _committee(), now=_parse_time(KICKOFF) - timedelta(minutes=59)
         )
 
         self.assertEqual(self.harness.store.rows, [])
         self.assertEqual(self.harness.calls(), [])
         self.assertEqual(self.harness.notifications, [])
         self.assertIn("kickoff cutoff", summary["skipped"][0]["reason"])
+
+    async def test_game_between_one_and_two_hours_out_is_judged(self) -> None:
+        # The cutoff moved from two hours to one (late-window refresh): a
+        # game 90 minutes out now gets a judge pass.
+        summary = await self.harness.run(
+            [_game()], _committee(), now=_parse_time(KICKOFF) - timedelta(minutes=90)
+        )
+
+        self.assertEqual(len(summary["attempted"]), 1)
+        self.assertEqual(
+            [row["expert_id"] for row in self.harness.store.rows],
+            ["god_rules", "god_judge"],
+        )
 
     async def test_incomplete_committee_is_skipped(self) -> None:
         rows = [row for row in _committee() if row["expert_id"] != "win_total"]
@@ -728,6 +746,430 @@ class EnsembleRunnerTests(_HarnessCase):
                             main(["--samples", bad])
                 self.assertEqual(caught.exception.code, 2)
                 self.assertIn("--samples", stderr.getvalue())
+
+
+def _rehash(row: dict) -> dict:
+    digest = opinion_output_sha256(row)
+    row["output_sha256"] = digest
+    row["approved_output_sha256"] = (
+        digest if row["review_status"] == "approved" else ""
+    )
+    return row
+
+
+def _voice_row(
+    expert_id: str,
+    *,
+    generated_at: str = "2026-09-05T02:00:00+00:00",
+    opinion_id: str | None = None,
+) -> dict:
+    """An approved, hash-bound optional-voice row (celebrity-shaped)."""
+    return _rehash(
+        _opinion(
+            expert_id,
+            model="claude-opus-4-8",
+            probability=0.6,
+            margin=3,
+            away_score=20,
+            home_score=24,
+            stars=2,
+            generated_at=generated_at,
+            opinion_id=opinion_id,
+            side_leg={"selection": "PASS", "line": None, "confidence_stars": 1},
+            total_leg={
+                "selection": "Under",
+                "line": 44.5,
+                "confidence_stars": 1,
+            },
+        )
+    )
+
+
+def _refresh_data(**overrides: object) -> dict:
+    """Human-submission tabs where every voice is fresh unless overridden."""
+    data: dict = {
+        "leans": [],
+        "celebrity_picks": [],
+        "win_predictions": [],
+        "celebrity_grades": [],
+        "ak_user_id": "111",
+        "cee_user_id": "222",
+    }
+    data.update(overrides)
+    return data
+
+
+def _ak_lean(submitted_at: str, *, status: str = "parsed") -> dict:
+    return {
+        "telegram_user_id": "111",
+        "event_id": EVENT_ID,
+        "period": "game",
+        "market": "spread",
+        "side": HOME,
+        "submitted_at_utc": submitted_at,
+        "prediction_parse_status": status,
+        "submission_id": f"ak-{submitted_at}",
+    }
+
+
+def _cee_lean(submitted_at: str, *, market: str = "moneyline") -> dict:
+    return {
+        "telegram_user_id": "222",
+        "event_id": EVENT_ID,
+        "period": "game",
+        "market": market,
+        "side": HOME,
+        "submitted_at_utc": submitted_at,
+        "submission_id": f"cee-{submitted_at}",
+    }
+
+
+def _celebrity_pick(submitted_at: str) -> dict:
+    return {"event_id": EVENT_ID, "submitted_at_utc": submitted_at}
+
+
+class StaleHumanVoiceTests(unittest.TestCase):
+    """The staleness helpers mirror each builder's own source filter."""
+
+    def setUp(self) -> None:
+        self.registry = load_registry()
+        self.game = _game()
+
+    def test_registry_marks_the_three_human_input_voices(self) -> None:
+        self.assertEqual(
+            human_input_experts(self.registry), ["ak", "cee", "celebrity"]
+        )
+
+    def test_ak_uses_the_newest_parsed_game_projection(self) -> None:
+        data = _refresh_data(
+            leans=[
+                _ak_lean("2026-09-06T00:00:00+00:00"),
+                _ak_lean("2026-09-07T00:00:00+00:00"),
+            ]
+        )
+        newest = latest_human_input("ak", self.game, data)
+        self.assertEqual(newest, _parse_time("2026-09-07T00:00:00+00:00"))
+
+    def test_ak_unparsed_newest_projection_is_not_fresh_input(self) -> None:
+        # build_ak_input would refuse it, so a regen cannot succeed.
+        data = _refresh_data(
+            leans=[
+                _ak_lean("2026-09-06T00:00:00+00:00"),
+                _ak_lean("2026-09-07T00:00:00+00:00", status="failed"),
+            ]
+        )
+        self.assertIsNone(latest_human_input("ak", self.game, data))
+
+    def test_cee_requires_a_moneyline_and_counts_her_spread(self) -> None:
+        spread_only = _refresh_data(
+            leans=[_cee_lean("2026-09-06T00:00:00+00:00", market="spread")]
+        )
+        self.assertIsNone(latest_human_input("cee", self.game, spread_only))
+        both = _refresh_data(
+            leans=[
+                _cee_lean("2026-09-06T00:00:00+00:00"),
+                _cee_lean("2026-09-07T00:00:00+00:00", market="spread"),
+            ]
+        )
+        self.assertEqual(
+            latest_human_input("cee", self.game, both),
+            _parse_time("2026-09-07T00:00:00+00:00"),
+        )
+
+    def test_celebrity_counts_only_pre_kickoff_picks(self) -> None:
+        data = _refresh_data(
+            celebrity_picks=[
+                _celebrity_pick("2026-09-06T00:00:00+00:00"),
+                _celebrity_pick("2026-09-11T00:00:00+00:00"),  # post-kickoff
+            ]
+        )
+        self.assertEqual(
+            latest_human_input("celebrity", self.game, data),
+            _parse_time("2026-09-06T00:00:00+00:00"),
+        )
+
+    def test_stale_when_input_postdates_the_selected_row(self) -> None:
+        selected = [
+            (
+                "ak",
+                {},
+                {"generated_at_utc": "2026-09-05T02:00:00+00:00"},
+                "default_model",
+            )
+        ]
+        stale = stale_human_voices(
+            self.game,
+            selected=selected,
+            registry=self.registry,
+            refresh_data=_refresh_data(
+                leans=[_ak_lean("2026-09-06T00:00:00+00:00")]
+            ),
+        )
+        self.assertEqual([item[0] for item in stale], ["ak"])
+        fresh = stale_human_voices(
+            self.game,
+            selected=selected,
+            registry=self.registry,
+            refresh_data=_refresh_data(
+                leans=[_ak_lean("2026-09-04T00:00:00+00:00")]
+            ),
+        )
+        self.assertEqual(fresh, [])
+
+    def test_missing_voice_with_input_is_stale(self) -> None:
+        stale = stale_human_voices(
+            self.game,
+            selected=[],
+            registry=self.registry,
+            refresh_data=_refresh_data(
+                celebrity_picks=[_celebrity_pick("2026-09-06T00:00:00+00:00")]
+            ),
+        )
+        self.assertEqual(stale, [("celebrity", "no approved row yet")])
+
+    def test_no_input_never_refreshes(self) -> None:
+        self.assertEqual(
+            stale_human_voices(
+                self.game,
+                selected=[],
+                registry=self.registry,
+                refresh_data=_refresh_data(),
+            ),
+            [],
+        )
+
+
+class LateWindowRefreshTests(_HarnessCase):
+    """The refresh step inside REFRESH_WINDOW, against a fake refresher."""
+
+    def _fake_refresher(
+        self,
+        *,
+        persist: dict[str, dict] | None = None,
+        results: dict[str, dict] | None = None,
+    ) -> tuple:
+        calls: list[tuple[str, str]] = []
+        store = self.harness.store
+
+        async def refresh(game: dict, expert_id: str) -> dict:
+            calls.append((str(game["event_id"]), expert_id))
+            row = (persist or {}).get(expert_id)
+            if row is not None:
+                store.append(row)
+                return {
+                    "status": "approved",
+                    "opinion_id": str(row["opinion_id"]),
+                }
+            return (results or {}).get(
+                expert_id, {"status": "failed", "error": "boom"}
+            )
+
+        return refresh, calls
+
+    async def test_stale_voice_refreshes_and_the_judge_sees_it(self) -> None:
+        stale_ak = next(
+            row for row in _committee() if row["expert_id"] == "ak"
+        )
+        fresh_ak = _rehash(
+            {
+                **stale_ak,
+                "opinion_id": "ak-refreshed",
+                "generated_at_utc": "2026-09-09T00:00:00+00:00",
+            }
+        )
+        refresh, calls = self._fake_refresher(persist={"ak": fresh_ak})
+        summary = await self.harness.run(
+            [_game()],
+            _committee(),
+            now=_parse_time(KICKOFF) - timedelta(minutes=90),
+            refresh_data=_refresh_data(
+                leans=[_ak_lean("2026-09-06T00:00:00+00:00")]
+            ),
+            refresh_voice=refresh,
+        )
+
+        self.assertEqual(calls, [(EVENT_ID, "ak")])
+        self.assertEqual(len(summary["refreshed"]), 1)
+        self.assertEqual(summary["refreshed"][0]["status"], "approved")
+        self.assertEqual(len(summary["attempted"]), 1)
+        rules = next(
+            row
+            for row in self.harness.store.rows
+            if row["expert_id"] == "god_rules"
+        )
+        # The judged committee carries the refreshed voice, not the stale
+        # one (the rules row persists the full input; the judge row only
+        # the masked request).
+        self.assertIn("ak-refreshed", rules["input_json"])
+        self.assertNotIn(stale_ak["opinion_id"], rules["input_json"])
+        self.assertIn("refreshed voices: ak", self.harness.notifications[-1])
+
+    async def test_missing_required_voice_heals_the_committee(self) -> None:
+        rows = [row for row in _committee() if row["expert_id"] != "ak"]
+        fresh_ak = _voice_row(
+            "ak",
+            generated_at="2026-09-09T00:00:00+00:00",
+            opinion_id="ak-healed",
+        )
+        refresh, calls = self._fake_refresher(persist={"ak": fresh_ak})
+        summary = await self.harness.run(
+            [_game()],
+            rows,
+            now=_parse_time(KICKOFF) - timedelta(minutes=90),
+            refresh_data=_refresh_data(
+                leans=[_ak_lean("2026-09-06T00:00:00+00:00")]
+            ),
+            refresh_voice=refresh,
+        )
+
+        self.assertEqual(calls, [(EVENT_ID, "ak")])
+        self.assertEqual(len(summary["attempted"]), 1)
+        self.assertEqual(summary["skipped"], [])
+
+    async def test_optional_voice_joins_via_refresh(self) -> None:
+        fresh_celebrity = _voice_row(
+            "celebrity",
+            generated_at="2026-09-09T00:00:00+00:00",
+            opinion_id="celebrity-joined",
+        )
+        refresh, calls = self._fake_refresher(
+            persist={"celebrity": fresh_celebrity}
+        )
+        summary = await self.harness.run(
+            [_game()],
+            _committee(),
+            now=_parse_time(KICKOFF) - timedelta(minutes=90),
+            refresh_data=_refresh_data(
+                celebrity_picks=[_celebrity_pick("2026-09-06T00:00:00+00:00")]
+            ),
+            refresh_voice=refresh,
+        )
+
+        self.assertEqual(calls, [(EVENT_ID, "celebrity")])
+        self.assertEqual(len(summary["attempted"]), 1)
+        rules = next(
+            row
+            for row in self.harness.store.rows
+            if row["expert_id"] == "god_rules"
+        )
+        self.assertIn("celebrity-joined", rules["input_json"])
+
+    async def test_refresh_failure_still_judges_on_the_old_committee(
+        self,
+    ) -> None:
+        refresh, calls = self._fake_refresher(
+            results={"ak": {"status": "failed", "error": "boom"}}
+        )
+        stale_ak = next(
+            row for row in _committee() if row["expert_id"] == "ak"
+        )
+        summary = await self.harness.run(
+            [_game()],
+            _committee(),
+            now=_parse_time(KICKOFF) - timedelta(minutes=90),
+            refresh_data=_refresh_data(
+                leans=[_ak_lean("2026-09-06T00:00:00+00:00")]
+            ),
+            refresh_voice=refresh,
+        )
+
+        self.assertEqual(calls, [(EVENT_ID, "ak")])
+        self.assertEqual(len(summary["attempted"]), 1)
+        rules = next(
+            row
+            for row in self.harness.store.rows
+            if row["expert_id"] == "god_rules"
+        )
+        self.assertIn(stale_ak["opinion_id"], rules["input_json"])
+        self.assertTrue(
+            any(
+                "voice refresh failed" in message and "ak: boom" in message
+                for message in self.harness.notifications
+            )
+        )
+
+    async def test_outside_the_window_nothing_refreshes(self) -> None:
+        refresh, calls = self._fake_refresher()
+        summary = await self.harness.run(
+            [_game()],
+            _committee(),
+            now=_parse_time(KICKOFF) - timedelta(hours=3),
+            refresh_data=_refresh_data(
+                leans=[_ak_lean("2026-09-06T00:00:00+00:00")]
+            ),
+            refresh_voice=refresh,
+        )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(summary["refreshed"], [])
+        self.assertEqual(len(summary["attempted"]), 1)
+
+    async def test_fresh_voices_are_left_alone(self) -> None:
+        refresh, calls = self._fake_refresher()
+        summary = await self.harness.run(
+            [_game()],
+            _committee(),
+            now=_parse_time(KICKOFF) - timedelta(minutes=90),
+            refresh_data=_refresh_data(
+                leans=[_ak_lean("2026-09-04T00:00:00+00:00")]
+            ),
+            refresh_voice=refresh,
+        )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(summary["refreshed"], [])
+        self.assertEqual(len(summary["attempted"]), 1)
+
+    async def test_refresh_budget_caps_the_pass(self) -> None:
+        refresh, calls = self._fake_refresher(
+            results={
+                "ak": {"status": "failed", "error": "boom"},
+                "celebrity": {"status": "failed", "error": "boom"},
+            }
+        )
+        summary = await self.harness.run(
+            [_game()],
+            _committee(),
+            now=_parse_time(KICKOFF) - timedelta(minutes=90),
+            refresh_data=_refresh_data(
+                leans=[_ak_lean("2026-09-06T00:00:00+00:00")],
+                celebrity_picks=[
+                    _celebrity_pick("2026-09-06T00:00:00+00:00")
+                ],
+            ),
+            refresh_voice=refresh,
+            max_refreshes=1,
+        )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(summary["refreshed"]), 1)
+
+    async def test_dry_run_only_reports_the_refresh(self) -> None:
+        summary = await self.harness.run(
+            [_game()],
+            _committee(),
+            now=_parse_time(KICKOFF) - timedelta(minutes=90),
+            refresh_data=_refresh_data(
+                leans=[_ak_lean("2026-09-06T00:00:00+00:00")]
+            ),
+            dry_run=True,
+        )
+
+        self.assertEqual(len(summary["refreshed"]), 1)
+        self.assertTrue(summary["refreshed"][0]["dry_run"])
+        self.assertEqual(self.harness.store.rows, [])
+        self.assertIn(
+            "would refresh ak", self.harness.output.getvalue()
+        )
+
+    def test_pending_message_names_refreshed_voices(self) -> None:
+        message = pending_message(
+            _game(),
+            rules_id="r1",
+            judge_id="j1",
+            refreshed=["ak", "celebrity"],
+        )
+        self.assertIn("refreshed voices: ak, celebrity", message)
 
 
 if __name__ == "__main__":

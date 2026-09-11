@@ -1118,7 +1118,8 @@ fresh VPS scratch clone across `scripts.test_moe_god`, `test_moe`,
   `scripts/fixtures/god_week1/`; the Rams one needed the vote split (`2-2`)
   and the record cohort (`17-8` → 25 games) to ground.
 - `scripts/god_judge_runner.py` + `god-judge.timer` (:12/:42): per upcoming
-  game with a complete committee, outside two hours of kickoff, build the
+  game with a complete committee, outside one hour of kickoff (two until the
+  2026-09-10 late-window refresh, below), build the
   input and request into a temp dir, persist the rules arm (unless a valid
   row carries the key), one `claude -p` call (Fable 5.1, max effort, no
   tools, registered prompt as the system prompt, request on stdin, empty
@@ -1807,6 +1808,52 @@ problem in judge reasons.
   stability, label-copy, legacy request without the keys); registry and
   end-to-end pins moved to v3. Full twelve-module suite green on a VPS
   scratch clone (408 tests).
+
+### Implemented — 2026-09-10: late-window committee refresh (roadmap WP11)
+
+Operator decision (2026-09-10): God decisions should land ~1h before
+kickoff, not ~2h, and the human-input voices should regenerate on new
+submissions rather than judge stale ones. Details in
+`docs/god-expert-roadmap.md` WP11; the runner's module docstring is the
+behavior reference.
+
+- `KICKOFF_CUTOFF` 2h → 1h in `scripts/god_judge_runner.py`. With the
+  :12/:42 cadence, decisions land ~1h–1h30 pregame — after the T-90min
+  inactives are in the lines the judge and the market-move veto read.
+- Inside `REFRESH_WINDOW` (cutoff + two timer intervals = the final two
+  eligible passes) the runner first regenerates every human-input voice
+  (`refresh_on_human_input` in the registry: `ak`, `cee`, `celebrity`)
+  whose newest eligible submission postdates its selected approved row —
+  or that has no approved row while eligible input exists, which also
+  heals an incomplete committee (a missing required `ak` row no longer
+  blocks the game if a parsed projection exists). Staleness mirrors each
+  builder's own source filter; a voice's *market* staleness is
+  deliberately not a trigger (the generation-time board already covers
+  it). Regeneration runs the expert's registered model and effort through
+  the same headless claude path and persists through `generate_opinion`
+  (backend `claude_headless`, one repair round, auto-approve on valid), so
+  a manual agent run and a runner refresh are indistinguishable in the
+  row. A failed or invalid refresh is logged, DMed, and leaves the
+  standing approved row as the voice — a refresh can never take a
+  committee away. Then the judge step sees the changed committee key and
+  re-runs in the same invocation; the completion DM names the refreshed
+  voices.
+- Budget: `--max-refreshes` (`GOD_JUDGE_MAX_REFRESHES`, default 6) per
+  pass, games in kickoff order; `--no-refresh` / `GOD_JUDGE_REFRESH=0`
+  kill switch. The refresh tabs (`nfl_leans`, `celebrity_picks`,
+  `nfl_win_predictions`, `allowed_users`, the grades ledger) are read only
+  when an upcoming game is actually inside the window, so quiet passes add
+  zero sheet reads. `god-judge.service` `TimeoutStartSec` 9000 → 14400 for
+  the refresh worst case. Known limit: on a 9-game 1 PM Sunday slate the
+  two window passes can need more than `--max-games` judge re-runs;
+  overflow games keep their earlier standing decision (set
+  `GOD_JUDGE_MAX_GAMES=5` on game day if that bites).
+- Tests: `StaleHumanVoiceTests` + `LateWindowRefreshTests` in
+  `scripts/test_god_judge_runner.py` (staleness per voice incl. the
+  unparsed-projection and no-moneyline gates, healing both optional and
+  required voices, refresh-failure fail-open, window and budget gating,
+  dry-run, DM lines); cutoff tests moved to 1h. Full twelve-module suite
+  green on a VPS scratch clone (426 tests).
 
 ### Implemented locally — 2026-09-04: authoritative NFL week metadata
 

@@ -98,6 +98,7 @@ experts:
   ak:
     name: AK Expert
     mode: human_calibration
+    refresh_on_human_input: true
     version: 2
     prompt_version: 1
     prompt: prompts/ak/v1.md
@@ -113,6 +114,7 @@ experts:
   cee:
     name: Cee Expert
     mode: agent
+    refresh_on_human_input: true
     version: 4
     prompt_version: 4
     prompt: prompts/cee/v4.md
@@ -136,6 +138,7 @@ experts:
   celebrity:
     name: Celebrity Expert
     mode: agent
+    refresh_on_human_input: true
     version: 3
     prompt_version: 3
     prompt: prompts/celebrity/v3.md

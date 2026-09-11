@@ -2,11 +2,12 @@
 # whose committee is complete (scripts/god_judge_runner.py), the rules arm on
 # the same input, then a DM to the reviewer. Never approves anything.
 #
-# TimeoutStartSec=9000 = 3 games per invocation (the runner's --max-games
-# default) x up to 3 sampled claude calls per game (GOD_JUDGE_SAMPLES, default
-# 1; the judge ensemble of roadmap WP9) x the 900 s claude timeout, plus sheet
-# reads and persistence. The runner makes a single attempt per call;
-# run_god_judge.sh never retries.
+# TimeoutStartSec=14400 = the late-window voice refresh worst case (6 stale
+# human-input voices per pass x 2 calls each, one repair round, x the 900 s
+# claude timeout = 10800 s) plus 3 games x up to 3 sampled judge calls x
+# 900 s under --samples 1 (2700 s), plus sheet reads and persistence,
+# rounded up. The runner makes a single attempt per call; run_god_judge.sh
+# never retries.
 #
 # Environment: .env (sheet + watchdog config), .env.local (server-only
 # values), and ~/.claude/auth.env (CLAUDE_CODE_OAUTH_TOKEN, the subscription
@@ -28,7 +29,7 @@ EnvironmentFile=-/home/forwarder/.claude/auth.env
 Environment=PATH=/home/forwarder/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=/home/forwarder
 ExecStart=/home/forwarder/app/run_god_judge.sh
-TimeoutStartSec=9000
+TimeoutStartSec=14400
 SyslogIdentifier=god-judge
 StandardOutput=journal
 StandardError=journal

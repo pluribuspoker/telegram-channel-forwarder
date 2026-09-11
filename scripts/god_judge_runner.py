@@ -2,9 +2,26 @@
 """Headless God Expert judge runner.
 
 ``god-judge.timer`` runs this every 30 minutes (at :12 and :42, after the
-BetOnline lines fetcher has usually written a fresh capture). For each
-upcoming game whose committee is complete -- one approved, hash-verified row
-for every enabled non-aggregator expert -- it:
+BetOnline lines fetcher has usually written a fresh capture).
+
+**Late-window voice refresh.** Inside ``REFRESH_WINDOW`` of kickoff (the
+final two eligible passes), each human-input voice (``refresh_on_human_input``
+in the registry: ak, cee, celebrity) whose newest eligible submission
+postdates its approved row -- or that has no approved row while eligible
+input exists, which also heals an incomplete committee -- regenerates first:
+one ``claude -p`` call at the expert's registered model and effort, persisted
+through ``generate_opinion`` exactly like a manual agent run (backend
+``claude_headless``, auto-approved when valid). At most ``--max-refreshes``
+voices per pass; a failed or invalid regeneration is logged and DMed, and the
+standing approved row, if any, remains the voice, so a refresh can never take
+a committee away. The refresh tabs are read only when a game is inside the
+window; ``GOD_JUDGE_REFRESH=0`` or ``--no-refresh`` disables the step. The
+market staleness of a voice is deliberately NOT a refresh trigger -- the
+judge already receives each voice's generation-time board and the movement
+since (2026-09-10); only new human input regenerates a voice.
+
+For each upcoming game whose committee is complete -- one approved,
+hash-verified row for every enabled non-aggregator expert -- it:
 
 1. builds the aggregator input and the masked judge request into a fresh
    temp directory (``input.json``, ``request.json``, and an EMPTY ``cwd``);
@@ -31,9 +48,10 @@ for every enabled non-aggregator expert -- it:
 
 Dedupe is by committee key (``moe_god.committee_key``: the sorted voice
 opinion ids plus the latest full-game lines and prices, never the capture
-timestamp). A game is skipped inside two hours of kickoff, when its
-committee is incomplete, when a valid judge row that has not been manually
-rejected already carries the current key, or when two invalid judge rows
+timestamp). A game is skipped inside one hour of kickoff (decisions land
+about 1h-1h30 pregame, after the T-90min inactives are in the lines), when
+its committee is incomplete, when a valid judge row that has not been
+manually rejected already carries the current key, or when two invalid judge rows
 carry it (the judge failed twice on this committee; the reviewer is told once
 per invocation). A rejected judge row does not block: rejection is the
 reviewer asking for a fresh run. At most ``--max-games``
@@ -88,6 +106,7 @@ from moe import (
     load_expert,
 )
 from moe_ak import _parse_time
+from moe_cee import _eligible_submissions
 from moe_god import (
     AGGREGATOR_MODES,
     DETERMINISTIC_BACKEND,
@@ -111,8 +130,13 @@ JUDGE_EXPERT_ID = "god_judge"
 JUDGE_MODEL = "claude-fable-5-1"
 JUDGE_EFFORT = "max"
 JUDGE_BACKEND = "claude_headless"
-KICKOFF_CUTOFF = timedelta(hours=2)
+KICKOFF_CUTOFF = timedelta(hours=1)
+# The timer fires every 30 minutes (:12/:42), so a game's final two eligible
+# passes fall inside this window; stale human-input voices refresh there.
+TIMER_INTERVAL = timedelta(minutes=30)
+REFRESH_WINDOW = KICKOFF_CUTOFF + 2 * TIMER_INTERVAL
 DEFAULT_MAX_GAMES = 3
+DEFAULT_MAX_REFRESHES = 6
 INVALID_ATTEMPT_CAP = 2
 # claude calls per game: 1 is the single-sample path, 2..MAX the ensemble.
 DEFAULT_SAMPLES = 1
@@ -161,6 +185,8 @@ class ClaudeHeadlessInvoker:
         timeout: float = CLAUDE_TIMEOUT_SECONDS,
         path: str | None = None,
         home: str | None = None,
+        model: str = JUDGE_MODEL,
+        effort: str = JUDGE_EFFORT,
     ) -> None:
         if not oauth_token:
             raise ValueError(
@@ -180,6 +206,8 @@ class ClaudeHeadlessInvoker:
         self.home = (
             home if home is not None else os.environ.get("HOME", str(Path.home()))
         )
+        self.model = model
+        self.effort = effort
         self.last_call: dict[str, Any] = {}
 
     def command(self, system_prompt: str) -> list[str]:
@@ -188,9 +216,9 @@ class ClaudeHeadlessInvoker:
             "-p",
             *ISOLATION_FLAGS[self.isolation],
             "--model",
-            JUDGE_MODEL,
+            self.model,
             "--effort",
-            JUDGE_EFFORT,
+            self.effort,
             "--tools",
             "",
             "--strict-mcp-config",
@@ -289,6 +317,121 @@ def committee_experts(registry: dict[str, Any]) -> list[str]:
     ]
 
 
+def human_input_experts(registry: dict[str, Any]) -> list[str]:
+    """Enabled voices whose input is human submissions, in id order.
+
+    Marked ``refresh_on_human_input`` in the registry: the judge's
+    generation-time board covers market drift since a voice generated, but
+    nothing compensates for a projection, lean, or celebrity pick that
+    postdates the voice's input — those voices regenerate in the late
+    window instead.
+    """
+    experts = registry["experts"]
+    return [
+        expert_id
+        for expert_id in sorted(experts)
+        if isinstance(experts[expert_id], dict)
+        and experts[expert_id].get("enabled")
+        and experts[expert_id].get("refresh_on_human_input")
+        and str(experts[expert_id].get("mode") or "") not in AGGREGATOR_MODES
+    ]
+
+
+def latest_human_input(
+    expert_id: str,
+    game: dict[str, Any],
+    refresh_data: dict[str, Any],
+) -> datetime | None:
+    """When the newest eligible human submission feeding this voice landed,
+    or None when the voice's input cannot be built at all. Each branch
+    mirrors its builder's own source filter (``build_ak_input``,
+    ``build_cee_input``, ``build_celebrity_input``)."""
+    event_id = str(game["event_id"])
+    kickoff = _parse_time(game["commence_time_utc"])
+    if expert_id == "celebrity":
+        times = [
+            _parse_time(row["submitted_at_utc"])
+            for row in refresh_data.get("celebrity_picks") or []
+            if str(row.get("event_id") or "") == event_id
+            and _parse_time(row["submitted_at_utc"]) < kickoff
+        ]
+        return max(times, default=None)
+    if expert_id == "ak":
+        user_id = str(refresh_data.get("ak_user_id") or "")
+        rows = [
+            row
+            for row in refresh_data.get("leans") or []
+            if user_id
+            and str(row.get("telegram_user_id")) == user_id
+            and str(row.get("event_id")) == event_id
+            and str(row.get("period")) == "game"
+            and str(row.get("prediction_parse_status") or "")
+            != "not_applicable"
+            and _parse_time(row["submitted_at_utc"]) < kickoff
+        ]
+        if not rows:
+            return None
+        current = max(
+            rows, key=lambda row: str(row.get("submitted_at_utc") or "")
+        )
+        # build_ak_input refuses an unparsed newest projection, so an
+        # unparsed newest row is not fresh input.
+        if str(current.get("prediction_parse_status") or "") != "parsed":
+            return None
+        return _parse_time(current["submitted_at_utc"])
+    if expert_id == "cee":
+        user_id = str(refresh_data.get("cee_user_id") or "")
+        if not user_id:
+            return None
+        leans = list(refresh_data.get("leans") or [])
+        moneyline = _eligible_submissions(
+            leans, game=game, user_id=user_id, market="moneyline"
+        )
+        if not moneyline:
+            return None  # build_cee_input requires a moneyline pick
+        spread = _eligible_submissions(
+            leans, game=game, user_id=user_id, market="spread"
+        )
+        return max(
+            _parse_time(row["submitted_at_utc"])
+            for row in [*moneyline, *spread]
+        )
+    return None
+
+
+def stale_human_voices(
+    game: dict[str, Any],
+    *,
+    selected: list[tuple[str, dict[str, Any], dict[str, Any], str]],
+    registry: dict[str, Any],
+    refresh_data: dict[str, Any],
+) -> list[tuple[str, str]]:
+    """``(expert_id, reason)`` for every human-input voice whose newest
+    eligible submission postdates its selected approved row — or that has no
+    approved row at all while eligible input exists (an optional voice that
+    was never generated, or a required one whose absence keeps the committee
+    incomplete: refreshing heals both)."""
+    selected_by_id = {item[0]: item[2] for item in selected}
+    stale: list[tuple[str, str]] = []
+    for expert_id in human_input_experts(registry):
+        newest = latest_human_input(expert_id, game, refresh_data)
+        if newest is None:
+            continue
+        row = selected_by_id.get(expert_id)
+        if row is None:
+            stale.append((expert_id, "no approved row yet"))
+            continue
+        generated_raw = str(row.get("generated_at_utc") or "")
+        if not generated_raw or newest > _parse_time(generated_raw):
+            stale.append(
+                (
+                    expert_id,
+                    f"input from {newest.isoformat()} postdates the voice",
+                )
+            )
+    return stale
+
+
 def row_committee_key(row: dict[str, Any]) -> str | None:
     """The committee key persisted inside a row's input_json, if any.
 
@@ -326,6 +469,7 @@ def pending_message(
     samples: int = 1,
     valid_samples: int = 0,
     failures: Iterable[str] = (),
+    refreshed: Iterable[str] = (),
 ) -> str:
     """The completion DM for automatically approved God Expert rows."""
     judge_text = f"judge {judge_id}"
@@ -335,6 +479,9 @@ def pending_message(
         f"pickbot: new God Expert rows approved for {describe_game(game)}: "
         f"rules {rules_id}, {judge_text}"
     ]
+    refreshed = list(refreshed)
+    if refreshed:
+        lines.append("refreshed voices: " + ", ".join(refreshed))
     failures = list(failures)
     if failures:
         lines.append("sample failures: " + "; ".join(failures))
@@ -355,6 +502,126 @@ def _text_create_fn(text: str) -> Callable[..., Any]:
         return SimpleNamespace(content=[SimpleNamespace(text=text)])
 
     return create_fn
+
+
+def _live_create_fn(invoker: Invoker, cwd: str) -> Callable[..., Any]:
+    """A ``generate_opinion`` create_fn that runs one headless claude call,
+    so input building, validation, persistence, and the one-repair round all
+    stay inside ``generate_opinion`` while the inference runs like the
+    judge's."""
+
+    async def create_fn(**kwargs: Any) -> Any:
+        system = str(kwargs.get("system") or "")
+        content = (
+            str(kwargs["messages"][0]["content"])
+            + "\n"
+            + RESPONSE_INSTRUCTION
+            + "\n"
+        )
+        text = await asyncio.to_thread(invoker, system, content, cwd)
+        return SimpleNamespace(content=[SimpleNamespace(text=text)])
+
+    return create_fn
+
+
+# (game, expert_id) -> awaitable outcome dict with at least "status"
+# ("approved" | "invalid" | "failed"), plus "opinion_id" / "error".
+Refresher = Callable[[dict[str, Any], str], Any]
+
+
+def make_voice_refresher(
+    *,
+    store: MoeOpinionStore,
+    refresh_data: dict[str, Any],
+    history: list[dict[str, Any]],
+    snapshots: list[dict[str, Any]],
+    registry: dict[str, Any],
+    claude_bin: str | Path,
+    oauth_token: str,
+    isolation: str,
+    runs_log: str | Path,
+    work_root: str | Path | None = None,
+) -> Refresher:
+    """The real late-window refresher: one headless claude call per stale
+    voice at the expert's registered model and effort, persisted through
+    ``generate_opinion`` (which builds the input from the same tabs the
+    manual CLI reads, validates, and auto-approves a valid row)."""
+
+    async def refresh(game: dict[str, Any], expert_id: str) -> dict[str, Any]:
+        expert = registry["experts"][expert_id]
+        model = str(expert.get("default_model") or "")
+        effort = str(expert.get("reasoning_effort") or "max")
+        invoker = ClaudeHeadlessInvoker(
+            claude_bin,
+            oauth_token=oauth_token,
+            isolation=isolation,
+            model=model,
+            effort=effort,
+        )
+        record: dict[str, Any] = {
+            "logged_at_utc": datetime.now(timezone.utc).isoformat(),
+            "kind": "voice_refresh_call",
+            "expert_id": expert_id,
+            "event_id": str(game["event_id"]),
+            "away_team": str(game["away_team"]),
+            "home_team": str(game["home_team"]),
+        }
+        workdir = Path(
+            tempfile.mkdtemp(
+                prefix=f"god-refresh-{expert_id}-",
+                dir=None if work_root is None else str(work_root),
+            )
+        )
+        started = time.monotonic()
+        outcome: dict[str, Any]
+        try:
+            call_cwd = workdir / "cwd"
+            call_cwd.mkdir(mode=0o700)
+            row = await generate_opinion(
+                expert_id=expert_id,
+                game=game,
+                history=history,
+                leans=refresh_data.get("leans"),
+                line_snapshots=snapshots,
+                win_predictions=refresh_data.get("win_predictions"),
+                celebrity_picks=refresh_data.get("celebrity_picks"),
+                celebrity_grades=refresh_data.get("celebrity_grades"),
+                ak_user_id=refresh_data.get("ak_user_id"),
+                cee_user_id=refresh_data.get("cee_user_id"),
+                store=store,
+                model=model or None,
+                create_fn=_live_create_fn(invoker, str(call_cwd)),
+                generation_backend=JUDGE_BACKEND,
+                generation_effort=effort,
+                repair_attempts=1,
+            )
+            outcome = {
+                "status": "approved",
+                "opinion_id": str(row["opinion_id"]),
+            }
+            record["status"] = "ok"
+            record["opinion_id"] = outcome["opinion_id"]
+        except ValueError as exc:
+            # An input that cannot build, or a response that failed
+            # validation (the audit row, if any, is already persisted).
+            outcome = {"status": "invalid", "error": str(exc)}
+            record["status"] = "invalid"
+            record["error"] = str(exc)
+        except Exception as exc:
+            outcome = {
+                "status": "failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            record["status"] = "error"
+            record["error"] = outcome["error"]
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+        record["wall_ms"] = int((time.monotonic() - started) * 1000)
+        record.update(invoker.last_call)
+        append_runs_log(runs_log, record)
+        return outcome
+
+    return refresh
 
 
 class _RecordingStore:
@@ -420,6 +687,9 @@ async def run_once(
     runs_log_path: str | Path | None = None,
     samples: int = DEFAULT_SAMPLES,
     pending_dm: bool = True,
+    refresh_data: dict[str, Any] | None = None,
+    refresh_voice: Refresher | None = None,
+    max_refreshes: int = DEFAULT_MAX_REFRESHES,
 ) -> dict[str, list[dict[str, Any]]]:
     """One pass over the upcoming slate. Every side effect arrives as an argument.
 
@@ -427,6 +697,13 @@ async def run_once(
     the single-sample path, 2 to ``MAX_SAMPLES`` the judge ensemble described
     in the module docstring. ``pending_dm=False`` keeps the completion DM
     quiet; failure and stall DMs are unaffected.
+
+    ``refresh_data`` (the human-submission tabs) arms the late-window voice
+    refresh: inside ``REFRESH_WINDOW`` of kickoff, a human-input voice whose
+    newest submission postdates its approved row — or that has none —
+    regenerates through ``refresh_voice`` before the committee is read, at
+    most ``max_refreshes`` voices per pass. ``refresh_data=None`` disables
+    the step entirely.
     """
     if not 1 <= int(samples) <= MAX_SAMPLES:
         raise ValueError(f"samples must be between 1 and {MAX_SAMPLES}")
@@ -443,6 +720,7 @@ async def run_once(
         "skipped": [],
         "failed": [],
         "stalled": [],
+        "refreshed": [],
     }
     prefix = "dry run: " if dry_run else ""
 
@@ -472,12 +750,88 @@ async def run_once(
             )
             break
         event_id = str(game["event_id"])
-        if _parse_time(game["commence_time_utc"]) - now < KICKOFF_CUTOFF:
-            skip(game, "inside the two-hour kickoff cutoff")
+        time_to_kick = _parse_time(game["commence_time_utc"]) - now
+        if time_to_kick < KICKOFF_CUTOFF:
+            skip(game, "inside the one-hour kickoff cutoff")
             continue
         selected = select_voice_rows(
             approved, event_id=event_id, registry=registry, policy=policy
         )
+        refresh_failures: list[str] = []
+        refreshed_here: list[str] = []
+        if refresh_data is not None and time_to_kick < REFRESH_WINDOW:
+            for expert_id, reason in stale_human_voices(
+                game,
+                selected=selected,
+                registry=registry,
+                refresh_data=refresh_data,
+            ):
+                if len(summary["refreshed"]) >= max_refreshes:
+                    print(
+                        f"{prefix}max refreshes ({max_refreshes}) reached; "
+                        "the rest wait for the next pass"
+                    )
+                    break
+                if dry_run or refresh_voice is None:
+                    print(
+                        f"dry run: would refresh {expert_id} for "
+                        f"{describe_game(game)}: {reason}"
+                    )
+                    summary["refreshed"].append(
+                        {
+                            "event_id": event_id,
+                            "expert_id": expert_id,
+                            "reason": reason,
+                            "dry_run": True,
+                        }
+                    )
+                    continue
+                print(
+                    f"refreshing {expert_id} for {describe_game(game)}: "
+                    f"{reason}"
+                )
+                outcome = await refresh_voice(game, expert_id)
+                summary["refreshed"].append(
+                    {
+                        "event_id": event_id,
+                        "expert_id": expert_id,
+                        "reason": reason,
+                        **outcome,
+                    }
+                )
+                if outcome.get("status") == "approved":
+                    refreshed_here.append(expert_id)
+                    print(
+                        f"{describe_game(game)}: refreshed {expert_id} "
+                        f"({outcome.get('opinion_id')})"
+                    )
+                else:
+                    error = str(outcome.get("error") or outcome.get("status"))
+                    refresh_failures.append(f"{expert_id}: {error}")
+                    print(
+                        f"{describe_game(game)}: {expert_id} refresh "
+                        f"{outcome.get('status')} ({error}); the standing "
+                        "approved row, if any, remains the voice"
+                    )
+            if refresh_failures:
+                notify(
+                    "pickbot: God Expert voice refresh failed for "
+                    f"{describe_game(game)}: " + "; ".join(refresh_failures)
+                )
+            if refreshed_here:
+                known = {str(row.get("opinion_id")) for row in opinion_rows}
+                opinion_rows = opinion_rows + [
+                    row
+                    for row in store.list()
+                    if str(row.get("opinion_id")) not in known
+                ]
+                approved = approved_opinions(opinion_rows)
+                selected = select_voice_rows(
+                    approved,
+                    event_id=event_id,
+                    registry=registry,
+                    policy=policy,
+                )
         present = {item[0] for item in selected}
         missing = [expert_id for expert_id in required if expert_id not in present]
         if missing:
@@ -740,6 +1094,7 @@ async def run_once(
                         samples=samples,
                         valid_samples=len(valid_samples),
                         failures=sample_failures,
+                        refreshed=refreshed_here,
                     )
                 )
         finally:
@@ -807,6 +1162,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Parent of the per-game temp directories (default: system temp).",
     )
     parser.add_argument(
+        "--max-refreshes",
+        type=int,
+        default=int(
+            os.environ.get("GOD_JUDGE_MAX_REFRESHES") or DEFAULT_MAX_REFRESHES
+        ),
+        help=(
+            "Stale human-input voice regenerations per invocation "
+            "(GOD_JUDGE_MAX_REFRESHES; default 6)."
+        ),
+    )
+    parser.add_argument(
+        "--no-refresh",
+        action="store_true",
+        default=(os.environ.get("GOD_JUDGE_REFRESH") or "").strip() == "0",
+        help=(
+            "Skip the late-window voice refresh entirely "
+            "(or set GOD_JUDGE_REFRESH=0)."
+        ),
+    )
+    parser.add_argument(
         "--samples",
         type=int,
         default=int(os.environ.get("GOD_JUDGE_SAMPLES") or DEFAULT_SAMPLES),
@@ -869,6 +1244,73 @@ def main(argv: list[str] | None = None) -> int:
     ]
     registry = load_registry()
     policy = aggregator_policy(registry)
+    now = datetime.now(timezone.utc)
+
+    # The refresh tabs are read only when a game is actually inside the
+    # late window, so the every-30-minutes pass costs no extra sheet reads
+    # on a quiet day.
+    refresh_data: dict[str, Any] | None = None
+    refresh_voice: Refresher | None = None
+    in_refresh_window = not args.no_refresh and any(
+        str(game.get("status") or "") == "upcoming"
+        and KICKOFF_CUTOFF
+        <= _parse_time(game["commence_time_utc"]) - now
+        < REFRESH_WINDOW
+        for game in games
+    )
+    if in_refresh_window and human_input_experts(registry):
+        from celebrity_grades import configured_celebrity_grade_store
+        from celebrity_picks import CELEBRITY_HEADERS
+        from intake_bot import _celebrity_worksheet
+        from moe_identity import (
+            ALLOWED_USER_HEADERS,
+            ALLOWED_USERS_TAB,
+            resolve_moe_expert_user_id,
+        )
+        from nfl_lines import LEAN_HEADERS
+        from nfl_win_predictions import PREDICTION_HEADERS
+
+        allowed_rows = spreadsheet.worksheet(ALLOWED_USERS_TAB).get_all_records(
+            expected_headers=ALLOWED_USER_HEADERS
+        )
+
+        def _expert_user_id(expert_id: str) -> str:
+            try:
+                return resolve_moe_expert_user_id(allowed_rows, expert_id)
+            except (RuntimeError, ValueError) as exc:
+                print(f"{expert_id} user id unresolved: {exc}", file=sys.stderr)
+                return ""
+
+        refresh_data = {
+            "leans": spreadsheet.worksheet("nfl_leans").get_all_records(
+                expected_headers=LEAN_HEADERS
+            ),
+            "celebrity_picks": _celebrity_worksheet(
+                spreadsheet
+            ).get_all_records(expected_headers=CELEBRITY_HEADERS),
+            "win_predictions": spreadsheet.worksheet(
+                "nfl_win_predictions"
+            ).get_all_records(expected_headers=PREDICTION_HEADERS),
+            "celebrity_grades": configured_celebrity_grade_store(
+                writable=False
+            ).list_latest(),
+            "ak_user_id": _expert_user_id("ak"),
+            "cee_user_id": _expert_user_id("cee"),
+        }
+        if not args.dry_run:
+            refresh_voice = make_voice_refresher(
+                store=store,
+                refresh_data=refresh_data,
+                history=history,
+                snapshots=snapshots,
+                registry=registry,
+                claude_bin=args.claude_bin,
+                oauth_token=oauth_token,
+                isolation=args.isolation,
+                runs_log=args.runs_log,
+                work_root=args.work_root,
+            )
+
     claude_invoker: Invoker
     if args.dry_run:
 
@@ -888,7 +1330,7 @@ def main(argv: list[str] | None = None) -> int:
             store=store,
             registry=registry,
             policy=policy,
-            now=datetime.now(timezone.utc),
+            now=now,
             claude_invoker=claude_invoker,
             notify=send_watchdog_dm,
             max_games=args.max_games,
@@ -897,12 +1339,16 @@ def main(argv: list[str] | None = None) -> int:
             runs_log_path=args.runs_log,
             samples=args.samples,
             pending_dm=os.environ.get("GOD_JUDGE_PENDING_DM", "1").strip() != "0",
+            refresh_data=refresh_data,
+            refresh_voice=refresh_voice,
+            max_refreshes=args.max_refreshes,
         )
     )
     print(
         f"God judge runner: {len(summary['attempted'])} attempted, "
         f"{len(summary['skipped'])} skipped, {len(summary['failed'])} failed, "
-        f"{len(summary['stalled'])} stalled"
+        f"{len(summary['stalled'])} stalled, "
+        f"{len(summary['refreshed'])} voices refreshed"
     )
     return 0
 

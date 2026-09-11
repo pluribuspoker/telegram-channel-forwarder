@@ -149,8 +149,12 @@ effort, every tool disabled, the registered prompt as the whole system
 prompt, from an empty directory whose environment holds no sheet
 credentials), persists the judge row with backend `claude_headless`, and
 DMs the reviewer through the watchdog bot. It dedupes on the committee key
-(voice opinion ids plus the latest lines and prices), stops two hours before
-kickoff and gives up on a committee after two invalid judge rows. Valid rules
+(voice opinion ids plus the latest lines and prices), stops one hour before
+kickoff and gives up on a committee after two invalid judge rows. In the
+final two eligible passes it first regenerates any human-input voice (ak,
+cee, celebrity — `refresh_on_human_input` in the registry) whose newest
+submission postdates its approved row, through the same headless path at the
+expert's registered model. Valid rules
 and judge rows are approved automatically by the normal generation policy.
 `python scripts/god_judge_runner.py --dry-run` prints the plan without
 persisting or calling anything.

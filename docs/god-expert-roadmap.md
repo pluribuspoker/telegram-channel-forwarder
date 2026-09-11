@@ -441,6 +441,50 @@ anywhere; judge runs bill the Claude Code subscription.
   under the bar → 2-0-0. Run it on a Tuesday once `moe_grade.py` has ~50
   graded games and compare with WP8's table.
 
+### WP11 — Late-window committee refresh (0.5 d, operator-decided 2026-09-10)
+
+- Operator decision (chat, 2026-09-10): decisions should land ~1h before
+  kickoff instead of ~2h, and the human-input voices should regenerate on
+  new submissions instead of the judge reading stale ones. Motivating
+  case: the Week 1 SF@LAR committee judged on AK's 1:49 AM projection
+  after he revised it at 12:04 PM (the revision flips which side of −3.5
+  his projection covers), and the 6:31 PM celebrity opinion missed four
+  later picks.
+- `KICKOFF_CUTOFF` 2h → 1h. With the :12/:42 cadence the last eligible
+  pass is ~1h10–1h40 out — after the T-90min inactives are in the lines
+  the judge and the veto read. Earlier passes are unchanged, so a game
+  always has a standing decision before the final fresh pass; a failed
+  final call leaves the earlier decision in force.
+- Inside `REFRESH_WINDOW` (cutoff + 2 timer intervals, i.e. the final two
+  eligible passes) the runner regenerates each voice marked
+  `refresh_on_human_input` in the registry (`ak`, `cee`, `celebrity`)
+  whose newest eligible submission postdates its selected approved row, or
+  that has no approved row while eligible input exists (heals an
+  incomplete committee too). Staleness mirrors each input builder's own
+  source filter — never an input-hash comparison, because `build_ak_input`
+  embeds the latest board by design and would false-positive on every
+  lines fetch; market staleness stays the judge's job via the
+  generation-time board (2026-09-10). One headless claude call per voice
+  at the expert's registered model/effort, persisted through
+  `generate_opinion` (backend `claude_headless`, `repair_attempts=1`,
+  auto-approve on valid) — indistinguishable from a manual agent run.
+  Fail-open: an invalid or failed refresh keeps the standing row as the
+  voice. The judge then re-runs on the changed committee key in the same
+  invocation; the completion DM names refreshed voices; per-voice usage
+  lands in `god_judge_runs.jsonl` as `voice_refresh_call` lines.
+- Budget `--max-refreshes`/`GOD_JUDGE_MAX_REFRESHES` (default 6) per pass
+  in kickoff order; kill switch `--no-refresh`/`GOD_JUDGE_REFRESH=0`; the
+  refresh tabs are read only when a game is inside the window (quiet
+  passes cost zero extra sheet reads). Cost worst case per game ≈ 3 voice
+  regenerations + the judge re-run that any committee change causes.
+  `god-judge.service` `TimeoutStartSec` 9000 → 14400. Known limit: a
+  9-game 1 PM slate can need more judge re-runs across the two window
+  passes than `--max-games`; overflow games keep their earlier standing
+  decision (raise `GOD_JUDGE_MAX_GAMES` on game day if it bites).
+- Built 2026-09-10: `StaleHumanVoiceTests` + `LateWindowRefreshTests`;
+  cutoff tests moved to 1h; twelve-module suite green on a VPS scratch
+  clone (426 tests).
+
 ## Dependencies and parallelism
 
 - Phase 1 (WP1–WP4) landed and was deployed on 2026-09-07 (status log).
@@ -598,6 +642,15 @@ Decided 2026-09-07 in chat, recorded here and on the Desk page:
   expert.
 - Judge runs are automated from a fresh headless session (WP2); the
   ensemble (WP9) follows once runner usage is measured.
+
+Decided 2026-09-10 in chat (operator):
+
+- The judge's kickoff cutoff drops from two hours to one, and the
+  human-input voices (`ak`, `cee`, `celebrity`) regenerate in the final
+  two eligible passes when their human input changed since generation
+  (WP11). Market drift alone never regenerates a voice — the judge's
+  generation-time board covers it. A failed refresh leaves the standing
+  approved row as the voice.
 - Grading cadence (decided 2026-09-07 in chat): `moe-grade.timer` runs
   `scripts/moe_grade.py --write --notify` daily at 05:23 ET. Grading is
   deterministic and the ledger dedupes on opinion id, so the daily pass
@@ -766,6 +819,15 @@ an answer:
   main, not pushed; the first weekly run after the phase-3 deploy approves
   the 17 pending Week 1 rows. The guard fix must be live before that: the
   approvals change both Week 1 committee keys and re-judge both games.
+- 2026-09-10 (night) — WP11 built on operator decision from chat: judge
+  cutoff 2h → 1h, late-window refresh of the human-input voices (`ak`,
+  `cee`, `celebrity`, registry `refresh_on_human_input`) in the final two
+  eligible passes, healing missing rows too; `--max-refreshes` 6,
+  `GOD_JUDGE_REFRESH=0` kill switch, `TimeoutStartSec` 14400. One
+  worktree (`late-window-refresh`); twelve-module suite green on a VPS
+  scratch clone: `Ran 426 tests … OK`. Motivating case: the SF@LAR
+  committee judged on AK's superseded 1:49 AM projection and a celebrity
+  opinion missing four later picks.
 
 ## Session opener (phase 2)
 
