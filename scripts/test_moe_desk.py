@@ -61,6 +61,18 @@ REGISTRY = {
             "committee_optional": True,
             "name": "Cee Expert",
         },
+        "celebrity": {
+            "enabled": True,
+            "mode": "agent",
+            "committee_optional": True,
+            "name": "Celebrity Expert",
+        },
+        "hi_lo": {
+            "enabled": True,
+            "mode": "agent",
+            "committee_optional": True,
+            "name": "Hi Lo Expert",
+        },
         "disabled": {"enabled": False, "mode": "agent"},
         "god_rules": {"enabled": True, "mode": "aggregator"},
         "god_judge": {"enabled": True, "mode": "aggregator_judge"},
@@ -314,6 +326,10 @@ class ModelTests(unittest.TestCase):
         self.assertNotIn("cee", statuses)  # optional and absent
         self.assertEqual((desk.required_approved, desk.required_total), (4, 5))
         self.assertEqual(desk.missing_required, ["win_total"])
+        self.assertEqual(
+            desk.missing_optional,
+            ["cee", "celebrity", "hi_lo"],
+        )
         self.assertEqual([r["opinion_id"] for r in desk.reviewed], ["a3", "a2", "a4", "a1"])
         self.assertIsNone(desk.rules)
         self.assertFalse(desk.started)
@@ -366,6 +382,11 @@ class ModelTests(unittest.TestCase):
         self.assertIn("<b>Rules</b>", text)
         self.assertIn("<b>Schedule</b>", text)
         self.assertIn("<b>Consensus</b>", text)
+        self.assertIn("<i>Waiting on required · Win Total</i>", text)
+        self.assertIn(
+            "<i>No opinion yet · Cee · Celebrity · Hi Lo</i>",
+            text,
+        )
         self.assertLess(len(text), 4096)
 
     def test_committee_selects_latest_approved_per_expert(self) -> None:

@@ -85,6 +85,7 @@ VOICE_ABBREVIATIONS = {
     "rating_elo": "Elo",
     "cee": "Cee",
     "celebrity": "Celeb",
+    "hi_lo": "Hi Lo",
     RULES_EXPERT_ID: "Rules",
     JUDGE_EXPERT_ID: "Judge",
 }
@@ -96,8 +97,18 @@ VOICE_NAMES = {
     "rating_elo": "Elo",
     "cee": "Cee",
     "celebrity": "Celebrity",
+    "hi_lo": "Hi Lo",
 }
-VOICE_DISPLAY_ORDER = ["schedule", "divisional", "win_total", "ak", "rating_elo", "cee", "celebrity"]
+VOICE_DISPLAY_ORDER = [
+    "schedule",
+    "divisional",
+    "win_total",
+    "ak",
+    "rating_elo",
+    "cee",
+    "celebrity",
+    "hi_lo",
+]
 
 CALLBACK_PREFIX = "desk:"
 
@@ -286,6 +297,7 @@ class GameDesk:
     voices: list[tuple[str, str, bool]]  # (expert_id, status, required)
     required_total: int
     required_approved: int
+    missing_optional: list[str]
     rules: dict[str, Any] | None
     judge: dict[str, Any] | None
 
@@ -443,6 +455,11 @@ def build_desks(
                 required_approved=sum(
                     1 for expert_id in required if expert_id in approved_experts
                 ),
+                missing_optional=[
+                    expert_id
+                    for expert_id in optional
+                    if status_of(expert_id) == "missing"
+                ],
                 rules=latest_row(
                     row for row in approved if row.get("expert_id") == RULES_EXPERT_ID
                 ),
@@ -1115,11 +1132,22 @@ def render_offline_card(
         lines.append("<i>No approved expert picks yet.</i>")
     if desk.missing_required:
         lines.append(
-            "<i>Waiting on "
+            "<i>Waiting on required · "
             + _esc(
-                ", ".join(
-                    expert_abbreviation(expert_id)
+                " · ".join(
+                    VOICE_NAMES.get(expert_id, expert_abbreviation(expert_id))
                     for expert_id in desk.missing_required
+                )
+            )
+            + "</i>"
+        )
+    if desk.missing_optional:
+        lines.append(
+            "<i>No opinion yet · "
+            + _esc(
+                " · ".join(
+                    VOICE_NAMES.get(expert_id, expert_abbreviation(expert_id))
+                    for expert_id in desk.missing_optional
                 )
             )
             + "</i>"

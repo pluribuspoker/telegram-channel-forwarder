@@ -916,8 +916,11 @@ either person sees or does.
   God arms, every approved voice pick, and consensus. It updates silently
   before kickoff, freezes at kickoff, and is never deleted when desk state
   ages out, so Telegram clients that synchronized the topic can retain their
-  local copy. This remains best-effort client caching, not guaranteed offline
-  storage. 📊 Scores: `scripts/moe_grade.py --notify` posts the digest
+  local copy. Its footer distinguishes missing required voices, which block a
+  complete committee, from enabled optional voices that have no opinion yet,
+  so the offline snapshot always exposes the full expert roster. This remains
+  best-effort client caching, not guaranteed offline storage. 📊 Scores:
+  `scripts/moe_grade.py --notify` posts the digest
   there (silent) when `MOE_DESK_SCORES_TOPIC` is set and falls back to
   the watchdog DM.
 - Shared-message rules: Picks reading controls navigate by editing the existing
