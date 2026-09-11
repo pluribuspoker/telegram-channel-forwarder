@@ -1854,6 +1854,19 @@ behavior reference.
   required voices, refresh-failure fail-open, window and budget gating,
   dry-run, DM lines); cutoff tests moved to 1h. Full twelve-module suite
   green on a VPS scratch clone (426 tests).
+- **Re-judge throttle (same night, operator):** the ledger showed 32
+  max-effort judge calls for the two Week 1 games because the committee
+  key embeds latest lines/prices and every BetOnline tick re-judged.
+  Outside the final 3h (`ACTIVE_WINDOW`/`GOD_JUDGE_ACTIVE_HOURS`, refused
+  below the 2h refresh window) a standing valid non-rejected decision
+  younger than 3h (`JUDGE_THROTTLE`/`GOD_JUDGE_THROTTLE_HOURS`) skips the
+  game even on a key change; first, stale, and rejected decisions still
+  run; inside the final 3h behavior is unchanged. Look-back tooling:
+  `scripts/moe_usage_report.py --days 7` — exact tokens per judge/refresh
+  call from the runs ledger, per expert × backend × model row counts and
+  response-size proxy from the opinion store (agent sessions expose no
+  token counts at persist time). Tests: `JudgeThrottleTests`,
+  `scripts/test_moe_usage_report.py`.
 
 ### Implemented locally — 2026-09-04: authoritative NFL week metadata
 

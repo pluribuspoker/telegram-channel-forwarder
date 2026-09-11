@@ -368,7 +368,12 @@ class RunnerTests(_HarnessCase):
         moved[LATEST_HOME_COLUMN] = "-3.5,-105,-181|-2.5,-115,-155|-0.5,115,-140"
         self.assertNotEqual(self._payload(moved)["committee_key"], self._payload()["committee_key"])
 
-        summary = await self.harness.run([moved], _committee())
+        # Inside the active window, where a key change always re-judges.
+        summary = await self.harness.run(
+            [moved],
+            _committee(),
+            now=_parse_time(KICKOFF) - timedelta(hours=2, minutes=30),
+        )
 
         self.assertEqual(len(summary["attempted"]), 1)
         self.assertEqual(
@@ -1170,6 +1175,109 @@ class LateWindowRefreshTests(_HarnessCase):
             refreshed=["ak", "celebrity"],
         )
         self.assertIn("refreshed voices: ak, celebrity", message)
+
+
+def _standing_judge_row(generated_at: str, **overrides: object) -> dict:
+    """A minimal persisted judge decision, old or fresh as the test needs.
+
+    No input_json on purpose: row_committee_key() returns None for it, so
+    the same-key dedupe never matches and only the throttle can skip."""
+    row = {
+        "opinion_id": f"standing-{generated_at}",
+        "expert_id": "god_judge",
+        "event_id": EVENT_ID,
+        "generation_status": "valid",
+        "review_status": "approved",
+        "generated_at_utc": generated_at,
+    }
+    row.update(overrides)
+    return row
+
+
+class JudgeThrottleTests(_HarnessCase):
+    """Outside the active window a fresh standing decision absorbs key
+    changes; inside it every key change re-judges."""
+
+    async def test_far_out_line_tick_is_throttled(self) -> None:
+        # Pass 1 persists a decision (wall-clock generated_at, hence fresh
+        # relative to the far-out fake now of pass 2).
+        await self.harness.run([_game()], _committee())
+        moved = _game()
+        moved[LATEST_HOME_COLUMN] = "-3.5,-105,-181|-2.5,-115,-155|-0.5,115,-140"
+
+        summary = await self.harness.run([moved], _committee())
+
+        self.assertEqual(summary["attempted"], [])
+        self.assertEqual(len(self.harness.calls()), 1)
+        self.assertIn("standing decision", summary["skipped"][0]["reason"])
+
+    async def test_stale_standing_decision_rejudges_far_out(self) -> None:
+        now = _parse_time(KICKOFF) - timedelta(days=2)
+        stale = _standing_judge_row(
+            (now - timedelta(hours=4)).isoformat()
+        )
+        summary = await self.harness.run(
+            [_game()], [*_committee(), stale], now=now
+        )
+
+        self.assertEqual(len(summary["attempted"]), 1)
+
+    async def test_rejected_standing_decision_never_throttles(self) -> None:
+        now = _parse_time(KICKOFF) - timedelta(days=2)
+        rejected = _standing_judge_row(
+            (now - timedelta(minutes=10)).isoformat(),
+            review_status="rejected",
+        )
+        summary = await self.harness.run(
+            [_game()], [*_committee(), rejected], now=now
+        )
+
+        self.assertEqual(len(summary["attempted"]), 1)
+
+    async def test_fresh_standing_decision_throttles_far_out(self) -> None:
+        now = _parse_time(KICKOFF) - timedelta(days=2)
+        fresh = _standing_judge_row((now - timedelta(hours=1)).isoformat())
+        summary = await self.harness.run(
+            [_game()], [*_committee(), fresh], now=now
+        )
+
+        self.assertEqual(summary["attempted"], [])
+        self.assertEqual(self.harness.calls(), [])
+        self.assertIn("standing decision is 1.0h old", summary["skipped"][0]["reason"])
+
+    async def test_inside_active_window_fresh_decision_still_rejudges(self) -> None:
+        now = _parse_time(KICKOFF) - timedelta(hours=2, minutes=30)
+        fresh = _standing_judge_row((now - timedelta(minutes=30)).isoformat())
+        summary = await self.harness.run(
+            [_game()], [*_committee(), fresh], now=now
+        )
+
+        self.assertEqual(len(summary["attempted"]), 1)
+
+    def test_standing_decision_age_ignores_invalid_and_other_events(self) -> None:
+        now = _parse_time(KICKOFF)
+        rows = [
+            _standing_judge_row(
+                (now - timedelta(hours=1)).isoformat(),
+                generation_status="invalid",
+            ),
+            _standing_judge_row(
+                (now - timedelta(hours=2)).isoformat(),
+                event_id="other-event",
+            ),
+            _standing_judge_row((now - timedelta(hours=5)).isoformat()),
+        ]
+        from scripts.god_judge_runner import standing_decision_age
+
+        age = standing_decision_age(EVENT_ID, rows, now)
+        self.assertEqual(age, timedelta(hours=5))
+        self.assertIsNone(standing_decision_age("missing", rows, now))
+
+    def test_active_hours_must_cover_the_refresh_window(self) -> None:
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(stderr):
+            main(["--dry-run", "--active-hours", "1.5"])
+        self.assertIn("refresh window", stderr.getvalue())
 
 
 if __name__ == "__main__":

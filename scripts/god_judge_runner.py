@@ -54,7 +54,17 @@ its committee is incomplete, when a valid judge row that has not been
 manually rejected already carries the current key, or when two invalid judge rows
 carry it (the judge failed twice on this committee; the reviewer is told once
 per invocation). A rejected judge row does not block: rejection is the
-reviewer asking for a fresh run. At most ``--max-games``
+reviewer asking for a fresh run.
+
+**Re-judge throttle (operator decision 2026-09-10).** The committee key
+includes the latest lines and prices, so every BetOnline tick used to
+re-judge a game all day (32 max-effort calls for the two Week 1 games).
+Outside ``ACTIVE_WINDOW`` (3h) of kickoff, a standing valid non-rejected
+judge decision younger than ``JUDGE_THROTTLE`` (3h) now skips the game even
+when the key changed; the first decision for a game, a stale standing one,
+and a rejected one still run. Inside the final 3h every pass re-judges on a
+key change as before, and the late-window refresh sits inside that.
+``GOD_JUDGE_ACTIVE_HOURS`` / ``GOD_JUDGE_THROTTLE_HOURS`` tune both. At most ``--max-games``
 games run per invocation. Every judge call bills the Claude Code
 subscription, so a failed call is logged and DMed, never retried; the next
 timer slot tries again.
@@ -135,6 +145,13 @@ KICKOFF_CUTOFF = timedelta(hours=1)
 # passes fall inside this window; stale human-input voices refresh there.
 TIMER_INTERVAL = timedelta(minutes=30)
 REFRESH_WINDOW = KICKOFF_CUTOFF + 2 * TIMER_INTERVAL
+# Re-judge cadence (operator decision 2026-09-10): inside ACTIVE_WINDOW of
+# kickoff every pass re-judges on a committee-key change (the refresh window
+# sits inside it); further out, a standing valid decision younger than
+# JUDGE_THROTTLE skips the game even when the key changed, so line ticks far
+# from kickoff stop burning a max-effort call every 30 minutes.
+ACTIVE_WINDOW = timedelta(hours=3)
+JUDGE_THROTTLE = timedelta(hours=3)
 DEFAULT_MAX_GAMES = 3
 DEFAULT_MAX_REFRESHES = 6
 INVALID_ATTEMPT_CAP = 2
@@ -432,6 +449,32 @@ def stale_human_voices(
     return stale
 
 
+def standing_decision_age(
+    event_id: str,
+    opinion_rows: Iterable[dict[str, Any]],
+    now: datetime,
+) -> timedelta | None:
+    """Age of the newest valid, non-rejected judge decision for the event,
+    or None when there is none. Rejected rows never count (rejection is the
+    reviewer asking for a fresh run); invalid and sample rows never count."""
+    newest: datetime | None = None
+    for row in opinion_rows:
+        if (
+            str(row.get("expert_id")) != JUDGE_EXPERT_ID
+            or str(row.get("event_id")) != str(event_id)
+            or str(row.get("generation_status") or "") != "valid"
+            or str(row.get("review_status") or "") == "rejected"
+        ):
+            continue
+        raw = str(row.get("generated_at_utc") or "")
+        if not raw:
+            continue
+        stamped = _parse_time(raw)
+        if newest is None or stamped > newest:
+            newest = stamped
+    return None if newest is None else now - newest
+
+
 def row_committee_key(row: dict[str, Any]) -> str | None:
     """The committee key persisted inside a row's input_json, if any.
 
@@ -690,6 +733,8 @@ async def run_once(
     refresh_data: dict[str, Any] | None = None,
     refresh_voice: Refresher | None = None,
     max_refreshes: int = DEFAULT_MAX_REFRESHES,
+    active_window: timedelta = ACTIVE_WINDOW,
+    judge_throttle: timedelta = JUDGE_THROTTLE,
 ) -> dict[str, list[dict[str, Any]]]:
     """One pass over the upcoming slate. Every side effect arrives as an argument.
 
@@ -704,6 +749,12 @@ async def run_once(
     regenerates through ``refresh_voice`` before the committee is read, at
     most ``max_refreshes`` voices per pass. ``refresh_data=None`` disables
     the step entirely.
+
+    Outside ``active_window`` of kickoff, a standing valid non-rejected
+    judge decision younger than ``judge_throttle`` skips the game even when
+    the committee key changed; a first decision, a stale one, or a rejected
+    one still runs. Inside the active window every pass re-judges on a key
+    change, as before.
     """
     if not 1 <= int(samples) <= MAX_SAMPLES:
         raise ValueError(f"samples must be between 1 and {MAX_SAMPLES}")
@@ -878,6 +929,17 @@ async def run_once(
                 f"committee {key[:12]}; waiting for the committee to change",
             )
             continue
+        if time_to_kick > active_window:
+            age = standing_decision_age(event_id, opinion_rows, now)
+            if age is not None and age < judge_throttle:
+                skip(
+                    game,
+                    f"standing decision is {age.total_seconds() / 3600:.1f}h "
+                    f"old; outside the {active_window.total_seconds() / 3600:g}h "
+                    f"active window the judge re-runs at most every "
+                    f"{judge_throttle.total_seconds() / 3600:g}h",
+                )
+                continue
         existing_rules = [
             row
             for row in rows_for(event_id, RULES_EXPERT_ID)
@@ -1182,6 +1244,32 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--active-hours",
+        type=float,
+        default=float(
+            os.environ.get("GOD_JUDGE_ACTIVE_HOURS")
+            or ACTIVE_WINDOW.total_seconds() / 3600
+        ),
+        help=(
+            "Hours before kickoff inside which every pass re-judges on a "
+            "committee-key change (GOD_JUDGE_ACTIVE_HOURS; default 3). "
+            "Must cover the refresh window (2h)."
+        ),
+    )
+    parser.add_argument(
+        "--throttle-hours",
+        type=float,
+        default=float(
+            os.environ.get("GOD_JUDGE_THROTTLE_HOURS")
+            or JUDGE_THROTTLE.total_seconds() / 3600
+        ),
+        help=(
+            "Outside the active window, minimum age of the standing valid "
+            "decision before the judge re-runs on a key change "
+            "(GOD_JUDGE_THROTTLE_HOURS; default 3)."
+        ),
+    )
+    parser.add_argument(
         "--samples",
         type=int,
         default=int(os.environ.get("GOD_JUDGE_SAMPLES") or DEFAULT_SAMPLES),
@@ -1202,6 +1290,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--max-games must be at least 1")
     if not 1 <= args.samples <= MAX_SAMPLES:
         parser.error(f"--samples must be between 1 and {MAX_SAMPLES}")
+    if args.active_hours * 3600 < REFRESH_WINDOW.total_seconds():
+        parser.error(
+            "--active-hours must cover the refresh window "
+            f"({REFRESH_WINDOW.total_seconds() / 3600:g}h), or a refreshed "
+            "committee could be throttled before it is judged"
+        )
+    if args.throttle_hours <= 0:
+        parser.error("--throttle-hours must be positive")
     oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
     if not args.dry_run and not oauth_token:
         parser.error(
@@ -1342,6 +1438,8 @@ def main(argv: list[str] | None = None) -> int:
             refresh_data=refresh_data,
             refresh_voice=refresh_voice,
             max_refreshes=args.max_refreshes,
+            active_window=timedelta(hours=args.active_hours),
+            judge_throttle=timedelta(hours=args.throttle_hours),
         )
     )
     print(

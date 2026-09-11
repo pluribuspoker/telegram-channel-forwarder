@@ -484,6 +484,23 @@ anywhere; judge runs bill the Claude Code subscription.
 - Built 2026-09-10: `StaleHumanVoiceTests` + `LateWindowRefreshTests`;
   cutoff tests moved to 1h; twelve-module suite green on a VPS scratch
   clone (426 tests).
+- **Re-judge throttle (same night, operator decision):** the committee key
+  includes latest lines/prices, so every BetOnline tick re-judged a game
+  all day — the ledger showed 32 max-effort calls for the two Week 1 games
+  (14 + 18, ~357k output tokens). Outside `ACTIVE_WINDOW` (3h, the
+  operator's "final 3 hours") a standing valid non-rejected judge decision
+  younger than `JUDGE_THROTTLE` (3h) now skips the game even when the key
+  changed; a first decision, a stale standing one, or a rejected one still
+  runs, and inside the final 3h every pass re-judges on key change (the
+  refresh window sits inside it — `--active-hours` is refused below 2h so
+  a refreshed committee can never be throttled before it is judged).
+  `GOD_JUDGE_ACTIVE_HOURS` / `GOD_JUDGE_THROTTLE_HOURS` tune it. Look-back
+  tooling: `scripts/moe_usage_report.py --days 7` aggregates the runs
+  ledger (exact tokens for judge + refresh calls) and the opinion store
+  (per expert × backend × model, response-size proxy — agent sessions
+  expose no token counts at persist time; `--api` dollars already land in
+  `claude_spend.jsonl`). Tests: `JudgeThrottleTests`,
+  `scripts/test_moe_usage_report.py`.
 
 ## Dependencies and parallelism
 
@@ -651,6 +668,10 @@ Decided 2026-09-10 in chat (operator):
   (WP11). Market drift alone never regenerates a voice — the judge's
   generation-time board covers it. A failed refresh leaves the standing
   approved row as the voice.
+- Line ticks re-judge a game every pass only in the final 3 hours; further
+  out a standing decision younger than 3h absorbs key changes (the
+  re-judge throttle in WP11). `GOD_JUDGE_MAX_GAMES=10` stands in
+  `.env.local`.
 - Grading cadence (decided 2026-09-07 in chat): `moe-grade.timer` runs
   `scripts/moe_grade.py --write --notify` daily at 05:23 ET. Grading is
   deterministic and the ledger dedupes on opinion id, so the daily pass
@@ -828,6 +849,12 @@ an answer:
   scratch clone: `Ran 426 tests … OK`. Motivating case: the SF@LAR
   committee judged on AK's superseded 1:49 AM projection and a celebrity
   opinion missing four later picks.
+- 2026-09-10 (night, later) — re-judge throttle + usage look-back, on the
+  operator's "God feels wasteful" + "final 3 hours" decisions after the
+  ledger showed 32 calls for two games: active window 3h, throttle 3h,
+  `scripts/moe_usage_report.py`. Worktree `judge-throttle`; suite green on
+  a VPS scratch clone (49 runner tests; 436 overall with the report
+  module).
 
 ## Session opener (phase 2)
 
