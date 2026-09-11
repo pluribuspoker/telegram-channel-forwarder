@@ -370,6 +370,20 @@ Authoritative configuration lives under `moe/`:
   into factor claims, forbids ambiguous `5-5`-style shorthand for paired
   season-win predictions, and requires a whole-response evidence sweep before
   return.
+- The 2026 Week 1 v6 backfill completed the four opinions that had exhausted
+  their v5 repair:
+  Cardinals-Chargers `adf085c0-5343-418b-a49c-e3f27e3ce904`,
+  Packers-Vikings `2dda0028-04cf-478d-966a-b6810412a40e`,
+  Dolphins-Raiders `8a620eb3-a20f-4b2f-8c73-91c4d33220a7`, and
+  Commanders-Eagles `d12ac31c-4af2-4968-a076-ee5bcc35c684`. All four use
+  Opus 4.8 at max effort through `agent_runtime` and are validation-approved
+  against prompt hash
+  `a0e31a1d76c312731b0f213de8ed910cca1b0f9d786837d86c38bc71e664235a`.
+  Three passed on the initial v6 response. Cardinals-Chargers used its one
+  allowed repair after the validator read `4 plus win-gap bucket` as an
+  uncited numeric claim; the repair removed every numeric bucket-label
+  occurrence and then passed. Win Total coverage for the 14 remaining Week 1
+  games is therefore 14/14.
 
 The schedule expert's enforced data contract is:
 
