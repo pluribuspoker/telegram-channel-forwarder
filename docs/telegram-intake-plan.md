@@ -275,10 +275,13 @@ Authoritative configuration lives under `moe/`:
 - Discarded considerations are restricted to non-numeric unavailable concepts;
   supplied numeric evidence must use a cited claim object instead of bypassing
   validation through a free-form discarded string.
-- Schema-v3 and schema-v4 generation allow up to two bounded validation-repair attempts.
-  Each failed response is first persisted as its own invalid audit row; the
-  next attempt receives the exact failed JSON and validator error. Validators
-  remain unchanged, and every repair receives a new opinion ID.
+- Schema-v3 and schema-v4 generation allow one bounded validation-repair
+  attempt. Each failed response is first persisted as its own invalid audit
+  row; the repair receives the exact failed JSON and validator error. The
+  repair request treats the reported error as one instance of a violation
+  class, sweeps the complete response for the same problem, and rechecks every
+  claim and field limit. Validators remain unchanged, and every repair receives
+  a new opinion ID.
 - Missing-record validation errors include matching candidate input paths so a
   repair can add the exact omitted citation rather than guessing.
 - A uniquely matching record path may be attached deterministically when the
@@ -349,7 +352,7 @@ Authoritative configuration lives under `moe/`:
   output schema version, exact input JSON, input SHA-256, raw response, whether
   the source tree was dirty, and a SHA-256 over the generation source files
   (including the AI transport and Sheets helpers).
-- `moe/prompts/win_total/v5.md` defines the Opus-only Win Total Expert. Its
+- `moe/prompts/win_total/v6.md` defines the Opus-only Win Total Expert. Its
   whitelisted input compares the two current BetOnline season totals, every
   forecaster's latest season-win predictions with equal weighting, and each
   person's latest full-game moneyline pick against their own season ordering.
@@ -362,7 +365,11 @@ Authoritative configuration lives under `moe/`:
   bookmaker totals, because those are not stored. The expert reuses existing
   `nfl_win_totals`, `nfl_win_predictions`, `nfl_team_history`,
   `nfl_game_history`, and `nfl_leans` data, so no worksheet migration is
-  required.
+  required. Version 6 keeps the 500-character validation ceiling while
+  targeting at most 400 characters for the thesis, moves detailed statistics
+  into factor claims, forbids ambiguous `5-5`-style shorthand for paired
+  season-win predictions, and requires a whole-response evidence sweep before
+  return.
 
 The schedule expert's enforced data contract is:
 

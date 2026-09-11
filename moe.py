@@ -3841,8 +3841,15 @@ async def generate_opinion(
             if _repair_response:
                 request += (
                     "\n\nYour previous JSON response failed validation. "
-                    "Correct only the response so it satisfies the same "
-                    "prompt and input."
+                    "Correct the complete response so it satisfies the same "
+                    "prompt and input. Treat the reported error as one "
+                    "instance of a violation class: inspect the thesis and "
+                    "every supporting, counterargument, no-signal, and "
+                    "discarded item for the same problem, then recheck every "
+                    "claim against its cited evidence. Do not introduce new "
+                    "uncited numbers, unsupported comparisons, or text beyond "
+                    "the prompt's field limits. Return the complete corrected "
+                    "JSON object."
                     f"\nValidation error: {_repair_error}"
                     f"\nPrevious response:\n{_repair_response}"
                 )

@@ -1577,6 +1577,12 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.rows[0]["generation_status"], "invalid")
         self.assertIn("Validation error:", requests[1])
         self.assertIn('{"not": "an opinion"}', requests[1])
+        self.assertIn("inspect the thesis and every supporting", requests[1])
+        self.assertIn(
+            "recheck every claim against its cited evidence",
+            requests[1],
+        )
+        self.assertIn("prompt's field limits", requests[1])
 
     def test_failed_sheet_append_is_spooled(self) -> None:
         row = {"opinion_id": "pending-1", "raw_response": "complete"}

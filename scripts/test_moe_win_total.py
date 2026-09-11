@@ -458,7 +458,7 @@ class WinTotalGenerationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(row["generation_status"], "valid")
         self.assertEqual(row["input_profile"], "win_total")
-        self.assertEqual(row["expert_version"], 5)
+        self.assertEqual(row["expert_version"], 6)
         self.assertIn("A K projects Seattle", row["full_opinion"])
         self.assertEqual(store.rows, [row])
 
@@ -489,14 +489,26 @@ class WinTotalGenerationTest(unittest.IsolatedAsyncioTestCase):
     def test_expert_configuration_is_versioned(self) -> None:
         expert = load_expert("win_total")
 
-        self.assertEqual(expert["version"], 5)
-        self.assertEqual(expert["prompt_version"], 5)
+        self.assertEqual(expert["version"], 6)
+        self.assertEqual(expert["prompt_version"], 6)
         self.assertEqual(expert["output_schema_version"], 3)
         self.assertEqual(
-            expert["prompt_path"], "moe/prompts/win_total/v5.md"
+            expert["prompt_path"], "moe/prompts/win_total/v6.md"
         )
         self.assertEqual(expert["default_model"], "claude-opus-4-8")
         self.assertEqual(expert["reasoning_effort"], "max")
+        self.assertIn(
+            "Keep `thesis.claim` at or below 400 characters",
+            expert["prompt_text"],
+        )
+        self.assertIn(
+            "Never express two season-win predictions as hyphenated shorthand",
+            expert["prompt_text"],
+        )
+        self.assertIn(
+            "Correct every occurrence of a problem",
+            expert["prompt_text"],
+        )
 
 
 if __name__ == "__main__":

@@ -67,7 +67,12 @@ and billing.
 5. Validate the deterministic response structure before any optional
    factuality inference. If validation fails, retain the invalid audit row and
    allow at most one fresh targeted repair using the exact error and original
-   response. Never retry until a response happens to pass.
+   response. The repair must inspect the complete response and correct every
+   occurrence of the same violation class across the thesis, supporting
+   factors, counterarguments, no-signal factors, and discarded
+   considerations. It must then recheck every claim against its cited evidence
+   and all prompt field limits, rather than changing only the location named by
+   the first error. Never retry until a response happens to pass.
 
 6. For an output-schema-v4 expert whose deterministic structure passed, run a
    second isolated inference with the
