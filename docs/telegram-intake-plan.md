@@ -911,16 +911,18 @@ either person sees or does.
   "Waiting on" line counting the required voices that still have no
   approved row per game — the games the judge runner skips as "committee
   incomplete". Offline is the cache-friendly reading surface: one
-  keyboard-free plain-text card per game in the ten-day desk horizon, with the
-  latest full-game spread, moneyline, total and capture time followed by both
-  God arms, every approved voice pick, and consensus. It updates silently
-  before kickoff, freezes at kickoff, and is never deleted when desk state
-  ages out, so Telegram clients that synchronized the topic can retain their
-  local copy. Its `No opinion yet` footer lists every enabled expert without an
-  approved opinion, whether required or optional, so the offline snapshot
-  always exposes the full expert roster without surfacing committee-readiness
-  terminology. This remains best-effort client caching, not guaranteed offline
-  storage. 📊 Scores:
+  keyboard-free plain-text card per game in the ten-day desk horizon once that
+  game has at least one approved voice or God-arm opinion. Games with no
+  approved opinion are omitted, and a previously tracked empty card is deleted.
+  Each visible card has the latest full-game spread, moneyline, total and
+  capture time followed by both God arms, every approved voice pick, and
+  consensus. It updates silently before kickoff, freezes at kickoff, and is
+  never deleted when desk state ages out, so Telegram clients that synchronized
+  the topic can retain their local copy. Its `No opinion yet` footer lists every
+  enabled expert without an approved opinion, whether required or optional, so
+  the offline snapshot always exposes the full expert roster without surfacing
+  committee-readiness terminology. This remains best-effort client caching,
+  not guaranteed offline storage. 📊 Scores:
   `scripts/moe_grade.py --notify` posts the digest
   there (silent) when `MOE_DESK_SCORES_TOPIC` is set and falls back to
   the watchdog DM.

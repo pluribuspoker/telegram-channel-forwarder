@@ -329,6 +329,11 @@ class GameDesk:
         )
 
     @property
+    def show_offline(self) -> bool:
+        """Offline snapshots start with the first approved opinion."""
+        return bool(self.rules or self.judge or self.approved_voices)
+
+    @property
     def week(self) -> str:
         return str(self.game.get("week") or "").strip()
 
@@ -1835,7 +1840,9 @@ def sync_desk(
         state["kickoffs"][desk.event_id] = desk.kickoff.isoformat()
         if config.offline_topic:
             offline_key = f"offline:{desk.event_id}"
-            if not desk.started or offline_key not in state["cards"]:
+            if desk.show_offline and (
+                not desk.started or offline_key not in state["cards"]
+            ):
                 text, keyboard = render_offline_card(
                     desk,
                     latest_market=latest_markets.get(desk.event_id),
@@ -1852,6 +1859,16 @@ def sync_desk(
                     budget=budget,
                     summary=summary,
                 )
+            elif not desk.show_offline and offline_key in state["cards"]:
+                if _delete_entry_messages(
+                    key=offline_key,
+                    entry=state["cards"][offline_key],
+                    config=config,
+                    api=api,
+                    summary=summary,
+                ):
+                    state["cards"].pop(offline_key, None)
+                    summary.deleted.append(offline_key)
         if desk.started:
             picks_key = f"picks:{desk.event_id}"
             existing = state["cards"].get(picks_key)

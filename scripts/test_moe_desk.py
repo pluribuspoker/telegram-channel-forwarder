@@ -721,6 +721,50 @@ class SyncTests(unittest.TestCase):
         self.assertNotIn("offline:401", second.posted)
         self.assertNotIn("offline:401", second.edited)
 
+    def test_offline_topic_hides_games_without_an_approved_opinion(self) -> None:
+        config = DeskConfig(
+            bot_token="token",
+            chat_id="-1001",
+            picks_topic=22,
+            scores_topic=33,
+            offline_topic=44,
+        )
+        desks = self.desks([])
+
+        summary = sync_desk(
+            config=config,
+            api=self.api,
+            state=self.state,
+            desks=desks,
+            now=NOW,
+            latest_markets={"401": LATEST_MARKET},
+            max_posts=50,
+        )
+
+        self.assertFalse(
+            any(message["topic"] == 44 for message in self.api.sent)
+        )
+        self.assertFalse(
+            any(key.startswith("offline:") for key in summary.posted)
+        )
+
+        self.state["cards"]["offline:401"] = {
+            "message_id": 901,
+            "topic": 44,
+        }
+        summary = sync_desk(
+            config=config,
+            api=self.api,
+            state=self.state,
+            desks=desks,
+            now=NOW,
+            latest_markets={"401": LATEST_MARKET},
+            max_posts=50,
+        )
+        self.assertIn("offline:401", summary.deleted)
+        self.assertIn(901, self.api.deleted)
+        self.assertNotIn("offline:401", self.state["cards"])
+
     def test_first_pass_posts_cards_and_pins_week(self) -> None:
         rows = committee("401")
         summary = self.sync(rows)
