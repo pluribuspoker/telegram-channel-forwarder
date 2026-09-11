@@ -480,7 +480,7 @@ anywhere; judge runs bill the Claude Code subscription.
   `god-judge.service` `TimeoutStartSec` 9000 → 14400. Known limit: a
   9-game 1 PM slate can need more judge re-runs across the two window
   passes than `--max-games`; overflow games keep their earlier standing
-  decision (raise `GOD_JUDGE_MAX_GAMES` on game day if it bites).
+  decision (`GOD_JUDGE_MAX_GAMES=10` has stood in `.env.local` since 2026-09-10, covering the full slate per pass).
 - Built 2026-09-10: `StaleHumanVoiceTests` + `LateWindowRefreshTests`;
   cutoff tests moved to 1h; twelve-module suite green on a VPS scratch
   clone (426 tests).

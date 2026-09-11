@@ -1846,8 +1846,8 @@ behavior reference.
   zero sheet reads. `god-judge.service` `TimeoutStartSec` 9000 → 14400 for
   the refresh worst case. Known limit: on a 9-game 1 PM Sunday slate the
   two window passes can need more than `--max-games` judge re-runs;
-  overflow games keep their earlier standing decision (set
-  `GOD_JUDGE_MAX_GAMES=5` on game day if that bites).
+  overflow games keep their earlier standing decision
+  (`GOD_JUDGE_MAX_GAMES=10` in `.env.local` since 2026-09-10).
 - Tests: `StaleHumanVoiceTests` + `LateWindowRefreshTests` in
   `scripts/test_god_judge_runner.py` (staleness per voice incl. the
   unparsed-projection and no-moneyline gates, healing both optional and
