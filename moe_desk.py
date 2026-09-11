@@ -11,6 +11,10 @@ message everyone sees:
   voices still have no approved row (those games the judge runner skips
   as "committee incomplete").
 - **Scores topic** — the grading digest (``scripts/moe_grade.py --notify``).
+- **Offline topic** — one plain-text card per game with the latest full-game
+  lines, both God arms, every approved voice pick, and consensus. Cards update
+  before kickoff and then freeze so a previously synced Telegram client can
+  read its cached copy without invoking the bot.
 
 Review is automatic: every structurally valid opinion row — voices and both
 God Expert arms — is approved at generation (``moe_god.review_policy``,
@@ -113,6 +117,7 @@ class DeskConfig:
     chat_id: str
     picks_topic: int
     scores_topic: int | None = None
+    offline_topic: int | None = None
     bot_username: str = ""
     sync_seconds: int = DEFAULT_SYNC_SECONDS
     state_path: Path = DEFAULT_STATE_PATH
@@ -151,6 +156,7 @@ def desk_config_from_env(
         chat_id=chat_id,
         picks_topic=picks,
         scores_topic=_int_or_none(environ.get("MOE_DESK_SCORES_TOPIC")),
+        offline_topic=_int_or_none(environ.get("MOE_DESK_OFFLINE_TOPIC")),
         sync_seconds=max(15, sync_seconds or DEFAULT_SYNC_SECONDS),
         state_path=Path(state_path) if state_path else DEFAULT_STATE_PATH,
     )
@@ -1020,6 +1026,107 @@ def render_picks_card(
     return "\n".join(summary_lines), keyboard
 
 
+def _line_value(value: Any, *, signed: bool = False) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    text = f"{number:g}"
+    if signed and number > 0:
+        text = f"+{text}"
+    return text
+
+
+def _line_with_price(line: Any, price: Any, *, signed: bool = False) -> str:
+    line_text = _line_value(line, signed=signed)
+    price_text = _line_value(price, signed=True)
+    return line_text if price_text == "—" else f"{line_text} ({price_text})"
+
+
+def _captured_label(value: Any) -> str:
+    if not value:
+        return ""
+    try:
+        return clock_label(_parse_time(value))
+    except (TypeError, ValueError):
+        return ""
+
+
+def render_offline_card(
+    desk: GameDesk,
+    *,
+    latest_market: dict[str, Any] | None = None,
+    team_abbrevs: dict[str, str] | None = None,
+) -> tuple[str, Keyboard]:
+    """One self-contained, keyboard-free game snapshot for offline reading."""
+    game = desk.game
+    away = _abbrev(game.get("away_team"), team_abbrevs)
+    home = _abbrev(game.get("home_team"), team_abbrevs)
+    lines = [
+        (
+            f"🏈 <b>{_esc(teams_label(game))}</b> · "
+            f"{kickoff_label(desk.kickoff)} ET"
+        ),
+        "",
+        "<b>LATEST LINES</b>",
+    ]
+    market = latest_market or {}
+    if not market or all(
+        market.get(key) is None
+        for key in ("away_spread", "home_spread", "away_moneyline", "home_moneyline", "total")
+    ):
+        lines.append("No full-game line data yet.")
+    else:
+        lines.extend(
+            [
+                (
+                    f"<b>Spread</b> · {_esc(away)} "
+                    f"{_esc(_line_with_price(market.get('away_spread'), market.get('away_spread_price'), signed=True))}"
+                    f" · {_esc(home)} "
+                    f"{_esc(_line_with_price(market.get('home_spread'), market.get('home_spread_price'), signed=True))}"
+                ),
+                (
+                    f"<b>Moneyline</b> · {_esc(away)} "
+                    f"{_esc(_line_value(market.get('away_moneyline'), signed=True))}"
+                    f" · {_esc(home)} "
+                    f"{_esc(_line_value(market.get('home_moneyline'), signed=True))}"
+                ),
+                (
+                    f"<b>Total</b> · {_esc(_line_value(market.get('total')))} "
+                    f"(O {_esc(_line_value(market.get('over_price'), signed=True))} / "
+                    f"U {_esc(_line_value(market.get('under_price'), signed=True))})"
+                ),
+            ]
+        )
+        metadata = [
+            str(market.get("bookmaker") or "").strip(),
+            _captured_label(market.get("captured_at")),
+        ]
+        metadata = [item for item in metadata if item]
+        if metadata:
+            lines.append(f"<i>{_esc(' · '.join(metadata))}</i>")
+    lines.extend(["", "<b>MOE PICKS</b>", *god_pick_lines(desk)])
+    if desk.approved_voices:
+        lines.extend(voice_line(row) for row in desk.approved_voices)
+        consensus = consensus_line(desk)
+        if consensus:
+            lines.extend(["", consensus])
+    else:
+        lines.append("<i>No approved expert picks yet.</i>")
+    if desk.missing_required:
+        lines.append(
+            "<i>Waiting on "
+            + _esc(
+                ", ".join(
+                    expert_abbreviation(expert_id)
+                    for expert_id in desk.missing_required
+                )
+            )
+            + "</i>"
+        )
+    return "\n".join(lines), []
+
+
 def _week_label(desks: Iterable[GameDesk]) -> str:
     weeks = sorted(
         {int(desk.week) for desk in desks if desk.week.isdigit()}
@@ -1664,6 +1771,7 @@ def sync_desk(
     desks: Iterable[GameDesk],
     now: datetime,
     team_abbrevs: dict[str, str] | None = None,
+    latest_markets: dict[str, dict[str, Any]] | None = None,
     max_posts: int = MAX_POSTS_PER_SYNC,
     priority_event_id: str | None = None,
     edit_only_event_id: str | None = None,
@@ -1696,6 +1804,7 @@ def sync_desk(
                 f"picks:{priority_event_id}: game is no longer available"
             )
     budget = _Budget(max_posts)
+    latest_markets = latest_markets or {}
     _drop_review_topic_state(state)
     preserve = _remove_legacy_picks_details(
         state=state,
@@ -1706,6 +1815,25 @@ def sync_desk(
     prune_state(state, now=now, preserve_event_ids=preserve)
     for desk in desks:
         state["kickoffs"][desk.event_id] = desk.kickoff.isoformat()
+        if config.offline_topic:
+            offline_key = f"offline:{desk.event_id}"
+            if not desk.started or offline_key not in state["cards"]:
+                text, keyboard = render_offline_card(
+                    desk,
+                    latest_market=latest_markets.get(desk.event_id),
+                    team_abbrevs=team_abbrevs,
+                )
+                _upsert_card(
+                    key=offline_key,
+                    topic=config.offline_topic,
+                    text=text,
+                    keyboard=keyboard,
+                    config=config,
+                    api=api,
+                    state=state,
+                    budget=budget,
+                    summary=summary,
+                )
         if desk.started:
             picks_key = f"picks:{desk.event_id}"
             existing = state["cards"].get(picks_key)

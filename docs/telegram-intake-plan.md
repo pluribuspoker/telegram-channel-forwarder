@@ -899,7 +899,7 @@ either person sees or does.
 - Topics and cards (as redesigned on 2026-09-08 after the first live pass,
   when 17 status boards plus cards for games with nothing to do read as
   clutter and the voices' opinions were on no card at all).
-  🏈 Picks is the reading surface: one card per game once two voices are
+  🏈 Picks is the interactive reading surface: one card per game once two voices are
   approved or a God arm is — the God line on top (both arms' short legs,
   "—" until an arm row is approved), then one
   line per approved voice (pick, probability, stars, projected score) in a
@@ -910,7 +910,14 @@ either person sees or does.
   card lists decided games (an approved arm) with their legs, and a
   "Waiting on" line counting the required voices that still have no
   approved row per game — the games the judge runner skips as "committee
-  incomplete". 📊 Scores: `scripts/moe_grade.py --notify` posts the digest
+  incomplete". Offline is the cache-friendly reading surface: one
+  keyboard-free plain-text card per game in the ten-day desk horizon, with the
+  latest full-game spread, moneyline, total and capture time followed by both
+  God arms, every approved voice pick, and consensus. It updates silently
+  before kickoff, freezes at kickoff, and is never deleted when desk state
+  ages out, so Telegram clients that synchronized the topic can retain their
+  local copy. This remains best-effort client caching, not guaranteed offline
+  storage. 📊 Scores: `scripts/moe_grade.py --notify` posts the digest
   there (silent) when `MOE_DESK_SCORES_TOPIC` is set and falls back to
   the watchdog DM.
 - Shared-message rules: Picks reading controls navigate by editing the existing
@@ -953,6 +960,7 @@ either person sees or does.
   or why not). Keys live in `.env` (synced — add them locally first, since
   `syncenv` deletes server keys absent locally): `MOE_DESK_CHAT_ID`,
   `MOE_DESK_PICKS_TOPIC`, `MOE_DESK_SCORES_TOPIC`,
+  `MOE_DESK_OFFLINE_TOPIC`,
   `MOE_DESK_SYNC_SECONDS`, `GOD_JUDGE_PENDING_DM`.
   Empty keys leave the desk disabled.
 - Deferred, per the options page: replies under a card as row notes; a

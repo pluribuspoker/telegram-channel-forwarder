@@ -36,6 +36,7 @@ from moe_desk import (
     post_scores_notice,
     prune_state,
     render_opinion_details,
+    render_offline_card,
     render_picks_card,
     render_week_card,
     resolve_picks_view,
@@ -72,6 +73,19 @@ CONFIG = DeskConfig(
     scores_topic=33,
     bot_username="nflguesser_bot",
 )
+LATEST_MARKET = {
+    "away_spread": 3.5,
+    "away_spread_price": -110,
+    "away_moneyline": 155,
+    "home_spread": -3.5,
+    "home_spread_price": -110,
+    "home_moneyline": -175,
+    "total": 44.5,
+    "over_price": -105,
+    "under_price": -115,
+    "bookmaker": "BetOnline.ag",
+    "captured_at": "2026-09-12T12:35:00+00:00",
+}
 SEA_SIDE = {
     "confidence_stars": 1,
     "edge": 0.0329,
@@ -325,6 +339,34 @@ class ModelTests(unittest.TestCase):
         desks = build_desks([far, done, old, final], [], [], REGISTRY, now=NOW)
         self.assertEqual([d.event_id for d in desks], ["8"])
         self.assertTrue(desks[0].started)
+
+    def test_offline_card_contains_lines_and_approved_picks(self) -> None:
+        rows = committee(arms_status="approved")
+        desk = build_desks(
+            [game("401", "New England Patriots", "Seattle Seahawks", SEA_KICKOFF)],
+            rows,
+            approved_of(rows),
+            REGISTRY,
+            now=NOW,
+        )[0]
+
+        text, keyboard = render_offline_card(
+            desk,
+            latest_market=LATEST_MARKET,
+            team_abbrevs={
+                "New England Patriots": "NE",
+                "Seattle Seahawks": "SEA",
+            },
+        )
+
+        self.assertEqual(keyboard, [])
+        self.assertIn("<b>Spread</b> · NE +3.5 (-110) · SEA -3.5 (-110)", text)
+        self.assertIn("<b>Moneyline</b> · NE +155 · SEA -175", text)
+        self.assertIn("<b>Total</b> · 44.5 (O -105 / U -115)", text)
+        self.assertIn("<b>Rules</b>", text)
+        self.assertIn("<b>Schedule</b>", text)
+        self.assertIn("<b>Consensus</b>", text)
+        self.assertLess(len(text), 4096)
 
     def test_committee_selects_latest_approved_per_expert(self) -> None:
         rows = [
@@ -620,6 +662,43 @@ class SyncTests(unittest.TestCase):
             now=now,
             **kwargs,
         )
+
+    def test_offline_topic_has_one_keyboard_free_card_per_game(self) -> None:
+        config = DeskConfig(
+            bot_token="token",
+            chat_id="-1001",
+            picks_topic=22,
+            scores_topic=33,
+            offline_topic=44,
+        )
+        rows = committee("401", arms_status="approved")
+        summary = sync_desk(
+            config=config,
+            api=self.api,
+            state=self.state,
+            desks=self.desks(rows),
+            now=NOW,
+            latest_markets={"401": LATEST_MARKET},
+            max_posts=50,
+        )
+
+        self.assertIn("offline:401", summary.posted)
+        offline = next(message for message in self.api.sent if message["topic"] == 44)
+        self.assertEqual(offline["keyboard"], [])
+        self.assertIn("<b>LATEST LINES</b>", offline["text"])
+        self.assertIn("<b>MOE PICKS</b>", offline["text"])
+
+        second = sync_desk(
+            config=config,
+            api=self.api,
+            state=self.state,
+            desks=self.desks(rows),
+            now=NOW,
+            latest_markets={"401": LATEST_MARKET},
+            max_posts=50,
+        )
+        self.assertNotIn("offline:401", second.posted)
+        self.assertNotIn("offline:401", second.edited)
 
     def test_first_pass_posts_cards_and_pins_week(self) -> None:
         rows = committee("401")
@@ -956,6 +1035,7 @@ class ConfigAndCallbackTests(unittest.TestCase):
             "MOE_DESK_CHAT_ID": "-100123",
             "MOE_DESK_PICKS_TOPIC": "3",
             "MOE_DESK_SCORES_TOPIC": "4",
+            "MOE_DESK_OFFLINE_TOPIC": "5",
             "MOE_DESK_SYNC_SECONDS": "5",
             # obsolete since the Review topic was removed (2026-09-10):
             # both are ignored if a .env still carries them
@@ -964,8 +1044,13 @@ class ConfigAndCallbackTests(unittest.TestCase):
         }
         config = desk_config_from_env(env)
         self.assertEqual(
-            (config.chat_id, config.picks_topic, config.scores_topic),
-            ("-100123", 3, 4),
+            (
+                config.chat_id,
+                config.picks_topic,
+                config.scores_topic,
+                config.offline_topic,
+            ),
+            ("-100123", 3, 4, 5),
         )
         self.assertEqual(config.sync_seconds, 15)  # floor
         self.assertEqual(config.with_username("@nflguesser_bot").bot_username, "nflguesser_bot")

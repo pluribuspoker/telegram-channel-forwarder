@@ -10,9 +10,10 @@ Order of operations, once, when the group is created:
 2. Send ``/desk`` inside the group: the bot replies with the chat id (and,
    inside a topic, that topic's id) and whether Topics are on. Set
    ``MOE_DESK_CHAT_ID=-100…`` in ``.env`` (both machines; it is synced).
-3. ``python scripts/desk_setup.py --create-topics`` — creates the Picks
-   and Scores topics and prints the ``MOE_DESK_*_TOPIC`` lines. (Review is
-   automatic since 2026-09-09; the Review topic was removed 2026-09-10.)
+3. ``python scripts/desk_setup.py --create-topics`` — creates the Picks,
+   Scores, and Offline topics and prints the ``MOE_DESK_*_TOPIC`` lines.
+   (Review is automatic since 2026-09-09; the Review topic was removed
+   2026-09-10.)
 4. ``python scripts/desk_setup.py --grant-reviewer <telegram_id>`` — adds
    ``reviewer`` to that ``allowed_users`` row (VPS, needs the sheet
    credentials). The role only opens the DM views of rows that are not
@@ -23,7 +24,7 @@ Order of operations, once, when the group is created:
 6. Restart ``telegram-intake.service``; the bot logs "Desk group enabled".
 
 Env: INTAKE_BOT_TOKEN, MOE_DESK_CHAT_ID, MOE_DESK_PICKS_TOPIC,
-MOE_DESK_SCORES_TOPIC (optional);
+MOE_DESK_SCORES_TOPIC (optional), MOE_DESK_OFFLINE_TOPIC (optional);
 GOOGLE_CREDENTIALS + NFL_INTAKE_SHEET_ID for the reviewer commands.
 """
 
@@ -53,6 +54,7 @@ from moe_identity import (  # noqa: E402
 TOPICS = (
     ("MOE_DESK_PICKS_TOPIC", "🏈 Picks"),
     ("MOE_DESK_SCORES_TOPIC", "📊 Scores"),
+    ("MOE_DESK_OFFLINE_TOPIC", "Offline"),
 )
 
 
@@ -119,12 +121,15 @@ def check(api: BotApi, chat_id: str, *, post_test: bool) -> int:
     else:
         print(
             f"topics: picks={config.picks_topic} "
-            f"scores={config.scores_topic or 'unset'} · sync every {config.sync_seconds}s"
+            f"scores={config.scores_topic or 'unset'} "
+            f"offline={config.offline_topic or 'unset'} · "
+            f"sync every {config.sync_seconds}s"
         )
         if post_test:
             for label, topic in (
                 ("picks", config.picks_topic),
                 ("scores", config.scores_topic),
+                ("offline", config.offline_topic),
             ):
                 if not topic:
                     continue

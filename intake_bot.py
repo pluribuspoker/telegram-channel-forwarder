@@ -1820,6 +1820,21 @@ def desk_sync_once(
     with _DESK_SYNC_LOCK:
         rows = load_cached_moe_opinions()
         games, _, team_abbrevs = load_intake_data()
+        latest_markets = {}
+        for game in games:
+            try:
+                latest = decode_packed_markets(
+                    str(game.get(LATEST_AWAY_COLUMN) or ""),
+                    str(game.get(LATEST_HOME_COLUMN) or ""),
+                    str(game.get(LATEST_TOTALS_COLUMN) or ""),
+                )["game"]
+            except (KeyError, TypeError, ValueError):
+                continue
+            latest_markets[str(game.get("event_id") or "")] = {
+                **latest,
+                "bookmaker": game.get("bookmaker"),
+                "captured_at": game.get("latest_captured_at"),
+            }
         registry = load_moe_registry()
         desks = build_desk_model(
             games, rows, approved_moe_opinions(rows), registry, now=now
@@ -1833,6 +1848,7 @@ def desk_sync_once(
                 desks=desks,
                 now=now,
                 team_abbrevs=team_abbrevs,
+                latest_markets=latest_markets,
             )
         finally:
             save_desk_state(config.state_path, state)
@@ -3895,7 +3911,8 @@ async def main() -> None:
         print(
             f"Desk group enabled: chat {desk_config.chat_id}, picks topic "
             f"{desk_config.picks_topic}, scores topic "
-            f"{desk_config.scores_topic}, sync every "
+            f"{desk_config.scores_topic}, offline topic "
+            f"{desk_config.offline_topic}, sync every "
             f"{desk_config.sync_seconds}s"
         )
 
