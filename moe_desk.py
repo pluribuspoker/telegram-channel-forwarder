@@ -1130,24 +1130,14 @@ def render_offline_card(
             lines.extend(["", consensus])
     else:
         lines.append("<i>No approved expert picks yet.</i>")
-    if desk.missing_required:
-        lines.append(
-            "<i>Waiting on required · "
-            + _esc(
-                " · ".join(
-                    VOICE_NAMES.get(expert_id, expert_abbreviation(expert_id))
-                    for expert_id in desk.missing_required
-                )
-            )
-            + "</i>"
-        )
-    if desk.missing_optional:
+    missing = [*desk.missing_required, *desk.missing_optional]
+    if missing:
         lines.append(
             "<i>No opinion yet · "
             + _esc(
                 " · ".join(
                     VOICE_NAMES.get(expert_id, expert_abbreviation(expert_id))
-                    for expert_id in desk.missing_optional
+                    for expert_id in missing
                 )
             )
             + "</i>"

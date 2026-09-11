@@ -382,11 +382,11 @@ class ModelTests(unittest.TestCase):
         self.assertIn("<b>Rules</b>", text)
         self.assertIn("<b>Schedule</b>", text)
         self.assertIn("<b>Consensus</b>", text)
-        self.assertIn("<i>Waiting on required · Win Total</i>", text)
         self.assertIn(
-            "<i>No opinion yet · Cee · Celebrity · Hi Lo</i>",
+            "<i>No opinion yet · Win Total · Cee · Celebrity · Hi Lo</i>",
             text,
         )
+        self.assertNotIn("Waiting on required", text)
         self.assertLess(len(text), 4096)
 
     def test_committee_selects_latest_approved_per_expert(self) -> None:
