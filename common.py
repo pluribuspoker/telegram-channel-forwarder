@@ -9,7 +9,7 @@ import os
 import re
 import sys
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from telethon.tl.types import MessageEntityBlockquote, MessageMediaDocument, MessageMediaPhoto
 
@@ -79,6 +79,33 @@ def record_unknown_attempt(leg_verdicts: dict, idx: int) -> int:
     updated["last_unknown"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     leg_verdicts[key] = updated
     return n
+
+
+def effective_grade_date(odds_gd: str | None, msg_date: str,
+                         today: date | None = None) -> str:
+    """Which date to grade a leg against: the odds-bound game date or the post date.
+
+    The odds binding is trusted within ±2 days of the post date (timezone
+    drift, "sent the night before" — the consecutive-day-series fix), and
+    beyond that only once the bound date has actually arrived. The old inline
+    form compared odds_gd to msg_date alone — a gap between two constants that
+    never closes — so a lookahead pick (Week-1 total posted 12 days early)
+    graded against the post date's empty slate forever. Waiting for the date
+    keeps the series guard intact: a mis-bound far-future date can't hijack a
+    leg the post-date slate can still settle, because that path resolves it
+    first. Shared by daemon + tracker so the two loops can't diverge.
+    """
+    if not odds_gd or odds_gd == msg_date:
+        return msg_date
+    try:
+        gap = (date.fromisoformat(odds_gd) - date.fromisoformat(msg_date)).days
+    except ValueError:
+        return msg_date
+    if abs(gap) <= 2:
+        return odds_gd
+    if gap > 2 and (today or date.today()) >= date.fromisoformat(odds_gd):
+        return odds_gd
+    return msg_date
 
 
 def parlay_combined_odds(leg_odds: list[int | None]) -> int | None:

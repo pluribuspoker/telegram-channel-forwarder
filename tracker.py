@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 from common import (
     VERDICT_EMOJI,
     UNKNOWN_MAX_ATTEMPTS,
+    effective_grade_date,
     parlay_combined_odds,
     record_unknown_attempt,
     should_skip_unknown,
@@ -912,10 +913,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     # then Odds API game_date, then message date.
                     if day_hint:
                         eff_date = day_hint
-                    elif odds_gd and odds_gd != date_str and abs((_date.fromisoformat(odds_gd) - _date.fromisoformat(date_str)).days) <= 2:
-                        eff_date = odds_gd
                     else:
-                        eff_date = date_str
+                        eff_date = effective_grade_date(odds_gd, date_str)
 
                     cached_leg = cached_leg_verdicts.get(str(i))
                     # Invalidate stale cached verdict if the game date

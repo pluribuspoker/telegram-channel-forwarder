@@ -34,6 +34,7 @@ load_dotenv(".env.local", override=True)
 from common import (
     VERDICT_EMOJI,
     UNKNOWN_MAX_ATTEMPTS,
+    effective_grade_date,
     parlay_combined_odds,
     record_unknown_attempt,
     should_skip_unknown,
@@ -776,8 +777,7 @@ async def _grade_cycle(
             pick = picks[i]
             pick_sport = pick.get("sport") or sport
             odds_gd = odds_by_pick.get(str(i), {}).get("game_date")
-            eff_date = odds_gd if (odds_gd and odds_gd != msg_date and
-                                   abs((_date.fromisoformat(odds_gd) - _date.fromisoformat(msg_date)).days) <= 2) else msg_date
+            eff_date = effective_grade_date(odds_gd, msg_date)
 
             sb = await espn_cache.get(pick_sport, eff_date)
 
