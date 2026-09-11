@@ -506,7 +506,7 @@ class WinTotalGenerationTest(unittest.IsolatedAsyncioTestCase):
             expert["prompt_text"],
         )
         self.assertIn(
-            "Correct every occurrence of a problem",
+            "occurrence of a problem, not only the first one noticed",
             expert["prompt_text"],
         )
 
