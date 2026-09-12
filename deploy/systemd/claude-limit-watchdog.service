@@ -1,0 +1,18 @@
+[Unit]
+Description=Claude limit watchdog (alerts when the model the VPS session runs on stops serving)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+# Long enough for the confirm re-probe plus the three alternative probes; the
+# happy path is one call and exits in under a second.
+TimeoutStartSec=300
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/deploy/claude_limit_watchdog.py
+# A blocked model exits 1 on purpose (so a manual run is scriptable); that is
+# not a unit failure, and a systemd "failed" state here would be noise on top
+# of the Telegram alert that already said it.
+SuccessExitStatus=0 1

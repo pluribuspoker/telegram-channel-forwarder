@@ -16,6 +16,7 @@ Commands (only responds to ALLOWED_USER_ID):
   /tmux     — capture last 50 lines of Claude's tmux pane (see what it's doing)
   /model    — show or switch the model, live and for restarts (credit limits)
   /effort   — set the reasoning effort level
+  /limit    — probe the session's model: is it serving, or out of credits?
   /reauth   — mint a new 1-year OAuth token (start; DMs a login URL)
   /authcode — finish re-auth by pasting the code from that URL
 
@@ -40,6 +41,10 @@ import time
 from pathlib import Path
 
 from claude_auth_watchdog import AUTH_ENV, probe as auth_probe
+from claude_models import (
+    CLAUDE_SETTINGS, EFFORT_LEVELS, HOME_DIR, MODEL_CHOICES, PANE,
+    launched_model, named, resolve_model, session_model, settings_model,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("watchdog")
@@ -101,30 +106,9 @@ def run_argv(argv: list[str], timeout: int = 30) -> str:
 #     its context survive; a restart would throw both away.
 #   * the NEXT start — STATE_FILE, which run_claude_channels.sh reads. Without
 #     it the first restart silently reverts to the launcher's default.
-HOME_DIR = Path(os.environ.get("HOME") or "/home/forwarder")
 STATE_FILE = Path(os.environ.get("CLAUDE_CHANNELS_STATE") or HOME_DIR / ".claude-channels.env")
 LAUNCHER = Path(__file__).resolve().parent / "run_claude_channels.sh"
-CLAUDE_SETTINGS = HOME_DIR / ".claude" / "settings.json"
-PANE = "claude"
-
-# Aliases resolve to full ids rather than being passed through: `/model opus`
-# has to mean the same model in six months as it does today, and an id is what
-# ends up on the launcher's command line.
-MODEL_CHOICES = {
-    "opus": "claude-opus-5",
-    "fable": "claude-fable-5",
-    "sonnet": "claude-sonnet-5",
-    "haiku": "claude-haiku-4-5-20251001",
-}
-EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
-# The same charset run_claude_channels.sh allowlists — keep the two in step.
-MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(\[1m\])?$")
-
-
-def resolve_model(arg: str) -> str | None:
-    """Alias or full model id -> the id to hand the CLI. None if it is neither."""
-    arg = arg.strip()
-    return MODEL_CHOICES.get(arg.lower()) or (arg if MODEL_ID_RE.match(arg) else None)
+LIMIT_WATCHDOG = Path(__file__).resolve().parent / "claude_limit_watchdog.py"
 
 
 def read_state() -> dict[str, str]:
@@ -157,19 +141,6 @@ def next_start() -> tuple[str, str]:
     out = run_argv(["bash", str(LAUNCHER), "--print-model"], timeout=15)
     vals = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln)
     return vals.get("model", "?"), vals.get("effort", "?")
-
-
-def settings_model() -> str:
-    """The id /model last saved. The CLI writes it only for a model it accepted."""
-    try:
-        return json.loads(CLAUDE_SETTINGS.read_text()).get("model", "")
-    except Exception:
-        return ""
-
-
-def launched_model() -> str:
-    m = re.search(r"--model (\S+)", run("pgrep -af 'claude --channels' | head -1"))
-    return m.group(1) if m else "(not running)"
 
 
 def _pane_alive() -> bool:
@@ -578,6 +549,18 @@ async def handle_message(update, context):
             head = f"✅ Effort {level}" if ok else f"⚠️ Saved {level} for restarts, but the pane never confirmed"
             await msg.reply_text(f"{head}\n```\n{detail}\n```", parse_mode="Markdown")
 
+    elif text == "/limit":
+        # Same probe the timer runs, on demand: "is the session blocked right
+        # now" is the one question /model can't answer from local state.
+        await msg.reply_text("Probing the model the session is on...")
+        out = await asyncio.to_thread(
+            run_argv,
+            ["/home/forwarder/venv/bin/python", str(LIMIT_WATCHDOG), "--report"],
+            120,
+        )
+        await msg.reply_text(f"```\n{(out or '(no output)').replace('`', chr(39))}\n```",
+                             parse_mode="Markdown")
+
     elif text == "/help":
         await msg.reply_text(
             "Emergency watchdog commands:\n"
@@ -590,6 +573,7 @@ async def handle_message(update, context):
             "/tmux — see what Claude is doing right now\n"
             "/model — show/switch model (fixes \"You've reached your limit\")\n"
             "/effort — low|medium|high|xhigh|max\n"
+            "/limit — is the session's model out of credits right now?\n"
             "/auth — check whether Claude's credentials still work\n"
             "/reauth — mint a new 1-year token (fixes \"Login expired\")"
         )

@@ -1,0 +1,13 @@
+[Unit]
+Description=Check every 15 min that the VPS Claude session's model still serves
+
+[Timer]
+# Quarter-hourly, off every other cadence on the box: the tracker runs on the
+# fives, god-judge at :12/:42, claude-spend at :07, odds-quota at :23.
+# Frequent because the fix is one tap and the cost of detection latency is the
+# whole outage - 2026-09-11 ran fourteen hours. One 1-token call per pass.
+OnCalendar=*:04,19,34,49
+Persistent=true
+
+[Install]
+WantedBy=timers.target
