@@ -20,6 +20,7 @@ from moe_pikkit import (
     INITIAL_PHASE,
     build_historical_calibration,
     build_pikkit_input,
+    initial_snapshot,
     normalize_pikkit_opinion,
     opinion_phase,
 )
@@ -216,6 +217,22 @@ class PikkitInputTests(unittest.TestCase):
         self.assertEqual(
             payload["selected_snapshot"]["betonline"]["captured_at_utc"],
             "2026-09-11T16:00:00+00:00",
+        )
+
+    def test_initial_snapshot_skips_rows_without_a_complete_prior_market(self):
+        earlier = snapshot(
+            "baseline",
+            datetime(2026, 9, 10, 12, tzinfo=timezone.utc),
+            datetime(2026, 9, 10, 13, tzinfo=timezone.utc),
+        )
+        later = self.first
+        self.assertEqual(
+            initial_snapshot(
+                [earlier, later],
+                [line("2026-09-11T16:00:00+00:00")],
+                "nfl-1",
+            )["snapshot_id"],
+            later["snapshot_id"],
         )
 
     def test_final_input_links_initial_watch_and_all_prior_snapshots(self):

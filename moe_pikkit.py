@@ -10,7 +10,6 @@ from typing import Any, Iterable
 from nfl_pikkit import (
     analyze_snapshot,
     final_snapshot,
-    first_snapshot,
     line_snapshot_market,
     latest_line_snapshot_at_or_before,
     parse_time,
@@ -114,6 +113,22 @@ def _line_for_snapshot(
         f"No complete BetOnline baseline exists before Pikkit snapshot "
         f"{snapshot['snapshot_id']}"
     )
+
+
+def initial_snapshot(
+    snapshot_rows: Iterable[dict[str, Any]],
+    line_rows: Iterable[dict[str, Any]],
+    event_id: str,
+) -> dict[str, Any] | None:
+    """Return the earliest snapshot with a complete prior market baseline."""
+    lines = list(line_rows)
+    for snapshot in snapshots_for_event(snapshot_rows, event_id):
+        try:
+            _line_for_snapshot(lines, snapshot)
+        except ValueError:
+            continue
+        return snapshot
+    return None
 
 
 def _matching_final(
@@ -369,9 +384,13 @@ def build_pikkit_input(
         raise ValueError(f"Unsupported Pikkit generation phase: {phase}")
     event_id = str(game["event_id"])
     event_snapshots = snapshots_for_event(snapshot_rows, event_id)
-    first = first_snapshot(event_snapshots, event_id)
+    line_rows = list(line_rows)
+    first = initial_snapshot(event_snapshots, line_rows, event_id)
     if first is None:
-        raise ValueError("Pikkit Expert requires a first snapshot")
+        raise ValueError(
+            "Pikkit Expert requires a snapshot with a complete prior "
+            "BetOnline baseline"
+        )
     selected = first if phase == INITIAL_PHASE else final_snapshot(
         event_snapshots, event_id
     )

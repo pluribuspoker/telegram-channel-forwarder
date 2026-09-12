@@ -29,6 +29,7 @@ from moe_pikkit import (
     INITIAL_PHASE,
     build_historical_calibration,
     build_pikkit_input,
+    initial_snapshot,
     opinion_phase_identity,
 )
 from nfl_game_history import (
@@ -40,7 +41,6 @@ from nfl_game_history import (
 from nfl_lines import GAME_HEADERS, SHEET_TABS, SNAPSHOT_HEADERS, get_gspread_client
 from nfl_pikkit import (
     final_snapshot,
-    first_snapshot,
     load_snapshot_rows,
     open_snapshot_worksheet,
     parse_time,
@@ -157,10 +157,13 @@ async def run_once(
         if generated_count >= max_opinions:
             break
         event_id = str(game["event_id"])
-        first = first_snapshot(snapshot_rows, event_id)
+        first = initial_snapshot(snapshot_rows, line_rows, event_id)
         if first is None:
             summary["skipped"].append(
-                {"event_id": event_id, "reason": "first snapshot unavailable"}
+                {
+                    "event_id": event_id,
+                    "reason": "usable first snapshot unavailable",
+                }
             )
             continue
         final = final_snapshot(snapshot_rows, event_id)

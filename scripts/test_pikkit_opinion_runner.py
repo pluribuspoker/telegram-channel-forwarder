@@ -69,12 +69,12 @@ class PikkitOpinionRunnerTests(unittest.IsolatedAsyncioTestCase):
             generation_effort="max",
         )
 
-    async def _run(self, snapshots, opinions, now):
+    async def _run(self, snapshots, opinions, now, lines=None):
         with tempfile.TemporaryDirectory() as temp:
             return await run_once(
                 games=[game()],
                 snapshot_rows=snapshots,
-                line_rows=self.lines,
+                line_rows=self.lines if lines is None else lines,
                 opinion_rows=opinions,
                 finals=[],
                 store=MemoryStore(),
@@ -95,6 +95,19 @@ class PikkitOpinionRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [(item["phase"], item["dry_run"]) for item in summary["generated"]],
             [("initial", True)],
+        )
+
+    async def test_missing_prior_market_is_a_normal_skip(self):
+        summary = await self._run(
+            [self.first],
+            [],
+            datetime(2026, 9, 11, 15, 30, tzinfo=timezone.utc),
+            lines=[],
+        )
+        self.assertEqual(summary["generated"], [])
+        self.assertEqual(
+            summary["skipped"][0]["reason"],
+            "usable first snapshot unavailable",
         )
 
     async def test_final_is_due_only_after_valid_initial(self):
