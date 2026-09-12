@@ -71,9 +71,27 @@ python scripts/audit_odds.py --dry-run
 
 `pikkit.py` fetches community betting splits (bet% + handle%) from Pikkit's API for each pick. Tracker calls `get_pick_splits()` after odds fetch and stores results in `pikkit_by_pick` in parse_cache. The dashboard shows a Book Interest column/filter based on this data.
 
+`nfl_pikkit.py` is the durable full-event NFL path. It preserves moneyline,
+spread, and total splits in the append-only `nfl_pikkit_snapshots` worksheet,
+captures a baseline at most once per 12-hour UTC bucket, and takes the
+canonical final snapshot at kickoff minus two hours. `scripts/fetch_nfl_pikkit.py`
+is idempotent on `snapshot_id`; the 15-minute
+`nfl-pikkit-snapshots.timer` only fetches captures that are due. Stored rows
+carry canonical source JSON and a SHA-256 verified by every reader.
+
+The shared reader time-joins each Pikkit observation to the latest prior
+BetOnline snapshot. It calculates bet/handle divergence, average-ticket
+indices, movement, and normalized sportsbook-net scenarios in code. Those
+scenarios assume BetOnline has Pikkit's side-level handle distribution at the
+representative BetOnline prices; they are estimates, not actual sportsbook
+liability.
+
 - **API:** `prod-website.pikkit.app` — `/events/all` (event discovery) + `/event/foryou/{id}` (splits by market)
 - **Auth:** `PIKKIT_TOKEN` in `.env.local` (opaque hex session_id, 400-day expiry)
 - **Key constraint:** completed games return 403 — splits must be fetched before/during the game
+- **NFL final:** T−2h is terminal; a successful final suppresses later captures
+- **Setup:** `python scripts/setup_nfl_pikkit.py` creates or validates the worksheet
+- **Manual collection:** `python scripts/fetch_nfl_pikkit.py [--dry-run]`
 - **Token generation:** `scripts/pikkit_auth.py` — must run locally (real Chrome + display), NOT on VPS. Turnstile rejects headless/bundled Chromium. Session is NOT IP-bound (tested 2026-07-24).
 
 **Two-step manual auth flow (run locally):**
@@ -88,4 +106,3 @@ Token is saved to `.env.local`. SCP to VPS or update `.env.local` there manually
 ```bash
 python scripts/pikkit_auth.py --validate
 ```
-

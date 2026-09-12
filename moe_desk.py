@@ -86,6 +86,7 @@ VOICE_ABBREVIATIONS = {
     "cee": "Cee",
     "celebrity": "Celeb",
     "hi_lo": "Hi Lo",
+    "pikkit": "Pikkit",
     RULES_EXPERT_ID: "Rules",
     JUDGE_EXPERT_ID: "Judge",
 }
@@ -98,6 +99,7 @@ VOICE_NAMES = {
     "cee": "Cee",
     "celebrity": "Celebrity",
     "hi_lo": "Hi Lo",
+    "pikkit": "Pikkit",
 }
 VOICE_DISPLAY_ORDER = [
     "schedule",
@@ -108,6 +110,7 @@ VOICE_DISPLAY_ORDER = [
     "cee",
     "celebrity",
     "hi_lo",
+    "pikkit",
 ]
 
 CALLBACK_PREFIX = "desk:"
@@ -300,6 +303,7 @@ class GameDesk:
     missing_optional: list[str]
     rules: dict[str, Any] | None
     judge: dict[str, Any] | None
+    shadow_experts: set[str] = field(default_factory=set)
 
     @property
     def event_id(self) -> str:
@@ -471,6 +475,13 @@ def build_desks(
                 judge=latest_row(
                     row for row in approved if row.get("expert_id") == JUDGE_EXPERT_ID
                 ),
+                shadow_experts={
+                    expert_id
+                    for expert_id, config in (registry.get("experts") or {}).items()
+                    if isinstance(config, dict)
+                    and str(config.get("aggregator_participation") or "active")
+                    == "shadow"
+                },
             )
         )
     desks.sort(key=lambda desk: (desk.kickoff, desk.event_id))
@@ -790,9 +801,68 @@ def god_pick_lines(desk: GameDesk) -> list[str]:
     return lines
 
 
+def _pikkit_summary(row: dict[str, Any]) -> dict[str, Any]:
+    try:
+        parsed = json.loads(str(row.get("calibration_summary_json") or "{}"))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _pikkit_phase_label(row: dict[str, Any]) -> str:
+    return (
+        "Final T-2h"
+        if _pikkit_summary(row).get("generation_phase") == "final_t_minus_2h"
+        else "Initial"
+    )
+
+
+def _pikkit_book_outcomes(row: dict[str, Any]) -> str:
+    sportsbook = _pikkit_summary(row).get("sportsbook") or {}
+    labels = []
+    for market, short in (
+        ("moneyline", "ML"),
+        ("spread", "spread"),
+        ("total", "total"),
+    ):
+        data = sportsbook.get(market)
+        if isinstance(data, dict) and data.get("best_outcome"):
+            labels.append(f"{short} {data['best_outcome']}")
+    return ", ".join(labels)
+
+
+def _pikkit_strongest_movement(row: dict[str, Any]) -> str:
+    movement = _pikkit_summary(row).get("movement") or {}
+    strongest: tuple[float, str] | None = None
+    for market, data in (movement.get("markets") or {}).items():
+        for side, changes in (data.get("sides") or {}).items():
+            try:
+                change = float(changes["handle_pct_change"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            label = f"{market} {side} {change:+.0%} handle"
+            if strongest is None or abs(change) > strongest[0]:
+                strongest = (abs(change), label)
+    return "" if strongest is None else strongest[1]
+
+
 def voice_line(row: dict[str, Any]) -> str:
     """One line per committee voice: ``Schedule Seahawks 66% ★★★ · 20-26``."""
     name = _esc(voice_name(row))
+    if str(row.get("expert_id") or "") == "pikkit":
+        phase = _pikkit_phase_label(row)
+        book = _pikkit_book_outcomes(row)
+        movement = _pikkit_strongest_movement(row)
+        details = []
+        if movement:
+            details.append(f"move: {movement}")
+        if book:
+            details.append(f"book benefits: {book}")
+        suffix = " · " + " · ".join(details) if details else ""
+        return (
+            f"<b>{name}</b> <i>Shadow · {_esc(phase)}</i> · "
+            f"{_esc(_labeled_legs(row))}{_esc(suffix)}"
+        )
     if str(row.get("pick_market") or "") == "side_and_total" and row.get("side_pick_json"):
         return f"<b>{name}</b> {_esc(_labeled_legs(row))}"
     winner = nickname(row.get("predicted_winner"))
@@ -820,6 +890,8 @@ def voice_line(row: dict[str, Any]) -> str:
 def consensus_line(desk: GameDesk) -> str:
     counts: dict[str, int] = {}
     for row in desk.approved_voices:
+        if str(row.get("expert_id") or "") in desk.shadow_experts:
+            continue
         if str(row.get("pick_market") or "") == "side_and_total":
             side, _ = arm_legs(row)
             winner = (
@@ -879,15 +951,31 @@ def picks_opinion_groups(
     labeled_rows.extend(
         (voice_name(row), row) for row in desk.approved_voices
     )
-    return [
-        (
-            str(row.get("expert_id") or ""),
-            label,
-            render_opinion_details([row], context="Approved committee"),
+    groups = []
+    for label, row in labeled_rows:
+        if row is None:
+            continue
+        expert_id = str(row.get("expert_id") or "")
+        detail_rows = [row]
+        context = "Approved committee"
+        if expert_id == "pikkit":
+            detail_rows = sorted(
+                (
+                    candidate
+                    for candidate in desk.approved
+                    if str(candidate.get("expert_id") or "") == "pikkit"
+                ),
+                key=row_key,
+            )
+            context = "Shadow Pikkit Expert · initial and final"
+        groups.append(
+            (
+                expert_id,
+                label,
+                render_opinion_details(detail_rows, context=context),
+            )
         )
-        for label, row in labeled_rows
-        if row is not None
-    ]
+    return groups
 
 
 def resolve_picks_view(

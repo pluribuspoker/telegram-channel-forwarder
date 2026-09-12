@@ -187,6 +187,24 @@ experts:
     review: validation
     enabled: true
     initial_weight: 1.0
+  pikkit:
+    name: Pikkit Expert
+    mode: agent
+    version: 1
+    prompt_version: 1
+    prompt: prompts/pikkit/v1.md
+    input_profile: pikkit_splits
+    output_schema_version: 10
+    default_model: claude-opus-4-8
+    reasoning_effort: max
+    allowed_models:
+      - claude-opus-4-8
+    enabled: true
+    committee_optional: true
+    aggregator_participation: shadow
+    review: validation
+    initial_weight: 1.0
+    markets: [side, total]
   god_rules:
     name: God Expert (Rules)
     mode: aggregator

@@ -1,0 +1,751 @@
+Pikkit NFL snapshots and usage plan
+
+Status
+
+Approved design implemented locally. The worksheet, timers, and services have
+not been created or deployed.
+
+
+Goal
+
+Capture time-series Pikkit community betting splits for every NFL game in a
+dedicated Google Sheet, then expose a single as-of reader that dashboards,
+expert inputs, aggregators, grading analysis, and future research can reuse.
+
+
+Settled decisions
+
+1. Store snapshots in a new append-only Google Sheet tab named
+   nfl_pikkit_snapshots.
+2. Capture each available upcoming NFL game at least once every 12 hours.
+3. Capture one mandatory final snapshot two hours before kickoff.
+4. Never fetch a postgame value as a substitute for a missed pregame snapshot.
+   Pikkit returns 403 for completed games, so missing historical observations
+   remain missing.
+5. Match games using the exact away team, home team, and kickoff date. A
+   one-team match is not sufficient.
+6. Retain the Pikkit event id after discovery and use it for later snapshots.
+7. Keep Pikkit splits independent from BetOnline lines. Pikkit supplies
+   market-side percentages but does not identify the spread or total line to
+   which those percentages correspond. Consumers may time-join these snapshots
+   with nfl_line_snapshots without claiming that the two sources share a line.
+8. All historical consumers must use the latest snapshot at or before their
+   as-of time. Later snapshots must never leak into an earlier opinion or
+   analysis.
+9. The first downstream consumer will be a dedicated Pikkit Expert voice.
+10. The Pikkit Expert will launch in shadow mode: its opinions are generated,
+    automatically approved after validation, displayed, and graded, but do not
+    enter either God Expert pool. Shadow mode remains active until an explicit
+    evidence threshold and activation decision are approved.
+11. Generate two Pikkit Expert opinions per game:
+    - an initial opinion immediately after the first successful snapshot;
+    - a final opinion immediately after the mandatory T-2h snapshot.
+12. The initial opinion records which observable Pikkit movements would
+    strengthen, weaken, or invalidate its read. The final opinion evaluates
+    those pre-registered watch conditions against the actual snapshot history.
+13. Both phases use Claude Opus 4.8 at max effort.
+14. The initial opinion is forced to PASS on both side and total. The final
+    T-2h opinion may issue side and/or total shadow legs under its registered
+    policy so those legs can be evaluated without affecting God.
+15. The Pikkit Expert remains in shadow mode until the operator explicitly
+    approves activation. No sample count, score, or automated threshold may
+    activate it.
+16. The T-2h snapshot is the canonical final snapshot. Once it succeeds, no
+    later baseline or replacement capture is scheduled for that game.
+17. Shadow generation has no arbitrary minimum Pikkit volume. Generate when at
+    least one complete market is available, preserve the counts, and treat low
+    volume as a no-signal warning and later evaluation dimension.
+18. Missing or invalid data blocks a shadow leg only for the affected market.
+    It does not suppress an otherwise valid game opinion.
+19. Snapshot collection and Opus generation run as separate services. The
+    collector never calls a model; an idempotent generation runner discovers
+    committed snapshots that still need an initial or final opinion.
+20. Desk presentation stays compact. Picks and Offline show one latest Pikkit
+    line; the DM detail view shows the complete initial watch and final
+    evaluation side by side.
+21. The Pikkit Expert is a predictive shadow voice. Its deterministic baseline
+    is the contemporaneous BetOnline market; Opus may adjust that baseline
+    using the Pikkit splits, estimated sportsbook exposure, time-series
+    movement, and supplied historical calibration.
+22. Code, not the prompt, calculates all percentages, implied probabilities,
+    normalized sportsbook-net scenarios, movement, buckets, and historical
+    records. The prompt interprets only the validated deterministic package.
+23. Sportsbook-benefit calculations cover moneyline, spread, and total. They
+    report both the lower-handle outcome proxy and a BetOnline-priced normalized
+    net estimate.
+24. The exposure estimate explicitly assumes BetOnline has the same side-level
+    handle distribution as Pikkit and that the representative BetOnline terms
+    apply to that handle. It is an analytical estimate, not a claim about
+    BetOnline's actual private liability.
+
+
+Current source
+
+pikkit.py already provides the required API access:
+
+- fetch_events_for_date(date) discovers Pikkit events through /events/all.
+- fetch_splits(pikkit_event_id) reads /event/foryou/{id}.
+- NFL is already mapped to the Pikkit NFL league.
+- The response contains moneyline, spread, and total breakdowns.
+- Each side contains bet_pct, handle_pct, label, and bets.
+- The event-level response also contains num_picks and total_wagered.
+
+The existing tracker path calls get_pick_splits(), reduces the full event
+response to one parsed pick's side, and stores it in parse_cache.json.
+angles/extract_angles.py reads that cached projection. NFL snapshot collection
+must instead preserve the complete event breakdown.
+
+
+Google Sheet schema
+
+One row represents one successful capture of one NFL game.
+
+Identity and timing
+
+- snapshot_id
+- capture_kind                  baseline | final_t_minus_2h
+- scheduled_for_utc
+- captured_at_utc
+- nfl_event_id
+- pikkit_event_id
+- season
+- week
+- commence_time_utc
+- away_team
+- home_team
+- pikkit_status
+
+Community totals
+
+- num_picks
+- total_wagered
+
+Moneyline
+
+- home_ml_label
+- home_ml_bet_pct
+- home_ml_handle_pct
+- home_ml_bets
+- away_ml_label
+- away_ml_bet_pct
+- away_ml_handle_pct
+- away_ml_bets
+
+Spread
+
+- home_spread_label
+- home_spread_bet_pct
+- home_spread_handle_pct
+- home_spread_bets
+- away_spread_label
+- away_spread_bet_pct
+- away_spread_handle_pct
+- away_spread_bets
+
+Total
+
+- over_label
+- over_bet_pct
+- over_handle_pct
+- over_bets
+- under_label
+- under_bet_pct
+- under_handle_pct
+- under_bets
+
+Audit and forward compatibility
+
+- source                         pikkit
+- source_json                    canonical normalized splits object
+- payload_sha256                 SHA-256 of source_json
+
+Percentages are stored as decimal fractions in the 0..1 range. Bet counts and
+num_picks are integers; total_wagered is a non-negative finite number. Missing
+markets remain blank rather than being converted to zero.
+
+
+Scheduling and idempotency
+
+Run a lightweight collector frequently enough to hit the T-2h boundary
+reliably; the collector decides which games are due rather than fetching every
+game on every invocation.
+
+For each upcoming game:
+
+1. Discover and bind its Pikkit event using both teams and kickoff date.
+2. If no successful baseline snapshot exists in the previous 12 hours, capture
+   a baseline snapshot.
+3. When the game enters the two-hour pregame boundary, capture exactly one
+   final_t_minus_2h snapshot.
+4. After the final snapshot succeeds, stop scheduling captures for that game.
+   Otherwise stop at kickoff and report the missing final observation.
+
+Use a deterministic snapshot_id based on the NFL event id and scheduled capture
+identity. Retries for the same scheduled capture therefore cannot append a
+duplicate row. A failed request appends no data row and remains eligible for a
+bounded retry before kickoff.
+
+The final capture should target kickoff minus two hours, with a small scheduler
+tolerance so timer jitter does not miss it. Its scheduled_for_utc remains the
+exact T-2h timestamp even when captured a few minutes later.
+
+
+Validation
+
+Before appending a row:
+
+- Require the NFL and Pikkit away/home teams to match as an unordered game pair
+  with the same home/away orientation.
+- Require the kickoff dates to agree in Eastern time.
+- Require the Pikkit event to be not_started or otherwise explicitly pregame.
+- Require every present percentage to be finite and within 0..1.
+- Require opposing bet percentages and handle percentages to sum to
+  approximately 1.0 when both sides are present.
+- Require non-negative integer bet counts, num_picks, and total_wagered.
+- Canonicalize source_json and verify payload_sha256 before returning rows to a
+  consumer.
+
+
+Reader contract
+
+Add one shared reader rather than letting each consumer query the worksheet
+differently. It should support:
+
+- all snapshots for an NFL event;
+- latest snapshot;
+- latest snapshot at or before an as-of timestamp;
+- first available snapshot;
+- final T-2h snapshot;
+- movement between two snapshots.
+
+The reader must return both raw stored fields and deterministic derived
+features. It must not silently substitute a future snapshot when no valid
+as-of row exists.
+
+
+Candidate derived features
+
+For each market side:
+
+- bet_pct
+- handle_pct
+- handle_minus_bet_pct
+- bet-count share
+- change in bet_pct since the first snapshot
+- change in handle_pct since the first snapshot
+- change since the previous snapshot
+- snapshot age at the consumer's as-of time
+
+Game-level summaries:
+
+- majority-bet side for moneyline, spread, and total;
+- majority-handle side for each market;
+- bet/handle disagreement;
+- largest absolute handle-versus-bet divergence;
+- whether the public majority flipped between first and final snapshots;
+- growth in num_picks and total_wagered;
+- first-to-final movement for every side.
+
+"Book side" is only shorthand for the side below 50% of bets. It must not be
+presented as proof of sportsbook liability or a profitable sharp position.
+
+
+Recommended downstream rollout
+
+Phase 1: collection and observability
+
+- Populate the Sheet without changing any expert or God Expert decision.
+- Add collection health reporting: games expected, games bound, captures due,
+  captures appended, final snapshots completed, and failures.
+- Inspect at least one full NFL week for missing games, late event publication,
+  percentage stability, and final-capture reliability.
+
+Phase 2: read-only presentation
+
+- Generate and display the shadow Pikkit Expert described below.
+- Show the latest available split snapshot and its age in the Pikkit opinion.
+- Show first versus final splits after kickoff for human analysis.
+- Keep the figures explicitly labeled as Pikkit community data.
+
+Phase 3: persisted MOE context
+
+- Keep the Pikkit Expert's complete as-of input hash-bound to its opinion.
+- Do not add raw Pikkit data to unrelated expert inputs during the shadow
+  phase.
+- Hash the selected Pikkit snapshot into the opinion input like every other
+  generation-time artifact.
+- Include the snapshot id, capture time, data age, market breakdowns, and
+  derived divergence fields.
+- Preserve byte-compatible behavior for legacy inputs that have no Pikkit
+  block.
+
+Phase 4: evaluation before influence
+
+- Grade historical associations between Pikkit features and game outcomes,
+  closing-line value, and existing expert/God decisions.
+- Separate descriptive reporting from predictive claims.
+- Do not change voice weights, the shared aggregator policy, edge thresholds,
+  or stake sizing until enough pregame snapshots and resolved games exist to
+  evaluate an explicitly proposed rule.
+- Evaluation produces an activation recommendation only. The registry remains
+  in shadow mode until the operator explicitly approves changing it.
+
+
+Dedicated Pikkit Expert
+
+Registry identity
+
+- expert_id: pikkit
+- name: Pikkit Expert
+- input_profile: pikkit_splits
+- mode: agent
+- default_model: claude-opus-4-8
+- reasoning_effort: max
+- allowed_models: [claude-opus-4-8]
+- committee_optional: true
+- markets: [side, total]
+- review: validation
+- aggregator_participation: shadow
+
+The existing committee_optional flag prevents an absent voice from blocking a
+God run, but it does not stop an available optional voice from entering the
+pools. Shadow mode therefore needs an explicit registry field enforced by
+voice selection or feature construction. The row remains a normal approved
+MOE opinion for display and grading; only aggregator participation is disabled.
+Activation should be a registry-only change after the evaluation gate, with
+the participation state copied into every subsequent aggregator input.
+
+Input contract
+
+The Pikkit Expert input should contain only information available at generation
+time:
+
+- game identity, teams, season, week, and kickoff;
+- the first Pikkit snapshot;
+- the latest snapshot at or before generation;
+- the final T-2h snapshot when generation occurs at or after that capture;
+- deterministic first-to-latest and previous-to-latest changes;
+- bet/handle disagreement and divergence fields;
+- snapshot ages and community sample counts;
+- separately labeled BetOnline opening/latest market context when needed to
+  identify favorite, underdog, posted total, and the market-implied baseline;
+- deterministic sportsbook-benefit scenarios for moneyline, spread, and total;
+- deterministic historical calibration from previously captured and resolved
+  NFL games, using only games resolved before the current kickoff.
+
+The input must state that Pikkit percentages are not tied to the displayed
+BetOnline spread or total number. It must not contain later Pikkit snapshots,
+post-kickoff lines, finals, grades, or later opinions.
+
+Prediction contract
+
+The deterministic input establishes the starting forecast from BetOnline:
+
+- pairwise de-vigged home/away moneyline probabilities;
+- spread-implied expected home margin;
+- posted total as the starting projected total;
+- the corresponding market-implied representative score.
+
+Opus then decides whether the Pikkit evidence and historical calibration justify
+moving away from that baseline. Every adjustment must identify:
+
+- the baseline value;
+- the deterministic Pikkit or calibration fields used;
+- the direction and size of the adjustment;
+- why the adjustment is warranted rather than merely describing public action;
+- evidence that would argue against the adjustment.
+
+No supplied signal means the output should remain near the market baseline,
+not invent an edge. The model must not assume that a sportsbook-benefiting
+outcome is destined to occur, but the estimated exposure is an allowed and
+central predictive lens.
+
+
+Deterministic sportsbook-benefit calculation
+
+For each Pikkit snapshot, pair it with the latest BetOnline snapshot captured at
+or before the Pikkit capture. Never use a later line or price.
+
+For a two-sided market with handle shares h_a and h_b and representative
+decimal prices d_a and d_b, estimate the book's net per unit of that market's
+handle:
+
+- outcome A wins: h_b - h_a * (d_a - 1)
+- outcome B wins: h_a - h_b * (d_b - 1)
+- push: 0, when the representative spread or total lands exactly
+
+Returned winning stake is neutral in this net convention; the expression is
+losing stakes retained minus winner profit paid. Report:
+
+- normalized net for every possible market outcome;
+- the highest-net and lowest-net outcome;
+- the net gap between those outcomes;
+- the lower-handle outcome as a separate line-free proxy;
+- whether the lower-handle proxy and priced-net estimate agree;
+- the assumptions and missing-data flags.
+
+Moneyline outcomes are home win and away win. Spread outcomes are home cover,
+away cover, and push at the representative BetOnline spread. Total outcomes are
+over, under, and push at the representative BetOnline total.
+
+Do not aggregate moneyline, spread, and total into one game-level dollar
+liability. Pikkit does not provide handle allocation between markets or
+cross-market bettor correlation. Each market remains a normalized independent
+scenario.
+
+
+Deterministic Pikkit statistics
+
+Current-snapshot fields:
+
+- bet and handle percentages for both sides;
+- bet counts and total market bet count;
+- handle-minus-bet percentage for each side;
+- average-ticket index: handle share divided by bet share;
+- majority-bet and majority-handle side;
+- agreement or disagreement between those majorities;
+- BetOnline market-implied probability, margin, total, and representative score;
+- estimated sportsbook-net outcome table and exposure gap.
+
+Movement fields:
+
+- first, previous, and selected snapshot values;
+- absolute and percentage-point changes in bet and handle shares;
+- changes in average-ticket index and exposure gap;
+- majority flips;
+- divergence widening, narrowing, and zero-crossing;
+- growth in bets, num_picks, and total_wagered;
+- elapsed time and snapshot age.
+
+Historical calibration fields, accumulated only from captured NFL data:
+
+- result of each market's estimated sportsbook-preferred outcome;
+- result of the lower-handle proxy outcome;
+- records by market, favorite/underdog or over/under side, majority bucket,
+  handle-divergence bucket, exposure-gap bucket, volume bucket, and movement
+  pattern;
+- Brier and margin error of prior initial and final Pikkit Expert opinions;
+- ATS/O-U record and CLV of prior final shadow legs;
+- market baseline performance over the same paired games;
+- sample size and explicit insufficient-sample flags for every cohort.
+
+Historical calculations must use only games whose kickoff and resolution
+precede the current game's kickoff. Empty or undersized cohorts remain visible
+as no-signal evidence rather than being omitted or generalized.
+
+Initial analytical behavior
+
+The voice should distinguish observations from claims:
+
+- "public side" means more than 50% of recorded bets;
+- "handle side" means more than 50% of recorded handle;
+- handle-minus-bet divergence describes ticket-size concentration, not proven
+  sharp action or sportsbook liability;
+- a majority or divergence is not inherently contrarian or predictive;
+- an estimated sportsbook-preferred outcome is not inherently destined to win;
+- low sample counts, missing markets, stale snapshots, and unstable flips are
+  explicit no-signal factors.
+
+The expert must produce the normal MOE prediction fields so it can be graded in
+shadow mode, but its rationale must identify when the supplied data offers no
+demonstrated directional edge. Until historical calibration exists, confidence
+should be constrained and the voice must not claim that a public or handle
+pattern is profitable.
+
+Output and leg policy
+
+Both phases use an input-bound Pikkit-specific output schema with the normal MOE
+prediction fields plus structured movement-watch results.
+
+Initial phase:
+
+- predicts winner, home-win probability, expected home margin, and final score;
+- starts from the contemporaneous BetOnline market-implied forecast and records
+  every adjustment;
+- records movement watch conditions;
+- forces side_pick_json and total_pick_json to PASS;
+- states that no actionable leg is issued before movement is observed.
+
+Final phase:
+
+- evaluates every initial watch condition as triggered, not_triggered,
+  invalidated, or unobservable;
+- predicts winner, home-win probability, expected home margin, and final score;
+- starts from the T-2h BetOnline market-implied forecast and records every
+  adjustment;
+- may issue a side leg, total leg, both, or PASS;
+- records exactly which observed snapshot changes support each issued leg;
+- remains a shadow result regardless of whether a leg fires.
+
+The normalizer, not prompt wording alone, enforces initial-phase PASS legs and
+requires the final response to account for every registered watch condition.
+
+Generation and refresh
+
+The collector persists snapshots only; it should not call a model inside the
+Sheet write transaction. A separate generation step reads the committed rows,
+builds a hash-bound input, generates the Pikkit opinion, and persists it through
+the standard moe.generate_opinion rail.
+
+Generation runner
+
+Use a separate periodic runner rather than an explicit mutable queue. The
+append-only snapshots and opinions are the durable work ledger.
+
+For each upcoming or recently kicked-off game, the runner derives phase state:
+
+- initial_due: a valid first snapshot exists and no valid initial opinion is
+  linked to that first_snapshot_id;
+- final_due: a valid final_t_minus_2h snapshot exists and no valid final opinion
+  is linked to that snapshot plus the canonical initial opinion;
+- complete: the required valid opinion already exists;
+- data_incomplete: the phase snapshot exists but no market is complete;
+- missed: the phase deadline passed without the required snapshot.
+
+The runner must use deterministic phase identity so repeated scans cannot
+duplicate successful work. An opinion identity is defined by expert id, NFL
+event id, generation phase, selected snapshot id, and, for the final phase, the
+initial opinion id. Invalid attempts remain audit rows but do not count as a
+successful phase opinion.
+
+Failure behavior:
+
+- a Sheet read or validation failure aborts that game without changing data;
+- an Opus transport failure appends no success-shaped row and remains retryable;
+- an invalid model response follows the standard invalid-row and bounded-repair
+  rail;
+- a successful opinion append is terminal for that exact phase identity;
+- one game's failure does not prevent other due games from running;
+- the runner reports due, generated, already complete, incomplete, missed, and
+  failed counts.
+
+The initial runner may retry until the final phase becomes due. The final runner
+may retry only while the game remains at least one hour from kickoff, matching
+the God Judge cutoff and leaving time for operator visibility. A final failure
+inside that boundary remains visible as missed rather than generating from a
+later or postgame state.
+
+Generation should be sequential by kickoff time to control subscription usage
+and keep logs attributable. Each Opus call records model, effort, phase, input
+hash, output status, token/usage metadata when available, and wall time in a
+dedicated JSONL runs ledger.
+
+Two generation phases are required:
+
+1. Initial: run immediately after the first successful Pikkit snapshot. It
+   describes the opening bettor behavior and pre-registers observable movement
+   conditions to check later.
+2. Final: run immediately after the mandatory T-2h snapshot. It receives the
+   first snapshot, every intervening 12-hour snapshot, the final snapshot, and
+   the hash-bound initial opinion. It reports which watch conditions occurred,
+   which did not occur, and how the evidence changed its final prediction.
+
+The initial opinion must not use generic hindsight-friendly language. Its
+movement watch should be structured and testable. Each watch item should carry:
+
+- market: moneyline | spread | total;
+- side: home | away | over | under;
+- metric: bet_pct | handle_pct | handle_minus_bet_pct | majority_side;
+- expected movement: rise | fall | widen | narrow | flip | remain stable;
+- threshold or an explicit explanation that only a directional observation is
+  intended;
+- interpretation if observed;
+- interpretation if not observed;
+- conditions that would invalidate the interpretation.
+
+Examples of observable patterns the initial voice may register, without
+claiming they are inherently predictive:
+
+- a bet-majority flip;
+- a handle-majority flip;
+- handle concentration increasing while bet share remains stable;
+- bet/handle divergence widening, narrowing, or crossing zero;
+- one side gaining most new bets but not most new handle;
+- agreement or disagreement emerging across moneyline and spread;
+- total behavior diverging from side-market behavior;
+- a signal disappearing as num_picks grows.
+
+The final opinion may discuss only changes supported by the stored snapshots.
+It must distinguish a triggered watch condition from a profitable betting
+signal and must explicitly note low growth, stale observations, or missing
+markets.
+
+Sparse and missing data
+
+A market is complete when both opposing sides are present, their percentages
+are valid, and their paired percentages approximately sum to 1.0. Initial and
+final opinions may be generated when at least one of moneyline, spread, or total
+is complete.
+
+There is no initial hard cutoff on num_picks or market bet counts. The input
+must carry those counts, and the opinion must call out limited participation
+when appropriate, but shadow collection should preserve the model's behavior
+across the observed volume distribution rather than discard low-volume cases.
+
+Leg eligibility is market-specific:
+
+- an incomplete spread blocks a side spread leg;
+- an incomplete total blocks a total leg;
+- missing moneyline does not block spread or total analysis;
+- if no market is complete, no opinion is generated and the runner records a
+  data-incomplete status for retry before the phase deadline.
+
+Volume buckets and any future minimum threshold are derived from observed data
+and evaluated later. They are not chosen before the first collection period.
+
+The final opinion becomes the default Pikkit Expert row shown in the standard
+game summary. The initial opinion remains available in detail/history so a
+reader can compare the pre-registered watch with the final assessment.
+
+Opinion phase and grading identity
+
+The two phases must not be counted as two independent games in the main expert
+scoreboard. Persist an explicit phase identity, at minimum:
+
+- generation_phase: initial | final_t_minus_2h
+- prior_opinion_id: blank for initial; initial opinion id for final
+- first_snapshot_id
+- selected_snapshot_id
+- snapshot_ids used by the final opinion
+
+These fields may live in a dedicated structured Pikkit summary if changing the
+common opinion columns is unnecessary, but readers and graders must validate
+them rather than infer phase from timestamps.
+
+The normal Pikkit Expert scoreboard uses the final phase only. A separate
+research comparison grades initial and final phases side by side:
+
+- initial versus final Brier and margin error;
+- prediction and confidence changes;
+- whether each registered watch condition triggered;
+- whether triggered conditions improved the final forecast;
+- whether final movement added value over the initial forecast and market
+  baseline.
+
+Because shadow opinions do not enter the aggregator, neither phase can change a
+God committee key or trigger a judge call during the observation phase.
+
+Shadow evaluation
+
+Track the Pikkit Expert like every other voice:
+
+- Brier score for home-win probability;
+- predicted-margin error;
+- ATS and O/U result at close;
+- fired-leg record and CLV if the voice schema permits legs;
+- calibration by bet-majority side, handle-majority side, divergence bucket,
+  market, sample-size bucket, and first-to-final movement;
+- comparison with the market baseline and the existing committee.
+
+Any activation review must evaluate whether the voice adds information beyond
+the market and existing voices, not merely whether its raw win rate is above
+50%. Passing such a review does not activate the voice; activation is a manual
+operator decision made between NFL weeks.
+
+
+Desk presentation
+
+Shared Picks card:
+
+- show one Pikkit Expert line in the normal voice order;
+- before the final opinion, label it Initial and show prediction, probability,
+  projected score, and that both legs are PASS;
+- after the final opinion, replace the shared summary with the Final T-2h
+  prediction and any shadow legs;
+- include one compact movement phrase naming the strongest observed,
+  non-misleading change, for example handle divergence widened or bet majority
+  flipped;
+- include the compact deterministic sportsbook-preferred outcomes separately
+  from the Opus prediction so readers can distinguish calculation from model
+  judgment;
+- keep detailed watch conditions inside the expandable Why content.
+
+Offline card:
+
+- retain the latest compact Pikkit line available when the card freezes;
+- include the phase and selected snapshot time so cached content is
+  self-describing.
+
+DM full-opinion view:
+
+- show the initial opinion and its registered movement watch;
+- show the final opinion and every watch item's outcome;
+- show first, final, and net changes for all complete markets;
+- link the final opinion to the initial opinion id and both selected snapshots;
+- make shadow status explicit so no displayed leg is mistaken for an active God
+  or production recommendation.
+
+
+Implementation work packages
+
+WP1: snapshot data model and API normalization
+
+- define nfl_pikkit_snapshots headers and validation;
+- refactor/reuse pikkit.py event discovery and full split normalization;
+- implement exact NFL game binding;
+- implement canonical source_json, payload hash, and snapshot identity;
+- add fixture-based tests for complete, partial, invalid, and duplicate data.
+
+WP2: collector and Google Sheet writer
+
+- create/validate the worksheet;
+- calculate baseline and final capture eligibility;
+- append idempotently;
+- stop after a successful final snapshot;
+- add dry-run and targeted-event modes;
+- add a systemd runner/timer and healthcheck reporting.
+
+WP3: shared reader and derived features
+
+- load and hash-verify snapshots;
+- implement first/latest/as-of/final selection;
+- calculate movement and divergence deterministically;
+- join each Pikkit snapshot to the latest prior BetOnline snapshot;
+- calculate market baseline and normalized sportsbook-net scenarios;
+- calculate as-of historical calibration cohorts;
+- refuse future-row substitution;
+- add time-travel and malformed-row tests.
+
+WP4: Pikkit Expert input, prompt, and validation
+
+- register the Opus 4.8/max shadow expert;
+- add the pikkit_splits input profile;
+- define initial and final phase schemas;
+- enforce initial PASS legs;
+- enforce complete final watch-condition accounting;
+- enforce baseline-to-adjustment attribution for every forecast;
+- render deterministic splits and sportsbook-benefit calculations separately
+  from nondeterministic Opus analysis;
+- keep the expert out of both aggregator pools through an explicit shadow
+  registry mechanism.
+
+WP5: idempotent generation runner
+
+- discover initial_due and final_due work from committed rows;
+- generate sequentially through moe.generate_opinion;
+- persist phase identity and runs-ledger records;
+- implement bounded retry, missed-deadline reporting, dry-run, and target modes;
+- install a separate systemd runner/timer.
+
+WP6: desk and opinion views
+
+- add the compact latest-phase line to Picks and Offline;
+- render initial-versus-final detail in DM;
+- preserve current shared-card notification behavior;
+- make every Pikkit leg visibly shadow-only.
+
+WP7: grading and research report
+
+- count only final opinions in the normal Pikkit Expert scoreboard;
+- compare initial versus final in a dedicated report;
+- group results by market, divergence, movement, and volume;
+- compare against market and committee baselines;
+- produce recommendations without changing shadow mode.
+
+
+Usage decisions still to make
+
+1. Exact collector timer frequency and acceptable lateness around T-2h.
+2. Exact Pikkit prompt and structured movement-watch schema wording.
+3. Whether the first implementation should create the worksheet automatically
+   or require an explicit setup command before the timer can run.

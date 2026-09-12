@@ -1043,6 +1043,65 @@ class GradingTests(unittest.TestCase):
         self.assertFalse(graded["closing_available"])
         self.assertAlmostEqual(graded["brier"], 0.16, places=6)
 
+    def test_shadow_expert_grades_only_latest_final_phase(self) -> None:
+        registry = load_registry()
+        policy = aggregator_policy(registry)
+        initial = _opinion(
+            "pikkit",
+            model="claude-opus-4-8",
+            probability=0.55,
+            margin=1,
+            away_score=21,
+            home_score=22,
+            generated_at="2026-09-09T12:00:00+00:00",
+        )
+        initial["calibration_summary_json"] = json.dumps(
+            {"generation_phase": "initial"}
+        )
+        final_old = _opinion(
+            "pikkit",
+            model="claude-opus-4-8",
+            probability=0.60,
+            margin=3,
+            away_score=20,
+            home_score=23,
+            generated_at="2026-09-09T20:00:00+00:00",
+        )
+        final_old["calibration_summary_json"] = json.dumps(
+            {"generation_phase": "final_t_minus_2h"}
+        )
+        final_latest = _opinion(
+            "pikkit",
+            model="claude-opus-4-8",
+            probability=0.70,
+            margin=5,
+            away_score=20,
+            home_score=25,
+            generated_at="2026-09-09T21:00:00+00:00",
+        )
+        final_latest["calibration_summary_json"] = json.dumps(
+            {"generation_phase": "final_t_minus_2h"}
+        )
+        rows = [initial, final_old, final_latest]
+        self.assertEqual(
+            select_voice_rows(
+                rows,
+                event_id=EVENT_ID,
+                registry=registry,
+                policy=policy,
+            ),
+            [],
+        )
+        graded = grade_all(
+            rows,
+            finals=self._finals(),
+            snapshots=self._snapshots(),
+            registry=registry,
+            policy=policy,
+        )
+        self.assertEqual(len(graded), 1)
+        self.assertEqual(graded[0]["opinion_id"], final_latest["opinion_id"])
+
     def test_scoreboard_and_hedge_weights(self) -> None:
         registry = load_registry()
         policy = aggregator_policy(registry)
@@ -1596,6 +1655,7 @@ class RegistryTests(unittest.TestCase):
                 "celebrity": ["side", "total"],
                 "divisional": ["side"],
                 "hi_lo": ["side", "total"],
+                "pikkit": ["side", "total"],
                 # WP7's rating voice: its total is the league scoring rate.
                 "rating_elo": ["side"],
                 "schedule": ["side", "total"],

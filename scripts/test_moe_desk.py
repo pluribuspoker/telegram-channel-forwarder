@@ -162,6 +162,7 @@ def row(
         "ak": "AK Expert",
         "rating_elo": "Rating Expert (Elo)",
         "cee": "Cee Expert",
+        "pikkit": "Pikkit Expert",
         "god_rules": "God Expert (Rules)",
         "god_judge": "God Expert (Judge)",
     }
@@ -479,6 +480,7 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(lines[-1], "<b>Consensus</b> · Seahawks 4–0")
         self.assertNotIn("<blockquote", text)
         self.assertNotIn("Win Total", text)  # pending, not approved
+
         self.assertEqual(
             keyboard,
             [[{"text": "Show full opinions", "callback_data": "desk:show:401"}]],
@@ -541,6 +543,83 @@ class RenderTests(unittest.TestCase):
                 ],
             ],
         )
+
+    def test_pikkit_is_shadowed_and_detail_keeps_both_phases(self) -> None:
+        initial = row(
+            "pikkit-initial",
+            "401",
+            "pikkit",
+            status="approved",
+            generated="2026-09-12T01:00:00+00:00",
+            pick_market="side_and_total",
+            side_pick_json=json.dumps(PASS_PLAIN),
+            total_pick_json=json.dumps(PASS_PLAIN),
+            calibration_summary_json=json.dumps(
+                {"generation_phase": "initial"}
+            ),
+            full_opinion="Initial movement watch.",
+        )
+        final = row(
+            "pikkit-final",
+            "401",
+            "pikkit",
+            status="approved",
+            generated="2026-09-13T18:05:00+00:00",
+            pick_market="side_and_total",
+            side_pick_json=json.dumps(SEA_SIDE),
+            total_pick_json=json.dumps(PASS_PLAIN),
+            calibration_summary_json=json.dumps(
+                {
+                    "generation_phase": "final_t_minus_2h",
+                    "sportsbook": {
+                        "moneyline": {"best_outcome": "away"},
+                        "spread": {"best_outcome": "home"},
+                    },
+                    "movement": {
+                        "markets": {
+                            "moneyline": {
+                                "sides": {
+                                    "home": {"handle_pct_change": 0.1},
+                                    "away": {"handle_pct_change": -0.1},
+                                }
+                            }
+                        }
+                    },
+                }
+            ),
+            full_opinion="Final movement evaluation.",
+        )
+        rows = committee(arms_status="approved") + [initial, final]
+        registry = {
+            **REGISTRY,
+            "experts": {
+                **REGISTRY["experts"],
+                "pikkit": {
+                    "enabled": True,
+                    "mode": "agent",
+                    "committee_optional": True,
+                    "aggregator_participation": "shadow",
+                    "name": "Pikkit Expert",
+                },
+            },
+        }
+        desk = build_desks(
+            [game("401", "New England Patriots", "Seattle Seahawks", SEA_KICKOFF)],
+            rows,
+            approved_of(rows),
+            registry,
+            now=NOW,
+        )[0]
+        text, _buttons = render_picks_card(desk, config=CONFIG)
+        self.assertIn("Shadow · Final T-2h", text)
+        self.assertIn("move: moneyline home +10% handle", text)
+        self.assertIn("book benefits: ML away, spread home", text)
+        self.assertNotIn("Consensus · Seahawks 5–0", text)
+        groups = moe_desk.picks_opinion_groups(desk)
+        pikkit = next(group for group in groups if group[0] == "pikkit")
+        details = "\n".join(pikkit[2])
+        self.assertIn("Initial movement watch.", details)
+        self.assertIn("Final movement evaluation.", details)
 
     def test_picks_card_states_missing_god(self) -> None:
         # unapproved arm rows are no arms at all: review is automatic, so a

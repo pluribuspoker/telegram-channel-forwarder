@@ -1,0 +1,20 @@
+[Unit]
+Description=Generate due shadow Pikkit Expert opinions
+After=network-online.target nfl-pikkit-snapshots.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+EnvironmentFile=-/home/forwarder/.claude/auth.env
+Environment=PATH=/home/forwarder/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/forwarder
+ExecStart=/home/forwarder/app/run_pikkit_opinions.sh
+TimeoutStartSec=7200
+SyslogIdentifier=pikkit-opinions
+StandardOutput=journal
+StandardError=journal

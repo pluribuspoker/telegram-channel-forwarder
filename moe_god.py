@@ -1094,6 +1094,8 @@ def select_voice_rows(
             continue
         if str(config.get("mode") or "") in AGGREGATOR_MODES:
             continue
+        if str(config.get("aggregator_participation") or "active") == "shadow":
+            continue
         candidates = [
             row for row in rows if str(row.get("expert_id")) == expert_id
         ]
@@ -1408,7 +1410,32 @@ def grade_all(
             )
             in AGGREGATOR_MODES
         ]
-        for row in [item[2] for item in selected] + aggregator_rows:
+        shadow_rows = []
+        for expert_id, config in experts.items():
+            if (
+                not isinstance(config, dict)
+                or str(config.get("aggregator_participation") or "active")
+                != "shadow"
+            ):
+                continue
+            candidates = [
+                row
+                for row in rows
+                if str(row.get("event_id")) == event_id
+                and str(row.get("expert_id")) == expert_id
+                and str(row.get("review_status") or "") == "approved"
+                and str(row.get("generation_status") or "") == "valid"
+            ]
+            final_candidates = []
+            for row in candidates:
+                summary = _parsed_json(row.get("calibration_summary_json")) or {}
+                if summary.get("generation_phase") == "final_t_minus_2h":
+                    final_candidates.append(row)
+            if final_candidates:
+                shadow_rows.append(_latest_row(final_candidates))
+        for row in (
+            [item[2] for item in selected] + shadow_rows + aggregator_rows
+        ):
             result = grade_opinion_row(row, finals=finals, snapshots=snapshots)
             if result is not None:
                 graded.append(result)

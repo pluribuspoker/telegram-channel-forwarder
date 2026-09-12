@@ -2795,3 +2795,39 @@ needed before the Telegram bot is deployed:
    define how `Other` should identify its market.
 5. **Target condition structure** — confirm free text for v1, with an optional
    best-effort parsed `target_line_or_price`, rather than another required step.
+
+### Completed locally — 2026-09-11: Pikkit shadow expert and snapshots
+
+The Pikkit integration has a durable data boundary and a two-phase predictive
+MOE voice. It is implemented locally but not deployed.
+
+- `nfl_pikkit.py` stores complete NFL moneyline, spread, and total splits in
+  `nfl_pikkit_snapshots`. Collection is append-only and idempotent, runs due
+  12-hour baseline buckets, and treats kickoff minus two hours as the
+  canonical terminal snapshot. Readers verify the canonical payload hash and
+  never substitute a future observation for an as-of query.
+- Each snapshot is paired only with the latest prior BetOnline line. Code
+  calculates de-vigged win probability, expected margin, projected total,
+  bet/handle divergence, average-ticket indices, movement, and the estimated
+  sportsbook net for every market outcome. The estimate explicitly assumes
+  BetOnline has the Pikkit handle shares at the paired representative terms;
+  it is not a claim about private BetOnline liability.
+- Registry expert `pikkit` uses schema 10, Opus 4.8/max, validation approval,
+  and `aggregator_participation: shadow`. `moe_god.select_voice_rows` excludes
+  every shadow expert from God pools. The desk displays its latest row as
+  Shadow, excludes it from consensus, and retains both initial and final rows
+  in the detailed view.
+- The initial opinion runs after the first snapshot, pre-registers observable
+  movement conditions, and is forced to PASS on side and total. The final
+  opinion runs after T−2h, must account for every registered condition, and may
+  issue independently valid side and total shadow legs.
+- `build_historical_calibration` uses only games resolved before the current
+  kickoff. It supplies sportsbook-preferred and lower-handle outcome records
+  by market, disagreement cohorts, initial/final Brier and score errors, and
+  the paired BetOnline baseline. Initial rows remain research records; only
+  the latest valid final row per game enters normal grading.
+- Collection and generation are separate 15-minute timers:
+  `nfl-pikkit-snapshots.timer` and `pikkit-opinions.timer`. The opinion runner
+  deduplicates phase identities, stalls after two invalid rows, stops final
+  retries inside one hour, and invokes isolated headless Opus with no tools or
+  session persistence.

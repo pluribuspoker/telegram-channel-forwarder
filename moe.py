@@ -405,6 +405,8 @@ def _source_sha256(expert: dict[str, Any]) -> str:
         paths.extend((ROOT / "moe_god.py", ROOT / "moe_ak.py", MARGINS_TABLE_PATH))
     if expert.get("input_profile") == RATING_PROFILE:
         paths.extend((ROOT / "moe_rating.py", ELO_PRIOR_PATH))
+    if expert.get("input_profile") == "pikkit_splits":
+        paths.extend((ROOT / "moe_pikkit.py", ROOT / "nfl_pikkit.py"))
     digest = hashlib.sha256()
     for path in paths:
         digest.update(str(path.relative_to(ROOT)).encode("utf-8"))
@@ -3554,7 +3556,23 @@ async def generate_opinion(
         # A prebuilt aggregator input (--input-file, or the judge runner's):
         # the builder is skipped and the payload's own policy is used as-is,
         # because it is the state that was shown to the judge.
-        _check_prebuilt_aggregator_input(input_payload, expert=expert, game=game)
+        if expert["input_profile"] == AGGREGATOR_PROFILE:
+            _check_prebuilt_aggregator_input(
+                input_payload, expert=expert, game=game
+            )
+        elif expert["input_profile"] == "pikkit_splits":
+            if (
+                input_payload.get("input_profile") != "pikkit_splits"
+                or str((input_payload.get("game") or {}).get("event_id"))
+                != str(game["event_id"])
+            ):
+                raise ValueError(
+                    "The prebuilt Pikkit input does not match this game"
+                )
+        else:
+            raise ValueError(
+                "A prebuilt input is accepted only for aggregator or Pikkit experts"
+            )
     elif expert["input_profile"] == "schedule_only":
         input_payload = build_schedule_input(game, history)
     elif expert["input_profile"] == "divisional":
@@ -3894,6 +3912,10 @@ async def generate_opinion(
             )
         elif int(expert["output_schema_version"]) == 9:
             opinion = normalize_rating_opinion(opinion, input_payload)
+        elif int(expert["output_schema_version"]) == 10:
+            from moe_pikkit import normalize_pikkit_opinion
+
+            opinion = normalize_pikkit_opinion(opinion, input_payload)
         validate_opinion(
             opinion,
             away_team=away,
