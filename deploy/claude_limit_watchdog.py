@@ -130,9 +130,14 @@ def alternatives(token: str, blocked: str) -> list[str]:
     return usable
 
 
-def compose(condition: str, model: str, detail: str, usable: list[str]) -> str:
+def compose(condition: str, model: str, detail: str, usable: list[str],
+            recovered: bool = True) -> str:
     if condition == "ok":
-        return f"✅ Claude on the VPS is serving again — {named(model)}."
+        # A forced check of a healthy session is not a recovery, and saying
+        # "again" would have the operator hunting an outage that never was.
+        return (f"✅ Claude on the VPS is serving again — {named(model)}."
+                if recovered else
+                f"✅ Claude on the VPS is serving — {named(model)} (forced check).")
     fix = (
         f"Available right now: {', '.join(usable)}\nSwitch from here: /model {usable[0]}"
         if usable else
@@ -201,8 +206,9 @@ def main() -> int:
 
     state = load_state()
     alert, next_state = decide(condition, model, state, force, time.time())
+    recovered = state.get("condition") == "blocked"
     if alert:
-        if send(compose(condition, model, detail, usable)):
+        if send(compose(condition, model, detail, usable, recovered)):
             save_state(next_state)
     elif next_state is not state:
         save_state(next_state)

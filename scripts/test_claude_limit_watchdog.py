@@ -126,6 +126,13 @@ class ComposeTest(unittest.TestCase):
         self.assertNotIn("/model", msg)
         self.assertIn("account-wide", msg)
 
+    def test_a_forced_check_is_not_reported_as_a_recovery(self):
+        # --force on a healthy session would otherwise say "serving again" and
+        # send the operator hunting an outage that never happened.
+        msg = lw.compose("ok", "claude-opus-5", "serving", [], recovered=False)
+        self.assertNotIn("again", msg)
+        self.assertIn("forced check", msg)
+
     def test_recovery_names_the_model_that_came_back(self):
         msg = lw.compose("ok", "claude-opus-5", "serving", [])
         self.assertIn("serving again", msg)
