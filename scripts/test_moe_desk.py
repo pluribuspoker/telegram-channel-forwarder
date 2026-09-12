@@ -263,7 +263,9 @@ class FakeApi(BotApi):
         self.sent: list[dict] = []
         self.edits: list[dict] = []
         self.pins: list[int] = []
+        self.unpins: list[int] = []
         self.missing: set[int] = set()
+        self.undeletable: set[int] = set()
         self.deleted: list[int] = []
         self.next_id = 100
 
@@ -292,7 +294,13 @@ class FakeApi(BotApi):
         self.pins.append(message_id)
         return True
 
+    def unpin(self, chat_id, message_id):
+        self.unpins.append(message_id)
+        return True
+
     def delete(self, chat_id, message_id):
+        if message_id in self.undeletable:
+            return False
         self.deleted.append(message_id)
         return True
 
@@ -983,6 +991,19 @@ class SyncTests(unittest.TestCase):
         )
         self.assertEqual(self.state["kickoffs"]["401"], SEA_KICKOFF)
         self.assertIn("402", self.state["kickoffs"])
+
+    def test_undeletable_legacy_cards_are_untracked_and_week_is_unpinned(self) -> None:
+        self.state["cards"] = {
+            "picks:old": {"message_id": 30, "topic": 22},
+            "week": {"message_id": 28, "topic": 22},
+        }
+        self.api.undeletable.update({28, 30})
+        summary = self.sync(committee("401"))
+        self.assertEqual(summary.errors, [])
+        self.assertEqual(self.api.unpins, [28])
+        self.assertNotIn("picks:old", self.state["cards"])
+        self.assertNotIn("week", self.state["cards"])
+        self.assertIn("picks-day:2026-09-13", self.state["cards"])
 
     def test_second_pass_with_the_same_model_is_a_no_op(self) -> None:
         rows = committee("401")

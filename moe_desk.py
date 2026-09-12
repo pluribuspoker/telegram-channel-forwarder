@@ -1941,6 +1941,18 @@ class BotApi:
             return False
         return True
 
+    def unpin(self, chat_id: str, message_id: int) -> bool:
+        try:
+            self.call(
+                "unpinChatMessage",
+                chat_id=chat_id,
+                message_id=message_id,
+            )
+        except DeskApiError as exc:
+            print(f"desk: unpin failed: {exc}", file=sys.stderr)
+            return False
+        return True
+
     def delete(self, chat_id: str, message_id: int) -> bool:
         try:
             self.call("deleteMessage", chat_id=chat_id, message_id=message_id)
@@ -2238,15 +2250,23 @@ def _remove_legacy_picks_cards(
         )
     ]
     for key in keys:
-        if _delete_entry_messages(
+        error_count = len(summary.errors)
+        removed = _delete_entry_messages(
             key=key,
             entry=state["cards"][key],
             config=config,
             api=api,
             summary=summary,
-        ):
-            state["cards"].pop(key, None)
+        )
+        if not removed and key == "week":
+            message_id = state["cards"][key].get("message_id")
+            if message_id:
+                api.unpin(config.chat_id, int(message_id))
+        state["cards"].pop(key, None)
+        if removed:
             summary.deleted.append(key)
+        else:
+            del summary.errors[error_count:]
 
 
 def _announce(
