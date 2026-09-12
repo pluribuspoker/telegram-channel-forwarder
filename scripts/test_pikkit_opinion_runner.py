@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 from moe import generate_opinion
 from moe_pikkit import INITIAL_PHASE, build_pikkit_input
-from scripts.pikkit_opinion_runner import run_once
+from scripts.pikkit_opinion_runner import build_parser, run_once
 from scripts.test_moe_pikkit import (
     MemoryStore,
     game,
@@ -149,6 +149,12 @@ class PikkitOpinionRunnerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(summary["generated"], [])
         self.assertEqual(summary["stalled"][0]["phase"], "initial")
+
+    def test_cli_accepts_explicit_season_and_week_scope(self):
+        args = build_parser().parse_args(
+            ["--dry-run", "--season", "2026", "--week", "1"]
+        )
+        self.assertEqual((args.season, args.week), (2026, 1))
 
 
 if __name__ == "__main__":

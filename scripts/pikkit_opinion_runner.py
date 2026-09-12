@@ -337,6 +337,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--target", help="Limit generation to one NFL event id.")
+    parser.add_argument("--season", type=int, help="Limit generation to one season.")
+    parser.add_argument("--week", type=int, help="Limit generation to one NFL week.")
     parser.add_argument("--max-opinions", type=int, default=3)
     parser.add_argument(
         "--claude-bin", default=os.environ.get("CLAUDE_BIN", "claude")
@@ -365,6 +367,18 @@ def main(argv: list[str] | None = None) -> int:
         expected_headers=GAME_HEADERS,
         numericise_ignore=["all"],
     )
+    if args.season is not None:
+        games = [
+            game
+            for game in games
+            if str(game.get("season") or "") == str(args.season)
+        ]
+    if args.week is not None:
+        games = [
+            game
+            for game in games
+            if str(game.get("week") or "") == str(args.week)
+        ]
     line_rows = spreadsheet.worksheet(SHEET_TABS["snapshots"]).get_all_records(
         expected_headers=SNAPSHOT_HEADERS,
         numericise_ignore=["all"],
