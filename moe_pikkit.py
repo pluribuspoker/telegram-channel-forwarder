@@ -11,6 +11,7 @@ from nfl_pikkit import (
     analyze_snapshot,
     final_snapshot,
     first_snapshot,
+    line_snapshot_market,
     latest_line_snapshot_at_or_before,
     parse_time,
     snapshot_movement,
@@ -72,17 +73,47 @@ def _line_for_snapshot(
     line_rows: Iterable[dict[str, Any]],
     snapshot: dict[str, Any],
 ) -> dict[str, Any]:
+    required = (
+        "home_moneyline",
+        "away_moneyline",
+        "home_spread",
+        "total",
+    )
     line = latest_line_snapshot_at_or_before(
         line_rows,
         str(snapshot["nfl_event_id"]),
         parse_time(snapshot["captured_at_utc"]),
     )
+    if line is not None:
+        market = line_snapshot_market(line)
+        if all(market.get(field) not in (None, "") for field in required):
+            return line
+    candidates = sorted(
+        (
+            dict(row)
+            for row in line_rows
+            if str(row.get("event_id") or "")
+            == str(snapshot["nfl_event_id"])
+            and row.get("captured_at")
+            and parse_time(row["captured_at"])
+            <= parse_time(snapshot["captured_at_utc"])
+        ),
+        key=lambda row: str(row.get("captured_at") or ""),
+        reverse=True,
+    )
+    for candidate in candidates:
+        market = line_snapshot_market(candidate)
+        if all(market.get(field) not in (None, "") for field in required):
+            return candidate
     if line is None:
         raise ValueError(
             f"No BetOnline snapshot exists before Pikkit snapshot "
             f"{snapshot['snapshot_id']}"
         )
-    return line
+    raise ValueError(
+        f"No complete BetOnline baseline exists before Pikkit snapshot "
+        f"{snapshot['snapshot_id']}"
+    )
 
 
 def _matching_final(

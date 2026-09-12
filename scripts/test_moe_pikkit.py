@@ -197,6 +197,27 @@ class PikkitInputTests(unittest.TestCase):
             0.579832,
         )
 
+    def test_input_falls_back_to_latest_complete_prior_line(self):
+        incomplete = line("2026-09-11T16:30:00+00:00")
+        incomplete[
+            "away_game_spread_spreadprice_moneyline__h1_spread_spreadprice_moneyline__q1_spread_spreadprice_moneyline"
+        ] = "0,-104,nodata|nodata,nodata,nodata|nodata,nodata,nodata"
+        incomplete[
+            "home_game_spread_spreadprice_moneyline__h1_spread_spreadprice_moneyline__q1_spread_spreadprice_moneyline"
+        ] = "0,-116,nodata|nodata,nodata,nodata|nodata,nodata,nodata"
+
+        payload = build_pikkit_input(
+            game(),
+            phase=INITIAL_PHASE,
+            snapshot_rows=[self.first],
+            line_rows=[self.lines[0], incomplete],
+        )
+
+        self.assertEqual(
+            payload["selected_snapshot"]["betonline"]["captured_at_utc"],
+            "2026-09-11T16:00:00+00:00",
+        )
+
     def test_final_input_links_initial_watch_and_all_prior_snapshots(self):
         initial = normalize_pikkit_opinion(
             initial_response(),
