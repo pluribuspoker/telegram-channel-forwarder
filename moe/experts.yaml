@@ -188,7 +188,7 @@ experts:
     enabled: true
     initial_weight: 1.0
   pikkit:
-    name: Pikkit Expert
+    name: Pikkit
     mode: agent
     version: 1
     prompt_version: 1

@@ -752,7 +752,11 @@ def render_opinion_details(
     """Render persisted full opinions as safe same-topic reply messages."""
     messages: list[str] = []
     for row in rows:
-        name = str(row.get("expert_name") or row.get("expert_id") or "Expert")
+        name = (
+            "Pikkit"
+            if str(row.get("expert_id") or "") == "pikkit"
+            else str(row.get("expert_name") or row.get("expert_id") or "Expert")
+        )
         model = _model_text(row)
         chunks = _split_plain_text(_detail_body(row))
         for index, chunk in enumerate(chunks):
@@ -1031,7 +1035,7 @@ def render_pikkit_details(rows: Iterable[dict[str, Any]]) -> list[str]:
         betonline = selected.get("betonline") or {}
         if not markets or not betonline:
             messages.extend(
-                render_opinion_details([row], context="Shadow Pikkit Expert")
+                render_opinion_details([row], context="Shadow Pikkit")
             )
             continue
         phase = _pikkit_phase_label(row)
@@ -1270,7 +1274,7 @@ def picks_opinion_groups(
                 ),
                 key=row_key,
             )
-            context = "Shadow Pikkit Expert · initial and final"
+            context = "Shadow Pikkit · initial and final"
         groups.append(
             (
                 expert_id,

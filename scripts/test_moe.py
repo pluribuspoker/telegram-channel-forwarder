@@ -2430,6 +2430,143 @@ class OpinionViewTest(unittest.TestCase):
         )
         self.assertIn("model gpt-5.6", detail)
 
+    def test_pikkit_uses_readable_private_view_and_short_name(self) -> None:
+        pikkit = self._row(
+            "pikkit",
+            "2026-09-01T00:00:00+00:00",
+            "RAW MODEL PROSE",
+            model="claude-opus-4-8",
+        )
+        pikkit.update(
+            {
+                "expert_name": "Pikkit Expert",
+                "away_team": "New York Jets",
+                "home_team": "Tennessee Titans",
+                "pick_market": "side_and_total",
+                "side_pick_json": json.dumps(
+                    {
+                        "selection": "PASS",
+                        "line": None,
+                        "price": None,
+                        "confidence_stars": 0,
+                        "pass_reason": "initial",
+                    }
+                ),
+                "total_pick_json": json.dumps(
+                    {
+                        "selection": "PASS",
+                        "line": None,
+                        "price": None,
+                        "confidence_stars": 0,
+                        "pass_reason": "initial",
+                    }
+                ),
+                "calibration_summary_json": json.dumps(
+                    {
+                        "generation_phase": "initial",
+                        "market_baseline": {"projected_total": 39.5},
+                        "model_adjustment": {"projected_total": 0},
+                    }
+                ),
+                "input_json": json.dumps(
+                    {
+                        "selected_snapshot": {
+                            "betonline": {
+                                "away_moneyline": 110,
+                                "home_moneyline": -130,
+                                "away_spread": 1.5,
+                                "away_spread_price": -108,
+                                "home_spread": -1.5,
+                                "home_spread_price": -112,
+                                "total": 39.5,
+                                "over_price": -105,
+                                "under_price": -115,
+                            },
+                            "markets": {
+                                "moneyline": {
+                                    "sides": {
+                                        "away": {
+                                            "bet_pct": 0.34446,
+                                            "handle_pct": 0.464418,
+                                        },
+                                        "home": {
+                                            "bet_pct": 0.65554,
+                                            "handle_pct": 0.535582,
+                                        },
+                                    },
+                                    "sportsbook": {
+                                        "net_per_unit_handle": {
+                                            "away_win": 0.024722,
+                                            "home_win": 0.052432,
+                                        }
+                                    },
+                                },
+                                "spread": {
+                                    "sides": {
+                                        "away": {
+                                            "bet_pct": 0.640724,
+                                            "handle_pct": 0.68311,
+                                        },
+                                        "home": {
+                                            "bet_pct": 0.359276,
+                                            "handle_pct": 0.31689,
+                                        },
+                                    },
+                                    "sportsbook": {
+                                        "net_per_unit_handle": {
+                                            "away_cover": -0.315619,
+                                            "home_cover": 0.400172,
+                                            "push": 0,
+                                        }
+                                    },
+                                },
+                                "total": {
+                                    "sides": {
+                                        "over": {
+                                            "bet_pct": 0.327759,
+                                            "handle_pct": 0.268122,
+                                        },
+                                        "under": {
+                                            "bet_pct": 0.672241,
+                                            "handle_pct": 0.731878,
+                                        },
+                                    },
+                                    "sportsbook": {
+                                        "net_per_unit_handle": {
+                                            "over": 0.476524,
+                                            "under": -0.368293,
+                                            "push": 0,
+                                        }
+                                    },
+                                },
+                            },
+                        }
+                    }
+                ),
+            }
+        )
+        pikkit["output_sha256"] = opinion_output_sha256(pikkit)
+        pikkit["approved_output_sha256"] = pikkit["output_sha256"]
+
+        summary, buttons = opinion_summary(_game(), [pikkit])
+        detail, _detail_buttons = opinion_detail(pikkit)
+
+        self.assertIn("<b>Pikkit</b>", summary)
+        self.assertNotIn("Pikkit Expert", summary)
+        self.assertTrue(
+            any(
+                button.text == "Pikkit"
+                for button_row in buttons
+                for button in button_row
+            )
+        )
+        self.assertIn("Community splits and estimated BO result", detail)
+        self.assertIn("Titans win</b> -130", detail)
+        self.assertIn("<b>BO +$5.24</b>", detail)
+        self.assertNotIn("RAW MODEL PROSE", detail)
+        self.assertLess(len(detail), 4096)
+        self.assertEqual(load_expert("pikkit")["name"], "Pikkit")
+
     def test_expert_prompt_is_loaded_from_versioned_file(self) -> None:
         expert = load_expert("schedule")
 

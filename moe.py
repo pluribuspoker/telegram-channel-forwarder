@@ -4924,6 +4924,12 @@ def _escaped_chunks(value: str, max_chars: int) -> list[str]:
     return chunks
 
 
+def _expert_display_name(row: dict[str, Any]) -> str:
+    if str(row.get("expert_id") or "") == "pikkit":
+        return "Pikkit"
+    return str(row.get("expert_name") or row.get("expert_id") or "Expert")
+
+
 def opinion_summary(
     game: dict[str, Any],
     rows: Iterable[dict[str, Any]],
@@ -4971,7 +4977,7 @@ def opinion_summary(
                 else f"{total['selection']} {float(total['line']):g}"
             )
             lines.append(
-                f"<b>{html.escape(str(row['expert_name']))}</b> "
+                f"<b>{html.escape(_expert_display_name(row))}</b> "
                 f"· <code>{html.escape(str(row['model']))}</code>"
             )
             lines.append(
@@ -4984,7 +4990,7 @@ def opinion_summary(
             buttons.append(
                 [
                     Button.inline(
-                        str(row["expert_name"]),
+                        _expert_display_name(row),
                         (
                             f"moe:expert:{row['expert_id']}:"
                             f"{callback_event_id}:0"
@@ -5002,7 +5008,7 @@ def opinion_summary(
             else 1 - probability
         )
         lines.append(
-            f"<b>{html.escape(str(row['expert_name']))}</b> "
+            f"<b>{html.escape(_expert_display_name(row))}</b> "
             f"· <code>{html.escape(str(row['model']))}</code>: {winner} "
             f"{winner_probability:.0%} {stars} · "
             f"score {int(row['predicted_away_score'])}-"
@@ -5012,7 +5018,7 @@ def opinion_summary(
         buttons.append(
             [
                 Button.inline(
-                    str(row["expert_name"]),
+                    _expert_display_name(row),
                     (
                         f"moe:expert:{row['expert_id']}:"
                         f"{callback_event_id}:0"
@@ -5064,7 +5070,7 @@ def opinion_model_picker(
     start = page * TELEGRAM_EXPERTS_PER_PAGE
     visible = choices[start : start + TELEGRAM_EXPERTS_PER_PAGE]
     lines = [
-        f"🧠 <b>{html.escape(str(choices[0]['expert_name']))}</b>",
+        f"🧠 <b>{html.escape(_expert_display_name(choices[0]))}</b>",
         "Choose a model:",
         "",
     ]
@@ -5164,6 +5170,35 @@ def opinion_detail(
 ) -> tuple[str, list[list[Any]]]:
     from telethon import Button
 
+    expert_id = str(row["expert_id"])
+    callback_event_id = event_id or str(row["event_id"])
+    if expert_id == "pikkit":
+        from moe_desk import render_pikkit_details
+
+        reports = render_pikkit_details([row])
+        if not reports:
+            raise ValueError("Pikkit opinion could not be rendered")
+        buttons: list[list[Any]] = []
+        if show_model_picker:
+            buttons.append(
+                [
+                    Button.inline(
+                        "← Models",
+                        f"moe:expert:{expert_id}:{callback_event_id}:0".encode(),
+                    )
+                ]
+            )
+        buttons.extend([
+            [
+                Button.inline(
+                    "← All MOE opinions",
+                    f"moe:view:{callback_event_id}:0".encode(),
+                )
+            ],
+            [Button.inline("← Back to game", b"back:game")],
+        ])
+        return reports[0], buttons
+
     home_probability = float(row["home_win_probability"])
     margin = float(row["expected_home_margin"])
     away_score = int(row["predicted_away_score"])
@@ -5182,7 +5217,7 @@ def opinion_detail(
             else f"{total['selection']} {float(total['line']):g}"
         )
         heading = (
-            f"🧠 <b>{html.escape(str(row['expert_name']))}</b>\n\n"
+            f"🧠 <b>{html.escape(_expert_display_name(row))}</b>\n\n"
             f"<b>Side:</b> {html.escape(side_label)} "
             f"{'★' * int(side['confidence_stars'])}\n"
             f"<b>Total:</b> {html.escape(total_label)} "
@@ -5196,7 +5231,7 @@ def opinion_detail(
     else:
         stars = "★" * int(row["confidence_stars"])
         heading = (
-            f"🧠 <b>{html.escape(str(row['expert_name']))}</b>\n\n"
+            f"🧠 <b>{html.escape(_expert_display_name(row))}</b>\n\n"
             f"<b>Pick:</b> {html.escape(str(row['predicted_winner']))}\n"
             f"<b>Predicted score:</b> "
             f"{html.escape(str(row['away_team']))} {away_score} — "
@@ -5223,8 +5258,6 @@ def opinion_detail(
     )
     buttons: list[list[Any]] = []
     navigation = []
-    expert_id = str(row["expert_id"])
-    callback_event_id = event_id or str(row["event_id"])
     if page > 0:
         navigation.append(
             Button.inline(
