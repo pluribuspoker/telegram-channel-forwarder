@@ -145,6 +145,9 @@ WIN_TOTALS_CACHE_TTL_SECONDS = 3600
 TEAM_HISTORY_CACHE_TTL_SECONDS = 21600
 WIN_PREDICTIONS_CACHE_TTL_SECONDS = 30
 CELEBRITY_REGISTRY_CACHE_TTL_SECONDS = 300
+# Own leans back the /guess_nfl_game_no_opinion filter; short-lived and
+# expired on every append_lean write so a just-saved pick drops immediately.
+LEANS_CACHE_TTL_SECONDS = 60
 # Toggle keyboards get unwieldy past a couple dozen buttons; ➕ New name always
 # stays reachable, so this only caps the prefilled roster shown at once.
 MAX_CELEBRITY_BUTTONS = 30
@@ -261,6 +264,11 @@ def command_keyboard() -> ReplyKeyboardMarkup:
             ),
             KeyboardButtonRow(
                 buttons=[
+                    KeyboardButton(text="/guess_nfl_game_no_opinion"),
+                ]
+            ),
+            KeyboardButtonRow(
+                buttons=[
                     KeyboardButton(text="/suggest"),
                 ]
             )
@@ -325,21 +333,37 @@ def game_browser(
     now: datetime,
     team_abbrevs: dict[str, str] | None = None,
     celebrity_name: str | None = None,
+    picked_event_ids: set[str] | None = None,
 ) -> tuple[str, list[list[Button]]]:
     games = select_games(records, days=days, now=now)
+    no_opinion = picked_event_ids is not None
+    if no_opinion:
+        games = [
+            game
+            for game in games
+            if str(game.get("event_id")) not in picked_event_ids
+        ]
     current, page, page_count = page_games(games, page)
     context = (
         f"\n🎤 <b>{html.escape(celebrity_name)}</b>"
         if celebrity_name
         else ""
     )
+    availability = (
+        f"{len(games)} game{'s' if len(games) != 1 else ''} "
+        + ("you haven't picked yet" if no_opinion else "available")
+    )
     text = (
         f"🏈 NFL games in the next {days} days\n"
-        f"{len(games)} game{'s' if len(games) != 1 else ''} available"
+        f"{availability}"
         f"{context}"
     )
     if not current:
-        text += "\n\nNo BetOnline games are currently available."
+        text += (
+            "\n\nYou've already picked every game in this window."
+            if no_opinion
+            else "\n\nNo BetOnline games are currently available."
+        )
 
     buttons: list[list[Button]] = []
     for game in current:
@@ -1795,6 +1819,31 @@ def load_desk_reviewers() -> dict[int, str]:
     )
 
 
+def load_leans() -> list[dict[str, Any]]:
+    """Every row of the ``nfl_leans`` tab, cached briefly and expired on write
+    (``append_lean``), so a just-saved pick drops out of the next browse."""
+    return _cached_sheet_value(
+        "nfl_leans",
+        LEANS_CACHE_TTL_SECONDS,
+        lambda: _intake_spreadsheet().worksheet("nfl_leans").get_all_records(),
+    )
+
+
+def user_picked_event_ids(user_id: int) -> set[str]:
+    """event_ids this Telegram user has already submitted a game pick for
+    (their own leans only — celebrity picks don't count as the user's own
+    opinion). Backs the /guess_nfl_game_no_opinion filter."""
+    target = str(user_id)
+    picked: set[str] = set()
+    for row in load_leans():
+        if str(row.get("telegram_user_id")) != target:
+            continue
+        event_id = str(row.get("event_id") or "")
+        if event_id:
+            picked.add(event_id)
+    return picked
+
+
 def game_stub(row: dict[str, Any]) -> dict[str, Any]:
     """Enough of a game record for the MOE views when the opinion's game
     has left the slate; the line views refuse it gracefully."""
@@ -2050,6 +2099,8 @@ def append_lean(row: dict[str, Any]) -> bool:
         [row.get(header, "") for header in LEAN_HEADERS],
         value_input_option="RAW",
     )
+    # Drop the browse cache so /guess_nfl_game_no_opinion sees this pick now.
+    expire_sheet_cache("nfl_leans")
     return True
 
 
@@ -2317,6 +2368,17 @@ async def main() -> None:
     guess_states: dict[int, dict[str, Any]] = {}
     game_celeb_states: dict[int, dict[str, Any]] = {}
     win_guess_states: dict[int, dict[str, Any]] = {}
+    # Users currently browsing via /guess_nfl_game_no_opinion — the browser
+    # hides games they've already submitted a pick for. Toggled by the two
+    # commands; the flag rides in memory so pagination keeps filtering.
+    no_opinion_users: set[int] = set()
+
+    async def picked_filter(user_id: int) -> set[str] | None:
+        """The user's already-picked event_ids when they're in no-opinion
+        mode, else None (browse shows every game)."""
+        if user_id not in no_opinion_users:
+            return None
+        return await asyncio.to_thread(user_picked_event_ids, user_id)
     # The desk group (moe_desk.py); filled after client.start() once the
     # bot's username is known, read by the callback and deep-link handlers.
     desk: dict[str, Any] = {"config": None, "api": None, "task": None}
@@ -2440,7 +2502,10 @@ async def main() -> None:
 
     @client.on(
         events.NewMessage(
-            pattern=r"^/(?:start|guess_nfl_game|predict_nfl_wins)(?:@\w+)?$",
+            pattern=(
+                r"^/(?:start|guess_nfl_game_no_opinion|guess_nfl_game"
+                r"|predict_nfl_wins)(?:@\w+)?$"
+            ),
             incoming=True,
             func=lambda event: event.is_private,
         )
@@ -2451,8 +2516,10 @@ async def main() -> None:
             return
         if event.raw_text.startswith("/start"):
             await event.respond(
-                "Tap /guess_nfl_game to browse games, /predict_nfl_wins "
-                "to predict season totals, or /suggest to send feedback.",
+                "Tap /guess_nfl_game to browse games, "
+                "/guess_nfl_game_no_opinion for only the games you haven't "
+                "picked yet, /predict_nfl_wins to predict season totals, or "
+                "/suggest to send feedback.",
                 buttons=command_keyboard(),
             )
         if event.raw_text.startswith("/predict_nfl_wins"):
@@ -2467,6 +2534,12 @@ async def main() -> None:
             )
             await event.respond(text, buttons=buttons, parse_mode="html")
             return
+        # /guess_nfl_game_no_opinion filters; plain /guess_nfl_game (and
+        # /start) clears the filter. Check the longer name first.
+        if event.raw_text.startswith("/guess_nfl_game_no_opinion"):
+            no_opinion_users.add(event.sender_id)
+        else:
+            no_opinion_users.discard(event.sender_id)
         guess_states.pop(event.sender_id, None)
         game_celeb_states.pop(event.sender_id, None)
         win_guess_states.pop(event.sender_id, None)
@@ -2477,6 +2550,7 @@ async def main() -> None:
             page=0,
             now=datetime.now(timezone.utc),
             team_abbrevs=team_abbrevs,
+            picked_event_ids=await picked_filter(event.sender_id),
         )
         await event.respond(text, buttons=buttons)
 
@@ -2698,6 +2772,7 @@ async def main() -> None:
                 now=datetime.now(timezone.utc),
                 team_abbrevs=team_abbrevs,
                 celebrity_name=celebrity["celebrity_name"],
+                picked_event_ids=await picked_filter(event.sender_id),
             )
             await event.respond(text, buttons=buttons, parse_mode="html")
             return
@@ -2994,6 +3069,7 @@ async def main() -> None:
             celebrity_name=(
                 str(active["name"]) if isinstance(active, dict) else None
             ),
+            picked_event_ids=await picked_filter(event.sender_id),
         )
         await event.respond(text, buttons=buttons, parse_mode="html")
 
@@ -3493,6 +3569,7 @@ async def main() -> None:
                 celebrity_name=(
                     str(active["name"]) if isinstance(active, dict) else None
                 ),
+                picked_event_ids=await picked_filter(event.sender_id),
             )
             await edit_callback(event, text, buttons)
             return
@@ -3513,6 +3590,7 @@ async def main() -> None:
                 celebrity_name=(
                     str(active["name"]) if isinstance(active, dict) else None
                 ),
+                picked_event_ids=await picked_filter(event.sender_id),
             )
             await edit_callback(event, text, buttons)
             return

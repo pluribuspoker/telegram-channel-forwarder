@@ -53,6 +53,7 @@ from intake_bot import (
     side_buttons,
     snapshot_lean_submission,
     team_emoji,
+    user_picked_event_ids,
     win_prediction_browser,
     win_celebrity_picker,
     win_prediction_confirmation,
@@ -434,7 +435,10 @@ class GameSelectionTest(unittest.TestCase):
         self.assertEqual(
             keyboard.rows[0].buttons[1].text, "/predict_nfl_wins"
         )
-        self.assertEqual(keyboard.rows[1].buttons[0].text, "/suggest")
+        self.assertEqual(
+            keyboard.rows[1].buttons[0].text, "/guess_nfl_game_no_opinion"
+        )
+        self.assertEqual(keyboard.rows[2].buttons[0].text, "/suggest")
 
     def test_default_window_includes_only_next_ten_days(self):
         records = [_game("a", 1), _game("b", 10), _game("c", 11)]
@@ -467,6 +471,58 @@ class GameSelectionTest(unittest.TestCase):
         self.assertIn("games:30:0", callback_values)
         self.assertIn("games:365:0", callback_values)
         self.assertIn("celebgame:start:10:0", callback_values)
+
+    def test_user_picked_event_ids_filters_to_own_leans(self):
+        leans = [
+            {"telegram_user_id": 42, "event_id": "a"},
+            {"telegram_user_id": 42, "event_id": "b"},
+            {"telegram_user_id": 99, "event_id": "c"},
+            {"telegram_user_id": 42, "event_id": ""},
+        ]
+        with patch.object(intake_bot, "load_leans", return_value=leans):
+            picked = user_picked_event_ids(42)
+
+        self.assertEqual(picked, {"a", "b"})
+
+    def test_user_picked_event_ids_matches_string_stored_ids(self):
+        leans = [{"telegram_user_id": "42", "event_id": "a"}]
+        with patch.object(intake_bot, "load_leans", return_value=leans):
+            picked = user_picked_event_ids(42)
+
+        self.assertEqual(picked, {"a"})
+
+    def test_no_opinion_browser_hides_already_picked_games(self):
+        records = [_game("a", 1), _game("b", 2), _game("c", 3)]
+
+        text, buttons = game_browser(
+            records,
+            days=10,
+            page=0,
+            now=NOW,
+            picked_event_ids={"b"},
+        )
+
+        callback_values = [
+            button.data.decode() for row in buttons for button in row
+        ]
+        self.assertIn("game:10:0:a", callback_values)
+        self.assertIn("game:10:0:c", callback_values)
+        self.assertNotIn("game:10:0:b", callback_values)
+        self.assertIn("2 games you haven't picked yet", text)
+
+    def test_no_opinion_browser_message_when_all_picked(self):
+        records = [_game("a", 1)]
+
+        text, _ = game_browser(
+            records,
+            days=10,
+            page=0,
+            now=NOW,
+            picked_event_ids={"a"},
+        )
+
+        self.assertIn("already picked every game", text)
+        self.assertIn("0 games you haven't picked yet", text)
 
     def test_game_browser_shows_sticky_celebrity_context(self):
         text, buttons = game_browser(
