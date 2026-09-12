@@ -4,12 +4,9 @@ NFL MOE committee and the God Expert.
 One supergroup with forum topics, the intake bot as admin. Every card is one
 message everyone sees:
 
-- **Picks topic** — one card per game once a God Expert arm is approved:
-  both arms' legs, the committee count, and a collapsed
-  ``<blockquote expandable>`` "Why" each viewer opens on their own screen.
-  A pinned week card lists the legs for every game, plus which required
-  voices still have no approved row (those games the judge runner skips
-  as "committee incomplete").
+- **Picks topic** — one card per Eastern game date. Its buttons select a game
+  and show that game's God arms, committee, and opinion details in the same
+  shared message.
 - **Scores topic** — the grading digest (``scripts/moe_grade.py --notify``).
 - **Offline topic** — one plain-text card per game with the latest full-game
   lines, both God arms, every approved voice pick, and consensus. Cards update
@@ -1332,6 +1329,7 @@ def render_picks_card(
     *,
     config: DeskConfig,
     view: Any = None,
+    back_to_games: bool = False,
 ) -> tuple[str, Keyboard]:
     """Compact index, opinion picker, or one opinion in the same message."""
     game = desk.game
@@ -1439,12 +1437,86 @@ def render_picks_card(
             ],
         ]
 
-    keyboard = (
-        [[_button("Show full opinions", callback=f"{CALLBACK_PREFIX}show:{desk.event_id}")]]
-        if groups
-        else []
-    )
+    actions = []
+    if groups:
+        actions.append(
+            _button(
+                "Show full opinions",
+                callback=f"{CALLBACK_PREFIX}show:{desk.event_id}",
+            )
+        )
+    if back_to_games:
+        actions.append(
+            _button(
+                "Back to games",
+                callback=f"{CALLBACK_PREFIX}games:{desk.event_id}",
+            )
+        )
+    keyboard = [actions] if actions else []
     return "\n".join(summary_lines), keyboard
+
+
+def picks_day(desk: GameDesk) -> str:
+    return desk.kickoff.astimezone(ET).date().isoformat()
+
+
+def render_picks_day_card(
+    desks: Iterable[GameDesk],
+    *,
+    config: DeskConfig,
+    expanded_picks: dict[str, Any],
+    selected_event_id: str | None = None,
+    team_abbrevs: dict[str, str] | None = None,
+) -> tuple[str, Keyboard]:
+    """Render a date index or the selected game's view in the same message."""
+    desks = sorted(
+        (desk for desk in desks if desk.show_picks),
+        key=lambda desk: (desk.kickoff, desk.event_id),
+    )
+    if not desks:
+        raise ValueError("A Picks day card requires at least one visible game")
+    if selected_event_id:
+        selected = next(
+            (
+                desk
+                for desk in desks
+                if desk.event_id == selected_event_id
+            ),
+            None,
+        )
+        if selected is not None:
+            raw_view = expanded_picks.get(selected.event_id)
+            view = (
+                None
+                if raw_view == "game"
+                else resolve_picks_view(selected, raw_view)
+            )
+            return render_picks_card(
+                selected,
+                config=config,
+                view=view,
+                back_to_games=True,
+            )
+
+    local_day = desks[0].kickoff.astimezone(ET)
+    date_label = f"{local_day:%A, %B} {local_day.day}"
+    week = _week_label(desks)
+    header = f"🏈 <b>{_esc(date_label)}</b>"
+    if week:
+        header += f" · {_esc(week)}"
+    keyboard = [
+        [
+            _button(
+                (
+                    f"{clock_label(desk.kickoff)} · "
+                    f"{html.unescape(_teams_short(desk, team_abbrevs))}"
+                ),
+                callback=f"{CALLBACK_PREFIX}game:{desk.event_id}",
+            )
+        ]
+        for desk in desks
+    ]
+    return f"{header}\nSelect a game.", keyboard
 
 
 def _line_value(value: Any, *, signed: bool = False) -> str:
@@ -2148,19 +2220,33 @@ def _remove_legacy_picks_details(
     return failed_events
 
 
-def _selected_picks_view(
+def _remove_legacy_picks_cards(
+    *,
+    config: DeskConfig,
+    api: BotApi,
     state: dict[str, Any],
-    desk: GameDesk,
-) -> str | dict[str, Any] | None:
-    selected = resolve_picks_view(
-        desk,
-        state["expanded_picks"].get(desk.event_id),
-    )
-    if selected is None:
-        state["expanded_picks"].pop(desk.event_id, None)
-    else:
-        state["expanded_picks"][desk.event_id] = selected
-    return selected
+    summary: SyncSummary,
+) -> None:
+    """Delete the superseded per-game cards and pinned week summary."""
+    keys = [
+        key
+        for key in state["cards"]
+        if key == "week"
+        or (
+            key.startswith("picks:")
+            and not key.startswith("picks-day:")
+        )
+    ]
+    for key in keys:
+        if _delete_entry_messages(
+            key=key,
+            entry=state["cards"][key],
+            config=config,
+            api=api,
+            summary=summary,
+        ):
+            state["cards"].pop(key, None)
+            summary.deleted.append(key)
 
 
 def _announce(
@@ -2286,6 +2372,12 @@ def sync_desk(
         api=api,
         summary=summary,
     )
+    _remove_legacy_picks_cards(
+        state=state,
+        config=config,
+        api=api,
+        summary=summary,
+    )
     prune_state(state, now=now, preserve_event_ids=preserve)
     for desk in desks:
         state["kickoffs"][desk.event_id] = desk.kickoff.isoformat()
@@ -2320,52 +2412,98 @@ def sync_desk(
                 ):
                     state["cards"].pop(offline_key, None)
                     summary.deleted.append(offline_key)
-        if desk.started:
-            picks_key = f"picks:{desk.event_id}"
-            existing = state["cards"].get(picks_key)
-            if desk.show_picks and isinstance(existing, dict):
-                text, keyboard = render_picks_card(
-                    desk,
-                    config=config,
-                    view=_selected_picks_view(state, desk),
-                )
-                picks_id = _upsert_card(
-                    key=picks_key,
-                    topic=config.picks_topic,
-                    text=text,
-                    keyboard=keyboard,
-                    config=config,
-                    api=api,
-                    state=state,
-                    budget=budget,
-                    summary=summary,
-                    edit_only=edit_only_event_id == desk.event_id,
-                )
-            elif priority_event_id == desk.event_id:
-                summary.errors.append(
-                    f"picks:{desk.event_id}: card is no longer available"
-                )
-            continue
-        picks_id = None
+
+    day_groups: dict[str, list[GameDesk]] = {}
+    for desk in desks:
         if desk.show_picks:
-            text, keyboard = render_picks_card(
-                desk,
-                config=config,
-                view=_selected_picks_view(state, desk),
+            day_groups.setdefault(picks_day(desk), []).append(desk)
+    active_day_keys = {f"picks-day:{day}" for day in day_groups}
+    for key in [
+        key
+        for key in state["cards"]
+        if key.startswith("picks-day:") and key not in active_day_keys
+    ]:
+        if _delete_entry_messages(
+            key=key,
+            entry=state["cards"][key],
+            config=config,
+            api=api,
+            summary=summary,
+        ):
+            state["cards"].pop(key, None)
+            summary.deleted.append(key)
+
+    picks_ids: dict[str, int] = {}
+    for day, day_desks in sorted(day_groups.items()):
+        selected_event_id = None
+        if priority_event_id and any(
+            desk.event_id == priority_event_id for desk in day_desks
+        ):
+            selected_event_id = priority_event_id
+        else:
+            selected_event_id = next(
+                (
+                    desk.event_id
+                    for desk in day_desks
+                    if desk.event_id in state["expanded_picks"]
+                ),
+                None,
             )
-            picks_id = _upsert_card(
-                key=f"picks:{desk.event_id}",
-                topic=config.picks_topic,
-                text=text,
-                keyboard=keyboard,
-                config=config,
-                api=api,
-                state=state,
-                budget=budget,
-                summary=summary,
-                edit_only=edit_only_event_id == desk.event_id,
+        if selected_event_id:
+            selected_desk = next(
+                desk
+                for desk in day_desks
+                if desk.event_id == selected_event_id
             )
-            for arm_row in (desk.rules, desk.judge):
+            raw_view = state["expanded_picks"].get(selected_event_id)
+            if raw_view != "game":
+                normalized_view = resolve_picks_view(
+                    selected_desk,
+                    raw_view,
+                )
+                if normalized_view is None:
+                    state["expanded_picks"].pop(selected_event_id, None)
+                    selected_event_id = None
+                else:
+                    state["expanded_picks"][
+                        selected_event_id
+                    ] = normalized_view
+        text, keyboard = render_picks_day_card(
+            day_desks,
+            config=config,
+            expanded_picks=state["expanded_picks"],
+            selected_event_id=selected_event_id,
+            team_abbrevs=team_abbrevs,
+        )
+        picks_id = _upsert_card(
+            key=f"picks-day:{day}",
+            topic=config.picks_topic,
+            text=text,
+            keyboard=keyboard,
+            config=config,
+            api=api,
+            state=state,
+            budget=budget,
+            summary=summary,
+            edit_only=(
+                edit_only_event_id is not None
+                and any(
+                    desk.event_id == edit_only_event_id
+                    for desk in day_desks
+                )
+            ),
+        )
+        if picks_id is not None:
+            for desk in day_desks:
+                picks_ids[desk.event_id] = picks_id
+
+    for desk in desks:
+        if desk.started or not desk.show_picks:
+            continue
+        picks_id = picks_ids.get(desk.event_id)
+        if picks_id is None:
+            continue
+        for arm_row in (desk.rules, desk.judge):
                 if arm_row is None:
                     continue
                 expert_id = str(arm_row.get("expert_id") or "")
@@ -2417,19 +2555,6 @@ def sync_desk(
                         summary=summary,
                         now=now,
                     )
-    text, keyboard = render_week_card(desks, team_abbrevs=team_abbrevs)
-    _upsert_card(
-        key="week",
-        topic=config.picks_topic,
-        text=text,
-        keyboard=keyboard,
-        config=config,
-        api=api,
-        state=state,
-        budget=budget,
-        summary=summary,
-        pin=True,
-    )
     return summary
 
 
@@ -2506,7 +2631,8 @@ def desk_ids_report(
 
 
 def parse_callback(data: str) -> tuple[str, str] | None:
-    """``desk:show:<event>``; ``desk:hide:<event>``;
+    """``desk:game:<event>``; ``desk:games:<event>``;
+    ``desk:show:<event>``; ``desk:hide:<event>``;
     ``desk:op:<event>:<expert>``; ``desk:part:<event>:<expert>:<chunk>``;
     ``desk:refresh:<event>``. Anything else — including the removed review
     actions ``ok``/``no``/``okarms`` — returns ``None``."""
@@ -2514,6 +2640,8 @@ def parse_callback(data: str) -> tuple[str, str] | None:
         return None
     action, _, target = data[len(CALLBACK_PREFIX):].partition(":")
     if action not in {
+        "game",
+        "games",
         "show",
         "hide",
         "op",

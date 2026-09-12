@@ -79,7 +79,8 @@ from moe_desk import (
     desk_ids_report,
     parse_start_param,
     resolve_picks_view,
-    render_picks_card,
+    picks_day,
+    render_picks_day_card,
     topic_id_from_reply,
     save_state as save_desk_state,
     sync_desk,
@@ -1879,7 +1880,7 @@ def update_desk_picks_view(
     message_id: int,
     force_opinions_refresh: bool = False,
 ) -> tuple[Any, str | None]:
-    """Atomically select and edit one existing Picks card; never post it."""
+    """Atomically select and edit one existing daily Picks card; never post it."""
     with _DESK_SYNC_LOCK:
         state = load_desk_state(config.state_path)
         raw_previous = state["expanded_picks"].get(event_id)
@@ -1902,11 +1903,36 @@ def update_desk_picks_view(
         )
         if desk is None or not desk.show_picks:
             return previous, "game is no longer available"
-        effective_view = resolve_picks_view(desk, view)
-        text, keyboard = render_picks_card(
-            desk,
+        day = picks_day(desk)
+        card_key = f"picks-day:{day}"
+        tracked = state["cards"].get(card_key)
+        if (
+            not isinstance(tracked, dict)
+            or int(tracked.get("message_id") or 0) != int(message_id)
+        ):
+            return previous, "stale or untracked Picks message"
+        day_desks = [
+            item
+            for item in desks
+            if item.show_picks and picks_day(item) == day
+        ]
+        for item in day_desks:
+            state["expanded_picks"].pop(item.event_id, None)
+        if view == "game":
+            effective_view = "game"
+        elif view is None:
+            effective_view = None
+        else:
+            effective_view = resolve_picks_view(desk, view)
+        if effective_view is not None:
+            state["expanded_picks"][event_id] = effective_view
+        text, keyboard = render_picks_day_card(
+            day_desks,
             config=config,
-            view=effective_view,
+            expanded_picks=state["expanded_picks"],
+            selected_event_id=(
+                event_id if effective_view is not None else None
+            ),
         )
         try:
             edited = api.edit(
@@ -1919,11 +1945,7 @@ def update_desk_picks_view(
             return previous, f"{type(exc).__name__}: {exc}"
         if not edited:
             return previous, "existing message could not be edited"
-        if effective_view is None:
-            state["expanded_picks"].pop(event_id, None)
-        else:
-            state["expanded_picks"][event_id] = effective_view
-        state["cards"][f"picks:{event_id}"] = {
+        state["cards"][card_key] = {
             "message_id": int(message_id),
             "hash": desk_content_hash(
                 text,
@@ -2327,10 +2349,23 @@ async def main() -> None:
             await event.answer("Unknown desk action.", alert=True)
             return
         action, target = parsed
-        if action in {"show", "hide", "op", "part", "page", "refresh"}:
+        if action in {
+            "game",
+            "games",
+            "show",
+            "hide",
+            "op",
+            "part",
+            "page",
+            "refresh",
+        }:
             event_id = target
             desired_view: Any = (
-                "menu" if action in {"show", "page", "refresh"} else None
+                "menu"
+                if action in {"show", "page", "refresh"}
+                else "game"
+                if action in {"game", "hide"}
+                else None
             )
             if action == "page":
                 legacy_event_id, separator, _ = target.rpartition(":")
@@ -2370,8 +2405,10 @@ async def main() -> None:
             desk_inflight.add(key)
             try:
                 await event.answer(
-                    "Returning to picks…"
-                    if desired_view is None
+                    "Returning to games…"
+                    if action == "games"
+                    else "Returning to picks…"
+                    if desired_view == "game"
                     else "Loading opinions…"
                 )
                 message_id = (

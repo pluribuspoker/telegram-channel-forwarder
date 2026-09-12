@@ -38,6 +38,7 @@ from moe_desk import (
     render_opinion_details,
     render_offline_card,
     render_picks_card,
+    render_picks_day_card,
     render_week_card,
     resolve_picks_view,
     save_state,
@@ -963,16 +964,23 @@ class SyncTests(unittest.TestCase):
         self.assertIn(901, self.api.deleted)
         self.assertNotIn("offline:401", self.state["cards"])
 
-    def test_first_pass_posts_cards_and_pins_week(self) -> None:
+    def test_first_pass_posts_one_card_for_the_game_day(self) -> None:
         rows = committee("401")
         summary = self.sync(rows)
-        self.assertEqual(summary.posted, ["picks:401", "week"])
+        self.assertEqual(summary.posted, ["picks-day:2026-09-13"])
         self.assertEqual(summary.alerts, [])
-        topics = [m["topic"] for m in self.api.sent]
-        self.assertEqual(topics, [22, 22])
+        self.assertEqual([m["topic"] for m in self.api.sent], [22])
         self.assertTrue(all(m["silent"] for m in self.api.sent))
-        self.assertEqual(self.api.pins, [102])
-        self.assertEqual(self.state["cards"]["picks:401"]["message_id"], 101)
+        self.assertEqual(self.api.pins, [])
+        card = self.api.sent[0]
+        self.assertEqual(
+            [button["text"] for row in card["keyboard"] for button in row],
+            ["4:05 PM · Patriots @ Seahawks"],
+        )
+        self.assertEqual(
+            self.state["cards"]["picks-day:2026-09-13"]["message_id"],
+            101,
+        )
         self.assertEqual(self.state["kickoffs"]["401"], SEA_KICKOFF)
         self.assertIn("402", self.state["kickoffs"])
 
@@ -988,16 +996,16 @@ class SyncTests(unittest.TestCase):
     def test_full_opinions_paginate_on_the_same_card(self) -> None:
         rows = committee("401")
         self.sync(rows)
-        picks_id = self.state["cards"]["picks:401"]["message_id"]
+        picks_id = self.state["cards"]["picks-day:2026-09-13"]["message_id"]
         sent = len(self.api.sent)
 
         self.state["expanded_picks"]["401"] = 0
         summary = self.sync(rows, priority_event_id="401")
         self.assertEqual(summary.posted, [])
-        self.assertIn("picks:401", summary.edited)
+        self.assertIn("picks-day:2026-09-13", summary.edited)
         self.assertEqual(len(self.api.sent), sent)
         self.assertEqual(
-            self.state["cards"]["picks:401"]["message_id"],
+            self.state["cards"]["picks-day:2026-09-13"]["message_id"],
             picks_id,
         )
         self.assertIn("Select an opinion", self.api.edits[-1]["text"])
@@ -1012,7 +1020,7 @@ class SyncTests(unittest.TestCase):
             "chunk": 0,
         }
         summary = self.sync(rows)
-        self.assertIn("picks:401", summary.edited)
+        self.assertIn("picks-day:2026-09-13", summary.edited)
         self.assertIn("Schedule Expert", self.api.edits[-1]["text"])
 
         summary = self.sync(rows)
@@ -1023,8 +1031,8 @@ class SyncTests(unittest.TestCase):
 
         self.state["expanded_picks"].pop("401")
         summary = self.sync(rows)
-        self.assertIn("picks:401", summary.edited)
-        self.assertIn("<b>GOD EXPERT</b>", self.api.edits[-1]["text"])
+        self.assertIn("picks-day:2026-09-13", summary.edited)
+        self.assertIn("Select a game.", self.api.edits[-1]["text"])
 
     def test_legacy_detail_replies_are_removed_without_new_posts(self) -> None:
         rows = committee("401")
@@ -1033,7 +1041,7 @@ class SyncTests(unittest.TestCase):
             "message_id": 901,
             "obsolete_message_ids": [902],
             "topic": 22,
-            "reply_to": self.state["cards"]["picks:401"]["message_id"],
+            "reply_to": self.state["cards"]["picks-day:2026-09-13"]["message_id"],
         }
         sent = len(self.api.sent)
         summary = self.sync(rows)
@@ -1104,7 +1112,7 @@ class SyncTests(unittest.TestCase):
     def test_same_card_pagination_still_works_after_kickoff(self) -> None:
         rows = committee("401")
         self.sync(rows)
-        picks_id = self.state["cards"]["picks:401"]["message_id"]
+        picks_id = self.state["cards"]["picks-day:2026-09-13"]["message_id"]
         self.state["expanded_picks"]["401"] = {
             "mode": "opinion",
             "opinion": 0,
@@ -1115,7 +1123,7 @@ class SyncTests(unittest.TestCase):
             now=datetime.fromisoformat(SEA_KICKOFF) + timedelta(minutes=5),
             priority_event_id="401",
         )
-        self.assertIn("picks:401", summary.edited)
+        self.assertIn("picks-day:2026-09-13", summary.edited)
         picks_edit = next(
             edit for edit in self.api.edits if edit["id"] == picks_id
         )
@@ -1124,7 +1132,7 @@ class SyncTests(unittest.TestCase):
     def test_callback_pagination_never_reposts_a_missing_card(self) -> None:
         rows = committee("401")
         self.sync(rows)
-        picks_id = self.state["cards"]["picks:401"]["message_id"]
+        picks_id = self.state["cards"]["picks-day:2026-09-13"]["message_id"]
         self.api.missing.add(picks_id)
         self.state["expanded_picks"]["401"] = "menu"
         sent = len(self.api.sent)
@@ -1139,37 +1147,40 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(summary.posted, [])
         self.assertTrue(
             any(
-                error.startswith("picks:401:")
+                error.startswith("picks-day:2026-09-13:")
                 for error in summary.errors
             )
         )
         self.assertEqual(
-            self.state["cards"]["picks:401"]["message_id"],
+            self.state["cards"]["picks-day:2026-09-13"]["message_id"],
             picks_id,
         )
 
     def test_a_new_approved_row_edits_only_the_affected_cards(self) -> None:
         rows = committee("401")
         self.sync(rows)
+        self.state["expanded_picks"]["401"] = "game"
+        self.sync(rows, priority_event_id="401")
         rows[2]["review_status"] = "approved"
         rows[2]["reviewed_by"] = "validation"
         summary = self.sync(rows)
         self.assertEqual(summary.posted, [])
-        self.assertEqual(summary.edited, ["picks:401", "week"])
-        picks_text, week_text = self.api.edits[0]["text"], self.api.edits[1]["text"]
+        self.assertEqual(summary.edited, ["picks-day:2026-09-13"])
+        picks_text = self.api.edits[-1]["text"]
         self.assertIn("<b>Win Total</b> Seahawks 61% ★★ · 20-24", picks_text)
-        self.assertIn("WT 1", week_text)  # 401 no longer waits on it, 402 still does
-        self.assertNotIn("WT 2", week_text)
 
     def test_approved_arm_posts_the_picks_card_and_one_loud_bet_alert(self) -> None:
         rows = committee("401", arms_status="approved")
         rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
         summary = self.sync(rows)
-        self.assertEqual(summary.posted, ["picks:401", "week"])
+        self.assertEqual(summary.posted, ["picks-day:2026-09-13"])
         self.assertEqual(summary.alerts, ["bet:c884d868-0000:side"])
         alert = next(m for m in self.api.sent if not m["silent"])
         self.assertEqual(alert["topic"], 22)
-        self.assertEqual(alert["reply_to"], self.state["cards"]["picks:401"]["message_id"])
+        self.assertEqual(
+            alert["reply_to"],
+            self.state["cards"]["picks-day:2026-09-13"]["message_id"],
+        )
         self.assertEqual(
             alert["text"], "🔔 Bet · Seahawks -3.5 (+100) ★ 0.6u · rules arm\njudge arm: PASS"
         )
@@ -1207,7 +1218,8 @@ class SyncTests(unittest.TestCase):
             "🔕 Withdrawn · Seahawks -3.5 (+100) ★ 0.6u · rules arm — ev floor",
         )
         self.assertEqual(
-            alert["reply_to"], self.state["cards"]["picks:401"]["message_id"]
+            alert["reply_to"],
+            self.state["cards"]["picks-day:2026-09-13"]["message_id"],
         )
         # idempotent: the judge arm (PASS all along) and later passes stay quiet
         summary = self.sync(rows)
@@ -1279,31 +1291,32 @@ class SyncTests(unittest.TestCase):
         self.sync(rows)
         kickoff = datetime.fromisoformat(SEA_KICKOFF)
         summary = self.sync(rows, now=kickoff + timedelta(minutes=5))
-        # started: off the week card, but the picks card entry survives
-        self.assertIn("week", summary.edited)
-        self.assertIn("picks:401", self.state["cards"])
+        self.assertIn("picks-day:2026-09-13", self.state["cards"])
         self.sync(rows, now=kickoff + timedelta(days=4))
-        self.assertNotIn("picks:401", self.state["cards"])
+        self.assertNotIn("picks-day:2026-09-13", self.state["cards"])
         self.assertNotIn("401", self.state["kickoffs"])
 
     def test_a_deleted_card_is_reposted(self) -> None:
         rows = committee("401")
         self.sync(rows)
-        self.api.missing.add(self.state["cards"]["picks:401"]["message_id"])
+        self.api.missing.add(
+            self.state["cards"]["picks-day:2026-09-13"]["message_id"]
+        )
         rows[2]["review_status"] = "approved"  # the card's content changes
+        self.state["expanded_picks"]["401"] = "game"
         summary = self.sync(rows)
-        self.assertEqual(summary.posted, ["picks:401"])
+        self.assertEqual(summary.posted, ["picks-day:2026-09-13"])
         self.assertEqual(
-            self.state["cards"]["picks:401"]["message_id"], self.api.sent[-1]["id"]
+            self.state["cards"]["picks-day:2026-09-13"]["message_id"],
+            self.api.sent[-1]["id"],
         )
 
-    def test_post_budget_defers_the_rest_to_the_next_pass(self) -> None:
+    def test_same_day_games_share_one_post_budget_slot(self) -> None:
         rows = committee("401") + committee("402")
-        summary = self.sync(rows, max_posts=2)
-        self.assertEqual(summary.posted, ["picks:401", "picks:402"])
-        self.assertEqual(summary.deferred, ["week"])
-        summary = self.sync(rows, max_posts=2)
-        self.assertEqual(summary.posted, ["week"])
+        summary = self.sync(rows, max_posts=1)
+        self.assertEqual(summary.posted, ["picks-day:2026-09-13"])
+        self.assertEqual(summary.deferred, [])
+        self.assertEqual(len(self.api.sent[0]["keyboard"]), 2)
 
     def test_legacy_review_topic_state_is_dropped_without_api_calls(self) -> None:
         # The Review topic was deleted 2026-09-10; its messages died with it,
@@ -1325,7 +1338,7 @@ class SyncTests(unittest.TestCase):
         self.api = Broken()
         summary = self.sync(committee("401"))
         self.assertEqual(summary.posted, [])
-        self.assertEqual(len(summary.errors), 2)
+        self.assertEqual(len(summary.errors), 1)
         self.assertEqual(self.state["cards"], {})
 
 
@@ -1462,6 +1475,8 @@ class ConfigAndCallbackTests(unittest.TestCase):
         self.assertIsNone(parse_callback("desk:okarms:401"))
         self.assertEqual(parse_callback("desk:show:401"), ("show", "401"))
         self.assertEqual(parse_callback("desk:hide:401"), ("hide", "401"))
+        self.assertEqual(parse_callback("desk:game:401"), ("game", "401"))
+        self.assertEqual(parse_callback("desk:games:401"), ("games", "401"))
         self.assertEqual(
             parse_callback("desk:page:401:2"),
             ("page", "401:2"),

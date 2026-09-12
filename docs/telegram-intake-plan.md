@@ -899,18 +899,15 @@ either person sees or does.
 - Topics and cards (as redesigned on 2026-09-08 after the first live pass,
   when 17 status boards plus cards for games with nothing to do read as
   clutter and the voices' opinions were on no card at all).
-  🏈 Picks is the interactive reading surface: one card per game once two voices are
-  approved or a God arm is — the God line on top (both arms' short legs,
-  "—" until an arm row is approved), then one
-  line per approved voice (pick, probability, stars, projected score) in a
-  fixed order, and every thesis (arms first, with up to three supporting
-  factors and two counterarguments) inside a collapsed
-  `<blockquote expandable>` each viewer opens on their own screen;
-  👁 Full opinions deep-links to the game's MOE view in the DM. A pinned
-  card lists decided games (an approved arm) with their legs, and a
-  "Waiting on" line counting the required voices that still have no
-  approved row per game — the games the judge runner skips as "committee
-  incomplete". Offline is the cache-friendly reading surface: one
+  🏈 Picks is the interactive reading surface: one shared card per Eastern
+  game date, with one button per game that opens that game's picks inside the
+  same message. The selected game shows the God line on top (both arms' short
+  legs, "—" until an arm row is approved), then one line per approved voice
+  (pick, probability, stars, projected score) in a fixed order. Full opinions
+  paginate in that same daily message, with Back to picks and Back to games
+  navigation. The old per-game cards and pinned week summary are deleted on
+  the first sync after migration; bet and withdrawal alerts reply to the
+  applicable daily card. Offline is the cache-friendly reading surface: one
   keyboard-free plain-text card per game in the ten-day desk horizon once that
   game has at least one approved voice or God-arm opinion. Games with no
   approved opinion are omitted, and a previously tracked empty card is deleted.
