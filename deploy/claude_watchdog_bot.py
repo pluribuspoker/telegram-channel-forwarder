@@ -14,6 +14,8 @@ Commands (only responds to ALLOWED_USER_ID):
   /ping     — responds "pong" (liveness check)
   /mem      — live RAM + swap usage + top consumers (alias /ram)
   /tmux     — capture last 50 lines of Claude's tmux pane (see what it's doing)
+  /model    — show or switch the model, live and for restarts (credit limits)
+  /effort   — set the reasoning effort level
   /reauth   — mint a new 1-year OAuth token (start; DMs a login URL)
   /authcode — finish re-auth by pasting the code from that URL
 
@@ -27,6 +29,7 @@ Env: WATCHDOG_BOT_TOKEN, WATCHDOG_USER_ID in .env
 """
 
 import html
+import json
 import json
 import os
 import re
@@ -84,6 +87,129 @@ def run_argv(argv: list[str], timeout: int = 30) -> str:
         return (r.stdout + r.stderr).strip()
     except subprocess.TimeoutExpired:
         return "(command timed out)"
+
+
+# --- model / effort ------------------------------------------------------
+# Running out of credits on one model is a full outage: every Telegram message
+# comes back "You've reached your <model> limit", and Claude can't fix it —
+# the fix is a slash command in a tmux pane nobody can reach from a phone. So
+# the switch lives here, in the service that stays up precisely when Claude
+# can't answer (2026-09-11: fourteen hours stuck on Fable).
+#
+# Two halves, and both are needed:
+#   * the LIVE session — /model typed into the tmux pane. The conversation and
+#     its context survive; a restart would throw both away.
+#   * the NEXT start — STATE_FILE, which run_claude_channels.sh reads. Without
+#     it the first restart silently reverts to the launcher's default.
+HOME_DIR = Path(os.environ.get("HOME") or "/home/forwarder")
+STATE_FILE = Path(os.environ.get("CLAUDE_CHANNELS_STATE") or HOME_DIR / ".claude-channels.env")
+LAUNCHER = Path(__file__).resolve().parent / "run_claude_channels.sh"
+CLAUDE_SETTINGS = HOME_DIR / ".claude" / "settings.json"
+PANE = "claude"
+
+# Aliases resolve to full ids rather than being passed through: `/model opus`
+# has to mean the same model in six months as it does today, and an id is what
+# ends up on the launcher's command line.
+MODEL_CHOICES = {
+    "opus": "claude-opus-5",
+    "fable": "claude-fable-5",
+    "sonnet": "claude-sonnet-5",
+    "haiku": "claude-haiku-4-5-20251001",
+}
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# The same charset run_claude_channels.sh allowlists — keep the two in step.
+MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(\[1m\])?$")
+
+
+def resolve_model(arg: str) -> str | None:
+    """Alias or full model id -> the id to hand the CLI. None if it is neither."""
+    arg = arg.strip()
+    return MODEL_CHOICES.get(arg.lower()) or (arg if MODEL_ID_RE.match(arg) else None)
+
+
+def read_state() -> dict[str, str]:
+    out: dict[str, str] = {}
+    if STATE_FILE.exists():
+        for line in STATE_FILE.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip().strip("\"'")
+    return out
+
+
+def write_state(**values: str) -> None:
+    """Update keys in STATE_FILE atomically — a restart may read it mid-write."""
+    state = read_state()
+    state.update(values)
+    body = (
+        "# Written by claude_watchdog_bot.py (/model, /effort).\n"
+        "# Read by deploy/run_claude_channels.sh at every service start.\n"
+        + "".join(f"{k}={v}\n" for k, v in sorted(state.items()))
+    )
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(body)
+    tmp.replace(STATE_FILE)
+
+
+def next_start() -> tuple[str, str]:
+    """What a restart would use — asked of the launcher, so it can't drift."""
+    out = run_argv(["bash", str(LAUNCHER), "--print-model"], timeout=15)
+    vals = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln)
+    return vals.get("model", "?"), vals.get("effort", "?")
+
+
+def settings_model() -> str:
+    """The id /model last saved. The CLI writes it only for a model it accepted."""
+    try:
+        return json.loads(CLAUDE_SETTINGS.read_text()).get("model", "")
+    except Exception:
+        return ""
+
+
+def launched_model() -> str:
+    m = re.search(r"--model (\S+)", run("pgrep -af 'claude --channels' | head -1"))
+    return m.group(1) if m else "(not running)"
+
+
+def pane_command(cmd: str, marker: str, timeout: float = 15.0) -> tuple[bool, str]:
+    """Type a slash command into Claude's pane and wait for ITS reply.
+
+    Only the text after the LAST occurrence of the command counts. An earlier
+    switch's reply is still on screen, and a command Claude has merely QUEUED
+    (busy mid-turn) appears with nothing under it — which is exactly the "not
+    confirmed" answer wanted, rather than a stale success.
+    """
+    if subprocess.run(["tmux", "has-session", "-t", PANE], capture_output=True).returncode:
+        return False, "no tmux session — /restart first"
+    run_argv(["tmux", "send-keys", "-t", PANE, "C-u"])  # drop anything half-typed
+    run_argv(["tmux", "send-keys", "-t", PANE, "-l", cmd])
+    run_argv(["tmux", "send-keys", "-t", PANE, "Enter"])
+    deadline = time.time() + timeout
+    while True:
+        time.sleep(1.0)
+        pane = run_argv(["tmux", "capture-pane", "-p", "-t", PANE, "-S", "-40"])
+        tail = pane.rsplit(cmd, 1)[1] if cmd in pane else ""
+        if marker.lower() in tail.lower():
+            return True, tail.strip()
+        if time.time() >= deadline:
+            return False, pane[-1200:]
+
+
+def switch_model(target: str) -> tuple[bool, str]:
+    """Move the live session, then make it stick. Persist only what took."""
+    ok, detail = pane_command(f"/model {target}", "set model to")
+    if ok or settings_model() == target:
+        write_state(CLAUDE_CHANNELS_MODEL=target)
+        return True, detail
+    return False, detail
+
+
+def switch_effort(level: str) -> tuple[bool, str]:
+    """Effort is session-only in the CLI, so STATE_FILE is what carries it over."""
+    ok, detail = pane_command(f"/effort {level}", f"set effort level to {level}")
+    write_state(CLAUDE_CHANNELS_EFFORT=level)  # allowlisted: can't break a start
+    return ok, detail
 
 
 # --- re-auth -------------------------------------------------------------
@@ -367,6 +493,67 @@ async def handle_message(update, context):
         )
         await msg.reply_text(f"```\n{out or '(no output)'}\n```", parse_mode="Markdown")
 
+    elif text.startswith("/model"):
+        parts = raw.split()
+        if len(parts) == 1:
+            nm, ne = next_start()
+            await msg.reply_text(
+                "🤖 Claude model\n"
+                f"in-session (last /model): {settings_model() or '(unset)'}\n"
+                f"launched with: {launched_model()}\n"
+                f"next restart: {nm} · effort {ne}\n\n"
+                "Switch (keeps the conversation):\n"
+                "/model " + " | ".join(MODEL_CHOICES) + "\n"
+                "…or a full id. Add `restart` to skip the live switch when the "
+                "pane is wedged: /model opus restart"
+            )
+        elif not (target := resolve_model(parts[1])):
+            await msg.reply_text(
+                f"Unknown model '{parts[1]}'.\nChoices: "
+                + " | ".join(MODEL_CHOICES)
+                + " (or a full claude-… id)"
+            )
+        elif len(parts) > 2 and parts[2].lower() in ("restart", "force"):
+            write_state(CLAUDE_CHANNELS_MODEL=target)
+            await msg.reply_text(f"Saved {target}. Restarting — the context is lost…")
+            run(f"sudo -n systemctl restart {SERVICE}", timeout=60)
+            await asyncio.sleep(15)
+            await msg.reply_text(
+                f"Service: {run(f'systemctl is-active {SERVICE}')}\n"
+                f"Running: {launched_model()}"
+            )
+        else:
+            await msg.reply_text(f"Switching the live session to {target}…")
+            ok, detail = await asyncio.to_thread(switch_model, target)
+            detail = detail.replace("`", "'")[-1200:]
+            if ok:
+                await msg.reply_text(
+                    f"✅ Now on {target} — context kept, and saved for restarts.\n"
+                    f"```\n{detail}\n```",
+                    parse_mode="Markdown",
+                )
+            else:
+                await msg.reply_text(
+                    "⚠️ The pane never confirmed (busy mid-turn, or the id was "
+                    f"refused) — nothing saved. Force it with:\n/model {parts[1]} "
+                    f"restart\n\n```\n{detail}\n```",
+                    parse_mode="Markdown",
+                )
+
+    elif text.startswith("/effort"):
+        parts = raw.split()
+        level = parts[1].lower() if len(parts) > 1 else ""
+        if level not in EFFORT_LEVELS:
+            _, ne = next_start()
+            await msg.reply_text(
+                "Usage: /effort " + "|".join(EFFORT_LEVELS) + f"\nNext restart: {ne}"
+            )
+        else:
+            ok, detail = await asyncio.to_thread(switch_effort, level)
+            detail = detail.replace("`", "'")[-900:]
+            head = f"✅ Effort {level}" if ok else f"⚠️ Saved {level} for restarts, but the pane never confirmed"
+            await msg.reply_text(f"{head}\n```\n{detail}\n```", parse_mode="Markdown")
+
     elif text == "/help":
         await msg.reply_text(
             "Emergency watchdog commands:\n"
@@ -377,6 +564,8 @@ async def handle_message(update, context):
             "/kill — force-kill and restart\n"
             "/logs — last 20 journal lines\n"
             "/tmux — see what Claude is doing right now\n"
+            "/model — show/switch model (fixes \"You've reached your limit\")\n"
+            "/effort — low|medium|high|xhigh|max\n"
             "/auth — check whether Claude's credentials still work\n"
             "/reauth — mint a new 1-year token (fixes \"Login expired\")"
         )
