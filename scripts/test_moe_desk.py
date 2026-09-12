@@ -572,8 +572,8 @@ class RenderTests(unittest.TestCase):
                 {
                     "generation_phase": "final_t_minus_2h",
                     "sportsbook": {
-                        "moneyline": {"best_outcome": "away"},
-                        "spread": {"best_outcome": "home"},
+                        "moneyline": {"best_outcome": "away_win"},
+                        "spread": {"best_outcome": "home_cover"},
                     },
                     "movement": {
                         "markets": {
@@ -613,7 +613,10 @@ class RenderTests(unittest.TestCase):
         text, _buttons = render_picks_card(desk, config=CONFIG)
         self.assertIn("Shadow · Final T-2h", text)
         self.assertIn("move: moneyline home +10% handle", text)
-        self.assertIn("book benefits: ML away, spread home", text)
+        self.assertIn(
+            "book benefits: ML Patriots win, spread Seahawks cover",
+            text,
+        )
         self.assertNotIn("Consensus · Seahawks 5–0", text)
         groups = moe_desk.picks_opinion_groups(desk)
         pikkit = next(group for group in groups if group[0] == "pikkit")

@@ -819,6 +819,17 @@ def _pikkit_phase_label(row: dict[str, Any]) -> str:
 
 def _pikkit_book_outcomes(row: dict[str, Any]) -> str:
     sportsbook = _pikkit_summary(row).get("sportsbook") or {}
+    home = nickname(row.get("home_team"))
+    away = nickname(row.get("away_team"))
+    outcome_labels = {
+        "home_win": f"{home} win",
+        "away_win": f"{away} win",
+        "home_cover": f"{home} cover",
+        "away_cover": f"{away} cover",
+        "over": "Over",
+        "under": "Under",
+        "push": "push",
+    }
     labels = []
     for market, short in (
         ("moneyline", "ML"),
@@ -827,7 +838,10 @@ def _pikkit_book_outcomes(row: dict[str, Any]) -> str:
     ):
         data = sportsbook.get(market)
         if isinstance(data, dict) and data.get("best_outcome"):
-            labels.append(f"{short} {data['best_outcome']}")
+            outcome = str(data["best_outcome"])
+            labels.append(
+                f"{short} {outcome_labels.get(outcome, outcome.replace('_', ' '))}"
+            )
     return ", ".join(labels)
 
 
