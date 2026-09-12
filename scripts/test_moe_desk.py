@@ -624,6 +624,122 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Initial movement watch.", details)
         self.assertIn("Final movement evaluation.", details)
 
+    def test_pikkit_detail_explains_splits_and_book_arithmetic(self) -> None:
+        payload = {
+            "selected_snapshot": {
+                "snapshot_age_seconds": 793703,
+                "betonline": {
+                    "away_moneyline": 110,
+                    "home_moneyline": -130,
+                    "away_spread": 1.5,
+                    "away_spread_price": -108,
+                    "home_spread": -1.5,
+                    "home_spread_price": -112,
+                    "total": 39.5,
+                    "over_price": -105,
+                    "under_price": -115,
+                },
+                "markets": {
+                    "moneyline": {
+                        "sides": {
+                            "away": {
+                                "bet_pct": 0.34446,
+                                "handle_pct": 0.464418,
+                            },
+                            "home": {
+                                "bet_pct": 0.65554,
+                                "handle_pct": 0.535582,
+                            },
+                        },
+                        "sportsbook": {
+                            "net_per_unit_handle": {
+                                "away_win": 0.024722,
+                                "home_win": 0.052432,
+                            }
+                        },
+                    },
+                    "spread": {
+                        "sides": {
+                            "away": {
+                                "bet_pct": 0.640724,
+                                "handle_pct": 0.68311,
+                            },
+                            "home": {
+                                "bet_pct": 0.359276,
+                                "handle_pct": 0.31689,
+                            },
+                        },
+                        "sportsbook": {
+                            "net_per_unit_handle": {
+                                "away_cover": -0.315619,
+                                "home_cover": 0.400172,
+                                "push": 0,
+                            }
+                        },
+                    },
+                    "total": {
+                        "sides": {
+                            "over": {
+                                "bet_pct": 0.327759,
+                                "handle_pct": 0.268122,
+                            },
+                            "under": {
+                                "bet_pct": 0.672241,
+                                "handle_pct": 0.731878,
+                            },
+                        },
+                        "sportsbook": {
+                            "net_per_unit_handle": {
+                                "over": 0.476524,
+                                "under": -0.368293,
+                                "push": 0,
+                            }
+                        },
+                    },
+                },
+            }
+        }
+        pikkit_row = row(
+            "pikkit-readable",
+            "401",
+            "pikkit",
+            status="approved",
+            pick_market="side_and_total",
+            side_pick_json=json.dumps(PASS_PLAIN),
+            total_pick_json=json.dumps(PASS_PLAIN),
+            expected_home_margin=1.5,
+            away_team="New York Jets",
+            home_team="Tennessee Titans",
+            predicted_away_score=19,
+            predicted_home_score=20,
+            home_win_probability=0.543,
+            calibration_summary_json=json.dumps(
+                {
+                    "generation_phase": "initial",
+                    "market_baseline": {"projected_total": 39.5},
+                    "model_adjustment": {"projected_total": 0},
+                }
+            ),
+            input_json=json.dumps(payload),
+        )
+
+        text = moe_desk.render_pikkit_details([pikkit_row])[0]
+
+        self.assertIn("Jets: 34.4% bets / 46.4% money", text)
+        self.assertIn(
+            "Titans win</b> -130: collect $46.44, pay $41.20 profit",
+            text,
+        )
+        self.assertIn("<b>BO +$5.24</b>", text)
+        self.assertIn("<b>BO -$31.56</b>", text)
+        self.assertIn(
+            "Largest estimated BO liabilities: Under (-$36.83), "
+            "Jets cover (-$31.56)",
+            text,
+        )
+        self.assertIn("Pikkit pick: PASS", text)
+        self.assertNotIn("Supporting factors", text)
+
     def test_picks_card_states_missing_god(self) -> None:
         # unapproved arm rows are no arms at all: review is automatic, so a
         # valid arm row is either approved or a legacy audit row

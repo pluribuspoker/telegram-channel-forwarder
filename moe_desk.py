@@ -861,6 +861,294 @@ def _pikkit_strongest_movement(row: dict[str, Any]) -> str:
     return "" if strongest is None else strongest[1]
 
 
+def _pikkit_input(row: dict[str, Any]) -> dict[str, Any]:
+    try:
+        parsed = json.loads(str(row.get("input_json") or "{}"))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _pct(value: Any) -> str:
+    try:
+        return f"{float(value):.1%}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _dollars(value: float) -> str:
+    return f"+${value:.2f}" if value >= 0 else f"-${abs(value):.2f}"
+
+
+def _american_profit(price: Any) -> float | None:
+    try:
+        number = float(price)
+    except (TypeError, ValueError):
+        return None
+    if number == 0:
+        return None
+    return number / 100.0 if number > 0 else 100.0 / abs(number)
+
+
+def _american_text(price: Any) -> str:
+    try:
+        return f"{int(float(price)):+d}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _pikkit_outcome_label(
+    outcome: str,
+    *,
+    home: str,
+    away: str,
+) -> str:
+    return {
+        "home_win": f"{home} win",
+        "away_win": f"{away} win",
+        "home_cover": f"{home} cover",
+        "away_cover": f"{away} cover",
+        "over": "Over",
+        "under": "Under",
+        "push": "Push",
+    }.get(outcome, outcome.replace("_", " "))
+
+
+def _pikkit_market_report(
+    market: str,
+    analysis: dict[str, Any],
+    betonline: dict[str, Any],
+    *,
+    home: str,
+    away: str,
+) -> tuple[list[str], list[tuple[float, str]]]:
+    configs = {
+        "moneyline": (
+            "Moneyline",
+            (
+                ("away", "away_win", away, betonline.get("away_moneyline"), ""),
+                ("home", "home_win", home, betonline.get("home_moneyline"), ""),
+            ),
+        ),
+        "spread": (
+            "Spread",
+            (
+                (
+                    "away",
+                    "away_cover",
+                    away,
+                    betonline.get("away_spread_price"),
+                    _line_value(betonline.get("away_spread"), signed=True),
+                ),
+                (
+                    "home",
+                    "home_cover",
+                    home,
+                    betonline.get("home_spread_price"),
+                    _line_value(betonline.get("home_spread"), signed=True),
+                ),
+            ),
+        ),
+        "total": (
+            "Total",
+            (
+                (
+                    "over",
+                    "over",
+                    "Over",
+                    betonline.get("over_price"),
+                    _line_value(betonline.get("total")),
+                ),
+                (
+                    "under",
+                    "under",
+                    "Under",
+                    betonline.get("under_price"),
+                    _line_value(betonline.get("total")),
+                ),
+            ),
+        ),
+    }
+    title, sides = configs[market]
+    split_parts = []
+    for side, _outcome, label, _price, _line in sides:
+        data = (analysis.get("sides") or {}).get(side) or {}
+        split_parts.append(
+            f"{label}: {_pct(data.get('bet_pct'))} bets / "
+            f"{_pct(data.get('handle_pct'))} money"
+        )
+    lines = [f"<b>{title}</b> · {_esc(' · '.join(split_parts))}"]
+    sportsbook = analysis.get("sportsbook") or {}
+    nets = sportsbook.get("net_per_unit_handle") or {}
+    outcomes: list[tuple[float, str]] = []
+    for index, (side, outcome, label, price, line) in enumerate(sides):
+        other_side = sides[1 - index][0]
+        side_data = (analysis.get("sides") or {}).get(side) or {}
+        other_data = (analysis.get("sides") or {}).get(other_side) or {}
+        try:
+            winning_handle = float(side_data["handle_pct"])
+            losing_handle = float(other_data["handle_pct"])
+            net = float(nets[outcome]) * 100.0
+        except (KeyError, TypeError, ValueError):
+            continue
+        profit_rate = _american_profit(price)
+        if profit_rate is None:
+            continue
+        collected = losing_handle * 100.0
+        paid = winning_handle * profit_rate * 100.0
+        term = f"{line} ({_american_text(price)})" if line else _american_text(price)
+        action = (
+            "win"
+            if market == "moneyline"
+            else "cover"
+            if market == "spread"
+            else "wins"
+        )
+        lines.append(
+            f"• <b>{_esc(label)} {_esc(action)}</b> {_esc(term)}: "
+            f"collect ${collected:.2f}, pay ${paid:.2f} profit → "
+            f"<b>BO {_esc(_dollars(net))}</b>"
+        )
+        outcomes.append(
+            (
+                net,
+                f"{_pikkit_outcome_label(outcome, home=home, away=away)} "
+                f"({_dollars(net)})",
+            )
+        )
+    if market in {"spread", "total"}:
+        lines.append("• <b>Push</b>: <b>BO $0.00</b>")
+    return lines, outcomes
+
+
+def render_pikkit_details(rows: Iterable[dict[str, Any]]) -> list[str]:
+    """Render deterministic splits and book-outcome arithmetic, not raw prose."""
+    messages = []
+    for row in rows:
+        payload = _pikkit_input(row)
+        selected = payload.get("selected_snapshot") or {}
+        markets = selected.get("markets") or {}
+        betonline = selected.get("betonline") or {}
+        if not markets or not betonline:
+            messages.extend(
+                render_opinion_details([row], context="Shadow Pikkit Expert")
+            )
+            continue
+        phase = _pikkit_phase_label(row)
+        home = nickname(row.get("home_team"))
+        away = nickname(row.get("away_team"))
+        try:
+            probability = f"{float(row.get('home_win_probability')):.1%}"
+            margin = f"{float(row.get('expected_home_margin')):+.1f}"
+            summary = _pikkit_summary(row)
+            baseline_total = float(
+                (summary.get("market_baseline") or {})["projected_total"]
+            )
+            total_adjustment = float(
+                (summary.get("model_adjustment") or {})["projected_total"]
+            )
+            total = f"{baseline_total + total_adjustment:.1f}"
+            score = (
+                f"{home} {int(float(row.get('predicted_home_score')))}–"
+                f"{int(float(row.get('predicted_away_score')))} {away}"
+            )
+        except (KeyError, TypeError, ValueError):
+            try:
+                total = (
+                    f"{float(row.get('predicted_away_score')) + float(row.get('predicted_home_score')):.1f}"
+                )
+            except (TypeError, ValueError):
+                total = "—"
+            probability = (
+                f"{float(row.get('home_win_probability')):.1%}"
+                if row.get("home_win_probability") not in (None, "")
+                else "—"
+            )
+            margin = (
+                f"{float(row.get('expected_home_margin')):+.1f}"
+                if row.get("expected_home_margin") not in (None, "")
+                else "—"
+            )
+            try:
+                score = (
+                    f"{home} {int(float(row.get('predicted_home_score')))}–"
+                    f"{int(float(row.get('predicted_away_score')))} {away}"
+                )
+            except (TypeError, ValueError):
+                score = "—"
+        lines = [
+            f"📊 <b>Pikkit — {_esc(phase)} snapshot</b>",
+            "<i>Positive BO values are estimated sportsbook profit; "
+            "negative values are estimated loss.</i>",
+            "",
+            "<b>Market baseline</b>",
+            f"{_esc(home)} {probability} to win · home margin {margin} · "
+            f"total {total}",
+            f"Projected score: <b>{_esc(score)}</b>",
+            "",
+            "<b>Community splits and estimated BO result per $100 wagered</b>",
+        ]
+        all_outcomes: list[tuple[float, str]] = []
+        for market in ("moneyline", "spread", "total"):
+            analysis = markets.get(market)
+            if not isinstance(analysis, dict):
+                continue
+            market_lines, outcomes = _pikkit_market_report(
+                market,
+                analysis,
+                betonline,
+                home=home,
+                away=away,
+            )
+            lines.extend(["", *market_lines])
+            all_outcomes.extend(outcomes)
+        positive = sorted(
+            (item for item in all_outcomes if item[0] > 0),
+            reverse=True,
+        )
+        negative = sorted(item for item in all_outcomes if item[0] < 0)
+        lines.extend(["", "<b>Bottom line</b>"])
+        if positive:
+            lines.append(
+                "• Best estimated BO outcomes: "
+                + _esc(", ".join(label for _net, label in positive[:2]))
+            )
+        if negative:
+            lines.append(
+                "• Largest estimated BO liabilities: "
+                + _esc(", ".join(label for _net, label in negative[:2]))
+            )
+        if phase == "Initial":
+            lines.append(
+                "• <b>Pikkit pick: PASS</b> — initial observation; "
+                "the final shadow opinion comes at T−2h."
+            )
+        else:
+            lines.append(f"• <b>Final shadow pick:</b> {_esc(_labeled_legs(row))}")
+        try:
+            age_days = float(selected.get("snapshot_age_seconds")) / 86400.0
+        except (TypeError, ValueError):
+            age_days = 0.0
+        if age_days >= 1:
+            lines.extend(
+                [
+                    "",
+                    f"⚠️ BetOnline prices are {age_days:.1f} days older than "
+                    "this Pikkit snapshot.",
+                ]
+            )
+        lines.extend(
+            [
+                "",
+                "<i>Assumes BetOnline has Pikkit's handle split at these "
+                "prices. Markets are calculated independently; this is not "
+                "actual private liability.</i>",
+            ]
+        )
+        messages.append("\n".join(lines))
+    return messages
+
+
 def voice_line(row: dict[str, Any]) -> str:
     """One line per committee voice: ``Schedule Seahawks 66% ★★★ · 20-26``."""
     name = _esc(voice_name(row))
@@ -987,7 +1275,11 @@ def picks_opinion_groups(
             (
                 expert_id,
                 label,
-                render_opinion_details(detail_rows, context=context),
+                (
+                    render_pikkit_details(detail_rows)
+                    if expert_id == "pikkit"
+                    else render_opinion_details(detail_rows, context=context)
+                ),
             )
         )
     return groups
