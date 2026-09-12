@@ -368,6 +368,64 @@ def _extract_first_json_object(raw: str) -> dict | None:
         start += 1
 
 
+def _mark_slash_parlay_legs(parsed: dict, text: str) -> None:
+    """Promote slash-separated selections on one bet line to parlay legs.
+
+    A bet line that lists its selections slash-separated ("Gantt / Chairez ML")
+    is one combined ticket — _PARSE_PROMPT says so, but the bet-slip preamble
+    could override it: a capper who attaches a stats card to every post makes
+    has_media true, and "only set is_parlay_leg=true when the slip is ONE
+    combined ticket" is then answered by an image that shows no ticket at all,
+    so both legs came back as singles.
+
+    Downstream that is not cosmetic. _insert_odds takes the standalone path,
+    stamps the FIRST leg's price on the shared line and drops the second — the
+    Gantt/Chairez parlay displayed [-430] (the Gantt leg) for a -122 bet — and
+    each leg then grades as its own wager, so a 1-1 split posts one win and one
+    loss instead of a single parlay loss.
+
+    Fires only on the unambiguous shape: 2+ standalone picks whose subjects sit
+    in DIFFERENT slash segments of one line. A slash separating a market from
+    its unit sizing ("Tiger-Cats ML (+200) / (3.5u to win 7)") leaves every pick
+    in segment 0 and is left alone; a game-title slash ("Pistons / Magic
+    o208.5") parses to a single pick and never reaches the 2-pick test.
+    Blockquoted angle records ("> 35-13 parlays") are never the bet line.
+
+    The >3-char token rule is deliberately the same one _insert_odds uses for
+    its leg-terms header fallback, so a line this promotes is a line that pass
+    can then find.
+    """
+    picks = parsed.get("picks") or []
+    standalone = [p for p in picks if not p.get("is_parlay_leg")]
+    if len(standalone) < 2:
+        return
+    for line in text.split("\n"):
+        if line.lstrip().startswith(">") or "/" not in line:
+            continue
+        segments = [seg.lower() for seg in line.split("/")]
+        owners: dict[int, list[dict]] = {}
+        for pick in standalone:
+            subjects = list(pick.get("teams") or [])
+            if pick.get("player"):
+                subjects.append(pick["player"])
+            tokens = {
+                w for subj in subjects
+                for w in re.split(r"[^\w'-]+", subj.lower()) if len(w) > 3
+            }
+            if not tokens:
+                continue
+            hit = [i for i, seg in enumerate(segments) if any(t in seg for t in tokens)]
+            if len(hit) == 1:  # unambiguous: this pick lives in exactly one segment
+                owners.setdefault(hit[0], []).append(pick)
+        if len(owners) >= 2:
+            for seg_picks in owners.values():
+                for pick in seg_picks:
+                    pick["is_parlay_leg"] = True
+            print(f"    [parse] slash-separated selections on one line "
+                  f"({len(owners)} segments) → parlay legs")
+            return
+
+
 async def claude_parse(
     text: str,
     date: str | None = None,
@@ -386,7 +444,21 @@ async def claude_parse(
         # to-advance bet — the description must contain the word "advance" so the
         # odds fetcher routes it to the to_qualify market, not the 90-min h2h).
         prompt = (
-            "This message has an attached bet slip image. Treat the IMAGE as the "
+            # The slip rules below are only true of an actual bet slip. Cappers
+            # also attach stats/record cards, profit charts and photos to every
+            # post, and an image that shows no ticket was answering "is this one
+            # combined ticket?" with a silent no — which demoted a slash-
+            # separated parlay to two singles (UFC Analyst, Gantt/Chairez).
+            "This message has an attached image. FIRST decide what the image IS. "
+            "A BET SLIP shows a wager: one or more selections together with a "
+            "stake/wager amount and a payout (or 'to win') figure. Anything else "
+            "— a capper's stats or record card, a profit/ROI chart, a "
+            "leaderboard, a player or fighter photo, a meme — is NOT a bet slip "
+            "and says NOTHING about this bet. If the image is NOT a bet slip, "
+            "IGNORE the slip instructions in this paragraph entirely and "
+            "classify the pick from the MESSAGE TEXT alone using the rules "
+            "below. "
+            "If the image IS a bet slip: treat the IMAGE as the "
             "ground truth for the market, teams, bet type, AND whether the bets are "
             "separate straight bets or a single parlay. The message text may be "
             "vague slang that omits the exact bet — describe each market using the "
@@ -592,6 +664,9 @@ async def claude_parse(
                 ):
                     pick["description"] = desc.rstrip(". ") + " to advance"
                     break
+
+    if parsed:
+        _mark_slash_parlay_legs(parsed, text)
 
     return parsed
 
