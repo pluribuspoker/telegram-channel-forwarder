@@ -5,6 +5,7 @@ Provides event discovery (by date/sport) and community splits
 (bet %, handle %) for matched events.  Token stored in PIKKIT_TOKEN env var.
 """
 
+import asyncio
 import os
 import re
 import logging
@@ -187,21 +188,37 @@ async def fetch_splits(event_id: str) -> dict | None:
 
     url = f"{BASE}/event/foryou/{event_id}"
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        try:
-            resp = await client.get(url, headers=_headers())
-        except httpx.HTTPError as e:
-            log.warning("[pikkit] splits fetch error for %s: %s", event_id, e)
-            return None
+        for attempt in range(3):
+            try:
+                resp = await client.get(url, headers=_headers())
+            except httpx.HTTPError as e:
+                log.warning("[pikkit] splits fetch error for %s: %s", event_id, e)
+                return None
 
-        if resp.status_code in (401, 403):
-            log.warning("[pikkit] %d -- token expired", resp.status_code)
+            if resp.status_code == 429 and attempt < 2:
+                try:
+                    delay = float(resp.headers.get("Retry-After") or 2 ** attempt)
+                except ValueError:
+                    delay = float(2 ** attempt)
+                await asyncio.sleep(max(1.0, min(delay, 30.0)))
+                continue
+            break
+
+        if resp.status_code == 401:
+            log.warning("[pikkit] 401 -- token expired")
             _alert_token_expired()
+            return None
+        if resp.status_code == 403:
+            log.warning("[pikkit] splits unavailable (403) for %s", event_id)
             return None
         if resp.status_code != 200:
             log.warning("[pikkit] splits status %d for %s", resp.status_code, event_id)
             return None
 
         data = resp.json()
+        if not isinstance(data, dict):
+            log.warning("[pikkit] splits payload is not an object for %s", event_id)
+            return None
 
     community = data.get("community", {})
     breakdowns = community.get("breakdowns", {})
