@@ -940,10 +940,19 @@ either person sees or does.
   for the DM views; legacy pending and rejected rows are visible to
   reviewers through the deep link in their DMs, while the DM browser
   (`/guess_nfl_game` → 🧠) stays approved-only.
-- Loud and silent. Every card post and edit is silent. The one loud reply:
-  under the picks card once per newly approved bet leg
-  (`bet:<opinion>:<side|total>`). The
-  runner's own completion DM is silenced with `GOD_JUDGE_PENDING_DM=0`
+- Loud and silent. Every card post and edit is silent. The loud replies,
+  both under the picks card and both once each: 🔔 for a newly approved bet
+  leg (`bet:<opinion>:<side|total>`) and 🔕 for its withdrawal
+  (`withdrawn:<the bet's opinion>:<side|total>`) when a later approved row
+  from the same arm passes that leg — a flip to PASS is otherwise only a
+  silent card edit, so a standing 🔔 would read as live until kickoff. The
+  bet announcement records `expert_id`/`kind`/`leg` in its state entry;
+  the withdrawal quotes that recorded label (the pass row no longer carries
+  it) and appends the new `pass_reason`. Entries written before this
+  (no `expert_id`) never fire a withdrawal, so deploying is not a spray;
+  a re-bet announces again and can be withdrawn again. Games are frozen at
+  kickoff, so neither fires after a game starts. The runner's own
+  completion DM is silenced with `GOD_JUDGE_PENDING_DM=0`
   (`run_once(pending_dm=False)`); its failure and stall DMs are unchanged.
 - State: `moe_desk_state.json` (gitignored; `MOE_DESK_STATE_PATH` to move
   it) holds message ids and content hashes per card, announcements and

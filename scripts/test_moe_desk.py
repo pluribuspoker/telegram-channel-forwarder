@@ -1061,6 +1061,103 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(summary.alerts, [])
         self.assertEqual(sum(1 for m in self.api.sent if not m["silent"]), 1)
 
+    def test_a_withdrawn_bet_alerts_loudly_once_with_the_reason(self) -> None:
+        rows = committee("401", arms_status="approved")
+        rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
+        self.sync(rows)
+        entry = self.state["announced"]["bet:c884d868-0000:side"]
+        self.assertEqual(
+            (entry["expert_id"], entry["kind"], entry["leg"]),
+            ("god_rules", "side", "Seahawks -3.5 (+100) ★ 0.6u"),
+        )
+
+        rows.append(
+            arm_row(
+                "c884d868-1111",
+                "401",
+                "god_rules",
+                {**PASS_PLAIN, "pass_reason": "ev floor"},
+                PASS_PLAIN,
+                status="approved",
+                generated="2026-09-12T12:45:00+00:00",
+            )
+        )
+        summary = self.sync(rows)
+        self.assertEqual(summary.alerts, ["withdrawn:c884d868-0000:side"])
+        alert = self.api.sent[-1]
+        self.assertFalse(alert["silent"])
+        self.assertEqual(
+            alert["text"],
+            "🔕 Withdrawn · Seahawks -3.5 (+100) ★ 0.6u · rules arm — ev floor",
+        )
+        self.assertEqual(
+            alert["reply_to"], self.state["cards"]["picks:401"]["message_id"]
+        )
+        # idempotent: the judge arm (PASS all along) and later passes stay quiet
+        summary = self.sync(rows)
+        self.assertEqual(summary.alerts, [])
+        self.assertEqual(sum(1 for m in self.api.sent if not m["silent"]), 2)
+
+    def test_a_re_bet_after_a_withdrawal_alerts_both_ways_again(self) -> None:
+        rows = committee("401", arms_status="approved")
+        rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
+        self.sync(rows)
+        rows.append(
+            arm_row(
+                "c884d868-1111",
+                "401",
+                "god_rules",
+                {**PASS_PLAIN, "pass_reason": "ev floor"},
+                PASS_PLAIN,
+                status="approved",
+                generated="2026-09-12T12:45:00+00:00",
+            )
+        )
+        self.sync(rows)
+        rows.append(
+            arm_row(
+                "c884d868-2222",
+                "401",
+                "god_rules",
+                SEA_SIDE,
+                PASS_PLAIN,
+                status="approved",
+                generated="2026-09-12T12:50:00+00:00",
+            )
+        )
+        summary = self.sync(rows)
+        self.assertEqual(summary.alerts, ["bet:c884d868-2222:side"])
+        rows.append(
+            arm_row(
+                "c884d868-3333",
+                "401",
+                "god_rules",
+                PASS_ADVERSE,
+                PASS_PLAIN,
+                status="approved",
+                generated="2026-09-12T12:55:00+00:00",
+            )
+        )
+        summary = self.sync(rows)
+        self.assertEqual(summary.alerts, ["withdrawn:c884d868-2222:side"])
+        self.assertEqual(
+            self.api.sent[-1]["text"],
+            "🔕 Withdrawn · Seahawks -3.5 (+100) ★ 0.6u · rules arm — adverse move",
+        )
+
+    def test_legacy_announced_bets_never_fire_withdrawals(self) -> None:
+        # Entries written before the withdrawal alert carry no expert_id;
+        # firing from them on first deploy would alert for every game whose
+        # arm currently passes.
+        self.state["announced"]["bet:00000000-aaaa:side"] = {
+            "at": "2026-09-10T06:30:06+00:00",
+            "event_id": "401",
+        }
+        rows = committee("401", arms_status="approved")
+        summary = self.sync(rows)
+        self.assertEqual(summary.alerts, [])
+        self.assertTrue(all(m["silent"] for m in self.api.sent))
+
     def test_started_games_are_frozen_and_later_pruned(self) -> None:
         rows = committee("401", arms_status="approved")
         self.sync(rows)

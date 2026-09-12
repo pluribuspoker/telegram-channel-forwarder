@@ -24,8 +24,9 @@ warning were removed 2026-09-10; rejecting a bad row remains possible with
 ``scripts/review_moe_opinion.py``.
 
 Loud (a notification) in one place only: a reply under the picks card when
-a bet leg is approved. Everything else is posted silently and edited in
-place; Telegram edits never notify.
+a bet leg is approved — and, symmetrically, when a later pass withdraws a
+previously-announced bet (flips it to PASS). Everything else is posted
+silently and edited in place; Telegram edits never notify.
 
 Shared-message rules: a button either switches the shared card's view or
 deep-links into the tapper's own DM; nothing else navigates the shared
@@ -1337,6 +1338,24 @@ def render_bet_alert(desk: GameDesk, arm_row: dict[str, Any], kind: str) -> str:
     return _esc(text)
 
 
+def render_withdrawal_alert(
+    bet_entry: dict[str, Any], arm_row: dict[str, Any], kind: str
+) -> str:
+    """``🔕 Withdrawn · 49ers +3.5 (-102) ★ 0.8u · rules arm — ev floor``.
+
+    ``bet_entry`` is the announced-bet state record carrying the leg label
+    as it was alerted; the reason comes from the superseding row's PASS leg.
+    """
+    side, total = arm_legs(arm_row)
+    leg = side if kind == "side" else total
+    arm = ARM_LABELS.get(str(arm_row.get("expert_id")), "Arm").lower()
+    text = f"🔕 Withdrawn · {bet_entry.get('leg') or 'bet'} · {arm} arm"
+    reason = str((leg or {}).get("pass_reason") or "").strip()
+    if reason:
+        text += f" — {reason}"
+    return _esc(text)
+
+
 def render_scores_notice(text: str) -> str:
     """Proportional text with a bold first line — never <pre>.
 
@@ -1861,6 +1880,7 @@ def _announce(
     budget: _Budget,
     summary: SyncSummary,
     now: datetime,
+    extra: dict[str, Any] | None = None,
 ) -> None:
     if key in state["announced"]:
         return
@@ -1872,8 +1892,40 @@ def _announce(
     except DeskApiError as exc:
         summary.errors.append(f"{key}: {exc}")
         return
-    state["announced"][key] = {"at": now.isoformat(), "event_id": event_id}
+    entry: dict[str, Any] = {"at": now.isoformat(), "event_id": event_id}
+    if extra:
+        entry.update(extra)
+    state["announced"][key] = entry
     summary.alerts.append(key)
+
+
+def _announced_bet(
+    state: dict[str, Any], *, event_id: str, expert_id: str, kind: str
+) -> tuple[str, dict[str, Any]] | None:
+    """The latest announced bet for this event+arm+kind: (opinion_id, entry).
+
+    Only entries that recorded ``expert_id`` participate — legacy entries
+    predate the withdrawal alert, and firing from them on first deploy
+    would spray alerts for every game whose arm currently passes.
+    """
+    best: tuple[str, str, dict[str, Any]] | None = None
+    for key, entry in state["announced"].items():
+        if not key.startswith("bet:") or not isinstance(entry, dict):
+            continue
+        if (
+            entry.get("event_id") != event_id
+            or entry.get("expert_id") != expert_id
+            or entry.get("kind") != kind
+        ):
+            continue
+        _, _, remainder = key.partition(":")
+        opinion_id, _, _ = remainder.partition(":")
+        at = str(entry.get("at") or "")
+        # >= so an equal timestamp resolves to the later-inserted entry —
+        # insertion order is announcement order.
+        if best is None or at >= best[0]:
+            best = (at, opinion_id, entry)
+    return None if best is None else (best[1], best[2])
 
 
 def _drop_review_topic_state(state: dict[str, Any]) -> None:
@@ -1902,9 +1954,10 @@ def sync_desk(
     edit_only_event_id: str | None = None,
 ) -> SyncSummary:
     """Reconcile the group with the model: post missing cards, edit changed
-    ones, announce new bet legs once. Idempotent — an unchanged model is a
-    no-op — and bounded to ``max_posts`` new messages per pass so a first
-    run over a full slate spreads across passes."""
+    ones, announce new bet legs and withdrawals of announced bets once
+    each. Idempotent — an unchanged model is a no-op — and bounded to
+    ``max_posts`` new messages per pass so a first run over a full slate
+    spreads across passes."""
     desks = list(desks)
     summary = SyncSummary()
     priority = None
@@ -2019,15 +2072,47 @@ def sync_desk(
             for arm_row in (desk.rules, desk.judge):
                 if arm_row is None:
                     continue
+                expert_id = str(arm_row.get("expert_id") or "")
                 side, total = arm_legs(arm_row)
                 for kind, leg in (("side", side), ("total", total)):
-                    if not leg_is_bet(leg):
+                    if leg_is_bet(leg):
+                        _announce(
+                            key=f"bet:{arm_row.get('opinion_id')}:{kind}",
+                            event_id=desk.event_id,
+                            topic=config.picks_topic,
+                            text=render_bet_alert(desk, arm_row, kind),
+                            reply_to=picks_id,
+                            config=config,
+                            api=api,
+                            state=state,
+                            budget=budget,
+                            summary=summary,
+                            now=now,
+                            extra={
+                                "expert_id": expert_id,
+                                "kind": kind,
+                                "leg": leg_label(leg, kind=kind),
+                            },
+                        )
                         continue
+                    # The arm's latest row no longer bets this kind: if an
+                    # earlier row's bet was announced, say so once — loudly,
+                    # keyed by the withdrawn bet's opinion id so a re-bet
+                    # and later re-withdrawal alert again.
+                    prior = _announced_bet(
+                        state,
+                        event_id=desk.event_id,
+                        expert_id=expert_id,
+                        kind=kind,
+                    )
+                    if prior is None:
+                        continue
+                    bet_opinion_id, bet_entry = prior
                     _announce(
-                        key=f"bet:{arm_row.get('opinion_id')}:{kind}",
+                        key=f"withdrawn:{bet_opinion_id}:{kind}",
                         event_id=desk.event_id,
                         topic=config.picks_topic,
-                        text=render_bet_alert(desk, arm_row, kind),
+                        text=render_withdrawal_alert(bet_entry, arm_row, kind),
                         reply_to=picks_id,
                         config=config,
                         api=api,
