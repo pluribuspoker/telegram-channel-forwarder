@@ -108,9 +108,12 @@ async def fetch_events_for_date(dt: str) -> dict[str, list[dict]]:
                 log.warning("[pikkit] events fetch error: %s", e)
                 break
 
-            if resp.status_code in (401, 403):
-                log.warning("[pikkit] %d -- token expired or invalid", resp.status_code)
+            if resp.status_code == 401:
+                log.warning("[pikkit] 401 -- token expired")
                 _alert_token_expired()
+                return {}
+            if resp.status_code == 403:
+                log.warning("[pikkit] events unavailable (403) for %s", dt)
                 return {}
             if resp.status_code != 200:
                 log.warning("[pikkit] events status %d", resp.status_code)

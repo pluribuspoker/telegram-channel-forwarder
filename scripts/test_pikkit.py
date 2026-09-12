@@ -98,5 +98,23 @@ class FetchSplitsTests(unittest.IsolatedAsyncioTestCase):
         alert.assert_not_called()
 
 
+class FetchEventsTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        pikkit._events_cache.clear()
+
+    async def test_forbidden_date_does_not_report_expired_token(self):
+        client = _Client([_Response(403, {})])
+        alert = Mock()
+        with (
+            patch.dict(pikkit.os.environ, {"PIKKIT_TOKEN": "token"}),
+            patch.object(pikkit.httpx, "AsyncClient", return_value=client),
+            patch.object(pikkit, "_alert_token_expired", alert),
+        ):
+            self.assertEqual(
+                await pikkit.fetch_events_for_date("2026-12-01"), {}
+            )
+        alert.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
