@@ -79,6 +79,131 @@ class StateFileTest(unittest.TestCase):
         self.assertEqual(bot.read_state(), {})
 
 
+OLD_REPLY = """\
+> /model claude-opus-5
+  |- Set model to Opus 5 and saved as your default for new sessions
+
+> /effort max
+  |- Set effort level to max (this session only)
+"""
+NEW_ECHO = "\n> /model claude-opus-5\n"
+NEW_REPLY = NEW_ECHO + "  |- Set model to Opus 5 and saved as your default for new sessions\n"
+
+
+class PaneConfirmationTest(unittest.TestCase):
+    """The pane is never a clean slate — the last switch's reply is still on it."""
+
+    def setUp(self):
+        self.frames = []
+        self.typed = []
+        saved = (bot._pane_capture, bot._pane_type, bot._pane_alive, bot.time.sleep)
+
+        def advance(cmd):
+            self.typed.append(cmd)
+
+        self.calls = 0
+        bot._pane_capture = lambda lines=500: self._capture()
+        bot._pane_type = advance
+        bot._pane_alive = lambda: True
+        bot.time.sleep = lambda _s: None
+        self.addCleanup(lambda: self._restore(saved))
+
+    def _capture(self):
+        frame = self.frames[min(self.calls, len(self.frames) - 1)]
+        self.calls += 1
+        return frame
+
+    @staticmethod
+    def _restore(saved):
+        bot._pane_capture, bot._pane_type, bot._pane_alive, bot.time.sleep = saved
+
+    def test_stale_reply_is_not_confirmation(self):
+        # The exact 2026-09-11 miss: the same switch was issued minutes ago, so
+        # "Set model to" is already on screen when the new one is still typing.
+        self.frames = [OLD_REPLY]
+        ok, _ = bot.pane_command("/model claude-opus-5", "set model to", timeout=0.2)
+        self.assertFalse(ok)
+
+    def test_new_reply_after_a_stale_one_confirms(self):
+        self.frames = [OLD_REPLY, OLD_REPLY, OLD_REPLY + NEW_REPLY]
+        ok, detail = bot.pane_command("/model claude-opus-5", "set model to", timeout=5)
+        self.assertTrue(ok)
+        # …and reports the new reply, not everything since the old echo.
+        self.assertNotIn("/effort", detail)
+
+    def test_queued_command_is_not_confirmed(self):
+        # Claude mid-turn echoes the command and answers it later.
+        self.frames = [OLD_REPLY, OLD_REPLY + NEW_ECHO]
+        ok, _ = bot.pane_command("/model claude-opus-5", "set model to", timeout=0.2)
+        self.assertFalse(ok)
+
+    def test_first_ever_switch_confirms(self):
+        self.frames = ["> some earlier work\n", "> some earlier work\n" + NEW_REPLY]
+        ok, _ = bot.pane_command("/model claude-opus-5", "set model to", timeout=5)
+        self.assertTrue(ok)
+
+    def test_dead_pane_is_reported_not_typed_into(self):
+        bot._pane_alive = lambda: False
+        ok, detail = bot.pane_command("/model claude-opus-5", "set model to", timeout=5)
+        self.assertFalse(ok)
+        self.assertEqual(self.typed, [])
+        self.assertIn("restart", detail)
+
+
+class SwitchModelTest(unittest.TestCase):
+    """Only a switch the CLI actually took may be written to the state file."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        saved = (bot.STATE_FILE, bot.pane_command, bot.settings_model)
+        bot.STATE_FILE = Path(self.tmp.name) / "state.env"
+        self.addCleanup(lambda: self._restore(saved))
+
+    @staticmethod
+    def _restore(saved):
+        bot.STATE_FILE, bot.pane_command, bot.settings_model = saved
+
+    def test_confirmed_switch_persists(self):
+        bot.pane_command = lambda *a, **k: (True, "Set model to Opus 5")
+        bot.settings_model = lambda: "claude-opus-5"
+        ok, _ = bot.switch_model("claude-opus-5")
+        self.assertTrue(ok)
+        self.assertEqual(bot.read_state()["CLAUDE_CHANNELS_MODEL"], "claude-opus-5")
+
+    def test_unconfirmed_switch_persists_nothing(self):
+        # A restart must not land on a model the CLI never agreed to.
+        bot.pane_command = lambda *a, **k: (False, "pane busy")
+        bot.settings_model = lambda: "claude-fable-5"
+        ok, _ = bot.switch_model("claude-opus-5")
+        self.assertFalse(ok)
+        self.assertEqual(bot.read_state(), {})
+
+    def test_late_acceptance_counts(self):
+        # Queued mid-turn, run after the pane timeout: settings.json moved, and
+        # the CLI writes it only for a model it accepted.
+        models = iter(["claude-fable-5", "claude-opus-5"])
+        bot.pane_command = lambda *a, **k: (False, "pane busy")
+        bot.settings_model = lambda: next(models)
+        ok, _ = bot.switch_model("claude-opus-5")
+        self.assertTrue(ok)
+        self.assertEqual(bot.read_state()["CLAUDE_CHANNELS_MODEL"], "claude-opus-5")
+
+    def test_already_on_target_is_not_mistaken_for_a_switch(self):
+        bot.pane_command = lambda *a, **k: (False, "pane busy")
+        bot.settings_model = lambda: "claude-opus-5"
+        ok, _ = bot.switch_model("claude-opus-5")
+        self.assertFalse(ok)
+
+    def test_effort_persists_even_unconfirmed(self):
+        # Five closed values that cannot break a start, and the CLI keeps effort
+        # session-only — the file is the only thing that carries it over.
+        bot.pane_command = lambda *a, **k: (False, "pane busy")
+        ok, _ = bot.switch_effort("high")
+        self.assertFalse(ok)
+        self.assertEqual(bot.read_state()["CLAUDE_CHANNELS_EFFORT"], "high")
+
+
 @unittest.skipUnless(shutil.which("bash"), "launcher resolution needs bash")
 class LauncherResolutionTest(unittest.TestCase):
     """The launcher is the one place model resolution happens (--print-model)."""

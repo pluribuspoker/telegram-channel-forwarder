@@ -172,37 +172,61 @@ def launched_model() -> str:
     return m.group(1) if m else "(not running)"
 
 
-def pane_command(cmd: str, marker: str, timeout: float = 15.0) -> tuple[bool, str]:
-    """Type a slash command into Claude's pane and wait for ITS reply.
+def _pane_alive() -> bool:
+    return subprocess.run(
+        ["tmux", "has-session", "-t", PANE], capture_output=True
+    ).returncode == 0
 
-    Only the text after the LAST occurrence of the command counts. An earlier
-    switch's reply is still on screen, and a command Claude has merely QUEUED
-    (busy mid-turn) appears with nothing under it — which is exactly the "not
-    confirmed" answer wanted, rather than a stale success.
-    """
-    if subprocess.run(["tmux", "has-session", "-t", PANE], capture_output=True).returncode:
-        return False, "no tmux session — /restart first"
+
+def _pane_capture(lines: int = 500) -> str:
+    return run_argv(["tmux", "capture-pane", "-p", "-t", PANE, "-S", f"-{lines}"])
+
+
+def _pane_type(cmd: str) -> None:
     run_argv(["tmux", "send-keys", "-t", PANE, "C-u"])  # drop anything half-typed
     run_argv(["tmux", "send-keys", "-t", PANE, "-l", cmd])
     run_argv(["tmux", "send-keys", "-t", PANE, "Enter"])
+
+
+def pane_command(cmd: str, marker: str, timeout: float = 15.0) -> tuple[bool, str]:
+    """Type a slash command into Claude's pane and wait for ITS reply.
+
+    "Is the marker on screen" is not an answer: the pane still shows the last
+    switch's reply, so re-issuing the same command matches the OLD one in the
+    second before the new one renders — caught doing exactly that on
+    2026-09-11. Confirmation needs the command echoed one time MORE than it was
+    before we typed (pane history only grows), and the marker in what follows
+    that newest echo. A command Claude merely QUEUED mid-turn is echoed with
+    nothing under it, and so reads as unconfirmed, which is the truth.
+    """
+    if not _pane_alive():
+        return False, "no tmux session — /restart first"
+    seen = _pane_capture().count(cmd)
+    _pane_type(cmd)
     deadline = time.time() + timeout
     while True:
         time.sleep(1.0)
-        pane = run_argv(["tmux", "capture-pane", "-p", "-t", PANE, "-S", "-40"])
-        tail = pane.rsplit(cmd, 1)[1] if cmd in pane else ""
-        if marker.lower() in tail.lower():
-            return True, tail.strip()
+        pane = _pane_capture()
+        if pane.count(cmd) > seen:
+            tail = pane.rsplit(cmd, 1)[1]
+            if marker.lower() in tail.lower():
+                return True, tail.strip()
         if time.time() >= deadline:
-            return False, pane[-1200:]
+            return False, _pane_capture(40)[-1200:]
 
 
 def switch_model(target: str) -> tuple[bool, str]:
     """Move the live session, then make it stick. Persist only what took."""
+    before = settings_model()
     ok, detail = pane_command(f"/model {target}", "set model to")
-    if ok or settings_model() == target:
+    # The CLI writes settings.json only for a model it accepted, so a value
+    # that changed to the target is proof the switch landed — the case where
+    # Claude was mid-turn and ran the queued command after the pane timeout.
+    if not ok and before != target and settings_model() == target:
+        ok = True
+    if ok:
         write_state(CLAUDE_CHANNELS_MODEL=target)
-        return True, detail
-    return False, detail
+    return ok, detail
 
 
 def switch_effort(level: str) -> tuple[bool, str]:
