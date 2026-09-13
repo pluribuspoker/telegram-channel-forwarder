@@ -1798,26 +1798,67 @@ def render_bet_card(
     selection, then a row per arm — God first — with stars, units and price.
     Stars/units (and the headline's line) render announced→current when they
     have drifted from ``arms_state``'s ``first`` baselines; the card is
-    edited in place as numbers move, so it carries no timestamps."""
+    edited in place as numbers move, so it carries no timestamps. A
+    withdrawn arm stays on the card as ✖ with its last stake struck
+    through, and once no arm bets the headline flips 🔕 with the selection
+    struck — the card IS the withdrawal record; nothing pings (operator-
+    picked, 2026-09-13)."""
     legs = _card_legs(desk, kind)
+    withdrawn = {
+        expert_id
+        for expert_id, info in arms_state.items()
+        if isinstance(info, dict) and info.get("withdrawn")
+    }
     primary = next(
-        (eid for eid in BET_ARM_ORDER if leg_is_bet(legs.get(eid))), None
+        (
+            eid
+            for eid in BET_ARM_ORDER
+            if eid not in withdrawn and leg_is_bet(legs.get(eid))
+        ),
+        None,
     )
-    head_leg = legs.get(primary) or {}
-    head_first = (arms_state.get(primary) or {}).get("first") or {}
-    selection = str(head_leg.get("selection") or "")
-    selection_text = nickname(selection) if kind == "side" else selection
-    line = _leg_line(head_leg)
-    first_line = head_first.get("line")
-    if first_line is None or first_line == line:
-        line_text = _line_text(line, kind)
+    if primary is not None:
+        head_leg = legs.get(primary) or {}
+        head_first = (arms_state.get(primary) or {}).get("first") or {}
+        selection = str(head_leg.get("selection") or "")
+        selection_text = nickname(selection) if kind == "side" else selection
+        line = _leg_line(head_leg)
+        first_line = head_first.get("line")
+        if first_line is None or first_line == line:
+            line_text = _line_text(line, kind)
+        else:
+            line_text = f"{_line_text(first_line, kind)}→{_line_text(line, kind)}"
+        headline = " ".join(part for part in (selection_text, line_text) if part)
+        head = f"🔔 <b>{_esc(headline)}</b> · {_teams_short(desk, team_abbrevs)}"
     else:
-        line_text = f"{_line_text(first_line, kind)}→{_line_text(line, kind)}"
-    headline = " ".join(part for part in (selection_text, line_text) if part)
-    lines = [f"🔔 <b>{_esc(headline)}</b> · {_teams_short(desk, team_abbrevs)}"]
+        # the bet is dead: strike the last announced selection
+        selection, line = "", None
+        label = next(
+            (
+                str((arms_state.get(eid) or {}).get("leg") or "")
+                for eid in BET_ARM_ORDER
+                if eid in withdrawn
+            ),
+            "",
+        )
+        head_text = _label_head(label) or label or "bet"
+        head = f"🔕 <s>{_esc(head_text)}</s> · {_teams_short(desk, team_abbrevs)}"
+    lines = [head]
     for expert_id in BET_ARM_ORDER:
         name = BET_ARM_NAMES[expert_id]
         leg = legs.get(expert_id)
+        if expert_id in withdrawn:
+            label = str((arms_state.get(expert_id) or {}).get("leg") or "")
+            stake = _label_stake(label) or label or "bet"
+            row_text = f"<b>{name}</b> ✖ <s>{_esc(stake)}</s>"
+            reason = ""
+            if leg is not None and not leg_is_bet(leg):
+                reason = str(leg.get("pass_reason") or "").strip()
+                reason = PASS_REASON_SHORT.get(reason, reason)
+            if reason:
+                row_text += f" · {_esc(reason)}"
+            lines.append(row_text)
+            continue
         if leg is None:
             lines.append(f"<b>{name}</b> —")
             continue
@@ -1866,21 +1907,21 @@ def render_bet_card(
     return "\n".join(lines)
 
 
-def render_withdrawal_alert(
-    leg_text: str, expert_id: str, pass_leg: dict[str, Any] | None
-) -> str:
-    """``🔕 Withdrawn · 49ers +3.5 (-102) ★ 0.8u · Rules — edge too thin``.
+def _label_head(label: Any) -> str:
+    """``Over 44.5`` out of ``Over 44.5 (-110) ★★ 1.5u`` — the selection
+    part of a rendered leg label, for the dead card's struck headline."""
+    match = _LEGACY_ALERT_LABEL.match(str(label or ""))
+    return (match.group("head") or "").strip() if match else ""
 
-    ``leg_text`` is the bet as its card last showed it; the reason comes
-    from the superseding row's PASS leg.
-    """
-    name = BET_ARM_NAMES.get(expert_id, "Arm")
-    text = f"🔕 Withdrawn · {leg_text or 'bet'} · {name}"
-    reason = str((pass_leg or {}).get("pass_reason") or "").strip()
-    reason = PASS_REASON_SHORT.get(reason, reason)
-    if reason:
-        text += f" — {reason}"
-    return _esc(text)
+
+def _label_stake(label: Any) -> str:
+    """``★★ 1.5u`` out of ``Over 44.5 (-110) ★★ 1.5u`` — the stake part of
+    a rendered leg label, for a withdrawn arm's struck row."""
+    match = _LEGACY_ALERT_LABEL.match(str(label or ""))
+    if not match:
+        return ""
+    units = match.group("units")
+    return match.group("stars") + (f" {units}u" if units else "")
 
 
 def render_scores_notice(text: str) -> str:
@@ -2428,38 +2469,6 @@ def _remove_legacy_picks_cards(
             del summary.errors[error_count:]
 
 
-def _announce(
-    *,
-    key: str,
-    event_id: str,
-    topic: int,
-    text: str,
-    reply_to: int | None,
-    config: DeskConfig,
-    api: BotApi,
-    state: dict[str, Any],
-    budget: _Budget,
-    summary: SyncSummary,
-    now: datetime,
-    extra: dict[str, Any] | None = None,
-) -> None:
-    if key in state["announced"]:
-        return
-    if not budget.take():
-        summary.deferred.append(key)
-        return
-    try:
-        api.send(config.chat_id, topic, text, silent=False, reply_to=reply_to)
-    except DeskApiError as exc:
-        summary.errors.append(f"{key}: {exc}")
-        return
-    entry: dict[str, Any] = {"at": now.isoformat(), "event_id": event_id}
-    if extra:
-        entry.update(extra)
-    state["announced"][key] = entry
-    summary.alerts.append(key)
-
-
 def _legacy_announced(
     state: dict[str, Any], *, event_id: str, kind: str
 ) -> dict[str, tuple[str, dict[str, Any]]]:
@@ -2717,16 +2726,19 @@ def _sync_bet_card(
     now: datetime,
     team_abbrevs: dict[str, str] | None,
 ) -> None:
-    """Reconcile the one 🔔 card for this event+kind.
+    """Reconcile the one card for this event+kind.
 
     Loud send for a new bet leg (including an arm joining, re-betting or
     flipping its selection — the stale card is deleted and reposted); a
     silent in-place edit for every other change (units, stars, line,
-    price); a loud 🔕 for a withdrawal, keyed by the withdrawn bet's
-    opinion id so a re-bet and later re-withdrawal alert again; the card
-    is deleted once no arm bets. Pre-card ``bet:{opinion_id}`` alerts
-    count as announced, so a deploy over standing bets stays silent until
-    a bet actually moves."""
+    price). Withdrawals are silent card state (operator-picked,
+    2026-09-13): the arm is marked ``withdrawn`` and rendered struck
+    through, and once no arm bets the card flips to a 🔕 headline and is
+    kept as the record — never deleted, never a separate message. Pre-card
+    ``bet:{opinion_id}`` alerts count as announced, so a deploy over
+    standing bets stays silent until a bet actually moves; a legacy arm
+    that has since withdrawn promotes to a dead card unless the loud-🔕
+    era already recorded it (a ``withdrawn:`` key)."""
     key = f"betcard:{desk.event_id}:{kind}"
     entry = state["announced"].get(key)
     if not isinstance(entry, dict):
@@ -2749,53 +2761,37 @@ def _sync_bet_card(
         {} if entry else _legacy_announced(state, event_id=desk.event_id, kind=kind)
     )
 
-    # A previously announced arm that no longer bets says so loudly, once.
-    withdrawn_sources: list[tuple[str, str, str]] = []
+    # An announced arm that no longer bets is marked withdrawn in place —
+    # the card strikes it through; nothing pings, and the leg/first stay
+    # frozen at the last bet so the struck stake reads as it was shown.
     for expert_id, info in arms_state.items():
-        if expert_id in betting or rows.get(expert_id) is None:
+        if expert_id in betting or info.get("withdrawn"):
             continue
-        withdrawn_sources.append(
-            (expert_id, str(info.get("opinion_id") or ""), str(info.get("leg") or ""))
-        )
+        if rows.get(expert_id) is None:
+            continue  # no superseding row: not a withdrawal
+        info["withdrawn"] = True
+    promoted_withdrawn: list[str] = []
     if entry is None:
         for expert_id, (opinion_id, legacy_entry) in legacy.items():
             if expert_id in betting or rows.get(expert_id) is None:
                 continue
-            withdrawn_sources.append(
-                (expert_id, opinion_id, str(legacy_entry.get("leg") or ""))
-            )
-    for expert_id, opinion_id, label in withdrawn_sources:
-        side, total = arm_legs(rows[expert_id])
-        pass_leg = side if kind == "side" else total
-        withdrawn_key = f"withdrawn:{opinion_id}:{kind}"
-        _announce(
-            key=withdrawn_key,
-            event_id=desk.event_id,
-            topic=config.picks_topic,
-            text=render_withdrawal_alert(label, expert_id, pass_leg),
-            reply_to=picks_id,
-            config=config,
-            api=api,
-            state=state,
-            budget=budget,
-            summary=summary,
-            now=now,
-        )
-        if withdrawn_key in state["announced"]:
-            arms_state.pop(expert_id, None)
+            side, total = arm_legs(rows[expert_id])
+            pass_leg = side if kind == "side" else total
+            if leg_is_bet(pass_leg):
+                continue
+            if f"withdrawn:{opinion_id}:{kind}" in state["announced"]:
+                continue  # the loud-🔕 era already recorded this one
+            arms_state[expert_id] = {
+                "opinion_id": opinion_id,
+                "leg": str(legacy_entry.get("leg") or ""),
+                "withdrawn": True,
+            }
+            promoted_withdrawn.append(expert_id)
 
-    if not betting:
-        if entry is not None:
-            if arms_state:
-                # a withdrawal is still deferred: keep the entry for it
-                entry["arms"] = arms_state
-                state["announced"][key] = entry
-                return
-            message_id = entry.get("message_id")
-            if message_id:
-                api.delete(config.chat_id, int(message_id))
-            state["announced"].pop(key, None)
-        return
+    if not betting and not any(
+        info.get("withdrawn") for info in arms_state.values()
+    ):
+        return  # nothing announced, nothing to record
 
     # Fold the betting arms into the card state; a new leg reposts loudly.
     loud = False
@@ -2804,15 +2800,18 @@ def _sync_bet_card(
         prior = arms_state.get(expert_id)
         first: dict[str, Any] | None = None
         if isinstance(prior, dict):
-            prior_first = prior.get("first")
-            if isinstance(prior_first, dict):
-                first = prior_first
-            if (
-                first is not None
-                and str(first.get("selection") or "") != snapshot["selection"]
-            ):
-                first = None  # the arm flipped: fresh baseline, loud repost
-                loud = True
+            if prior.get("withdrawn"):
+                loud = True  # a re-bet revives the card, fresh baseline
+            else:
+                prior_first = prior.get("first")
+                if isinstance(prior_first, dict):
+                    first = prior_first
+                if (
+                    first is not None
+                    and str(first.get("selection") or "") != snapshot["selection"]
+                ):
+                    first = None  # the arm flipped: fresh baseline, loud repost
+                    loud = True
         elif entry is None and expert_id in legacy:
             seeded = _legacy_first(legacy[expert_id][1].get("leg"), leg, kind)
             if seeded == "flip":
@@ -2826,7 +2825,7 @@ def _sync_bet_card(
             "leg": leg_label(leg, kind=kind),
             "first": first or snapshot,
         }
-    if entry is None and not loud:
+    if entry is None and not loud and not promoted_withdrawn:
         covered = all(
             expert_id in legacy
             and arms_state[expert_id]["leg"]
@@ -2882,7 +2881,7 @@ def _sync_bet_card(
         summary.alerts.append(key)
     else:
         summary.posted.append(key)
-    for expert_id in betting:
+    for expert_id in (*betting, *promoted_withdrawn):
         if expert_id in legacy:
             state["announced"].pop(f"bet:{legacy[expert_id][0]}:{kind}", None)
 

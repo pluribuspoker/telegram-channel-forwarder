@@ -947,27 +947,36 @@ either person sees or does.
   non-betting arm's row reads `no bet · <reason>` with the reason mapped
   to plain English by `PASS_REASON_SHORT` (ev floor → edge too thin,
   adverse move → line moved against, no positive expectation → no edge;
-  operator-picked copy, 2026-09-13) — the 🔕 withdrawal shares the
-  mapping; an arm with no row yet stays a bare `—`. The
+  operator-picked copy, 2026-09-13) — a withdrawn arm's struck row shares
+  the mapping; an arm with no row yet stays a bare `—`. The
   card is edited in place as numbers move; stars, units and the headline's
   line render announced→current (`★★→★`, `2.3→1.2u`, `-3.5→-2.5`) from the
   per-arm `first` baselines in state, so drift is visible with no
   timestamps and no history growth (a value returning to its announced
   number drops the arrow). Price shows current only — it ticks too often
-  to arrow. Loud, once each: the card's first post for a new bet leg; a
-  delete+loud repost when an arm joins, re-bets, or flips its selection
-  (an edit can't ping, and the joining arm's baseline resets while the
-  standing arm's survives); and 🔕 for a withdrawal
-  (`withdrawn:<the bet's opinion>:<side|total>`) quoting the card's last
-  label for that arm plus the new `pass_reason` — which also deletes the
-  🔔 card once no arm bets, so a stale bet never reads as live until
-  kickoff. A hand-deleted card is reposted silently on the next change.
-  Migration: pre-card `bet:<opinion>` entries count as announced — the
-  deploy is not a spray — and the first real change promotes one to a
-  silent card whose baselines are parsed back out of the alerted label
-  (`_legacy_first`), so even that first drift shows arrows; entries
-  without `expert_id` (pre-withdrawal era) stay inert as before. Games
-  are frozen at kickoff, so nothing fires after a game starts. The
+  to arrow. Loud, once each: the card's first post for a new bet leg, and
+  a delete+loud repost when an arm joins, re-bets after a withdrawal, or
+  flips its selection (an edit can't ping, and the joining arm's baseline
+  resets while the standing arm's survives). Withdrawals are SILENT card
+  state (operator-picked (A) on 2026-09-13, superseding the 2026-09-12
+  loud 🔕 message): the arm is marked `withdrawn` in the entry — its leg
+  label and baselines frozen at the last bet — and its row renders
+  `✖ <s>★★ 1.5u</s> · <short reason>` (stake parsed from the frozen label
+  by `_label_stake`); once no arm bets, the headline flips to
+  `🔕 <s>Over 44.5</s>` (`_label_head`) and the card is KEPT as the
+  record — never deleted, no separate message, no ping. The operator
+  accepted that a kill is glance-only: the 49ers@Rams failure was a stale
+  ALERT claiming a dead bet was live, and the always-current card is the
+  fix for that, not the loudness. A hand-deleted card is reposted
+  silently on the next change. Migration: pre-card `bet:<opinion>`
+  entries count as announced — the deploy is not a spray — and the first
+  real change promotes one to a silent card whose baselines are parsed
+  back out of the alerted label (`_legacy_first`), so even that first
+  drift shows arrows; a legacy arm that has since withdrawn promotes to a
+  silent dead card unless a `withdrawn:` key shows the loud-🔕 era
+  already recorded it; entries without `expert_id` (pre-withdrawal era)
+  stay inert as before. Games are frozen at kickoff, so nothing fires
+  after a game starts. The
   runner's own completion DM is silenced with `GOD_JUDGE_PENDING_DM=0`
   (`run_once(pending_dm=False)`); its failure and stall DMs are unchanged.
 - State: `moe_desk_state.json` (gitignored; `MOE_DESK_STATE_PATH` to move

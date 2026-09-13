@@ -1345,7 +1345,7 @@ class SyncTests(unittest.TestCase):
             replacement["id"],
         )
 
-    def test_a_withdrawn_bet_alerts_loudly_once_with_the_reason(self) -> None:
+    def test_a_withdrawal_strikes_the_card_silently(self) -> None:
         rows = committee("401", arms_status="approved")
         rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
         self.sync(rows)
@@ -1367,29 +1367,61 @@ class SyncTests(unittest.TestCase):
             )
         )
         summary = self.sync(rows)
-        self.assertEqual(summary.alerts, ["withdrawn:c884d868-0000:side"])
-        alert = self.api.sent[-1]
-        self.assertFalse(alert["silent"])
+        self.assertEqual(summary.alerts, [])
+        self.assertEqual(summary.edited, ["betcard:401:side"])
+        edit = self.api.edits[-1]
+        self.assertEqual(edit["id"], card_id)
         self.assertEqual(
-            alert["text"],
-            "🔕 Withdrawn · Seahawks -3.5 (+100) ★ 0.6u · Rules — edge too thin",
+            edit["text"],
+            "🔕 <s>Seahawks -3.5</s> · Patriots @ Seahawks\n"
+            "<b>God</b> no bet\n"
+            "<b>Rules</b> ✖ <s>★ 0.6u</s> · edge too thin",
         )
-        self.assertEqual(
-            alert["reply_to"],
-            self.state["cards"]["picks-day:2026-09-13"]["message_id"],
+        # the card stays as the record — no delete, no separate message
+        self.assertNotIn(card_id, self.api.deleted)
+        self.assertTrue(
+            self.state["announced"]["betcard:401:side"]["arms"]["god_rules"][
+                "withdrawn"
+            ]
         )
-        # the stale 🔔 card is removed; the 🔕 is the record
-        self.assertIn(card_id, self.api.deleted)
-        self.assertNotIn("betcard:401:side", self.state["announced"])
-        # idempotent: the judge arm (PASS all along) and later passes stay quiet
+        # idempotent: later passes stay quiet
+        edits_before = len(self.api.edits)
         summary = self.sync(rows)
         self.assertEqual(summary.alerts, [])
-        self.assertEqual(sum(1 for m in self.api.sent if not m["silent"]), 2)
+        self.assertEqual(len(self.api.edits), edits_before)
+        self.assertEqual(sum(1 for m in self.api.sent if not m["silent"]), 1)
 
-    def test_a_re_bet_after_a_withdrawal_alerts_both_ways_again(self) -> None:
+    def test_a_partial_withdrawal_keeps_the_live_headline(self) -> None:
+        rows = committee("401", arms_status="approved")
+        rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
+        rows[6]["side_pick_json"] = json.dumps(SEA_SIDE)
+        self.sync(rows)
+        rows.append(
+            arm_row(
+                "c884d868-1111",
+                "401",
+                "god_rules",
+                PASS_ADVERSE,
+                PASS_PLAIN,
+                status="approved",
+                generated="2026-09-12T12:45:00+00:00",
+            )
+        )
+        summary = self.sync(rows)
+        self.assertEqual(summary.alerts, [])
+        self.assertEqual(summary.edited, ["betcard:401:side"])
+        self.assertEqual(
+            self.api.edits[-1]["text"],
+            "🔔 <b>Seahawks -3.5</b> · Patriots @ Seahawks\n"
+            "<b>God</b> ★ 0.6u (+100)\n"
+            "<b>Rules</b> ✖ <s>★ 0.6u</s> · line moved against",
+        )
+
+    def test_a_re_bet_after_a_withdrawal_revives_the_card_loudly(self) -> None:
         rows = committee("401", arms_status="approved")
         rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
         self.sync(rows)
+        dead_id = self.state["announced"]["betcard:401:side"]["message_id"]
         rows.append(
             arm_row(
                 "c884d868-1111",
@@ -1401,13 +1433,13 @@ class SyncTests(unittest.TestCase):
                 generated="2026-09-12T12:45:00+00:00",
             )
         )
-        self.sync(rows)
+        self.sync(rows)  # silent flip to 🔕
         rows.append(
             arm_row(
                 "c884d868-2222",
                 "401",
                 "god_rules",
-                SEA_SIDE,
+                {**SEA_SIDE, "stake_units": 1.1},
                 PASS_PLAIN,
                 status="approved",
                 generated="2026-09-12T12:50:00+00:00",
@@ -1415,6 +1447,21 @@ class SyncTests(unittest.TestCase):
         )
         summary = self.sync(rows)
         self.assertEqual(summary.alerts, ["betcard:401:side"])
+        self.assertIn(dead_id, self.api.deleted)
+        alert = self.api.sent[-1]
+        self.assertFalse(alert["silent"])
+        # fresh baseline: no drift arrows on the revived card
+        self.assertEqual(
+            alert["text"],
+            "🔔 <b>Seahawks -3.5</b> · Patriots @ Seahawks\n"
+            "<b>God</b> no bet\n"
+            "<b>Rules</b> ★ 1.1u (+100)",
+        )
+        self.assertNotIn(
+            "withdrawn",
+            json.dumps(self.state["announced"]["betcard:401:side"]),
+        )
+        # and a second withdrawal strikes it silently again
         rows.append(
             arm_row(
                 "c884d868-3333",
@@ -1427,11 +1474,46 @@ class SyncTests(unittest.TestCase):
             )
         )
         summary = self.sync(rows)
-        self.assertEqual(summary.alerts, ["withdrawn:c884d868-2222:side"])
-        self.assertEqual(
-            self.api.sent[-1]["text"],
-            "🔕 Withdrawn · Seahawks -3.5 (+100) ★ 0.6u · Rules — line moved against",
+        self.assertEqual(summary.alerts, [])
+        self.assertIn(
+            "<b>Rules</b> ✖ <s>★ 1.1u</s> · line moved against",
+            self.api.edits[-1]["text"],
         )
+
+    def test_a_legacy_withdrawal_promotes_to_a_silent_dead_card(self) -> None:
+        legacy_entry = {
+            "at": "2026-09-12T12:31:00+00:00",
+            "event_id": "401",
+            "expert_id": "god_rules",
+            "kind": "side",
+            "leg": "Seahawks -3.5 (+100) ★ 0.6u",
+        }
+        self.state["announced"]["bet:c884d868-0000:side"] = dict(legacy_entry)
+        rows = committee("401", arms_status="approved")  # rules passes now
+        summary = self.sync(rows)
+        self.assertEqual(summary.alerts, [])
+        card = self.api.sent[-1]
+        self.assertTrue(card["silent"])
+        self.assertEqual(
+            card["text"],
+            "🔕 <s>Seahawks -3.5</s> · Patriots @ Seahawks\n"
+            "<b>God</b> no bet\n"
+            "<b>Rules</b> ✖ <s>★ 0.6u</s> · line moved against",
+        )
+        self.assertNotIn("bet:c884d868-0000:side", self.state["announced"])
+
+        # …unless the loud-🔕 era already recorded that same withdrawal
+        self.state["announced"].pop("betcard:401:side")
+        self.state["announced"]["bet:c884d868-0000:side"] = dict(legacy_entry)
+        self.state["announced"]["withdrawn:c884d868-0000:side"] = {
+            "at": "2026-09-12T13:00:00+00:00",
+            "event_id": "401",
+        }
+        sent_before = len(self.api.sent)
+        summary = self.sync(rows)
+        self.assertEqual(summary.alerts, [])
+        self.assertNotIn("betcard:401:side", self.state["announced"])
+        self.assertEqual(len(self.api.sent), sent_before)
 
     def test_legacy_alert_stays_quiet_until_the_bet_moves(self) -> None:
         # A pre-card ``bet:{opinion_id}`` entry covers the standing bet: the
