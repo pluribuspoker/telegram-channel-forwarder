@@ -73,6 +73,11 @@ RULES_EXPERT_ID = "god_rules"
 JUDGE_EXPERT_ID = "god_judge"
 ARM_IDS = (RULES_EXPERT_ID, JUDGE_EXPERT_ID)
 ARM_LABELS = {RULES_EXPERT_ID: "Rules", JUDGE_EXPERT_ID: "Judge"}
+# The bet card names the arms the way the operator does — God (the judge)
+# first, Rules under it — separate from ARM_LABELS so the cards' wording
+# can move independently of the picks views.
+BET_ARM_ORDER = (JUDGE_EXPERT_ID, RULES_EXPERT_ID)
+BET_ARM_NAMES = {JUDGE_EXPERT_ID: "God", RULES_EXPERT_ID: "Rules"}
 AGGREGATOR_MODES = {"aggregator", "aggregator_judge"}
 
 VOICE_ABBREVIATIONS = {
@@ -519,6 +524,75 @@ def _units_text(leg: dict[str, Any]) -> str:
     except (TypeError, ValueError):
         return ""
     return f"{units:g}u" if units > 0 else ""
+
+
+def _leg_line(leg: dict[str, Any] | None) -> float | None:
+    try:
+        return float((leg or {}).get("line"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _leg_stars(leg: dict[str, Any]) -> int:
+    try:
+        return max(1, int(leg.get("confidence_stars") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _leg_units(leg: dict[str, Any]) -> float | None:
+    try:
+        units = float(leg.get("stake_units") or 0)
+    except (TypeError, ValueError):
+        return None
+    return units if units > 0 else None
+
+
+def bet_snapshot(leg: dict[str, Any]) -> dict[str, Any]:
+    """The fields whose drift the bet card renders as announced→current."""
+    return {
+        "selection": str(leg.get("selection") or ""),
+        "line": _leg_line(leg),
+        "stars": _leg_stars(leg),
+        "units": _leg_units(leg),
+    }
+
+
+def _line_text(line: float | None, kind: str) -> str:
+    if line is None:
+        return ""
+    return f"{line:+g}" if kind == "side" else f"{line:g}"
+
+
+_LEGACY_ALERT_LABEL = re.compile(
+    r"^(?P<head>.*?)\s*(?:\([+-]?\d+\))?\s*(?P<stars>★+)(?:\s+(?P<units>\d+(?:\.\d+)?)u)?\s*$"
+)
+
+
+def _legacy_first(label: Any, leg: dict[str, Any], kind: str) -> Any:
+    """Seed announced→current baselines from a pre-card alert's rendered
+    label, so the drift that promotes a legacy alert into a card is still
+    visible on the card. ``"flip"`` = the alert was for a different
+    selection (the promotion must repost loudly); ``None`` = unparseable —
+    the caller starts a fresh baseline."""
+    match = _LEGACY_ALERT_LABEL.match(str(label or ""))
+    if not match:
+        return None
+    selection = str(leg.get("selection") or "")
+    selection_text = nickname(selection) if kind == "side" else selection
+    head = (match.group("head") or "").strip()
+    if not selection_text or not head.startswith(selection_text):
+        return "flip"
+    first: dict[str, Any] = {
+        "selection": selection,
+        "stars": len(match.group("stars")),
+        "units": float(match.group("units")) if match.group("units") else None,
+    }
+    try:
+        first["line"] = float(head[len(selection_text) :].strip())
+    except ValueError:
+        first["line"] = None
+    return first
 
 
 def leg_label(
@@ -1692,33 +1766,109 @@ def render_week_card(
     return "\n".join(lines), []
 
 
-def render_bet_alert(desk: GameDesk, arm_row: dict[str, Any], kind: str) -> str:
-    side, total = arm_legs(arm_row)
-    leg = side if kind == "side" else total
-    arm = ARM_LABELS.get(str(arm_row.get("expert_id")), "Arm").lower()
-    text = f"🔔 Bet · {leg_label(leg, kind=kind)} · {arm} arm"
-    other = desk.judge if arm_row is desk.rules else desk.rules
-    if other is not None:
-        other_side, other_total = arm_legs(other)
-        other_leg = other_side if kind == "side" else other_total
-        other_arm = ARM_LABELS.get(str(other.get("expert_id")), "Arm").lower()
-        text += f"\n{other_arm} arm: {leg_label(other_leg, kind=kind)}"
-    return _esc(text)
+def _card_legs(desk: GameDesk, kind: str) -> dict[str, dict[str, Any] | None]:
+    legs: dict[str, dict[str, Any] | None] = {}
+    for expert_id, arm_row in (
+        (JUDGE_EXPERT_ID, desk.judge),
+        (RULES_EXPERT_ID, desk.rules),
+    ):
+        if arm_row is None:
+            legs[expert_id] = None
+            continue
+        side, total = arm_legs(arm_row)
+        legs[expert_id] = side if kind == "side" else total
+    return legs
+
+
+def render_bet_card(
+    desk: GameDesk,
+    kind: str,
+    arms_state: dict[str, Any],
+    *,
+    team_abbrevs: dict[str, str] | None = None,
+) -> str:
+    """The one 🔔 message per bet (event+kind): a bold headline with the
+    selection, then a row per arm — God first — with stars, units and price.
+    Stars/units (and the headline's line) render announced→current when they
+    have drifted from ``arms_state``'s ``first`` baselines; the card is
+    edited in place as numbers move, so it carries no timestamps."""
+    legs = _card_legs(desk, kind)
+    primary = next(
+        (eid for eid in BET_ARM_ORDER if leg_is_bet(legs.get(eid))), None
+    )
+    head_leg = legs.get(primary) or {}
+    head_first = (arms_state.get(primary) or {}).get("first") or {}
+    selection = str(head_leg.get("selection") or "")
+    selection_text = nickname(selection) if kind == "side" else selection
+    line = _leg_line(head_leg)
+    first_line = head_first.get("line")
+    if first_line is None or first_line == line:
+        line_text = _line_text(line, kind)
+    else:
+        line_text = f"{_line_text(first_line, kind)}→{_line_text(line, kind)}"
+    headline = " ".join(part for part in (selection_text, line_text) if part)
+    lines = [f"🔔 <b>{_esc(headline)}</b> · {_teams_short(desk, team_abbrevs)}"]
+    for expert_id in BET_ARM_ORDER:
+        name = BET_ARM_NAMES[expert_id]
+        leg = legs.get(expert_id)
+        if leg is None:
+            lines.append(f"<b>{name}</b> —")
+            continue
+        if not leg_is_bet(leg):
+            reason = str(leg.get("pass_reason") or "").strip()
+            suffix = f" — {_esc(reason)}" if reason else ""
+            lines.append(f"<b>{name}</b> pass{suffix}")
+            continue
+        first = (arms_state.get(expert_id) or {}).get("first") or {}
+        stars = _leg_stars(leg)
+        first_stars = first.get("stars")
+        stars_text = (
+            "★" * stars
+            if first_stars in (None, stars)
+            else "★" * int(first_stars) + "→" + "★" * stars
+        )
+        units = _leg_units(leg)
+        first_units = first.get("units")
+        if units is None:
+            units_text = ""
+        elif first_units in (None, units):
+            units_text = f"{units:g}u"
+        else:
+            units_text = f"{first_units:g}→{units:g}u"
+        parts = [stars_text, units_text, _price_text(leg.get("price"))]
+        row_text = f"<b>{name}</b> " + " ".join(part for part in parts if part)
+        if expert_id != primary:
+            own_selection = str(leg.get("selection") or "")
+            own_line = _leg_line(leg)
+            if own_selection != selection:
+                own_text = " ".join(
+                    part
+                    for part in (
+                        nickname(own_selection)
+                        if kind == "side"
+                        else own_selection,
+                        _line_text(own_line, kind),
+                    )
+                    if part
+                )
+                row_text += f" · {_esc(own_text)}"
+            elif own_line != line:
+                row_text += f" · {_esc(_line_text(own_line, kind))}"
+        lines.append(row_text)
+    return "\n".join(lines)
 
 
 def render_withdrawal_alert(
-    bet_entry: dict[str, Any], arm_row: dict[str, Any], kind: str
+    leg_text: str, expert_id: str, pass_leg: dict[str, Any] | None
 ) -> str:
-    """``🔕 Withdrawn · 49ers +3.5 (-102) ★ 0.8u · rules arm — ev floor``.
+    """``🔕 Withdrawn · 49ers +3.5 (-102) ★ 0.8u · Rules — ev floor``.
 
-    ``bet_entry`` is the announced-bet state record carrying the leg label
-    as it was alerted; the reason comes from the superseding row's PASS leg.
+    ``leg_text`` is the bet as its card last showed it; the reason comes
+    from the superseding row's PASS leg.
     """
-    side, total = arm_legs(arm_row)
-    leg = side if kind == "side" else total
-    arm = ARM_LABELS.get(str(arm_row.get("expert_id")), "Arm").lower()
-    text = f"🔕 Withdrawn · {bet_entry.get('leg') or 'bet'} · {arm} arm"
-    reason = str((leg or {}).get("pass_reason") or "").strip()
+    name = BET_ARM_NAMES.get(expert_id, "Arm")
+    text = f"🔕 Withdrawn · {leg_text or 'bet'} · {name}"
+    reason = str((pass_leg or {}).get("pass_reason") or "").strip()
     if reason:
         text += f" — {reason}"
     return _esc(text)
@@ -2301,33 +2451,39 @@ def _announce(
     summary.alerts.append(key)
 
 
-def _announced_bet(
-    state: dict[str, Any], *, event_id: str, expert_id: str, kind: str
-) -> tuple[str, dict[str, Any]] | None:
-    """The latest announced bet for this event+arm+kind: (opinion_id, entry).
+def _legacy_announced(
+    state: dict[str, Any], *, event_id: str, kind: str
+) -> dict[str, tuple[str, dict[str, Any]]]:
+    """Pre-card ``bet:{opinion_id}:{kind}`` alerts for this event+kind, the
+    latest per arm: ``{expert_id: (opinion_id, entry)}``.
 
-    Only entries that recorded ``expert_id`` participate — legacy entries
-    predate the withdrawal alert, and firing from them on first deploy
-    would spray alerts for every game whose arm currently passes.
+    Only entries that recorded ``expert_id`` participate — the oldest
+    entries predate the withdrawal alert, and acting on them on first
+    deploy would spray alerts for every game whose arm currently passes.
     """
-    best: tuple[str, str, dict[str, Any]] | None = None
+    best: dict[str, tuple[str, str, dict[str, Any]]] = {}
     for key, entry in state["announced"].items():
         if not key.startswith("bet:") or not isinstance(entry, dict):
             continue
+        expert_id = str(entry.get("expert_id") or "")
         if (
-            entry.get("event_id") != event_id
-            or entry.get("expert_id") != expert_id
+            not expert_id
+            or entry.get("event_id") != event_id
             or entry.get("kind") != kind
         ):
             continue
         _, _, remainder = key.partition(":")
         opinion_id, _, _ = remainder.partition(":")
         at = str(entry.get("at") or "")
+        prior = best.get(expert_id)
         # >= so an equal timestamp resolves to the later-inserted entry —
         # insertion order is announcement order.
-        if best is None or at >= best[0]:
-            best = (at, opinion_id, entry)
-    return None if best is None else (best[1], best[2])
+        if prior is None or at >= prior[0]:
+            best[expert_id] = (at, opinion_id, entry)
+    return {
+        expert_id: (opinion_id, entry)
+        for expert_id, (_, opinion_id, entry) in best.items()
+    }
 
 
 def _drop_review_topic_state(state: dict[str, Any]) -> None:
@@ -2523,59 +2679,203 @@ def sync_desk(
         picks_id = picks_ids.get(desk.event_id)
         if picks_id is None:
             continue
-        for arm_row in (desk.rules, desk.judge):
-                if arm_row is None:
-                    continue
-                expert_id = str(arm_row.get("expert_id") or "")
-                side, total = arm_legs(arm_row)
-                for kind, leg in (("side", side), ("total", total)):
-                    if leg_is_bet(leg):
-                        _announce(
-                            key=f"bet:{arm_row.get('opinion_id')}:{kind}",
-                            event_id=desk.event_id,
-                            topic=config.picks_topic,
-                            text=render_bet_alert(desk, arm_row, kind),
-                            reply_to=picks_id,
-                            config=config,
-                            api=api,
-                            state=state,
-                            budget=budget,
-                            summary=summary,
-                            now=now,
-                            extra={
-                                "expert_id": expert_id,
-                                "kind": kind,
-                                "leg": leg_label(leg, kind=kind),
-                            },
-                        )
-                        continue
-                    # The arm's latest row no longer bets this kind: if an
-                    # earlier row's bet was announced, say so once — loudly,
-                    # keyed by the withdrawn bet's opinion id so a re-bet
-                    # and later re-withdrawal alert again.
-                    prior = _announced_bet(
-                        state,
-                        event_id=desk.event_id,
-                        expert_id=expert_id,
-                        kind=kind,
-                    )
-                    if prior is None:
-                        continue
-                    bet_opinion_id, bet_entry = prior
-                    _announce(
-                        key=f"withdrawn:{bet_opinion_id}:{kind}",
-                        event_id=desk.event_id,
-                        topic=config.picks_topic,
-                        text=render_withdrawal_alert(bet_entry, arm_row, kind),
-                        reply_to=picks_id,
-                        config=config,
-                        api=api,
-                        state=state,
-                        budget=budget,
-                        summary=summary,
-                        now=now,
-                    )
+        for kind in ("side", "total"):
+            _sync_bet_card(
+                desk=desk,
+                kind=kind,
+                picks_id=picks_id,
+                config=config,
+                api=api,
+                state=state,
+                budget=budget,
+                summary=summary,
+                now=now,
+                team_abbrevs=team_abbrevs,
+            )
     return summary
+
+
+def _sync_bet_card(
+    *,
+    desk: GameDesk,
+    kind: str,
+    picks_id: int,
+    config: DeskConfig,
+    api: BotApi,
+    state: dict[str, Any],
+    budget: _Budget,
+    summary: SyncSummary,
+    now: datetime,
+    team_abbrevs: dict[str, str] | None,
+) -> None:
+    """Reconcile the one 🔔 card for this event+kind.
+
+    Loud send for a new bet leg (including an arm joining, re-betting or
+    flipping its selection — the stale card is deleted and reposted); a
+    silent in-place edit for every other change (units, stars, line,
+    price); a loud 🔕 for a withdrawal, keyed by the withdrawn bet's
+    opinion id so a re-bet and later re-withdrawal alert again; the card
+    is deleted once no arm bets. Pre-card ``bet:{opinion_id}`` alerts
+    count as announced, so a deploy over standing bets stays silent until
+    a bet actually moves."""
+    key = f"betcard:{desk.event_id}:{kind}"
+    entry = state["announced"].get(key)
+    if not isinstance(entry, dict):
+        entry = None
+    rows = {JUDGE_EXPERT_ID: desk.judge, RULES_EXPERT_ID: desk.rules}
+    betting: dict[str, dict[str, Any]] = {}
+    for expert_id, arm_row in rows.items():
+        if arm_row is None:
+            continue
+        side, total = arm_legs(arm_row)
+        leg = side if kind == "side" else total
+        if leg_is_bet(leg):
+            betting[expert_id] = leg
+    arms_state: dict[str, Any] = {
+        expert_id: info
+        for expert_id, info in ((entry or {}).get("arms") or {}).items()
+        if isinstance(info, dict)
+    }
+    legacy = (
+        {} if entry else _legacy_announced(state, event_id=desk.event_id, kind=kind)
+    )
+
+    # A previously announced arm that no longer bets says so loudly, once.
+    withdrawn_sources: list[tuple[str, str, str]] = []
+    for expert_id, info in arms_state.items():
+        if expert_id in betting or rows.get(expert_id) is None:
+            continue
+        withdrawn_sources.append(
+            (expert_id, str(info.get("opinion_id") or ""), str(info.get("leg") or ""))
+        )
+    if entry is None:
+        for expert_id, (opinion_id, legacy_entry) in legacy.items():
+            if expert_id in betting or rows.get(expert_id) is None:
+                continue
+            withdrawn_sources.append(
+                (expert_id, opinion_id, str(legacy_entry.get("leg") or ""))
+            )
+    for expert_id, opinion_id, label in withdrawn_sources:
+        side, total = arm_legs(rows[expert_id])
+        pass_leg = side if kind == "side" else total
+        withdrawn_key = f"withdrawn:{opinion_id}:{kind}"
+        _announce(
+            key=withdrawn_key,
+            event_id=desk.event_id,
+            topic=config.picks_topic,
+            text=render_withdrawal_alert(label, expert_id, pass_leg),
+            reply_to=picks_id,
+            config=config,
+            api=api,
+            state=state,
+            budget=budget,
+            summary=summary,
+            now=now,
+        )
+        if withdrawn_key in state["announced"]:
+            arms_state.pop(expert_id, None)
+
+    if not betting:
+        if entry is not None:
+            if arms_state:
+                # a withdrawal is still deferred: keep the entry for it
+                entry["arms"] = arms_state
+                state["announced"][key] = entry
+                return
+            message_id = entry.get("message_id")
+            if message_id:
+                api.delete(config.chat_id, int(message_id))
+            state["announced"].pop(key, None)
+        return
+
+    # Fold the betting arms into the card state; a new leg reposts loudly.
+    loud = False
+    for expert_id, leg in betting.items():
+        snapshot = bet_snapshot(leg)
+        prior = arms_state.get(expert_id)
+        first: dict[str, Any] | None = None
+        if isinstance(prior, dict):
+            prior_first = prior.get("first")
+            if isinstance(prior_first, dict):
+                first = prior_first
+            if (
+                first is not None
+                and str(first.get("selection") or "") != snapshot["selection"]
+            ):
+                first = None  # the arm flipped: fresh baseline, loud repost
+                loud = True
+        elif entry is None and expert_id in legacy:
+            seeded = _legacy_first(legacy[expert_id][1].get("leg"), leg, kind)
+            if seeded == "flip":
+                loud = True
+            elif isinstance(seeded, dict):
+                first = seeded
+        else:
+            loud = True  # a bet leg nobody has announced yet
+        arms_state[expert_id] = {
+            "opinion_id": str((rows[expert_id] or {}).get("opinion_id") or ""),
+            "leg": leg_label(leg, kind=kind),
+            "first": first or snapshot,
+        }
+    if entry is None and not loud:
+        covered = all(
+            expert_id in legacy
+            and arms_state[expert_id]["leg"]
+            == str(legacy[expert_id][1].get("leg") or "")
+            for expert_id in betting
+        )
+        if covered:
+            return  # pre-card alerts stand and nothing has moved
+
+    text = render_bet_card(desk, kind, arms_state, team_abbrevs=team_abbrevs)
+    digest = content_hash(text, [], config.picks_topic)
+    message_id = (entry or {}).get("message_id")
+    new_entry = {
+        "at": str((entry or {}).get("at") or now.isoformat()),
+        "event_id": desk.event_id,
+        "kind": kind,
+        "message_id": message_id,
+        "hash": digest,
+        "arms": arms_state,
+    }
+    if message_id and not loud:
+        if (entry or {}).get("hash") == digest:
+            state["announced"][key] = new_entry  # keep labels/opinion ids fresh
+            return
+        try:
+            if api.edit(config.chat_id, int(message_id), text):
+                state["announced"][key] = new_entry
+                summary.edited.append(key)
+                return
+        except DeskApiError as exc:
+            summary.errors.append(f"{key}: {exc}")
+            return
+        message_id = None  # the card was deleted by hand: repost silently
+    if not budget.take():
+        summary.deferred.append(key)
+        return
+    if message_id and loud:
+        api.delete(config.chat_id, int(message_id))
+    try:
+        new_id = api.send(
+            config.chat_id,
+            config.picks_topic,
+            text,
+            silent=not loud,
+            reply_to=picks_id,
+        )
+    except DeskApiError as exc:
+        summary.errors.append(f"{key}: {exc}")
+        return
+    new_entry["message_id"] = new_id
+    state["announced"][key] = new_entry
+    if loud:
+        summary.alerts.append(key)
+    else:
+        summary.posted.append(key)
+    for expert_id in betting:
+        if expert_id in legacy:
+            state["announced"].pop(f"bet:{legacy[expert_id][0]}:{kind}", None)
 
 
 def post_scores_notice(
