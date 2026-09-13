@@ -937,19 +937,33 @@ either person sees or does.
   for the DM views; legacy pending and rejected rows are visible to
   reviewers through the deep link in their DMs, while the DM browser
   (`/guess_nfl_game` → 🧠) stays approved-only.
-- Loud and silent. Every card post and edit is silent. The loud replies,
-  both under the picks card and both once each: 🔔 for a newly approved bet
-  leg (`bet:<opinion>:<side|total>`) and 🔕 for its withdrawal
-  (`withdrawn:<the bet's opinion>:<side|total>`) when a later approved row
-  from the same arm passes that leg — a flip to PASS is otherwise only a
-  silent card edit, so a standing 🔔 would read as live until kickoff. The
-  bet announcement records `expert_id`/`kind`/`leg` in its state entry;
-  the withdrawal quotes that recorded label (the pass row no longer carries
-  it) and appends the new `pass_reason`. Entries written before this
-  (no `expert_id`) never fire a withdrawal, so deploying is not a spray;
-  a re-bet announces again and can be withdrawn again. Games are frozen at
-  kickoff, so neither fires after a game starts. The runner's own
-  completion DM is silenced with `GOD_JUDGE_PENDING_DM=0`
+- Loud and silent. Every card post and edit is silent. Bets live on ONE
+  🔔 card per event+kind (`betcard:<event>:<side|total>`, 2026-09-13,
+  5b05759 — the previous `bet:<opinion>` key re-alerted an unchanged bet
+  every judge pass, because every pass persists fresh arm rows): a bold
+  selection headline plus a God row and a Rules row (`BET_ARM_NAMES`,
+  deliberately not `ARM_LABELS` — the operator's own vocabulary), each row
+  stars + units + current price, replying to the daily picks card. The
+  card is edited in place as numbers move; stars, units and the headline's
+  line render announced→current (`★★→★`, `2.3→1.2u`, `-3.5→-2.5`) from the
+  per-arm `first` baselines in state, so drift is visible with no
+  timestamps and no history growth (a value returning to its announced
+  number drops the arrow). Price shows current only — it ticks too often
+  to arrow. Loud, once each: the card's first post for a new bet leg; a
+  delete+loud repost when an arm joins, re-bets, or flips its selection
+  (an edit can't ping, and the joining arm's baseline resets while the
+  standing arm's survives); and 🔕 for a withdrawal
+  (`withdrawn:<the bet's opinion>:<side|total>`) quoting the card's last
+  label for that arm plus the new `pass_reason` — which also deletes the
+  🔔 card once no arm bets, so a stale bet never reads as live until
+  kickoff. A hand-deleted card is reposted silently on the next change.
+  Migration: pre-card `bet:<opinion>` entries count as announced — the
+  deploy is not a spray — and the first real change promotes one to a
+  silent card whose baselines are parsed back out of the alerted label
+  (`_legacy_first`), so even that first drift shows arrows; entries
+  without `expert_id` (pre-withdrawal era) stay inert as before. Games
+  are frozen at kickoff, so nothing fires after a game starts. The
+  runner's own completion DM is silenced with `GOD_JUDGE_PENDING_DM=0`
   (`run_once(pending_dm=False)`); its failure and stall DMs are unchanged.
 - State: `moe_desk_state.json` (gitignored; `MOE_DESK_STATE_PATH` to move
   it) holds message ids and content hashes per card, announcements and
