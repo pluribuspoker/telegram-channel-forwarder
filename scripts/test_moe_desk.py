@@ -1205,7 +1205,7 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(
             alert["text"],
             "🔔 <b>Seahawks -3.5</b> · Patriots @ Seahawks\n"
-            "<b>God</b> pass\n"
+            "<b>God</b> no bet\n"
             "<b>Rules</b> ★ 0.6u (+100)",
         )
         summary = self.sync(rows)
@@ -1237,7 +1237,7 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(
             edit["text"],
             "🔔 <b>Seahawks -3.5</b> · Patriots @ Seahawks\n"
-            "<b>God</b> pass\n"
+            "<b>God</b> no bet\n"
             "<b>Rules</b> ★→★★ 0.6→1.4u (+100)",
         )
         self.assertEqual(sum(1 for m in self.api.sent if not m["silent"]), 1)
@@ -1246,6 +1246,19 @@ class SyncTests(unittest.TestCase):
         summary = self.sync(rows)
         self.assertEqual(summary.edited, [])
         self.assertEqual(len(self.api.edits), edits_before)
+
+    def test_a_pass_row_reads_no_bet_with_the_short_reason(self) -> None:
+        rows = committee("401", arms_status="approved")
+        rows[6]["side_pick_json"] = json.dumps(SEA_SIDE)  # judge bets
+        rows[5]["side_pick_json"] = json.dumps(PASS_ADVERSE)  # rules sits
+        self.sync(rows)
+        alert = next(m for m in self.api.sent if not m["silent"])
+        self.assertEqual(
+            alert["text"],
+            "🔔 <b>Seahawks -3.5</b> · Patriots @ Seahawks\n"
+            "<b>God</b> ★ 0.6u (+100)\n"
+            "<b>Rules</b> no bet · line moved against",
+        )
 
     def test_a_line_move_shows_in_the_headline(self) -> None:
         rows = committee("401", arms_status="approved")
@@ -1267,7 +1280,7 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(
             self.api.edits[-1]["text"],
             "🔔 <b>Seahawks -3.5→-2.5</b> · Patriots @ Seahawks\n"
-            "<b>God</b> pass\n"
+            "<b>God</b> no bet\n"
             "<b>Rules</b> ★ 0.6u (+100)",
         )
 
@@ -1359,7 +1372,7 @@ class SyncTests(unittest.TestCase):
         self.assertFalse(alert["silent"])
         self.assertEqual(
             alert["text"],
-            "🔕 Withdrawn · Seahawks -3.5 (+100) ★ 0.6u · Rules — ev floor",
+            "🔕 Withdrawn · Seahawks -3.5 (+100) ★ 0.6u · Rules — edge too thin",
         )
         self.assertEqual(
             alert["reply_to"],
@@ -1417,7 +1430,7 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(summary.alerts, ["withdrawn:c884d868-2222:side"])
         self.assertEqual(
             self.api.sent[-1]["text"],
-            "🔕 Withdrawn · Seahawks -3.5 (+100) ★ 0.6u · Rules — adverse move",
+            "🔕 Withdrawn · Seahawks -3.5 (+100) ★ 0.6u · Rules — line moved against",
         )
 
     def test_legacy_alert_stays_quiet_until_the_bet_moves(self) -> None:

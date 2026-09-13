@@ -78,6 +78,13 @@ ARM_LABELS = {RULES_EXPERT_ID: "Rules", JUDGE_EXPERT_ID: "Judge"}
 # can move independently of the picks views.
 BET_ARM_ORDER = (JUDGE_EXPERT_ID, RULES_EXPERT_ID)
 BET_ARM_NAMES = {JUDGE_EXPERT_ID: "God", RULES_EXPERT_ID: "Rules"}
+# Plain-English pass reasons for the bet card and the 🔕 withdrawal
+# (operator-picked copy, 2026-09-13); unmapped reasons show as persisted.
+PASS_REASON_SHORT = {
+    "ev floor": "edge too thin",
+    "adverse move": "line moved against",
+    "no positive expectation at the posted price": "no edge",
+}
 AGGREGATOR_MODES = {"aggregator", "aggregator_judge"}
 
 VOICE_ABBREVIATIONS = {
@@ -1816,8 +1823,9 @@ def render_bet_card(
             continue
         if not leg_is_bet(leg):
             reason = str(leg.get("pass_reason") or "").strip()
-            suffix = f" — {_esc(reason)}" if reason else ""
-            lines.append(f"<b>{name}</b> pass{suffix}")
+            reason = PASS_REASON_SHORT.get(reason, reason)
+            suffix = f" · {_esc(reason)}" if reason else ""
+            lines.append(f"<b>{name}</b> no bet{suffix}")
             continue
         first = (arms_state.get(expert_id) or {}).get("first") or {}
         stars = _leg_stars(leg)
@@ -1861,7 +1869,7 @@ def render_bet_card(
 def render_withdrawal_alert(
     leg_text: str, expert_id: str, pass_leg: dict[str, Any] | None
 ) -> str:
-    """``🔕 Withdrawn · 49ers +3.5 (-102) ★ 0.8u · Rules — ev floor``.
+    """``🔕 Withdrawn · 49ers +3.5 (-102) ★ 0.8u · Rules — edge too thin``.
 
     ``leg_text`` is the bet as its card last showed it; the reason comes
     from the superseding row's PASS leg.
@@ -1869,6 +1877,7 @@ def render_withdrawal_alert(
     name = BET_ARM_NAMES.get(expert_id, "Arm")
     text = f"🔕 Withdrawn · {leg_text or 'bet'} · {name}"
     reason = str((pass_leg or {}).get("pass_reason") or "").strip()
+    reason = PASS_REASON_SHORT.get(reason, reason)
     if reason:
         text += f" — {reason}"
     return _esc(text)

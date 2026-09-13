@@ -943,7 +943,12 @@ either person sees or does.
   every judge pass, because every pass persists fresh arm rows): a bold
   selection headline plus a God row and a Rules row (`BET_ARM_NAMES`,
   deliberately not `ARM_LABELS` — the operator's own vocabulary), each row
-  stars + units + current price, replying to the daily picks card. The
+  stars + units + current price, replying to the daily picks card. A
+  non-betting arm's row reads `no bet · <reason>` with the reason mapped
+  to plain English by `PASS_REASON_SHORT` (ev floor → edge too thin,
+  adverse move → line moved against, no positive expectation → no edge;
+  operator-picked copy, 2026-09-13) — the 🔕 withdrawal shares the
+  mapping; an arm with no row yet stays a bare `—`. The
   card is edited in place as numbers move; stars, units and the headline's
   line render announced→current (`★★→★`, `2.3→1.2u`, `-3.5→-2.5`) from the
   per-arm `first` baselines in state, so drift is visible with no
