@@ -1544,6 +1544,10 @@ class ReasonGuardTests(unittest.TestCase):
                 "win total versus 1 for the away team, with 0 tied",
                 "miami enters 2025 with 7 prior-season wins to las "
                 "vegas's 3",
+                "both teams in the same prior-win bucket with bucket "
+                "minimums of 9 and 9, has the home side winning",
+                "the exact current away/home prior-win pair (5 and 11) "
+                "has only 4 historical games",
             ],
         }
         tail = reason_reference_text(request).split("\n")[-1]
@@ -1560,6 +1564,9 @@ class ReasonGuardTests(unittest.TestCase):
             "4-1-0",
             "7-3",  # the prior-win comparison, either way around
             "3-7",
+            "9-9",  # pair labels: "bucket minimums of 9 and 9" and
+            "5-11",  # "prior-win pair (5 and 11)", either way around
+            "11-5",
         ):
             self.assertIn(token, derived)
         # A derived record also grounds the cohort it implies.

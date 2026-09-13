@@ -2886,8 +2886,11 @@ Three classes, all now grounded by `reason_reference_text` /
   → `2-2`), cohort shares ("won 26 of 49 games" → `26-23`, both orders),
   the celebrity ballot ("votes {'X': 3, 'Y': 2}" → `3-2`), all three
   forecaster consensus phrasings ("4 ranked … 0 ranked … 1 tied" /
-  "projecting more away wins" / "versus 1 … with 0 tied" → `4-0-1`), and
-  the prior-win comparison ("7 prior-season wins to Y's 3" → `7-3`).
+  "projecting more away wins" / "versus 1 … with 0 tied" → `4-0-1`), the
+  prior-win comparison ("7 prior-season wins to Y's 3" → `7-3`), and pair
+  labels ("bucket minimums of 9 and 9" / "prior-win pair (5 and 11)" →
+  `9-9` / `5-11` — the equal pair is not an ascending range, a live
+  rejection the very first pass after the fix deployed).
 - Ranges: a strictly ascending two-part token whose endpoints both appear
   as numbers in the reference passes ("3-5 game samples", "44-46
   projections", the "2-3 prior-win-gap bucket"). Descending pairs and

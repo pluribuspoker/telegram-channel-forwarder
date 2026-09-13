@@ -2990,6 +2990,16 @@ def reason_reference_text(request: dict[str, Any]) -> str:
     ):
         derived.append(f"{match.group(1)}-{match.group(2)}")
         derived.append(f"{match.group(2)}-{match.group(1)}")
+    # Pair labels: "bucket minimums of 9 and 9" and "prior-win pair (5 and
+    # 11)" name the bucket, and a reason names it back as "the 9-9 bucket".
+    # The equal pair is not an ascending range, so it needs deriving (a
+    # live rejection the first pass after the 2026-09-13 fix).
+    for match in re.finditer(
+        r"minimums of (\d+) and (\d+)|pair \((\d+) and (\d+)\)", lowered
+    ):
+        first, second = (group for group in match.groups() if group)
+        derived.append(f"{first}-{second}")
+        derived.append(f"{second}-{first}")
     return text + "\n" + " ".join(derived)
 
 
