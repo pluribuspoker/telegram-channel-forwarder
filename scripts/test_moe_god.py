@@ -1519,6 +1519,79 @@ class ReasonGuardTests(unittest.TestCase):
         self.assertIn("2-2 split pool", cited)
         self.assertIn("17-8 over 25 games", cited)
 
+    def test_prose_records_are_grounded(self) -> None:
+        # 30 live responses were rejected on the first full Sunday slate
+        # (2026-09-13) for re-notating records the request states in
+        # prose. Every phrasing here is a stable format string from this
+        # repo's own experts, lifted from the rejected requests.
+        request = {
+            "voices": [],
+            "factors": [
+                "the 4_plus prior-win-gap bucket shows the side entering "
+                "with more prior-season wins won 132, lost 84, and tied 1 "
+                "for a 0.6083 win rate",
+                "only 4 historical games, a negligible sample split 2 wins "
+                "and 2 losses, 0 ties",
+                "the home side won 26 of 49 games, a 0.5306 home win rate",
+                "majority across 5 celebrities with votes {'green bay "
+                "packers': 3, 'minnesota vikings': 2}",
+                "4 of 5 forecasters with both teams ranked baltimore "
+                "higher, 0 ranked indianapolis higher, and 1 tied",
+                "averaging 11.4 away wins to 8.2 home wins with 4 "
+                "forecasters projecting more away wins, 0 more home wins, "
+                "and 1 tie",
+                "4 of 5 forecasters gave the home team the higher season "
+                "win total versus 1 for the away team, with 0 tied",
+                "miami enters 2025 with 7 prior-season wins to las "
+                "vegas's 3",
+            ],
+        }
+        tail = reason_reference_text(request).split("\n")[-1]
+        derived = tail.split()
+        for token in (
+            "132-84-1",  # "won 132, lost 84, and tied 1"
+            "132-84",
+            "2-2",  # "split 2 wins and 2 losses, 0 ties"
+            "26-23",  # "won 26 of 49 games", and the other order
+            "23-26",
+            "3-2",  # the celebrity ballot, either way around
+            "2-3",
+            "4-0-1",  # both forecaster consensus phrasings
+            "4-1-0",
+            "7-3",  # the prior-win comparison, either way around
+            "3-7",
+        ):
+            self.assertIn(token, derived)
+        # A derived record also grounds the cohort it implies.
+        self.assertIn("217 games", tail)
+        self.assertIn("49 games", tail)
+
+    def test_ascending_range_over_request_numbers_passes(self) -> None:
+        # "3-5 game samples", "44-46 projections": ranges over numbers
+        # the request carries, not records (11 live rejections
+        # 2026-09-13). Descending pairs and pairs with an endpoint the
+        # request lacks are still invented.
+        response, full_input = self._sea()
+        reference = reason_reference_text(build_judge_request(full_input)).lower()
+        self.assertNotIn("3-5", reference)
+        for endpoint in ("3", "5"):
+            self.assertIsNotNone(re.search(rf"(?<![\d.]){endpoint}\b", reference))
+        response["counterpoints"] = [
+            {"voice": "pool", "text": "The sharpest cohorts rest on 3-5 game samples."},
+        ]
+        normalize_aggregator_opinion(response, full_input, expert=load_expert("god_judge"))
+        response["counterpoints"] = [
+            {"voice": "pool", "text": "The sharpest cohorts rest on 5-3 game samples."},
+        ]
+        with self.assertRaises(ValueError):
+            normalize_aggregator_opinion(response, full_input, expert=load_expert("god_judge"))
+        self.assertNotIn("977", reference)
+        response["counterpoints"] = [
+            {"voice": "pool", "text": "Cohorts of 3-977 games say nothing."},
+        ]
+        with self.assertRaises(ValueError):
+            normalize_aggregator_opinion(response, full_input, expert=load_expert("god_judge"))
+
     def test_rules_arm_reasons_are_not_guarded(self) -> None:
         for prefix in ("sea", "lar"):
             with self.subTest(game=prefix):

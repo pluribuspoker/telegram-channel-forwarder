@@ -1182,10 +1182,15 @@ fresh VPS scratch clone across `scripts.test_moe_god`, `test_moe`,
   cites must appear in the request text or among the numbers it carries in
   structured form (projected scores, winner-vote split, track-record tallies,
   integer counts under count-like keys, a cited record's implied cohort
-  size). Failure is a ValueError → invalid audit row. The rules arm's
-  generated reasons are unguarded. Both Week 1 judge responses replay from
-  `scripts/fixtures/god_week1/`; the Rams one needed the vote split (`2-2`)
-  and the record cohort (`17-8` → 25 games) to ground.
+  size — and, since 2026-09-13, records the request states in prose, cohort
+  shares ("won 26 of 49 games" → 26-23), the celebrity ballot, the
+  forecaster consensus sentences, and the prior-win comparison, each with
+  its implied cohort). A strictly ascending two-part token whose endpoints
+  are both request numbers reads as a range ("3-5 game samples"), not a
+  record, and passes. Failure is a ValueError → invalid audit row. The
+  rules arm's generated reasons are unguarded. Both Week 1 judge responses
+  replay from `scripts/fixtures/god_week1/`; the Rams one needed the vote
+  split (`2-2`) and the record cohort (`17-8` → 25 games) to ground.
 - `scripts/god_judge_runner.py` + `god-judge.timer` (:12/:42): per upcoming
   game with a complete committee, outside one hour of kickoff (two until the
   2026-09-10 late-window refresh, below), build the
@@ -2865,3 +2870,37 @@ MOE voice. It is implemented locally but not deployed.
   deduplicates phase identities, stalls after two invalid rows, stops final
   retries inside one hour, and invokes isolated headless Opus with no tools or
   session persistence.
+
+### Implemented — 2026-09-13: reason guard grounds prose records, derived splits, and ranges
+
+The first full Sunday slate rejected 30 of 69 judge responses (43%,
+~$26 of re-calls) with "cites a record the request does not carry", and
+every stalled committee re-alerted the operator on each line tick. All 30
+were false rejections: the judge re-notating numbers the request carries.
+Three classes, all now grounded by `reason_reference_text` /
+`_check_reason_citations`:
+
+- Prose records from our own experts' stable format strings: the win-total
+  gap buckets ("won 132, lost 84, and tied 1" → `132-84-1`, and the implied
+  "217 games"), prior-win pair splits ("split 2 wins and 2 losses, 0 ties"
+  → `2-2`), cohort shares ("won 26 of 49 games" → `26-23`, both orders),
+  the celebrity ballot ("votes {'X': 3, 'Y': 2}" → `3-2`), all three
+  forecaster consensus phrasings ("4 ranked … 0 ranked … 1 tied" /
+  "projecting more away wins" / "versus 1 … with 0 tied" → `4-0-1`), and
+  the prior-win comparison ("7 prior-season wins to Y's 3" → `7-3`).
+- Ranges: a strictly ascending two-part token whose endpoints both appear
+  as numbers in the reference passes ("3-5 game samples", "44-46
+  projections", the "2-3 prior-win-gap bucket"). Descending pairs and
+  W-L-T stay verbatim-only, so an invented winning record or tie tally is
+  still caught.
+- Not grounded on purpose: a judge counting listed items itself ("a 5-0
+  panel ordering" over five individually listed forecaster factors) can
+  still reject — 1 of the day's 69 calls, and a stall needs two in a row.
+
+Replay of all 69 persisted responses: 29 of 30 invalids pass, 0 of 39
+valids regress. Tests: `test_prose_records_are_grounded`,
+`test_ascending_range_over_request_numbers_passes`; the invented-number
+canaries are unchanged. Contributing context: the `pikkit` voice joined
+committees 2026-09-12 (six-voice committees, much more numeric prose) and
+Sunday line moves changed committee keys nearly every pass, so each new
+key re-ran and re-failed. The stall alarm itself is working as designed.
