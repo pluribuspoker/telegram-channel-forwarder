@@ -13,7 +13,11 @@ import httpx
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import nfl_lines
 from nfl_lines import (
+    _SHEETS_READ_RETRY,
+    _install_sheets_retry,
+    get_gspread_client,
     AWAY_SNAPSHOT_COLUMN,
     HOME_SNAPSHOT_COLUMN,
     LATEST_AWAY_COLUMN,
@@ -535,6 +539,69 @@ class SnapshotDecisionTest(unittest.TestCase):
                 "|nodata,nodata,nodata|nodata,nodata,nodata"
             )
         )
+
+
+class SheetsRetryTest(unittest.TestCase):
+    def test_retry_config_targets_read_quota(self):
+        r = _SHEETS_READ_RETRY
+        self.assertIn(429, r.status_forcelist)
+        for code in (500, 502, 503, 504):
+            self.assertIn(code, r.status_forcelist)
+        # Only idempotent reads are retried; writes keep app-layer handling.
+        self.assertIn("GET", r.allowed_methods)
+        self.assertNotIn("POST", r.allowed_methods)
+        self.assertNotIn("PUT", r.allowed_methods)
+        self.assertGreaterEqual(r.total, 3)
+        self.assertTrue(r.respect_retry_after_header)
+        # Backoff must be able to span a per-minute quota window.
+        self.assertGreaterEqual(r.backoff_factor * 4, 30)
+
+    def test_install_mounts_adapter_for_sheets_hosts(self):
+        import requests
+
+        session = requests.Session()
+        _install_sheets_retry(session)
+        adapter = session.get_adapter("https://sheets.googleapis.com/v4/x")
+        self.assertIn(429, adapter.max_retries.status_forcelist)
+        self.assertIn("GET", adapter.max_retries.allowed_methods)
+
+    def test_get_gspread_client_installs_retry(self):
+        class _Session:
+            def __init__(self):
+                self.mounted = {}
+
+            def mount(self, prefix, adapter):
+                self.mounted[prefix] = adapter
+
+        class _HTTPClient:
+            def __init__(self):
+                self.session = _Session()
+
+        class _Client:
+            def __init__(self):
+                self.http_client = _HTTPClient()
+
+        captured = _Client()
+        original = nfl_lines.gspread.authorize
+        original_creds = nfl_lines.Credentials.from_service_account_info
+        nfl_lines.gspread.authorize = lambda creds: captured
+        nfl_lines.Credentials.from_service_account_info = (
+            lambda info, scopes: object()
+        )
+        try:
+            import base64
+            import json
+
+            creds_b64 = base64.b64encode(json.dumps({"x": 1}).encode()).decode()
+            client = get_gspread_client(creds_b64)
+        finally:
+            nfl_lines.gspread.authorize = original
+            nfl_lines.Credentials.from_service_account_info = original_creds
+
+        self.assertIs(client, captured)
+        mounted = captured.http_client.session.mounted
+        self.assertIn("https://", mounted)
+        self.assertIn(429, mounted["https://"].max_retries.status_forcelist)
 
 
 if __name__ == "__main__":

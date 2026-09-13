@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo
 import gspread
 import httpx
 from google.oauth2.service_account import Credentials
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 ESPN_SCOREBOARD_URL = (
@@ -773,6 +775,33 @@ def scheduled_poll_plan(
     )
 
 
+# Read GETs are idempotent, so retry them transparently on quota (429) and
+# transient 5xx with exponential backoff. Google Sheets' per-user read quota is
+# per-minute and 429s rarely carry Retry-After, so the backoff must span a
+# minute: 8,16,32,64,120,120s (backoff_max caps each wait). Only GET is
+# retried — writes (POST/PUT) keep their app-layer handling (``_call_with_retry``
+# for 429 and the opinion-store spool for 5xx) so this never double-fires an
+# append. ``raise_on_status=False`` lets a still-429 response surface as the
+# usual gspread ``APIError`` after retries are exhausted, preserving callers'
+# error handling.
+_SHEETS_READ_RETRY = Retry(
+    total=6,
+    backoff_factor=8,
+    backoff_max=120,
+    status_forcelist=(429, 500, 502, 503, 504),
+    allowed_methods=frozenset({"GET"}),
+    respect_retry_after_header=True,
+    raise_on_status=False,
+)
+
+
+def _install_sheets_retry(session: Any) -> None:
+    """Mount the read-retry adapter on a gspread HTTP session."""
+    adapter = HTTPAdapter(max_retries=_SHEETS_READ_RETRY)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
+
 def get_gspread_client(credentials_b64: str) -> gspread.Client:
     if not credentials_b64:
         raise ValueError("GOOGLE_CREDENTIALS is not set")
@@ -784,7 +813,15 @@ def get_gspread_client(credentials_b64: str) -> gspread.Client:
             "https://www.googleapis.com/auth/drive",
         ],
     )
-    return gspread.authorize(credentials)
+    client = gspread.authorize(credentials)
+    # gspread 6.x: the AuthorizedSession lives at client.http_client.session.
+    try:
+        _install_sheets_retry(client.http_client.session)
+    except AttributeError:
+        # A future gspread reshuffle shouldn't break client creation; the
+        # app-layer _call_with_retry still covers 429s if this no-ops.
+        pass
+    return client
 
 
 def _call_with_retry(
