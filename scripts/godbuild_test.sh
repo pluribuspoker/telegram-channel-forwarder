@@ -10,6 +10,10 @@
 # 3. Runs the twelve-module God Expert suite plus any extra modules, prints the output,
 #    removes the clone. Exit status is unittest's.
 #
+# Works from the operator's machine (ssh/scp to the VPS) and from the VPS
+# itself (hostname-detected; the clone+overlay+suite run on-box — sshing the
+# box from itself has no key and dies as "scp: Connection closed").
+#
 # Never touches ~/app, the sheet, or the network beyond ssh/scp.
 set -euo pipefail
 
@@ -44,6 +48,29 @@ if [ "$COUNT" -gt 0 ]; then
 else
   tar czf "$LOCAL_TAR" -T /dev/null
 fi
+
+if [ "$(hostname)" = "pickbot" ]; then
+  # Already on the VPS (e.g. the Telegram Claude session): ssh/scp back to
+  # the same box would need keys this user lacks (first symptom: a bare
+  # "scp: Connection closed") — clone, overlay, and run right here instead.
+  # Files authored on the box carry no CRs to strip.
+  as_forwarder() { if [ "$(id -un)" = forwarder ]; then bash -c "$1"; else su - forwarder -c "$1"; fi; }
+  rm -rf "$CLONE"
+  as_forwarder "git clone -q /home/forwarder/app $CLONE" || { echo "clone failed"; exit 2; }
+  echo "clone at $(as_forwarder "cd $CLONE && git log --oneline -1")"
+  tar xzf "$LOCAL_TAR" -C "$CLONE"
+  rm -f "$LOCAL_TAR" "$LIST"
+  [ "$(id -un)" = forwarder ] || chown -R forwarder:forwarder "$CLONE"
+  echo "=== unittest: $SUITE $EXTRA_MODULES"
+  set +e
+  as_forwarder "cd $CLONE && /home/forwarder/venv/bin/python -m unittest $SUITE $EXTRA_MODULES 2>&1"
+  STATUS=$?
+  set -e
+  rm -rf "$CLONE"
+  echo "=== exit $STATUS (clone removed)"
+  exit $STATUS
+fi
+
 scp -q "$LOCAL_TAR" "${VPS}:${OVERLAY}"
 # The overlaid file list rides along so only those files get their CRs stripped.
 scp -q "$LIST" "${VPS}:${OVERLAY}.list"
