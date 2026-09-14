@@ -1128,6 +1128,50 @@ class GradingTests(unittest.TestCase):
         short = build_scoreboard(rows[:2], finals=finals[:1], snapshots=[], registry=registry, policy=policy, as_of="now")
         self.assertFalse(hedge_weights(short, ["schedule", "divisional"], policy)["active"])
 
+    def test_scoreboard_latest_per_game_counts_only_the_standing_arm_row(self) -> None:
+        # The arms persist a row per committee change; the ledger view counts
+        # each (default), the display view only the decision standing at
+        # kickoff — so a superseded row's bet leg never reads as a bet.
+        registry = load_registry()
+        policy = aggregator_policy(registry)
+        finals = [{"event_id": "espn-0", "kickoff_utc": KICKOFF, "away_team": AWAY, "home_team": HOME, "away_score": 17, "home_score": 24}]
+        rows = [
+            _opinion("schedule", model="claude-opus-4-8", probability=0.75, margin=7, away_score=17, home_score=24),
+            _opinion(
+                "god_rules",
+                model=DETERMINISTIC_MODEL,
+                probability=0.62,
+                margin=3,
+                away_score=20,
+                home_score=23,
+                generated_at="2026-09-05T02:00:00+00:00",
+                side_leg={"selection": HOME, "line": -3.0, "confidence_stars": 2},
+            ),
+            _opinion(
+                "god_rules",
+                model=DETERMINISTIC_MODEL,
+                probability=0.58,
+                margin=2,
+                away_score=21,
+                home_score=23,
+                generated_at="2026-09-06T02:00:00+00:00",
+                side_leg={"selection": "PASS", "line": None},
+            ),
+        ]
+        ledger = build_scoreboard(rows, finals=finals, snapshots=[], registry=registry, policy=policy, as_of="now")
+        self.assertEqual(ledger["by_expert"]["god_rules"]["resolved"], 2)
+        self.assertEqual(sum(ledger["by_expert"]["god_rules"]["legs"].values()), 1)
+        standing = build_scoreboard(rows, finals=finals, snapshots=[], registry=registry, policy=policy, as_of="now", latest_per_game=True)
+        self.assertEqual(standing["by_expert"]["god_rules"]["resolved"], 1)
+        # The 09-06 row is the standing decision: no bet legs, its Brier.
+        self.assertEqual(sum(standing["by_expert"]["god_rules"]["legs"].values()), 0)
+        self.assertAlmostEqual(standing["by_expert"]["god_rules"]["brier"], (0.58 - 1.0) ** 2, places=4)
+        # Voices are one row per game either way.
+        self.assertEqual(standing["by_expert"]["schedule"]["resolved"], 1)
+        self.assertEqual(standing["by_expert"]["schedule"], ledger["by_expert"]["schedule"])
+        self.assertEqual(standing["resolved_games"], 1)
+        self.assertEqual(standing["graded_opinions"], 2)
+
 
 class GenerationTests(unittest.IsolatedAsyncioTestCase):
     async def test_rules_arm_end_to_end(self) -> None:

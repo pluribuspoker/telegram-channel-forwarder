@@ -6,10 +6,16 @@ closing-line value), then the God Expert disagreement report: per game
 graded for both arms, each arm's Brier, whether the legs agreed, and who was
 right where they differed; season totals give the paired Brier difference
 with its standard error, the leg agreement rate, and the disagreement
-record. With --write, appends one row per graded opinion to the append-only
-``moe_grades`` tab, then one ``mean_of_arms`` row per paired game (the
-bake-off's free third row: a ledger row, never an expert), skipping opinion
-ids already present. With --notify as well, posts the digest — per game:
+record. The scoreboard here (text, --json, and the digest) counts one
+standing row per expert per game (``build_scoreboard(latest_per_game=True)``)
+— the arms persist a fresh row per committee change, and tallying every row
+quintuple-counted their games and reported superseded re-judges' legs as
+bets (the operator-reported "god_judge ats 37-35" of 2026-09-14 was 73 rows
+over 15 games; the real standing record was 8-5-1 with one bet leg). The
+LEDGER is untouched: --write still appends one row per graded opinion to
+the append-only ``moe_grades`` tab, then one ``mean_of_arms`` row per
+paired game (the bake-off's free third row: a ledger row, never an expert),
+skipping opinion ids already present. With --notify as well, posts the digest — per game:
 the final, the closing spread/total the picks were graded against, and
 each expert's graded side, line, and bet legs with ✅/❌/♻️ results, then
 the season scoreboard — to the desk group's Scores topic when one is
@@ -130,6 +136,69 @@ def _record_line(expert_id: str, record: dict) -> str:
     return f"{expert_id} · " + " · ".join(parts)
 
 
+def _wlp(record: dict) -> str:
+    """'13-9-1'; a zero push count drops the third part ('3-2')."""
+    tail = f"-{record['p']}" if record["p"] else ""
+    return f"{record['w']}-{record['l']}{tail}"
+
+
+def _bet_record_line(expert_id: str, record: dict) -> str:
+    """'god_rules 3-2 · clv -0.20/5' — the expert's actual graded bet legs."""
+    line = f"{expert_id} {_wlp(record['legs'])}"
+    if record["clv_points_mean"] is not None:
+        line += f" · clv {record['clv_points_mean']:+.2f}/{record['clv_legs']}"
+    return line
+
+
+def _lean_line(expert_id: str, record: dict) -> str:
+    """'ak · 15g · ats 8-6-1 · ou 9-5 · B 0.2071' — per-game stance at close."""
+    parts = [
+        f"{record['resolved']}g",
+        f"ats {_wlp(record['ats'])}",
+        f"ou {_wlp(record['ou'])}",
+    ]
+    if record["brier"] is not None:
+        parts.append(f"B {record['brier']:.4f}")
+    return f"{expert_id} · " + " · ".join(parts)
+
+
+def season_sections(by_expert: dict) -> tuple[list[str], list[str]]:
+    """The digest's season block: bet records, then per-game leans.
+
+    Bets list only experts that graded a leg (arms first — they are the
+    product — then voices by id); the leans leaderboard sorts by Brier,
+    best first, and drops experts with nothing resolved (an all-zero row
+    is registry noise, not a record).
+    """
+    bet_lines = [
+        _bet_record_line(expert_id, by_expert[expert_id])
+        for expert_id in sorted(
+            (
+                expert_id
+                for expert_id, record in by_expert.items()
+                if any(record["legs"].values())
+            ),
+            key=lambda expert_id: (not expert_id.startswith("god_"), expert_id),
+        )
+    ]
+    lean_lines = [
+        _lean_line(expert_id, record)
+        for expert_id, record in sorted(
+            (
+                (expert_id, record)
+                for expert_id, record in by_expert.items()
+                if record["resolved"]
+            ),
+            key=lambda item: (
+                item[1]["brier"] is None,
+                item[1]["brier"] if item[1]["brier"] is not None else 0.0,
+                item[0],
+            ),
+        )
+    ]
+    return bet_lines, lean_lines
+
+
 def _passed_pick(value) -> bool:
     """True when a persisted pick json explicitly declares selection PASS."""
     if value in (None, ""):
@@ -248,17 +317,22 @@ def notification_text(
     projected score, the side and line of its ATS/O-U grades with ✅/❌/♻️
     results, and its actual bet legs (or PASS) where it placed any. When a
     game produced several rows for one expert (the arms re-run per
-    committee), only the latest shows. The season-to-date scoreboard closes
-    the message. Blocks degrade to bare header lines from the end when the
-    full text would pass Telegram's limit.
+    committee), only the latest shows. The season block closes the message:
+    actual bet records first (glanceable — that is the money question), the
+    per-game lean leaderboard under it (operator-asked 2026-09-14: the old
+    single-section board read the arms' every-row lean tallies as bet
+    records; ``scoreboard`` must come from ``latest_per_game=True``).
+    Blocks degrade to bare header lines from the end when the full text
+    would pass Telegram's limit.
 
     ``html=True`` renders the Bot API HTML the Scores topic gets — the same
     content visually chunked (operator-asked, 2026-09-10: the flat version
     still read as one wall): bold section and game headers, each game's
     expert lines in a <blockquote> (Telegram's indent bar separates the
-    games), the expert bolded at the start of its line, and the season
-    scoreboard collapsed into a <blockquote expandable>. Plain mode is what
-    the watchdog-DM fallback sends, tag-free.
+    games), the expert bolded at the start of its line, bet records in the
+    open with the leans leaderboard collapsed into a
+    <blockquote expandable>. Plain mode is what the watchdog-DM fallback
+    sends, tag-free.
     """
     opinions = list(opinions or [])
     by_id = {str(op.get("opinion_id") or ""): op for op in opinions}
@@ -367,15 +441,18 @@ def notification_text(
         f"→ {GRADES_TAB}",
     ]
     extra_games = len(event_order) - len(blocks)
-    season_lines = ["season so far:"] + [
-        _record_line(expert_id, record)
-        for expert_id, record in sorted(scoreboard["by_expert"].items())
-    ]
+    bet_lines, lean_lines = season_sections(scoreboard["by_expert"])
 
     esc = _escape_html if html else (lambda value: value)
 
     def _bold(line: str) -> str:
         return f"<b>{esc(line)}</b>" if html else line
+
+    def _head_bold(line: str, sep: str) -> str:
+        head, found, rest = line.partition(sep)
+        if not found:
+            return esc(line)
+        return f"<b>{esc(head)}</b>{esc(sep + rest)}"
 
     def _expert_html(line: str) -> str:
         # '↳ bet: …' stays plain; 'ak 20-24: …' bolds its prefix through the
@@ -406,18 +483,23 @@ def notification_text(
             lines.append(esc(f"+{extra_games} more games"))
         if footnotes:
             lines.extend(["", *(esc(note) for note in footnotes)])
+        lines.append("")
+        lines.append(_bold("season so far") if html else "season so far:")
         if html:
-            season_records = "\n".join(
-                f"<b>{esc(head)}</b> · {esc(rest)}" if sep else esc(line)
-                for line in season_lines[1:]
-                for head, sep, rest in [line.partition(" · ")]
-            )
-            lines.extend(
-                ["", _bold("season so far"),
-                 f"<blockquote expandable>{season_records}</blockquote>"]
-            )
+            if bet_lines:
+                lines.append(esc("bets:"))
+                lines.extend(_head_bold(line, " ") for line in bet_lines)
+            if lean_lines:
+                quoted = "\n".join(
+                    [esc("per-game leans at close:")]
+                    + [_head_bold(line, " · ") for line in lean_lines]
+                )
+                lines.append(f"<blockquote expandable>{quoted}</blockquote>")
         else:
-            lines.extend(["", *season_lines])
+            if bet_lines:
+                lines.extend(["bets:", *bet_lines])
+            if lean_lines:
+                lines.extend(["per-game leans at close:", *lean_lines])
         return "\n".join(lines)
 
     # Full detail if it fits; otherwise degrade trailing games to their bare
@@ -521,6 +603,8 @@ def main() -> None:
     registry = load_registry()
     policy = aggregator_policy(registry)
     graded_at = datetime.now(timezone.utc).isoformat()
+    # Display counts one standing row per expert per game; only the ledger
+    # (grade_all below) grades every persisted re-judge.
     scoreboard = build_scoreboard(
         approved,
         finals=finals,
@@ -528,6 +612,7 @@ def main() -> None:
         registry=registry,
         policy=policy,
         as_of=graded_at,
+        latest_per_game=True,
     )
     graded = grade_all(
         approved,

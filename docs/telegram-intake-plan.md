@@ -2035,11 +2035,21 @@ Prototype issue log:
   grades with ✅/❌/♻️ results, and its actual bet legs with CLV (or an
   explicit `bet: PASS` when its declared picks graded no leg; only the
   latest row shows for an expert the arms re-graded per committee) — then
-  the season scoreboard, one compact `expert · n · B · ats · ou` line
-  each (2026-09-10, operator-requested redesign: the old aligned columns
-  wrapped mid-number inside a mobile `<pre>` bubble, and the digest named
-  neither the closing lines nor any pick's side; `render_scores_notice`
-  now sends proportional text, bold first line, never `<pre>`). When the
+  the season block: actual bet records in the open (`god_rules 3-2 · clv
+  -0.20/5`, arms first, only experts that graded a leg), the per-game lean
+  leaderboard in a `<blockquote expandable>` (`expert · 15g · ats 8-6-1 ·
+  ou 9-5 · B 0.2071`, best Brier first, zero-resolved experts dropped).
+  Two operator-requested redesigns shaped this: 2026-09-10 (the old
+  aligned columns wrapped mid-number inside a mobile `<pre>` bubble, and
+  the digest named neither the closing lines nor any pick's side;
+  `render_scores_notice` now sends proportional text, bold first line,
+  never `<pre>`) and 2026-09-14 (the single-section board tallied the
+  arms' EVERY persisted row, so `god_judge · ats 37-35-1` was 73 re-judged
+  rows over 15 games masquerading as a bet record while its actual bets
+  were 0-1; every moe_grade surface — text, `--json`, digest — now passes
+  `build_scoreboard(latest_per_game=True)`, which keeps only the standing
+  row per expert per game and leaves the ledger's every-row grading, the
+  judge-input scoreboard, and Hedge weights byte-identical). When the
   full text would pass Telegram's 4096-character cap, trailing game
   blocks degrade to their bare score-header line before anything is
   truncated (`notification_text`). It is a no-op without `--write` or

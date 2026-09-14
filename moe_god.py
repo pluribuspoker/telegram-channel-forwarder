@@ -1462,15 +1462,41 @@ def build_scoreboard(
     registry: dict[str, Any],
     policy: dict[str, Any],
     as_of: str,
+    latest_per_game: bool = False,
 ) -> dict[str, Any]:
-    """Per-expert track record from every resolved approved opinion."""
+    """Per-expert track record from every resolved approved opinion.
+
+    The arms persist a fresh approved row on every committee change, and by
+    default each graded row counts — the ledger view, where one game can
+    weigh in many times for god_rules/god_judge. ``latest_per_game=True``
+    keeps only the latest graded row per expert per game — the decision
+    standing at kickoff — which is the record display surfaces must show
+    (an arm's ``legs`` are then its actual bets, not every superseded
+    re-judge's). Voices are identical under both modes: ``select_voice_rows``
+    already picks one row per game. The aggregator input builder keeps the
+    default so its requests stay byte-identical.
+    """
+    rows = list(approved_rows)
     graded = grade_all(
-        approved_rows,
+        rows,
         finals=finals,
         snapshots=snapshots,
         registry=registry,
         policy=policy,
     )
+    if latest_per_game:
+        order = {
+            str(row.get("opinion_id") or ""): _row_order(row) for row in rows
+        }
+        standing: dict[
+            tuple[str, str], tuple[tuple[str, str], dict[str, Any]]
+        ] = {}
+        for result in graded:
+            key = (result["expert_id"], result["event_id"])
+            rank = order.get(result["opinion_id"], ("", ""))
+            if key not in standing or rank > standing[key][0]:
+                standing[key] = (rank, result)
+        graded = [item[1] for item in standing.values()]
     board: dict[str, dict[str, Any]] = {
         expert_id: _empty_record()
         for expert_id, config in registry["experts"].items()

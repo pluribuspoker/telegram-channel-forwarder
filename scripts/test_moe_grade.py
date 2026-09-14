@@ -258,17 +258,26 @@ class GameBlockTests(unittest.TestCase):
         # No sides or lines to spell out, but the results still show.
         self.assertIn("schedule: ats ♻️ · o/u ✅ · B 0.1296", text)
 
-    def test_season_lines_are_compact_and_skip_empty_sections(self) -> None:
-        text = self._text()
-        self.assertIn("season so far:", text)
-        self.assertIn("schedule · n1 · B 0.1296 · ats 1-0-0 · ou 0-1-0", text)
-        # No legs and no clv → neither section appears on the line.
-        self.assertNotIn("schedule · n1 · B 0.1296 · ats 1-0-0 · ou 0-1-0 · legs", text)
+    def test_season_block_splits_bets_from_leans(self) -> None:
+        board = dict(self.scoreboard)
+        board["by_expert"] = {
+            **self.scoreboard["by_expert"],
+            "pikkit": _record(0, None),
+        }
+        text = self._text(scoreboard=board)
+        season = text.split("season so far:")[1]
+        # Actual bet legs lead — only experts that graded a leg appear.
+        self.assertIn("bets:\ngod_rules 0-0-1 · clv +0.00/1", season)
+        self.assertNotIn("schedule", season.split("per-game leans")[0])
+        # Leans are per-game records, best Brier first; zero pushes drop.
         self.assertIn(
-            "god_rules · n2 · B 0.1530 · ats 1-0-0 · ou 0-1-0 · legs 0-0-1 "
-            "· clv +0.00/1",
-            text,
+            "per-game leans at close:\n"
+            "schedule · 1g · ats 1-0 · ou 0-1 · B 0.1296\n"
+            "god_rules · 2g · ats 1-0 · ou 0-1 · B 0.1530",
+            season,
         )
+        # Nothing resolved (registry noise) never earns a season line.
+        self.assertNotIn("pikkit", text)
 
     def test_record_line_omits_brier_when_unresolved(self) -> None:
         self.assertEqual(
@@ -294,11 +303,16 @@ class HtmlDigestTests(GameBlockTests):
         self.assertIn("↳ bet: Seahawks -3 ♻️ (clv +0.0)", text)
         self.assertIn("<b>mean_of_arms:</b> ats ♻️ · o/u ✅ · B 0.1534</blockquote>", text)
 
-    def test_html_season_board_is_an_expandable_quote(self) -> None:
+    def test_html_season_board_bets_open_leans_expandable(self) -> None:
         text = self._text(html=True)
         self.assertIn("<b>season so far</b>", text)
+        # Bet records sit in the open — the glanceable money view.
+        self.assertIn("bets:\n<b>god_rules</b> 0-0-1 · clv +0.00/1", text)
         self.assertIn(
-            "<blockquote expandable><b>god_rules</b> · n2 · B 0.1530", text
+            "<blockquote expandable>per-game leans at close:\n"
+            "<b>schedule</b> · 1g · ats 1-0 · ou 0-1 · B 0.1296\n"
+            "<b>god_rules</b> · 2g · ats 1-0 · ou 0-1 · B 0.1530</blockquote>",
+            text,
         )
         self.assertTrue(text.endswith("</blockquote>"))
 
