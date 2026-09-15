@@ -27,6 +27,7 @@ from scores import (
     scoreboard_text,
     line_scores_text,
     box_score_text,
+    scoring_plays_text,
     find_event_ids,
     _completed_events,
     _ufc_bout_completed,
@@ -774,6 +775,18 @@ async def claude_grade(pick_desc: str, date: str, context: str, bet_type: str = 
 
 # ─── Grade context builder ────────────────────────────────────────────────────
 
+_ORDINAL_SCORER_RE = re.compile(
+    r"\b(first|1st|last|opening)\b.{0,40}\b(touchdown|td|goal|scorer)\b",
+    re.I | re.S)
+
+
+def _needs_scoring_order(pick: dict) -> bool:
+    """Ordinal scorer props (first TD scorer) settle on scoring ORDER, which
+    the box score doesn't carry — their context needs scoring_plays_text."""
+    blob = f"{pick.get('prop_stat') or ''} {pick.get('description') or ''}"
+    return bool(_ORDINAL_SCORER_RE.search(blob))
+
+
 async def build_context(
     sport: str,
     date: str,
@@ -899,6 +912,10 @@ async def build_context(
                 # Line scores too: NRFI/period props grade off inning scores,
                 # and the final score sanity-checks the box.
                 parts.append(line_scores_text(summary, sport))
+                if _needs_scoring_order(pick):
+                    splays = scoring_plays_text(summary)
+                    if splays:
+                        parts.append(splays)
                 btext = box_score_text(summary, player)
                 if btext != "No player stats found":
                     player_found = True
@@ -933,7 +950,23 @@ async def build_context(
                         "his stats below are from the game he actually played:",
                         line_scores_text(summary, sport), btext,
                     ]
+                    if _needs_scoring_order(pick):
+                        splays = scoring_plays_text(summary)
+                        if splays:
+                            parts.insert(2, splays)
                     return "\n\n".join(p for p in parts if p.strip()), date
+
+        # Player in no completed box while the day's slate still has unplayed
+        # games: his real game may simply not have started yet (a stale-roster
+        # parse binds the wrong team, and on an MNF slate nothing is final
+        # until late). Grading now binds a wrong or empty context and burns
+        # the UNKNOWN cap pregame — defer so the box rescue above gets its
+        # post-final chance. UFC exempt: cards carry no player boxes; method
+        # props grade from the scoreboard path below.
+        if (bet_type == "prop" and player and not player_found
+                and sport != "UFC"
+                and len(_completed_events(scoreboard)) < len(scoreboard.get("events") or [])):
+            return CONTEXT_PENDING, date
 
         if parts:
             return "\n\n".join(p for p in parts if p.strip()), date

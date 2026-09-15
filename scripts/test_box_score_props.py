@@ -133,5 +133,61 @@ check("no-teams player pick left to _parse_incomplete",
           {"picks": [{"player": "Tarik Skubal", "teams": []}]},
           "Skubal getting 9"))
 
+# ── ordinal scorer props: context must carry scoring ORDER ───────────────────
+# A box score counts a player's TDs but says nothing about order, so "First
+# Touchdown Scorer" graded UNKNOWN forever (Trent msg 101: Engram MNF first-TD
+# capped ungradeable). Fixture is the pruned REAL DEN@KC summary (2026-09-14).
+from scores import scoring_plays_text  # noqa: E402
+
+DEN_KC = json.load(open(FIXTURES / "espn_nfl_summary_den_kc_20260914.json"))
+
+sp = scoring_plays_text(DEN_KC)
+check("scoring plays render in game order",
+      "SCORING PLAYS" in sp and sp.index("Patrick Mahomes") < sp.index("Evan Engram"), sp[:160])
+check("scoring plays are numbered", "1. P1" in sp and "2. P1" in sp, sp[:160])
+check("summary without scoringPlays renders empty", scoring_plays_text({}) == "")
+
+check("first-TD prop needs scoring order", ai._needs_scoring_order(
+    {"prop_stat": "First Touchdown Scorer",
+     "description": "Evan Engram First Touchdown Scorer +2500"}))
+check("last/1st goal variants need order",
+      ai._needs_scoring_order({"prop_stat": "Last TD scorer", "description": ""})
+      and ai._needs_scoring_order({"prop_stat": "", "description": "1st goal scorer"}))
+check("anytime TD needs no order", not ai._needs_scoring_order(
+    {"prop_stat": "Anytime Touchdown", "description": "Engram anytime TD"}))
+check("plain K prop needs no order", not ai._needs_scoring_order(_pick))
+
+_denkc_event = {
+    "id": "denkc", "name": "Denver Broncos at Kansas City Chiefs",
+    "status": {"type": {"completed": True}},
+    "competitions": [{"competitors": [
+        {"team": {"displayName": "Denver Broncos"}},
+        {"team": {"displayName": "Kansas City Chiefs"}}]}]}
+_nfl_sb = {"events": [_denkc_event]}
+_summaries["denkc"] = DEN_KC
+
+_engram = {
+    "description": "Evan Engram First Touchdown Scorer +2500",
+    "bet_type": "prop", "period": "game",
+    "teams": ["Jacksonville Jaguars"],  # stale roster memory — JAX idle that day
+    "player": "Evan Engram", "prop_stat": "First Touchdown Scorer",
+    "line": None, "direction": None,
+}
+ctx3, _ = asyncio.run(ai.build_context("NFL", "2026-09-14", _engram, _nfl_sb, {}))
+check("rescue rebinds Engram to his real game", "receivingTouchdowns=1" in ctx3, ctx3[:300])
+check("rescued ordinal context carries scoring order", "SCORING PLAYS" in ctx3, ctx3[:300])
+
+# Correctly-parsed team: same order data arrives without the rescue note.
+_engram_ok = dict(_engram, teams=["Denver Broncos"])
+ctx4, _ = asyncio.run(ai.build_context("NFL", "2026-09-14", _engram_ok, _nfl_sb, {}))
+check("direct bind carries scoring order too",
+      "SCORING PLAYS" in ctx4 and "NOTE:" not in ctx4, ctx4[:300])
+
+# Pregame slate: the player is in no completed box because his game hasn't
+# started — must defer (PENDING), not burn the UNKNOWN cap on a wrong context.
+_nfl_sb_pre = {"events": [dict(_denkc_event, status={"type": {"completed": False}})]}
+ctx5, _ = asyncio.run(ai.build_context("NFL", "2026-09-14", _engram, _nfl_sb_pre, {}))
+check("incomplete slate defers player prop", ctx5 == ai.CONTEXT_PENDING, repr(ctx5)[:100])
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

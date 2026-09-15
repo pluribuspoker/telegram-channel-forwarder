@@ -1324,6 +1324,29 @@ def box_score_text(summary: dict, player_hint: str = "",
     return "\n".join(lines) or "No player stats found"
 
 
+def scoring_plays_text(summary: dict) -> str:
+    """Ordered scoring plays from a game summary.
+
+    Ordinal scorer props (first/last touchdown scorer) cannot grade from a
+    box score — it counts a player's TDs but carries no order. ESPN summaries
+    already ship the sequence in `scoringPlays`; render it numbered so
+    "first" is directly readable. Empty string when the summary has none.
+    """
+    lines = []
+    for i, play in enumerate(summary.get("scoringPlays") or [], 1):
+        period = (play.get("period") or {}).get("number", "?")
+        clock = (play.get("clock") or {}).get("displayValue") or ""
+        team = ((play.get("team") or {}).get("abbreviation")
+                or (play.get("team") or {}).get("displayName") or "?")
+        ptype = ((play.get("type") or {}).get("abbreviation")
+                 or (play.get("type") or {}).get("text") or "")
+        text = play.get("text") or ""
+        lines.append(f"  {i}. P{period} {clock} {team} {ptype}: {text}".rstrip())
+    if not lines:
+        return ""
+    return "SCORING PLAYS (in game order):\n" + "\n".join(lines)
+
+
 # Words that, when following a matched term, indicate it's a different longer team name.
 # e.g., "Iowa" should not match "Iowa State Cyclones" because "State" follows "Iowa".
 _QUALIFIERS = {"state", "tech", "a&m", "am", "international", "st"}  # "st" = abbrev for State/Saint disambiguation

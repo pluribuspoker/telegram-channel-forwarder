@@ -1,0 +1,366 @@
+{
+ "header": {
+  "competitions": [
+   {
+    "competitors": [
+     {
+      "team": {
+       "displayName": "Kansas City Chiefs"
+      },
+      "score": "31",
+      "linescores": [
+       {
+        "displayValue": "7"
+       },
+       {
+        "displayValue": "7"
+       },
+       {
+        "displayValue": "10"
+       },
+       {
+        "displayValue": "7"
+       }
+      ]
+     },
+     {
+      "team": {
+       "displayName": "Denver Broncos"
+      },
+      "score": "10",
+      "linescores": [
+       {
+        "displayValue": "7"
+       },
+       {
+        "displayValue": "0"
+       },
+       {
+        "displayValue": "3"
+       },
+       {
+        "displayValue": "0"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ "boxscore": {
+  "players": [
+   {
+    "team": {
+     "displayName": "Denver Broncos"
+    },
+    "statistics": [
+     {
+      "name": "receiving",
+      "type": null,
+      "keys": [
+       "receptions",
+       "receivingYards",
+       "yardsPerReception",
+       "receivingTouchdowns",
+       "longReception",
+       "receivingTargets"
+      ],
+      "athletes": [
+       {
+        "athlete": {
+         "displayName": "Evan Engram"
+        },
+        "stats": [
+         "4",
+         "43",
+         "10.8",
+         "1",
+         "19",
+         "5"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Pat Bryant"
+        },
+        "stats": [
+         "4",
+         "42",
+         "10.5",
+         "0",
+         "13",
+         "6"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "RJ Harvey"
+        },
+        "stats": [
+         "4",
+         "23",
+         "5.8",
+         "0",
+         "11",
+         "4"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Courtland Sutton"
+        },
+        "stats": [
+         "2",
+         "11",
+         "5.5",
+         "0",
+         "6",
+         "5"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Adam Trautman"
+        },
+        "stats": [
+         "2",
+         "10",
+         "5.0",
+         "0",
+         "6",
+         "3"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Jaylen Waddle"
+        },
+        "stats": [
+         "1",
+         "2",
+         "2.0",
+         "0",
+         "2",
+         "3"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "team": {
+     "displayName": "Kansas City Chiefs"
+    },
+    "statistics": [
+     {
+      "name": "receiving",
+      "type": null,
+      "keys": [
+       "receptions",
+       "receivingYards",
+       "yardsPerReception",
+       "receivingTouchdowns",
+       "longReception",
+       "receivingTargets"
+      ],
+      "athletes": [
+       {
+        "athlete": {
+         "displayName": "Travis Kelce"
+        },
+        "stats": [
+         "3",
+         "71",
+         "23.7",
+         "0",
+         "59",
+         "5"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Emmett Johnson"
+        },
+        "stats": [
+         "2",
+         "44",
+         "22.0",
+         "0",
+         "25",
+         "2"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Rashee Rice"
+        },
+        "stats": [
+         "2",
+         "19",
+         "9.5",
+         "1",
+         "13",
+         "2"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Kenneth Walker III"
+        },
+        "stats": [
+         "3",
+         "18",
+         "6.0",
+         "1",
+         "11",
+         "6"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Xavier Worthy"
+        },
+        "stats": [
+         "3",
+         "18",
+         "6.0",
+         "0",
+         "9",
+         "6"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Jake Briningstool"
+        },
+        "stats": [
+         "1",
+         "9",
+         "9.0",
+         "0",
+         "9",
+         "1"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ "scoringPlays": [
+  {
+   "period": {
+    "number": 1
+   },
+   "clock": {
+    "displayValue": "8:11"
+   },
+   "team": {
+    "abbreviation": "KC"
+   },
+   "type": {
+    "abbreviation": "TD",
+    "text": "Rushing Touchdown"
+   },
+   "text": "Patrick Mahomes 15 Yd Rush (Harrison Butker Kick)"
+  },
+  {
+   "period": {
+    "number": 1
+   },
+   "clock": {
+    "displayValue": "3:48"
+   },
+   "team": {
+    "abbreviation": "DEN"
+   },
+   "type": {
+    "abbreviation": "TD",
+    "text": "Passing Touchdown"
+   },
+   "text": "Evan Engram 19 Yd pass from Bo Nix (Wil Lutz Kick)"
+  },
+  {
+   "period": {
+    "number": 2
+   },
+   "clock": {
+    "displayValue": "1:39"
+   },
+   "team": {
+    "abbreviation": "KC"
+   },
+   "type": {
+    "abbreviation": "TD",
+    "text": "Passing Touchdown"
+   },
+   "text": "Rashee Rice 13 Yd pass from Patrick Mahomes (Harrison Butker Kick)"
+  },
+  {
+   "period": {
+    "number": 3
+   },
+   "clock": {
+    "displayValue": "12:43"
+   },
+   "team": {
+    "abbreviation": "KC"
+   },
+   "type": {
+    "abbreviation": "TD",
+    "text": "Rushing Touchdown"
+   },
+   "text": "Kenneth Walker III 60 Yd Rush (Harrison Butker Kick)"
+  },
+  {
+   "period": {
+    "number": 3
+   },
+   "clock": {
+    "displayValue": "7:34"
+   },
+   "team": {
+    "abbreviation": "DEN"
+   },
+   "type": {
+    "abbreviation": "FG",
+    "text": "Field Goal Good"
+   },
+   "text": "Wil Lutz 31 Yd Field Goal"
+  },
+  {
+   "period": {
+    "number": 3
+   },
+   "clock": {
+    "displayValue": "3:17"
+   },
+   "team": {
+    "abbreviation": "KC"
+   },
+   "type": {
+    "abbreviation": "FG",
+    "text": "Field Goal Good"
+   },
+   "text": "Harrison Butker 28 Yd Field Goal"
+  },
+  {
+   "period": {
+    "number": 4
+   },
+   "clock": {
+    "displayValue": "14:39"
+   },
+   "team": {
+    "abbreviation": "KC"
+   },
+   "type": {
+    "abbreviation": "TD",
+    "text": "Passing Touchdown"
+   },
+   "text": "Kenneth Walker III 2 Yd pass from Patrick Mahomes (Harrison Butker Kick)"
+  }
+ ]
+}
