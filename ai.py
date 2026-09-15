@@ -186,6 +186,7 @@ Classification rules:
 - Colloquial moneyline slang: phrases like "nuking/hammering/pounding/smashing/blasting/tailing/riding/loving the X", "all over the X", or "X for the win" express a MONEYLINE pick on team/side X (bet_type=moneyline), even with no explicit bet type, line, or odds stated — extract it. Ignore surrounding bankroll slang (e.g. "for my coin back", "to get well"). Still return no picks for pure commentary with no team/side named. "AL"/"NL" in an MLB All-Star context = American League All-Stars / National League All-Stars.
 - Period: 1h=first half, 2h=second half, 1q=first quarter, 1p/2p/3p=hockey periods, game=full game (default). For baseball, 1h = first 5 innings (F5) and 1q = first inning: NRFI (no run first inning) = bet_type total, line 0.5, direction under, period 1q; YRFI is the same with direction over.
 - Period qualifiers are PER-LEG, never shared. In a multi-leg pick, a period written on one leg applies ONLY to that leg — every other leg is period="game" unless it carries its own qualifier. In "Dodgers F5 +1.5 & under 11.5" the F5 belongs to the spread; the total is a FULL-GAME total (period="game"). Sanity-check the line against the period before tagging it: an MLB first-5-innings total is ~3.5-7.5 runs, an NBA first-half total ~105-125, an NFL first-half total ~19-28, an NHL period total ~1.5-2.5. A line far above the period's normal range is a full-game line that was never period-scoped.
+- Bare "TEAM over/under N" with NO team-total wording is the GAME total: cappers name a team as shorthand for the game — "Chiefs over 42.5" = the Chiefs game's combined score over 42.5 (bet_type=total, teams=["Kansas City Chiefs"]). Use bet_type=team_total ONLY when the message says "team total"/"TT" (e.g. "Hornets team total over 117.5", "Chiefs TT o26.5"), OR the number is far below any game total and only fits one team's own range (typical GAME totals: NFL/NCAAF ~36-75, NBA ~205-250, NCAAB ~120-165, WNBA ~150-175, MLB ~6.5-13, NHL ~5-7.5; a team total runs about half that): bare "Ravens over 24.5" is a team total by range, bare "Chiefs over 42.5" is a game total.
 
 Message:
 {text}"""
@@ -424,6 +425,63 @@ def _mark_slash_parlay_legs(parsed: dict, text: str) -> None:
             print(f"    [parse] slash-separated selections on one line "
                   f"({len(owners)} segments) → parlay legs")
             return
+
+
+# "team total"/"TT" written anywhere in the message. Whole-text on purpose:
+# when the words appear at all, leave the model's team_total reading alone.
+_TT_MARKER_RE = re.compile(r"\btt\b|\bteam[\s-]*total", re.IGNORECASE)
+
+# Sport → lowest line that cannot plausibly be one team's total (main team-total
+# markets top out well below it) while sitting squarely in the sport's game-total
+# range. Sports with real overlap between the two ranges (Soccer goals/corners)
+# are deliberately absent — no floor, no flip.
+_GAME_TOTAL_FLOORS = {
+    "NFL": 36, "NCAAF": 56, "CFL": 40, "UFL": 36,
+    "NBA": 160, "WNBA": 125, "NCAAB": 110,
+    "MLB": 8.5, "KBO": 10.5, "NHL": 5,
+}
+
+
+def _fix_bare_game_total(parsed: dict, text: str) -> None:
+    """Re-read a bare "TEAM over/under N" mis-parsed as team_total as the game total.
+
+    Cappers name a team as shorthand for the game: Insider's "Chiefs over 42.5"
+    was the Broncos-Chiefs game total (the market number that night was exactly
+    42.5), but it parsed as a Chiefs TEAM total. Downstream that priced the only
+    market carrying a 42.5 team-total line — a deep alternate at +3500, through
+    the PAID odds path (team totals aren't on the free sources) — and graded on
+    the Chiefs' score alone. A game total prices free (ESPN/Bovada) at ~-110.
+
+    Fires only on the unambiguous shape: bet_type=team_total, full-game period,
+    no "team total"/"TT" wording anywhere in the message, and a line at or above
+    the sport's game-total floor (a number no single team's market reaches).
+    Explicitly-worded team totals, period-scoped team totals, and sports whose
+    team/game ranges overlap (Soccer) are never touched. The description is
+    rewritten too — it feeds the grade prompt, and "team total" there would
+    argue with the corrected bet_type.
+    """
+    if _TT_MARKER_RE.search(text):
+        return
+    for pick in parsed.get("picks") or []:
+        if pick.get("bet_type") != "team_total" or pick.get("prop_stat"):
+            continue
+        if (pick.get("period") or "game") != "game":
+            continue
+        sport = pick.get("sport") or parsed.get("sport")
+        floor = _GAME_TOTAL_FLOORS.get(sport)
+        line = pick.get("line")
+        if floor is None or not isinstance(line, (int, float)) or line < floor:
+            continue
+        pick["bet_type"] = "total"
+        desc = pick.get("description") or ""
+        if re.search(r"\bteam[\s-]*total\b", desc, re.IGNORECASE):
+            pick["description"] = re.sub(
+                r"\bteam[\s-]*total\b", "game total", desc, flags=re.IGNORECASE)
+        elif "game total" not in desc.lower() and re.search(r"\b(over|under)\b", desc, re.IGNORECASE):
+            pick["description"] = re.sub(
+                r"\b(over|under)\b", r"game total \1", desc, count=1, flags=re.IGNORECASE)
+        print(f"    [parse] bare team total {line:g} ≥ {sport} game-total floor "
+              f"{floor:g} → game total")
 
 
 async def claude_parse(
@@ -667,6 +725,7 @@ async def claude_parse(
 
     if parsed:
         _mark_slash_parlay_legs(parsed, text)
+        _fix_bare_game_total(parsed, text)
 
     return parsed
 
