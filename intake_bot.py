@@ -1253,6 +1253,20 @@ def snapshot_lean_submission(
     )
 
 
+def celebrity_reopen_target(submission: dict[str, Any]) -> dict[str, Any]:
+    """The game + market context to reopen for another celebrity after a
+    celebrity pick submits. Backs the "🎤 Same game, new celebrity" button:
+    the next celebrity lands back on this exact game, period, and market."""
+    return {
+        "event_id": str(submission["game"].get("event_id", "")),
+        "period": submission["period"],
+        "market": submission["market"],
+        "custom_market_family": submission.get("custom_market_family"),
+        "days": int(submission.get("days", 10)),
+        "page": int(submission.get("page", 0)),
+    }
+
+
 def requires_ak_projection(
     sender_id: int,
     ak_user_id: str,
@@ -2379,6 +2393,85 @@ async def main() -> None:
         if user_id not in no_opinion_users:
             return None
         return await asyncio.to_thread(user_picked_event_ids, user_id)
+
+    async def open_same_game_market(
+        event, reopen: dict[str, Any], celebrity: dict[str, Any], *, via_edit: bool
+    ) -> bool:
+        """Reopen the just-submitted game at the same period + market for a
+        newly chosen celebrity (the "🎤 Same game, new celebrity" button).
+        Structured markets land on the side picker; a custom market lands on
+        its text prompt. Returns False if the game has left the slate."""
+        records2, team_emojis2, _ = await _intake_data()
+        game = next(
+            (
+                r
+                for r in records2
+                if str(r.get("event_id")) == str(reopen.get("event_id"))
+            ),
+            None,
+        )
+        if game is None:
+            return False
+        period = reopen.get("period")
+        market = reopen.get("market")
+        if period not in PERIOD_LABELS or market not in {
+            "spread",
+            "moneyline",
+            "total",
+            "custom",
+        }:
+            return False
+        name = str(celebrity["name"])
+        base = {
+            "game": game,
+            "days": int(reopen.get("days", 10)),
+            "page": int(reopen.get("page", 0)),
+            "celebrity": dict(celebrity),
+            "period": period,
+            "market": market,
+        }
+        if market == "custom":
+            family = reopen.get("custom_market_family")
+            if family not in CUSTOM_MARKET_FAMILIES:
+                return False
+            base["custom_market_family"] = family
+            base["side"] = "custom"
+            guess_states[event.sender_id] = base
+            header = (
+                f"🎤 <b>{html.escape(name)}</b>\n\n"
+                f"<b>{html.escape(PERIOD_LABELS[period])} · "
+                f"{html.escape(family.replace('_', ' ').title())}</b>"
+            )
+            back = [[Button.inline("← Back to markets", b"back:markets")]]
+            if via_edit:
+                await edit_callback(event, header, back)
+            else:
+                await event.respond(header, buttons=back, parse_mode="html")
+            prompt = await event.respond(
+                custom_pick_prompt(family),
+                buttons=Button.force_reply(
+                    single_use=True,
+                    placeholder="Enter the structured celebrity pick",
+                ),
+            )
+            base["prompt_msg_id"] = prompt.id
+            return True
+        guess_states[event.sender_id] = base
+        text = market_side_summary(
+            game,
+            period=period,
+            market=market,
+            team_emojis=team_emojis2,
+            celebrity_name=name,
+        )
+        buttons = side_buttons(
+            market, str(game["away_team"]), str(game["home_team"])
+        )
+        if via_edit:
+            await edit_callback(event, text, buttons)
+        else:
+            await event.respond(text, buttons=buttons, parse_mode="html")
+        return True
     # The desk group (moe_desk.py); filled after client.start() once the
     # bot's username is known, read by the callback and deep-link handlers.
     desk: dict[str, Any] = {"config": None, "api": None, "task": None}
@@ -2764,6 +2857,14 @@ async def main() -> None:
                 "name": celebrity["celebrity_name"],
             }
             guess_states.pop(event.sender_id, None)
+            reopen = game_celeb_state.get("reopen")
+            if isinstance(reopen, dict):
+                game_celeb_state.pop("reopen", None)
+                if await open_same_game_market(
+                    event, reopen, game_celeb_state["celebrity"], via_edit=False
+                ):
+                    return
+                # Game left the slate -> fall through to the game browser.
             records, _, team_abbrevs = await _intake_data()
             text, buttons = game_browser(
                 records,
@@ -3058,7 +3159,8 @@ async def main() -> None:
         await event.respond(
             saved_summary, buttons=command_keyboard(), parse_mode="html"
         )
-        active = game_celeb_states.get(event.sender_id, {}).get("celebrity")
+        celeb_state = game_celeb_states.get(event.sender_id, {})
+        active = celeb_state.get("celebrity")
         records, _, team_abbrevs = await _intake_data()
         text, buttons = game_browser(
             records,
@@ -3071,6 +3173,19 @@ async def main() -> None:
             ),
             picked_event_ids=await picked_filter(event.sender_id),
         )
+        # After a celebrity pick, offer to enter another celebrity's pick on
+        # the SAME game + market: stash the reopen target and add the button.
+        if isinstance(active, dict):
+            celeb_state["reopen"] = celebrity_reopen_target(submission)
+            buttons.append(
+                [
+                    Button.inline(
+                        "🎤 Same game, new celebrity",
+                        f"celebnext:{int(submission['days'])}:"
+                        f"{int(submission['page'])}".encode(),
+                    )
+                ]
+            )
         await event.respond(text, buttons=buttons, parse_mode="html")
 
     @client.on(events.CallbackQuery)
@@ -3479,6 +3594,35 @@ async def main() -> None:
             )
             await edit_callback(event, text, buttons)
             return
+        if data.startswith("celebnext:"):
+            parts = data.split(":")
+            if len(parts) != 3:
+                await event.answer("Invalid selection.", alert=True)
+                return
+            try:
+                days = int(parts[1])
+                page = int(parts[2])
+            except ValueError:
+                await event.answer("Invalid selection.", alert=True)
+                return
+            state = game_celeb_states.setdefault(event.sender_id, {})
+            if not isinstance(state.get("reopen"), dict):
+                await event.answer(
+                    "That game view expired. Start from /guess_nfl_game.",
+                    alert=True,
+                )
+                return
+            state["days"] = days
+            state["page"] = page
+            roster = await asyncio.to_thread(load_celebrity_roster)
+            state["roster"] = {
+                str(celebrity_user_id(name)): name for name in roster
+            }
+            # Keep state["reopen"]; the following celebgame:pick / celebgame:new
+            # consumes it to reopen the same game + market for the new celebrity.
+            text, buttons = game_celebrity_picker(roster, days=days, page=page)
+            await edit_callback(event, text, buttons)
+            return
         if data.startswith("celebgame:"):
             parts = data.split(":")
             action = parts[1] if len(parts) > 1 else ""
@@ -3506,6 +3650,9 @@ async def main() -> None:
             state["days"] = days
             state["page"] = page
             if action == "start":
+                # Normal celebrity-mode entry: drop any stale reopen target so
+                # a following pick returns to the game browser, not an old game.
+                state.pop("reopen", None)
                 roster = await asyncio.to_thread(load_celebrity_roster)
                 state["roster"] = {
                     str(celebrity_user_id(name)): name for name in roster
@@ -3541,6 +3688,14 @@ async def main() -> None:
                 }
                 state.pop("roster", None)
                 guess_states.pop(event.sender_id, None)
+                reopen = state.get("reopen")
+                if isinstance(reopen, dict):
+                    state.pop("reopen", None)
+                    if await open_same_game_market(
+                        event, reopen, state["celebrity"], via_edit=True
+                    ):
+                        return
+                    # Game left the slate -> fall through to the game browser.
             elif action == "new":
                 prompt = await event.respond(
                     "Type the celebrity name:",
@@ -3554,9 +3709,10 @@ async def main() -> None:
                 return
             elif action == "self":
                 state.pop("celebrity", None)
+                state.pop("reopen", None)
                 guess_states.pop(event.sender_id, None)
             elif action == "cancel":
-                pass
+                state.pop("reopen", None)
             state.pop("roster", None)
             state.pop("prompt_msg_id", None)
             active = state.get("celebrity")

@@ -27,6 +27,7 @@ from intake_bot import (
     build_lean_row,
     build_suggestion_row,
     build_win_prediction_row,
+    celebrity_reopen_target,
     celebrity_user_id,
     command_keyboard,
     custom_market_buttons,
@@ -538,6 +539,40 @@ class GameSelectionTest(unittest.TestCase):
             buttons[-1][0].data,
             b"celebgame:self:10:0",
         )
+
+    def test_celebrity_reopen_target_captures_game_period_market(self):
+        submission = {
+            "game": {"event_id": "abc123"},
+            "period": "first_half",
+            "market": "spread",
+            "days": 30,
+            "page": 2,
+        }
+        self.assertEqual(
+            celebrity_reopen_target(submission),
+            {
+                "event_id": "abc123",
+                "period": "first_half",
+                "market": "spread",
+                "custom_market_family": None,
+                "days": 30,
+                "page": 2,
+            },
+        )
+
+    def test_celebrity_reopen_target_keeps_custom_family(self):
+        submission = {
+            "game": {"event_id": "xyz789"},
+            "period": "game",
+            "market": "custom",
+            "custom_market_family": "player_passing",
+            "days": 10,
+            "page": 0,
+        }
+        target = celebrity_reopen_target(submission)
+        self.assertEqual(target["market"], "custom")
+        self.assertEqual(target["custom_market_family"], "player_passing")
+        self.assertEqual(target["event_id"], "xyz789")
 
     def test_game_celebrity_picker_uses_stable_ids_and_browser_context(self):
         text, buttons = game_celebrity_picker(
