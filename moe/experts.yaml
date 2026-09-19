@@ -56,7 +56,7 @@ experts:
   divisional:
     name: Divisional Expert
     mode: agent
-    version: 34
+    version: 35
     prompt_version: 20
     prompt: prompts/divisional/v20.md
     input_profile: divisional

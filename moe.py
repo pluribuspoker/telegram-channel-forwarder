@@ -1969,6 +1969,83 @@ def _evidence_favored_side(
     return None
 
 
+def _relevant_team_keys(matchup_type: str) -> set[str] | None:
+    """Team-cohort keys a non-divisional matchup may cite.
+
+    Returns ``None`` for a divisional matchup, where every team cohort is
+    relevant. Mirrors the allow-list enforced in
+    :func:`_normalize_evidence_card_opinion`.
+    """
+
+    if matchup_type in {"conference", "non_conference"}:
+        matchup_key = (
+            "conference_non_division"
+            if matchup_type == "conference"
+            else "non_conference"
+        )
+        return {
+            "all_games",
+            "division_games",
+            "division_games_excluding_current_opponent",
+            "non_division_games",
+            "non_division_games_excluding_current_opponent",
+            matchup_key,
+            "against_current_opponent",
+            "against_current_opponent_as_home",
+            "against_current_opponent_as_away",
+        }
+    return None
+
+
+def _counterargument_available(
+    input_payload: dict[str, Any],
+    predicted_side: str,
+) -> bool:
+    """Whether any relevant cohort could argue against the predicted side.
+
+    A cohort produces a counterargument when its favored side is anything
+    other than ``predicted_side`` -- the opposing team, or a mixed signal
+    (``None``) that is retained as a caution. When every relevant,
+    signal-bearing cohort favors the predicted side, the matchup is genuinely
+    one-sided and no honest counterargument exists.
+    """
+
+    matchup_type = str(input_payload["game"].get("matchup_type") or "")
+    historical = input_payload.get("historical_data", {})
+    allowed = _relevant_team_keys(matchup_type)
+    candidates: list[str] = []
+    for team in ("away_team", "home_team"):
+        node = historical.get(team, {})
+        if not isinstance(node, dict):
+            continue
+        for key in node:
+            if allowed is not None and key not in allowed:
+                continue
+            candidates.append(f"historical_data.{team}.{key}")
+    meeting = input_payload["game"].get("division_meeting_number")
+    if isinstance(
+        historical.get("divisional_home_side_meeting_cohorts"), dict
+    ) and meeting in {1, 2}:
+        candidates.extend(
+            f"historical_data.divisional_home_side_meeting_cohorts."
+            f"{scope}.meeting_{meeting}"
+            for scope in ("nfl", "division", "opponent_pair")
+        )
+    candidates.append("current_season_prior_meeting")
+    for path in candidates:
+        try:
+            value = _resolve_evidence_path(input_payload, path)
+        except ValueError:
+            continue
+        if value is None or (
+            isinstance(value, dict) and int(value.get("games", -1)) == 0
+        ):
+            continue
+        if _evidence_favored_side(path, value, input_payload) != predicted_side:
+            return True
+    return False
+
+
 def _normalize_evidence_card_opinion(
     opinion: dict[str, Any],
     input_payload: dict[str, Any],
@@ -1991,16 +2068,6 @@ def _normalize_evidence_card_opinion(
             f"{matchup_type.replace('_', '-')} matchup-structure evidence"
         )
     )
-    thesis = (
-        f"The selected {evidence_lens} yields a {confidence_label} lean toward "
-        f"{opinion.get('predicted_winner')}, with conflicting evidence retained "
-        "as counterarguments."
-    )
-    normalized["thesis"] = thesis
-    normalized["thesis_citation"] = {
-        "claim": thesis,
-        "evidence": [],
-    }
     selected: set[str] = set()
     supporting: list[dict[str, Any]] = []
     counterarguments: list[dict[str, Any]] = []
@@ -2035,10 +2102,38 @@ def _normalize_evidence_card_opinion(
             supporting.append(card)
         else:
             counterarguments.append(card)
-    if not supporting or not counterarguments:
+    if not supporting:
+        raise ValueError(
+            "Selected evidence must include at least one supporting cohort"
+        )
+    # A counterargument is required only when the relevant evidence can produce
+    # one. When every relevant cohort favors the predicted side, the matchup is
+    # genuinely one-sided and forcing a counterargument would be dishonest; an
+    # empty list is allowed. The mandatory core-comparison coverage checked
+    # below guarantees any dissenting core cohort is still surfaced here.
+    if not counterarguments and _counterargument_available(
+        input_payload, predicted_side
+    ):
         raise ValueError(
             "Selected evidence must produce support and counterarguments"
         )
+    thesis_tail = (
+        "with conflicting evidence retained as counterarguments."
+        if counterarguments
+        else (
+            "with every relevant cohort in agreement and no counterargument "
+            "available."
+        )
+    )
+    thesis = (
+        f"The selected {evidence_lens} yields a {confidence_label} lean toward "
+        f"{opinion.get('predicted_winner')}, {thesis_tail}"
+    )
+    normalized["thesis"] = thesis
+    normalized["thesis_citation"] = {
+        "claim": thesis,
+        "evidence": [],
+    }
     normalized["supporting_factors"] = supporting
     normalized["counterarguments"] = counterarguments
 
@@ -2072,17 +2167,7 @@ def _normalize_evidence_card_opinion(
             if matchup_type == "conference"
             else "non_conference"
         )
-        allowed_team_keys = {
-            "all_games",
-            "division_games",
-            "division_games_excluding_current_opponent",
-            "non_division_games",
-            "non_division_games_excluding_current_opponent",
-            matchup_key,
-            "against_current_opponent",
-            "against_current_opponent_as_home",
-            "against_current_opponent_as_away",
-        }
+        allowed_team_keys = _relevant_team_keys(matchup_type)
         for path in selected:
             parts = path.split(".")
             if (
@@ -3375,6 +3460,18 @@ def validate_opinion(
         raise ValueError(
             "escaped thesis is too long for the Telegram summary"
         )
+    # A divisional evidence-card opinion may legitimately carry no
+    # counterargument when every relevant cohort favors the predicted side
+    # (a genuinely one-sided matchup). Every other field, and every other
+    # expert, still requires a non-empty list.
+    counter_may_be_empty = (
+        schedule_input is not None
+        and schedule_input.get("input_profile") == "divisional"
+        and not _counterargument_available(
+            schedule_input,
+            "home" if winner == home_team else "away",
+        )
+    )
     for field in ("supporting_factors", "counterarguments"):
         value = opinion.get(field)
         valid_items = (
@@ -3391,7 +3488,12 @@ def validate_opinion(
                 for item in value or []
             )
         )
-        if not isinstance(value, list) or not value or not valid_items:
+        allow_empty = field == "counterarguments" and counter_may_be_empty
+        if (
+            not isinstance(value, list)
+            or (not value and not allow_empty)
+            or not valid_items
+        ):
             raise ValueError(
                 f"{field} must be a non-empty list of non-empty strings"
             )

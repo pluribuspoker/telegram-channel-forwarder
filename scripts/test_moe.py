@@ -1278,7 +1278,7 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(row["expert_id"], "divisional")
         self.assertEqual(row["input_profile"], "divisional")
-        self.assertEqual(row["expert_version"], 34)
+        self.assertEqual(row["expert_version"], 35)
         self.assertEqual(row["output_schema_version"], 4)
         self.assertEqual(row["model"], "claude-fable-5")
         self.assertEqual(row["generation_backend"], "agent_runtime")
@@ -1492,6 +1492,130 @@ class OpinionTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(
             ValueError,
             "current opponent, the rest of the division",
+        ):
+            _normalize_evidence_card_opinion(opinion, payload)
+
+    @staticmethod
+    def _one_sided_noncon_payload(home_all_games: dict | None = None) -> dict:
+        def coh(wins, losses, games, win_rate, margin, ties=0):
+            return {
+                "wins": wins,
+                "losses": losses,
+                "ties": ties,
+                "games": games,
+                "win_rate": win_rate,
+                "average_margin": margin,
+            }
+
+        return {
+            "input_profile": "divisional",
+            "game": {
+                "away_team": "Philadelphia Eagles",
+                "home_team": "Tennessee Titans",
+                "matchup_type": "non_conference",
+                "division_meeting_number": None,
+            },
+            "current_season_prior_meeting": None,
+            "historical_data": {
+                "away_team": {
+                    "all_games": coh(36, 15, 51, 0.7059, 4.29),
+                    "division_games": coh(12, 6, 18, 0.6667, 5.06),
+                    "non_division_games": coh(24, 9, 33, 0.7273, 3.88),
+                    "non_conference": coh(12, 3, 15, 0.8, 6.4),
+                    "against_current_opponent": coh(0, 0, 0, 0.0, 0.0),
+                },
+                "home_team": {
+                    "all_games": home_all_games
+                    or coh(12, 39, 51, 0.2353, -7.94),
+                    "division_games": coh(2, 16, 18, 0.1111, -11.33),
+                    "non_division_games": coh(10, 23, 33, 0.303, -6.09),
+                    "non_conference": coh(3, 12, 15, 0.2, -9.33),
+                    "against_current_opponent": coh(0, 0, 0, 0.0, 0.0),
+                },
+            },
+        }
+
+    @staticmethod
+    def _one_sided_opinion(evidence_paths: list[str]) -> dict:
+        return {
+            "predicted_winner": "Philadelphia Eagles",
+            "predicted_away_score": 27,
+            "predicted_home_score": 20,
+            "home_win_probability": 0.23,
+            "expected_home_margin": -7.0,
+            "confidence_stars": 4,
+            "evidence_paths": evidence_paths,
+            "no_signal_evidence_paths": [
+                "current_season_prior_meeting",
+                "historical_data.away_team.against_current_opponent",
+                "historical_data.home_team.against_current_opponent",
+            ],
+            "nondeterministic_analysis": [
+                "Philadelphia leads every allowed cohort over Tennessee."
+            ],
+            "discarded_considerations": [
+                "prior meeting - none has been played",
+                "markets and injuries - outside the supplied input",
+            ],
+        }
+
+    _ONE_SIDED_CORE_PATHS = [
+        "historical_data.away_team.all_games",
+        "historical_data.away_team.division_games",
+        "historical_data.away_team.non_division_games",
+        "historical_data.away_team.non_conference",
+        "historical_data.home_team.all_games",
+        "historical_data.home_team.division_games",
+        "historical_data.home_team.non_division_games",
+        "historical_data.home_team.non_conference",
+    ]
+
+    def test_one_sided_matchup_allows_empty_counterarguments(self) -> None:
+        payload = self._one_sided_noncon_payload()
+        opinion = self._one_sided_opinion(self._ONE_SIDED_CORE_PATHS)
+        normalized = _normalize_evidence_card_opinion(opinion, payload)
+        self.assertEqual(normalized["counterarguments"], [])
+        self.assertTrue(normalized["supporting_factors"])
+        self.assertIn("no counterargument available", normalized["thesis"])
+        # validate_opinion also accepts the empty list for this profile.
+        validate_opinion(
+            normalized,
+            away_team="Philadelphia Eagles",
+            home_team="Tennessee Titans",
+            schedule_input=payload,
+        )
+        self.assertIn("Why it may be wrong\n- None.", normalized["full_opinion"])
+
+    def test_one_sided_matchup_still_rejects_the_dominated_team(self) -> None:
+        payload = self._one_sided_noncon_payload()
+        opinion = self._one_sided_opinion(self._ONE_SIDED_CORE_PATHS)
+        opinion["predicted_winner"] = "Tennessee Titans"
+        with self.assertRaisesRegex(
+            ValueError,
+            "at least one supporting cohort",
+        ):
+            _normalize_evidence_card_opinion(opinion, payload)
+
+    def test_available_counterargument_may_not_be_omitted(self) -> None:
+        # The home team wins its all_games cohort, so a counterargument to an
+        # Eagles pick genuinely exists; omitting it must still be rejected.
+        payload = self._one_sided_noncon_payload(
+            home_all_games={
+                "wins": 30,
+                "losses": 21,
+                "ties": 0,
+                "games": 51,
+                "win_rate": 0.588,
+                "average_margin": 3.0,
+            }
+        )
+        opinion = self._one_sided_opinion(
+            [p for p in self._ONE_SIDED_CORE_PATHS
+             if p != "historical_data.home_team.all_games"]
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "support and counterarguments",
         ):
             _normalize_evidence_card_opinion(opinion, payload)
 
@@ -2596,7 +2720,7 @@ class OpinionViewTest(unittest.TestCase):
         self.assertEqual(len(expert["prompt_sha256"]), 64)
 
         divisional = load_expert("divisional")
-        self.assertEqual(divisional["version"], 34)
+        self.assertEqual(divisional["version"], 35)
         self.assertEqual(divisional["prompt_version"], 20)
         self.assertEqual(divisional["output_schema_version"], 4)
         self.assertEqual(
