@@ -109,6 +109,7 @@ Rules here are terse on purpose. Each section points to a `docs/*.md` file holdi
 ## Sauce daily — docs/sauce.md
 
 - `scripts/sauce_daily.py`: SAUCE tab → graded Pillow image (no Chromium — headless OOM'd the VPS) → channel `-1003977774560`; 6 AM ET cron (`run_sauce_daily.sh`), log `/tmp/sauce_daily_cron.log`.
+- `sauce-watch.timer` (~20 min + jitter): `run_sauce_watch.sh` → `--only-if-new` — one anonymous GET; full pipeline + 🆕-caption send only when the sheet has unseen picks (diff on the upsert key, so no re-triggers); shares `/tmp/sauce_daily.lock` with the cron; `SAUCE_WATCH_HEALTHCHECK_URL` unset = no-op.
 - Manual: `su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/sauce_daily.py --channel -1003977774560 2>&1"`
 
 ## Capper backfill — docs/backfill.md

@@ -19,3 +19,15 @@ su - forwarder -c "cd ~/app && ~/venv/bin/python scripts/sauce_daily.py --channe
 
 **ESPN sport validation:** `validate_sport()` in `scores.py` verifies Claude's sport classification against ESPN game schedules. Catches ambiguous teams (Rangers, Cardinals, Giants, etc.). Also wired into the core tracker flow in `tracker.py`.
 
+## Intraday watcher (`sauce-watch.timer`, 2026-09-20)
+
+New bets reach the channel within ~20–25 min instead of at the next 6 AM run, with no extra visibility risk: every tick is ONE anonymous GET to the sheet's publish-to-web endpoint on docs.google.com (the same fetch the daily uses — kylekirms.com is never touched, and Google exposes no view logs or analytics for published sheets, so the owner can't see pulls or their frequency; the only real exposure vectors were his website and authenticated sheet access, and we do neither).
+
+- Chain: `sauce-watch.timer` → `sauce-watch.service` → `run_sauce_watch.sh` → `sauce_daily.py --channel -1003977774560 --only-if-new`. Cadence `OnUnitActiveSec=20min` + `RandomizedDelaySec=300` (jitter so polls don't tick like a metronome).
+- `--only-if-new` (watcher mode): after the scrape, `get_new_picks()` diffs sheet rows against `sauce_picks` on the SAME key `upsert_picks` inserts on (`(_date_to_iso(date), bet)`), so a detected pick always upserts and can never re-trigger. No new rows → exit before any Claude/ESPN/sheet work. New rows → the normal full pipeline runs and the sent image carries a `🆕 N new SAUCE pick(s)` caption listing them (first 10, then `…+N more`).
+- **Cost:** a no-change tick is $0 Claude (one GET, one SQLite read). A new-pick tick costs the same Haiku parse as the daily run (<1¢) — spend scales with how often Kyle posts, not with poll frequency.
+- **Concurrency:** `run_sauce_watch.sh` and `run_sauce_daily.sh` share `flock` on `/tmp/sauce_daily.lock` (watch skips its tick after 300s waiting, exit 0; daily fails after 600s) so a tick and the 6 AM cron can't interleave DB writes or double-send.
+- **Known failure mode (accepted):** a new-pick tick dying after upsert (step 3) but before the send skips the ping for those picks — the rows are now "known", so the next new pick or the 6 AM image covers them. Don't "fix" this by moving upsert after send; grading needs the rows in the DB first.
+- Log: `/tmp/sauce_watch_last_run.log` (journal has the same lines). Healthcheck env: `SAUCE_WATCH_HEALTHCHECK_URL` (unset = silent no-op, same as trent).
+- Disable: `sudo systemctl disable --now sauce-watch.timer`. The 6 AM cron is unchanged (unconditional send, no caption) and stays as the daily anchor/grading recap.
+

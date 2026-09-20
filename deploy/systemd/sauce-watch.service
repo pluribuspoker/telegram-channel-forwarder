@@ -1,0 +1,18 @@
+[Unit]
+Description=Sauce open-bets watcher — full pipeline only when new picks appear
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+ExecStart=/home/forwarder/app/run_sauce_watch.sh
+# No-change ticks exit in seconds; a new-pick tick runs the whole daily pipeline
+# (Claude parse + ESPN + sheet writes + Telegram send) plus up to 300s waiting on
+# the shared lock — same headroom as the 6 AM run.
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

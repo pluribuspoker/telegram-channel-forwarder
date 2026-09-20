@@ -225,6 +225,20 @@ def upsert_picks(picks: list[dict]) -> int:
         return inserted
 
 
+def get_new_picks(picks: list[dict]) -> list[dict]:
+    """Subset of scraped picks not yet in sauce_picks.
+
+    Keys on (_date_to_iso(date), bet) — exactly what upsert_picks inserts on —
+    so a pick reported new here is guaranteed to upsert and never re-trigger.
+    """
+    with _connect() as conn:
+        known = {
+            (r["date"], r["bet"])
+            for r in conn.execute("SELECT date, bet FROM sauce_picks").fetchall()
+        }
+    return [p for p in picks if (_date_to_iso(p["date"]), p["bet"]) not in known]
+
+
 def get_pending_picks(days_back: int = 3) -> list[dict]:
     """Get PENDING picks from the last N days."""
     cutoff = (_date.today() - timedelta(days=days_back)).isoformat()
@@ -614,6 +628,10 @@ async def main():
     parser.add_argument("--no-send", action="store_true", help="Skip Telegram send")
     parser.add_argument("--setup-sheet", action="store_true", help="Set up sheet headers")
     parser.add_argument("--days-back", type=int, default=3, help="Days back for grading pending picks")
+    parser.add_argument("--only-if-new", action="store_true",
+                        help="Watcher mode: exit after the scrape (before any Claude call) "
+                             "unless the sheet has picks the DB hasn't seen; when it does, "
+                             "run the full pipeline and caption the image with the new picks")
     args = parser.parse_args()
 
     _init_db()
@@ -633,6 +651,16 @@ async def main():
         print("No picks found!")
         return
     print(f"Found {len(picks)} picks from sheet.")
+
+    # ── 1b. Change detection (watcher mode) ──
+    # Must run before any Claude/ESPN/sheet work: a no-change poll costs one
+    # anonymous GET and nothing else.
+    new_picks = get_new_picks(picks)
+    if new_picks:
+        print(f"{len(new_picks)} new pick(s) not yet in DB.")
+    if args.only_if_new and not new_picks:
+        print(f"No new picks ({len(picks)} on sheet, all known); exiting.")
+        return
 
     # ── 2. Classify + parse ──
     print("Classifying and parsing via Claude...")
@@ -691,8 +719,27 @@ async def main():
     preview_path.parent.mkdir(parents=True, exist_ok=True)
     preview_path.write_bytes(img)
 
+    # Watcher sends announce the picks that triggered them (image caption)
+    caption = ""
+    if args.only_if_new and new_picks:
+        shown = new_picks[:10]
+        lines = []
+        for p in shown:
+            parts = [p["date"], p["bet"]]
+            if p.get("odds"):
+                parts.append(f"({p['odds']})")
+            if p.get("unit"):
+                parts.append(p["unit"])
+            lines.append("• " + " ".join(parts))
+        if len(new_picks) > len(shown):
+            lines.append(f"…+{len(new_picks) - len(shown)} more")
+        plural = "s" if len(new_picks) != 1 else ""
+        caption = f"🆕 {len(new_picks)} new SAUCE pick{plural}\n" + "\n".join(lines)
+
     if args.no_send:
         print(f"Preview saved to {preview_path}")
+        if caption:
+            print(f"Caption would be:\n{caption}")
         cost = usage_cost()
         print(f"\n[Claude cost] {fmt_cost(cost)}")
         return
@@ -711,7 +758,7 @@ async def main():
     entity = await client.get_entity(dest)
     buf = io.BytesIO(img)
     buf.name = "sauce_open_bets.png"
-    await client.send_file(entity, buf)
+    await client.send_file(entity, buf, caption=caption or None)
     print(f"Sent to {dest}!")
     await client.disconnect()
 

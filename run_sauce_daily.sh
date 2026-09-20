@@ -14,4 +14,9 @@ cd "$APP_DIR"
 source .env
 [ -f .env.local ] && source .env.local
 
+# Shared with run_sauce_watch.sh — a watch tick and the daily run must not
+# interleave DB writes or double-send.
+exec 9>/tmp/sauce_daily.lock
+flock -w 600 9 || { echo "Could not take /tmp/sauce_daily.lock within 600s"; exit 1; }
+
 $PYTHON scripts/sauce_daily.py --channel -1003977774560 2>&1 | tee "$LOGFILE"

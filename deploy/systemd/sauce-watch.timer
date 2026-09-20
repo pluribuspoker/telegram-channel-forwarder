@@ -1,0 +1,12 @@
+[Unit]
+Description=Sauce open-bets watcher (change-detection poll of the published sheet)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=20min
+# Jitter so the polls don't tick like a metronome
+RandomizedDelaySec=300
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
