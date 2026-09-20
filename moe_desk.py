@@ -4,11 +4,13 @@ NFL MOE committee and the God Expert.
 One supergroup with forum topics, the intake bot as admin. Every card is one
 message everyone sees:
 
-- **Picks topic** — one card per game (operator-asked 2026-09-20): the God
-  arms (👑 marks the judge) and every voice with an actual bet leg, each with
-  its season graded-bet record. Lean-only stances never show here — they
-  stay on the offline card and in the full opinions, which the card's
-  buttons page through in the same shared message.
+- **Picks topic** — one card per game, existing only while someone actually
+  bets it (operator-asked 2026-09-20): the betting God arms (👑 marks the
+  judge) and every voice with an actual bet leg, each with its season
+  graded-bet record. A non-betting expert is simply absent — no ``no bet``
+  filler — and lean-only stances never show here; both stay on the offline
+  card and in the full opinions, which the card's buttons page through in
+  the same shared message.
 - **Scores topic** — the grading digest (``scripts/moe_grade.py --notify``).
 - **Offline topic** — one plain-text card per game with the latest full-game
   lines, both God arms, every approved voice pick, and consensus. Cards update
@@ -337,21 +339,24 @@ class GameDesk:
         (operator-asked 2026-09-20): a lean-only stance — predicted winner,
         probability, projected score with no staked leg — is not a pick and
         never shows there."""
+        return [row for row in self.approved_voices if row_bets(row)]
+
+    @property
+    def betting_arm_rows(self) -> list[tuple[str, dict[str, Any]]]:
+        """The God arms with an actual bet leg, judge (God) first."""
+        rows = ((JUDGE_EXPERT_ID, self.judge), (RULES_EXPERT_ID, self.rules))
         return [
-            row
-            for row in self.approved_voices
-            if any(leg_is_bet(leg) for leg in arm_legs(row))
+            (expert_id, row)
+            for expert_id, row in rows
+            if row is not None and row_bets(row)
         ]
 
     @property
     def show_picks(self) -> bool:
-        """A picks card exists once an arm has decided (bet or pass) or a
-        voice actually bets; lean-only committees stay off the Picks topic."""
-        return bool(
-            self.rules is not None
-            or self.judge is not None
-            or self.betting_voices
-        )
+        """A picks card exists only while someone actually bets the game —
+        an arm leg or a voice leg (operator-asked 2026-09-20: a game with no
+        bets gets no message). All-PASS decisions live on the offline card."""
+        return bool(self.betting_arm_rows or self.betting_voices)
 
     @property
     def show_offline(self) -> bool:
@@ -527,6 +532,11 @@ def leg_from_json(value: Any) -> dict[str, Any] | None:
 
 def leg_is_bet(leg: dict[str, Any] | None) -> bool:
     return bool(leg) and str(leg.get("selection") or "PASS").upper() != "PASS"
+
+
+def row_bets(row: dict[str, Any]) -> bool:
+    """True when the row stakes at least one actual leg."""
+    return any(leg_is_bet(leg) for leg in arm_legs(row))
 
 
 def _price_text(price: Any) -> str:
@@ -1363,10 +1373,11 @@ def pick_lines(
     desk: GameDesk,
     records: dict[str, Any] | None = None,
 ) -> list[str]:
-    """The glanceable picks list: both God arms always — 👑 God first, then
-    Rules; ``—`` until an arm row exists, ``no bet`` when it passes — then a
-    blank line and one line per voice that actually bets a leg. Every line
-    carries the expert's season graded-bet record next to its name."""
+    """The glanceable picks list: only experts that actually bet the game
+    (operator-asked 2026-09-20 — no ``no bet``/``—`` filler, a non-betting
+    expert is simply absent). Betting arms first — 👑 God, then Rules — then
+    a blank line and one line per betting voice. Every line carries the
+    expert's season graded-bet record next to its name."""
     records = records or {}
 
     def _head(name: str, expert_id: str, *, icon: str = "", shadow: bool = False) -> str:
@@ -1378,17 +1389,20 @@ def pick_lines(
             head += f" {_esc(record)}"
         return head
 
-    lines: list[str] = []
-    for expert_id in BET_ARM_ORDER:
-        row = desk.judge if expert_id == JUDGE_EXPERT_ID else desk.rules
-        icon = f"{JUDGE_ICON} " if expert_id == JUDGE_EXPERT_ID else ""
-        head = _head(BET_ARM_NAMES[expert_id], expert_id, icon=icon)
-        if row is None:
-            value = "—"
-        else:
-            bets = _bet_leg_labels(row)
-            value = " · ".join(_esc(bet) for bet in bets) if bets else "no bet"
-        lines.append(f"{head} · {value}")
+    def _legs(row: dict[str, Any]) -> str:
+        return " · ".join(_esc(bet) for bet in _bet_leg_labels(row))
+
+    arms = [
+        (
+            _head(
+                BET_ARM_NAMES[expert_id],
+                expert_id,
+                icon=f"{JUDGE_ICON} " if expert_id == JUDGE_EXPERT_ID else "",
+            )
+            + f" · {_legs(row)}"
+        )
+        for expert_id, row in desk.betting_arm_rows
+    ]
     voices = [
         (
             _head(
@@ -1396,15 +1410,13 @@ def pick_lines(
                 str(row.get("expert_id") or ""),
                 shadow=str(row.get("expert_id") or "") in desk.shadow_experts,
             )
-            + " · "
-            + " · ".join(_esc(bet) for bet in _bet_leg_labels(row))
+            + f" · {_legs(row)}"
         )
         for row in desk.betting_voices
     ]
-    if voices:
-        lines.append("")
-        lines.extend(voices)
-    return lines
+    if arms and voices:
+        return [*arms, "", *voices]
+    return [*arms, *voices]
 
 
 def market_summary_line(
@@ -2569,11 +2581,15 @@ def sync_desk(
             picks_ids[desk.event_id] = picks_id
 
     for desk in desks:
-        if desk.started or not desk.show_picks:
+        if desk.started:
             continue
         picks_id = picks_ids.get(desk.event_id)
-        if picks_id is None:
-            continue
+        if desk.show_picks and picks_id is None:
+            continue  # anchor card deferred or failed: retry next pass
+        # No picks card at all (zero bets left) still syncs the bet cards:
+        # a withdrawal must strike the standing 🔔 card even though the
+        # game no longer earns a picks card — a stale live-looking alert
+        # was the 49ers@Rams failure.
         for kind in ("side", "total"):
             _sync_bet_card(
                 desk=desk,
@@ -2594,7 +2610,7 @@ def _sync_bet_card(
     *,
     desk: GameDesk,
     kind: str,
-    picks_id: int,
+    picks_id: int | None,
     config: DeskConfig,
     api: BotApi,
     state: dict[str, Any],

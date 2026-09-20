@@ -900,19 +900,26 @@ either person sees or does.
   the 2026-09-08 daily-index redesign in between grouped games behind one
   shared card per Eastern date with game buttons, and its `picks-day:*`
   cards are deleted on the first sync after migration).
-  🏈 Picks is the glanceable picks surface: ONE message per game, posted
-  once an arm has decided or a voice actually bets (`show_picks`), frozen at
-  kickoff, deleted when the game ages out of the model. The card: matchup
-  header, kickoff + week line, an italic latest-market line (`DAL -2.5 ·
-  O/U 51`, from the packed `nfl_games` columns), then the picks — 👑 God
-  first (the judge; the crown is the operator-asked judge marker — never a
-  star, stars mean confidence), Rules under it (`BET_ARM_NAMES`), each
-  `—` until a row exists and `no bet` when every leg passes, then a blank
-  line and one line per voice with an actual bet leg (a shadow voice keeps
-  an italic `Shadow` tag). **Lean-only stances — predicted winner,
-  probability, projected score with no staked leg — never show on this
-  card** (operator-asked 2026-09-20: "do not include picks for leans"),
-  and consensus went with them; both remain on the offline card. Every
+  🏈 Picks is the glanceable picks surface: ONE message per game, existing
+  only while someone actually bets it (`show_picks` = a betting arm leg or
+  a betting voice; operator-tightened later on 2026-09-20 — a game with no
+  bets gets no message, so an all-PASS committee posts nothing and a card
+  whose last bet withdraws is deleted), frozen at kickoff, deleted when
+  the game ages out of the model. The card: matchup header, kickoff +
+  week line, an italic latest-market line (`DAL -2.5 · O/U 51`, from the
+  packed `nfl_games` columns), then ONLY the experts that bet — 👑 God
+  first when the judge bets (the crown is the operator-asked judge marker
+  — never a star, stars mean confidence), Rules when it bets
+  (`BET_ARM_NAMES`), then a blank line and one line per voice with an
+  actual bet leg (a shadow voice keeps an italic `Shadow` tag). **A
+  non-betting expert is simply absent — no `no bet` or `—` filler — and
+  lean-only stances (predicted winner, probability, projected score with
+  no staked leg) never show on this card** (operator-asked 2026-09-20);
+  consensus went with them; all of that remains on the offline card. The
+  bet-card sync is deliberately decoupled from the card's existence: 🔔
+  cards sync (with `reply_to=None`) even when the game has no picks card,
+  so a withdrawal still strikes the standing 🔔 — a stale live-looking
+  alert was the 49ers@Rams failure. Every
   line carries the expert's season graded-bet record `(5-2-1)` next to its
   name — `_record_text` reads only `legs` from
   `build_scoreboard(latest_per_game=True)["by_expert"]` (the digest's

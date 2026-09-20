@@ -510,7 +510,6 @@ class RenderTests(unittest.TestCase):
                 "Sun Sep 13 · 4:05 PM ET · Week 1",
                 "<i>SEA -3.5 · O/U 44.5</i>",
                 "",
-                "👑 <b>God</b> (5-2) · no bet",
                 "<b>Rules</b> (4-3-1) · Seahawks -3.5 (+100) ★ 0.6u · "
                 "Over 44.5 (-105) ★ 0.5u",
                 "",
@@ -518,7 +517,11 @@ class RenderTests(unittest.TestCase):
             ],
         )
         # Lean-only stances stay off the card entirely — no names, no
-        # probabilities, no consensus (a zero-leg record shows nothing).
+        # probabilities, no consensus (a zero-leg record shows nothing) —
+        # and so does a non-betting arm (the all-PASS judge has no line,
+        # no "no bet" filler).
+        self.assertNotIn("God", text)
+        self.assertNotIn("no bet", text)
         self.assertNotIn("Schedule", text)
         self.assertNotIn("%", text)
         self.assertNotIn("Consensus", text)
@@ -536,7 +539,7 @@ class RenderTests(unittest.TestCase):
             config=CONFIG,
             view="menu",
         )
-        self.assertIn("👑 <b>God</b> · no bet", picker_text)
+        self.assertIn("<b>Rules</b> · Seahawks -3.5 (+100) ★ 0.6u", picker_text)
         self.assertIn("<b>Select an opinion</b>", picker_text)
         self.assertEqual(
             [
@@ -786,19 +789,23 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Pikkit pick: PASS", text)
         self.assertNotIn("Supporting factors", text)
 
-    def test_picks_card_states_missing_god(self) -> None:
-        # unapproved arm rows are no arms at all: review is automatic, so a
-        # valid arm row is either approved or a legacy audit row
+    def test_non_betting_arms_are_absent_not_labeled(self) -> None:
+        # A voice bet alone carries the card; arms without a bet leg (no row
+        # yet, or an all-PASS decision) simply do not appear.
         rows = committee()  # arms unapproved
         rows[3]["side_pick_json"] = json.dumps(SEA_SIDE)  # AK bets → card
         text, _ = render_picks_card(self.desk(rows), config=CONFIG)
-        self.assertIn("👑 <b>God</b> · —\n<b>Rules</b> · —", text)
+        self.assertNotIn("God", text)
+        self.assertNotIn("Rules", text)
+        self.assertNotIn("—", text)
+        self.assertIn("<b>AK</b> · Seahawks -3.5 (+100) ★ 0.6u", text)
+        # The judge betting alone puts 👑 God on top and omits Rules.
         rows = committee(arms_status="approved")
-        rows[6]["review_status"] = "pending"
-        self.assertIn(
-            "👑 <b>God</b> · —\n<b>Rules</b> · no bet",
-            render_picks_card(self.desk(rows), config=CONFIG)[0],
-        )
+        rows[6]["side_pick_json"] = json.dumps(SEA_SIDE)
+        text, _ = render_picks_card(self.desk(rows), config=CONFIG)
+        self.assertIn("👑 <b>God</b> · Seahawks -3.5 (+100) ★ 0.6u", text)
+        self.assertNotIn("Rules", text)
+        self.assertNotIn("no bet", text)
 
     def test_selected_expert_survives_god_opinions_becoming_available(self) -> None:
         without_god = self.desk(committee())
@@ -840,15 +847,18 @@ class RenderTests(unittest.TestCase):
             detail_keyboard[0],
         )
 
-    def test_picks_card_needs_an_arm_or_a_betting_voice(self) -> None:
+    def test_picks_card_needs_an_actual_bet(self) -> None:
         lone = [row("a4", "401", "rating_elo", status="approved", model="deterministic")]
         self.assertFalse(self.desk(lone).show_picks)
         # lean-only voices never earn a picks card, no matter how many
         two = lone + [row("a1", "401", "schedule", status="approved")]
         self.assertFalse(self.desk(two).show_picks)
-        arm = lone + [arm_row("r1", "401", "god_rules", PASS_PLAIN, PASS_PLAIN, status="approved")]
-        self.assertTrue(self.desk(arm).show_picks)
-        betting = lone + [
+        # an all-PASS arm decision is not a bet: still no card
+        passing = lone + [arm_row("r1", "401", "god_rules", PASS_PLAIN, PASS_PLAIN, status="approved")]
+        self.assertFalse(self.desk(passing).show_picks)
+        betting_arm = lone + [arm_row("r2", "401", "god_rules", SEA_SIDE, PASS_PLAIN, status="approved")]
+        self.assertTrue(self.desk(betting_arm).show_picks)
+        betting_voice = lone + [
             row(
                 "a1",
                 "401",
@@ -857,7 +867,7 @@ class RenderTests(unittest.TestCase):
                 side_pick_json=json.dumps(SEA_SIDE),
             )
         ]
-        self.assertTrue(self.desk(betting).show_picks)
+        self.assertTrue(self.desk(betting_voice).show_picks)
 
     def test_consensus_does_not_count_a_side_pass(self) -> None:
         # Consensus left the picks card with the lean lines; the offline
@@ -990,9 +1000,9 @@ class SyncTests(unittest.TestCase):
         self.assertNotIn("offline:401", self.state["cards"])
 
     def test_first_pass_posts_one_card_per_game(self) -> None:
-        rows = committee("401", arms_status="approved") + committee(
-            "402", arms_status="approved"
-        )
+        rows = committee("401") + committee("402")
+        rows[3]["side_pick_json"] = json.dumps(SEA_SIDE)  # AK bets 401
+        rows[10]["side_pick_json"] = json.dumps(SEA_SIDE)  # AK bets 402
         summary = self.sync(rows, records=RECORDS)
         self.assertEqual(summary.posted, ["picks:401", "picks:402"])
         self.assertEqual(summary.alerts, [])
@@ -1000,8 +1010,8 @@ class SyncTests(unittest.TestCase):
         self.assertTrue(all(m["silent"] for m in self.api.sent))
         self.assertEqual(self.api.pins, [])
         card = self.api.sent[0]
-        self.assertIn("👑 <b>God</b> (5-2) · no bet", card["text"])
-        self.assertIn("<b>Rules</b> (4-3-1) · no bet", card["text"])
+        self.assertIn("<b>AK</b> (3-1) · Seahawks -3.5 (+100) ★ 0.6u", card["text"])
+        self.assertNotIn("God", card["text"])
         self.assertEqual(
             [button["text"] for row in card["keyboard"] for button in row],
             ["Show full opinions"],
@@ -1019,7 +1029,9 @@ class SyncTests(unittest.TestCase):
             "picks-day:2026-09-14": {"message_id": 31, "topic": 22},
         }
         self.api.undeletable.add(31)
-        summary = self.sync(committee("401", arms_status="approved"))
+        rows = committee("401", arms_status="approved")
+        rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
+        summary = self.sync(rows)
         self.assertEqual(summary.errors, [])
         self.assertIn(30, self.api.deleted)
         self.assertNotIn("picks-day:2026-09-13", self.state["cards"])
@@ -1028,6 +1040,7 @@ class SyncTests(unittest.TestCase):
 
     def test_second_pass_with_the_same_model_is_a_no_op(self) -> None:
         rows = committee("401", arms_status="approved")
+        rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
         self.sync(rows)
         sent = len(self.api.sent)
         summary = self.sync(rows)
@@ -1037,6 +1050,7 @@ class SyncTests(unittest.TestCase):
 
     def test_full_opinions_paginate_on_the_same_card(self) -> None:
         rows = committee("401", arms_status="approved")
+        rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
         self.sync(rows)
         picks_id = self.state["cards"]["picks:401"]["message_id"]
         sent = len(self.api.sent)
@@ -1071,13 +1085,14 @@ class SyncTests(unittest.TestCase):
         self.state["expanded_picks"].pop("401")
         summary = self.sync(rows)
         self.assertIn("picks:401", summary.edited)
-        self.assertIn("👑 <b>God</b> · no bet", self.api.edits[-1]["text"])
+        self.assertIn("<b>Rules</b> · Seahawks -3.5 (+100) ★ 0.6u", self.api.edits[-1]["text"])
 
     def test_legacy_game_view_state_collapses_to_the_summary(self) -> None:
         # "game" was the daily index's selected-game marker; on a per-game
         # card it means the summary, which is what already renders — the
         # state entry is dropped and the message is left untouched.
         rows = committee("401", arms_status="approved")
+        rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
         self.sync(rows)
         self.state["expanded_picks"]["401"] = "game"
         summary = self.sync(rows)
@@ -1085,17 +1100,18 @@ class SyncTests(unittest.TestCase):
         self.assertEqual((summary.posted, summary.edited), ([], []))
 
     def test_a_new_approved_row_edits_only_the_affected_cards(self) -> None:
-        rows = committee("401", arms_status="approved") + committee(
-            "402", arms_status="approved"
-        )
+        rows = committee("401") + committee("402")
+        rows[3]["side_pick_json"] = json.dumps(SEA_SIDE)
+        rows[10]["side_pick_json"] = json.dumps(SEA_SIDE)
         self.sync(rows)
         rows.append(
             row(
-                "ak-bet",
+                "cee-bet",
                 "401",
-                "ak",
+                "cee",
                 status="approved",
                 generated="2026-09-12T12:40:00+00:00",
+                pick_market="spread",
                 side_pick_json=json.dumps(SEA_SIDE),
             )
         )
@@ -1103,7 +1119,7 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(summary.posted, [])
         self.assertEqual(summary.edited, ["picks:401"])
         picks_text = self.api.edits[-1]["text"]
-        self.assertIn("<b>AK</b> · Seahawks -3.5 (+100) ★ 0.6u", picks_text)
+        self.assertIn("<b>Cee</b> · Seahawks -3.5 (+100) ★ 0.6u", picks_text)
 
     def test_approved_arm_posts_the_picks_card_and_one_loud_bet_alert(self) -> None:
         rows = committee("401", arms_status="approved")
@@ -1294,6 +1310,10 @@ class SyncTests(unittest.TestCase):
         )
         # the card stays as the record — no delete, no separate message
         self.assertNotIn(card_id, self.api.deleted)
+        # …while the picks card goes with the last bet (no bets → no card),
+        # and the strike landed anyway despite the missing anchor.
+        self.assertIn("picks:401", summary.deleted)
+        self.assertNotIn("picks:401", self.state["cards"])
         self.assertTrue(
             self.state["announced"]["betcard:401:side"]["arms"]["god_rules"][
                 "withdrawn"
@@ -1483,11 +1503,12 @@ class SyncTests(unittest.TestCase):
 
     def test_started_games_are_frozen_and_later_deleted(self) -> None:
         rows = committee("401", arms_status="approved")
+        rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
         self.sync(rows)
         card_id = self.state["cards"]["picks:401"]["message_id"]
         kickoff = datetime.fromisoformat(SEA_KICKOFF)
         # After kickoff the card is frozen: a model change edits nothing.
-        rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)
+        rows[5]["side_pick_json"] = json.dumps({**SEA_SIDE, "stake_units": 1.4})
         summary = self.sync(rows, now=kickoff + timedelta(minutes=5))
         self.assertEqual((summary.edited, summary.alerts), ([], []))
         self.assertIn("picks:401", self.state["cards"])
@@ -1498,18 +1519,20 @@ class SyncTests(unittest.TestCase):
         self.assertNotIn("401", self.state["kickoffs"])
 
     def test_a_deleted_card_is_reposted(self) -> None:
-        rows = committee("401", arms_status="approved")
+        rows = committee("401")
+        rows[3]["side_pick_json"] = json.dumps(SEA_SIDE)  # AK bets
         self.sync(rows)
         self.api.missing.add(
             self.state["cards"]["picks:401"]["message_id"]
         )
         rows.append(  # the card's content changes
             row(
-                "ak-bet",
+                "cee-bet",
                 "401",
-                "ak",
+                "cee",
                 status="approved",
                 generated="2026-09-12T12:40:00+00:00",
+                pick_market="spread",
                 side_pick_json=json.dumps(SEA_SIDE),
             )
         )
@@ -1521,9 +1544,9 @@ class SyncTests(unittest.TestCase):
         )
 
     def test_each_game_takes_its_own_budget_slot(self) -> None:
-        rows = committee("401", arms_status="approved") + committee(
-            "402", arms_status="approved"
-        )
+        rows = committee("401") + committee("402")
+        rows[3]["side_pick_json"] = json.dumps(SEA_SIDE)
+        rows[10]["side_pick_json"] = json.dumps(SEA_SIDE)
         summary = self.sync(rows, max_posts=1)
         self.assertEqual(summary.posted, ["picks:401"])
         self.assertEqual(summary.deferred, ["picks:402"])
@@ -1549,7 +1572,9 @@ class SyncTests(unittest.TestCase):
                 raise DeskApiError("sendMessage: chat not found")
 
         self.api = Broken()
-        summary = self.sync(committee("401", arms_status="approved"))
+        rows = committee("401")
+        rows[3]["side_pick_json"] = json.dumps(SEA_SIDE)
+        summary = self.sync(rows)
         self.assertEqual(summary.posted, [])
         self.assertEqual(len(summary.errors), 1)
         self.assertEqual(self.state["cards"], {})
