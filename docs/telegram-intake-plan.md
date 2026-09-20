@@ -896,18 +896,39 @@ either person sees or does.
   entries without API calls. A row can still be rejected with
   `scripts/review_moe_opinion.py`; the `reviewer` role now only opens the
   DM views of unapproved rows.
-- Topics and cards (as redesigned on 2026-09-08 after the first live pass,
-  when 17 status boards plus cards for games with nothing to do read as
-  clutter and the voices' opinions were on no card at all).
-  🏈 Picks is the interactive reading surface: one shared card per Eastern
-  game date, with one button per game that opens that game's picks inside the
-  same message. The selected game shows the God line on top (both arms' short
-  legs, "—" until an arm row is approved), then one line per approved voice
-  (pick, probability, stars, projected score) in a fixed order. Full opinions
-  paginate in that same daily message, with Back to picks and Back to games
-  navigation. The old per-game cards and pinned week summary are deleted on
-  the first sync after migration; bet and withdrawal alerts reply to the
-  applicable daily card. Offline is the cache-friendly reading surface: one
+- Topics and cards (per-game cards again since 2026-09-20, operator-asked;
+  the 2026-09-08 daily-index redesign in between grouped games behind one
+  shared card per Eastern date with game buttons, and its `picks-day:*`
+  cards are deleted on the first sync after migration).
+  🏈 Picks is the glanceable picks surface: ONE message per game, posted
+  once an arm has decided or a voice actually bets (`show_picks`), frozen at
+  kickoff, deleted when the game ages out of the model. The card: matchup
+  header, kickoff + week line, an italic latest-market line (`DAL -2.5 ·
+  O/U 51`, from the packed `nfl_games` columns), then the picks — 👑 God
+  first (the judge; the crown is the operator-asked judge marker — never a
+  star, stars mean confidence), Rules under it (`BET_ARM_NAMES`), each
+  `—` until a row exists and `no bet` when every leg passes, then a blank
+  line and one line per voice with an actual bet leg (a shadow voice keeps
+  an italic `Shadow` tag). **Lean-only stances — predicted winner,
+  probability, projected score with no staked leg — never show on this
+  card** (operator-asked 2026-09-20: "do not include picks for leans"),
+  and consensus went with them; both remain on the offline card. Every
+  line carries the expert's season graded-bet record `(5-2-1)` next to its
+  name — `_record_text` reads only `legs` from
+  `build_scoreboard(latest_per_game=True)["by_expert"]` (the digest's
+  "bets" section, NEVER the ats/ou lean tallies), rendered only once a leg
+  has graded. `intake_bot.load_expert_records` computes that scoreboard
+  (history tab + `current_season_finals` + snapshots, lazily importing
+  scripts.generate_moe_opinion because that module imports intake_bot),
+  cached an hour under `moe_expert_records`; any failure caches `{}` for a
+  TTL and the cards render recordless — records decorate, they never stall
+  the sync. Full opinions (the whole committee, leans included) still
+  paginate inside the same message: Show full opinions → opinion picker →
+  chunked opinion with Back to opinions / Back to picks; view state stays
+  in `expanded_picks` per event (`"menu"` or `{mode: opinion, expert,
+  chunk}`; the legacy `"game"` value and the old `desk:game`/`desk:games`
+  callbacks collapse to the summary). Bet and withdrawal alerts reply to
+  the game's own picks card. Offline is the cache-friendly reading surface: one
   keyboard-free plain-text card per game in the ten-day desk horizon once that
   game has at least one approved voice or God-arm opinion. Games with no
   approved opinion are omitted, and a previously tracked empty card is deleted.
@@ -924,11 +945,13 @@ either person sees or does.
   there (silent) when `MOE_DESK_SCORES_TOPIC` is set and falls back to
   the watchdog DM.
 - Shared-message rules: Picks reading controls navigate by editing the existing
-  shared game card and never create detail messages. Show full opinions keeps
+  per-game card and never create detail messages. Show full opinions keeps
   the summary visible, lists God Rules and God Judge first, then the approved
   voices; Refresh opinions invalidates only the opinion cache and redraws that
-  card. A tap is answered at once because Telegram discards a callback answer
-  after a few seconds. `nfl_games` and `moe_opinions` both use one-hour
+  card. A started game's card is frozen for the sync but its buttons still
+  navigate (`update_desk_picks_view` edits directly and the sync skips
+  started entries, so they never fight). A tap is answered at once because
+  Telegram discards a callback answer after a few seconds. `nfl_games` and `moe_opinions` both use one-hour
   in-process caches; Refresh opinions is the explicit cache bust for
   externally generated rows. The sheet cache serves its last good value
   through 5xx and 429. The reviewer list
@@ -943,7 +966,7 @@ either person sees or does.
   every judge pass, because every pass persists fresh arm rows): a bold
   selection headline plus a God row and a Rules row (`BET_ARM_NAMES`,
   deliberately not `ARM_LABELS` — the operator's own vocabulary), each row
-  stars + units + current price, replying to the daily picks card. A
+  stars + units + current price, replying to the game's picks card. A
   non-betting arm's row reads `no bet · <reason>` with the reason mapped
   to plain English by `PASS_REASON_SHORT` (ev floor → edge too thin,
   adverse move → line moved against, no positive expectation → no edge;

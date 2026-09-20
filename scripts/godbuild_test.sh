@@ -33,6 +33,16 @@ LIST="$(mktemp)"
   git diff --name-only --diff-filter=ACMR origin/main -- .
   git ls-files --others --exclude-standard
 } | sort -u | grep -v '^$' > "$LIST" || true
+# Untracked files the invoking user cannot read (e.g. a root-owned .env
+# backup lying in ~/app) would abort the tar; they can never be part of a
+# change under test, so skip them loudly instead.
+UNREADABLE="$(while IFS= read -r f; do [ -r "$f" ] || printf '%s\n' "$f"; done < "$LIST")"
+if [ -n "$UNREADABLE" ]; then
+  echo "WARNING: unreadable files skipped from the overlay:" >&2
+  printf '%s\n' "$UNREADABLE" >&2
+  printf '%s\n' "$UNREADABLE" | grep -vxF -f /dev/stdin "$LIST" > "${LIST}.readable" || true
+  mv "${LIST}.readable" "$LIST"
+fi
 # Deleted files cannot be overlaid; report them so the operator knows.
 DELETED="$(git diff --name-only --diff-filter=D origin/main -- . || true)"
 if [ -n "$DELETED" ]; then

@@ -4,9 +4,11 @@ NFL MOE committee and the God Expert.
 One supergroup with forum topics, the intake bot as admin. Every card is one
 message everyone sees:
 
-- **Picks topic** — one card per Eastern game date. Its buttons select a game
-  and show that game's God arms, committee, and opinion details in the same
-  shared message.
+- **Picks topic** — one card per game (operator-asked 2026-09-20): the God
+  arms (👑 marks the judge) and every voice with an actual bet leg, each with
+  its season graded-bet record. Lean-only stances never show here — they
+  stay on the offline card and in the full opinions, which the card's
+  buttons page through in the same shared message.
 - **Scores topic** — the grading digest (``scripts/moe_grade.py --notify``).
 - **Offline topic** — one plain-text card per game with the latest full-game
   lines, both God arms, every approved voice pick, and consensus. Cards update
@@ -65,19 +67,21 @@ HORIZON = timedelta(days=10)
 RETENTION = timedelta(days=3)
 MAX_POSTS_PER_SYNC = 15
 THESIS_CHARS = 160
-COMMITTEE_THESIS_CHARS = 110
-WHY_CHARS = 1800
 DETAIL_BODY_CHARS = 3000
 
 RULES_EXPERT_ID = "god_rules"
 JUDGE_EXPERT_ID = "god_judge"
 ARM_IDS = (RULES_EXPERT_ID, JUDGE_EXPERT_ID)
 ARM_LABELS = {RULES_EXPERT_ID: "Rules", JUDGE_EXPERT_ID: "Judge"}
-# The bet card names the arms the way the operator does — God (the judge)
-# first, Rules under it — separate from ARM_LABELS so the cards' wording
-# can move independently of the picks views.
+# The bet and picks cards name the arms the way the operator does — God
+# (the judge) first, Rules under it — separate from ARM_LABELS so the
+# cards' wording can move independently of the opinion-detail views.
 BET_ARM_ORDER = (JUDGE_EXPERT_ID, RULES_EXPERT_ID)
 BET_ARM_NAMES = {JUDGE_EXPERT_ID: "God", RULES_EXPERT_ID: "Rules"}
+# The judge's marker on the picks card (operator-asked 2026-09-20: an icon
+# specifically on God's picks). Confidence already renders as ★, so the
+# marker must not be a star.
+JUDGE_ICON = "👑"
 # Plain-English pass reasons for the bet card and the 🔕 withdrawal
 # (operator-picked copy, 2026-09-13); unmapped reasons show as persisted.
 PASS_REASON_SHORT = {
@@ -248,11 +252,6 @@ def clock_label(moment: datetime) -> str:
     return local.strftime("%I:%M %p").lstrip("0")
 
 
-def short_kickoff(kickoff: datetime) -> str:
-    local = kickoff.astimezone(ET)
-    return f"{local:%a} {clock_label(kickoff)}"
-
-
 def committee_experts(registry: dict[str, Any]) -> list[str]:
     """Enabled required voices — the same rule as the judge runner's
     ``committee_experts``: optional experts join only when available."""
@@ -333,13 +332,25 @@ class GameDesk:
         )
 
     @property
+    def betting_voices(self) -> list[dict[str, Any]]:
+        """Voices with an actual bet leg. The picks card lists exactly these
+        (operator-asked 2026-09-20): a lean-only stance — predicted winner,
+        probability, projected score with no staked leg — is not a pick and
+        never shows there."""
+        return [
+            row
+            for row in self.approved_voices
+            if any(leg_is_bet(leg) for leg in arm_legs(row))
+        ]
+
+    @property
     def show_picks(self) -> bool:
-        """A picks card is worth posting once two voices have spoken or a God
-        arm is approved; a lone rating row on every game would be noise."""
-        return (
+        """A picks card exists once an arm has decided (bet or pass) or a
+        voice actually bets; lean-only committees stay off the Picks topic."""
+        return bool(
             self.rules is not None
             or self.judge is not None
-            or len(self.approved_voices) >= 2
+            or self.betting_voices
         )
 
     @property
@@ -870,14 +881,6 @@ def render_opinion_details(
     return messages
 
 
-def _short_legs(row: dict[str, Any]) -> str:
-    side, total = arm_legs(row)
-    return (
-        f"{leg_label(side, kind='side', with_reason=False, short_pass=True)} · "
-        f"{leg_label(total, kind='total', with_reason=False, short_pass=True)}"
-    )
-
-
 def _labeled_legs(row: dict[str, Any]) -> str:
     side, total = arm_legs(row)
     return (
@@ -1325,28 +1328,110 @@ def consensus_line(desk: GameDesk) -> str:
     )
 
 
-def _why_block(desk: GameDesk) -> str:
-    """Collapsed on the card: the arms' theses and factors, then one thesis
-    per voice."""
-    pieces: list[str] = []
-    for label, row in (("Rules", desk.rules), ("Judge", desk.judge)):
+def _record_text(record: Any) -> str:
+    """``(5-2)`` / ``(5-2-1)`` from a scoreboard record's graded bet legs
+    (``build_scoreboard(latest_per_game=True)["by_expert"][id]``) — actual
+    bets only, the digest's "bets" section, never the ats/ou lean tallies.
+    Empty until the expert has a graded leg, or when no records were
+    supplied (records decorate the card; their absence never blocks it)."""
+    legs = record.get("legs") if isinstance(record, dict) else None
+    if not isinstance(legs, dict):
+        return ""
+    try:
+        wins, losses, pushes = (
+            int(legs.get(key) or 0) for key in ("w", "l", "p")
+        )
+    except (TypeError, ValueError):
+        return ""
+    if not (wins or losses or pushes):
+        return ""
+    tail = f"-{pushes}" if pushes else ""
+    return f"({wins}-{losses}{tail})"
+
+
+def _bet_leg_labels(row: dict[str, Any]) -> list[str]:
+    """The row's actual bet legs, side before total; PASS legs are omitted."""
+    side, total = arm_legs(row)
+    return [
+        leg_label(leg, kind=kind)
+        for kind, leg in (("side", side), ("total", total))
+        if leg_is_bet(leg)
+    ]
+
+
+def pick_lines(
+    desk: GameDesk,
+    records: dict[str, Any] | None = None,
+) -> list[str]:
+    """The glanceable picks list: both God arms always — 👑 God first, then
+    Rules; ``—`` until an arm row exists, ``no bet`` when it passes — then a
+    blank line and one line per voice that actually bets a leg. Every line
+    carries the expert's season graded-bet record next to its name."""
+    records = records or {}
+
+    def _head(name: str, expert_id: str, *, icon: str = "", shadow: bool = False) -> str:
+        head = f"{icon}<b>{_esc(name)}</b>"
+        if shadow:
+            head += " <i>Shadow</i>"
+        record = _record_text(records.get(expert_id))
+        if record:
+            head += f" {_esc(record)}"
+        return head
+
+    lines: list[str] = []
+    for expert_id in BET_ARM_ORDER:
+        row = desk.judge if expert_id == JUDGE_EXPERT_ID else desk.rules
+        icon = f"{JUDGE_ICON} " if expert_id == JUDGE_EXPERT_ID else ""
+        head = _head(BET_ARM_NAMES[expert_id], expert_id, icon=icon)
         if row is None:
-            continue
-        thesis = _clip(row.get("thesis"), 260)
-        segment = [f"<b>{label}</b>" + (f" · {_esc(thesis)}" if thesis else "")]
-        for factor in _factor_texts(row.get("supporting_factors_json"), 3):
-            segment.append(f"• {_esc(_clip(factor, 200))}")
-        for factor in _factor_texts(row.get("counterarguments_json"), 2):
-            segment.append(f"◦ {_esc(_clip(factor, 200))}")
-        pieces.append("\n".join(segment))
-    for row in desk.approved_voices:
-        thesis = _clip(row.get("thesis"), 220)
-        if thesis:
-            pieces.append(f"<b>{_esc(voice_name(row))}</b> · {_esc(thesis)}")
-    text = "\n".join(pieces)
-    if len(text) > WHY_CHARS:
-        text = text[: WHY_CHARS - 1].rstrip() + "…"
-    return text
+            value = "—"
+        else:
+            bets = _bet_leg_labels(row)
+            value = " · ".join(_esc(bet) for bet in bets) if bets else "no bet"
+        lines.append(f"{head} · {value}")
+    voices = [
+        (
+            _head(
+                voice_name(row),
+                str(row.get("expert_id") or ""),
+                shadow=str(row.get("expert_id") or "") in desk.shadow_experts,
+            )
+            + " · "
+            + " · ".join(_esc(bet) for bet in _bet_leg_labels(row))
+        )
+        for row in desk.betting_voices
+    ]
+    if voices:
+        lines.append("")
+        lines.extend(voices)
+    return lines
+
+
+def market_summary_line(
+    game: dict[str, Any],
+    latest_market: dict[str, Any] | None,
+    team_abbrevs: dict[str, str] | None,
+) -> str:
+    """``DAL -2.5 · O/U 47.5`` — the latest full-game frame the picks face,
+    one italic line; empty when there is no line data yet."""
+    market = latest_market or {}
+    parts: list[str] = []
+    try:
+        spread = float(market.get("home_spread"))
+    except (TypeError, ValueError):
+        spread = None
+    if spread is not None:
+        home = _abbrev(game.get("home_team"), team_abbrevs)
+        parts.append(f"{home} {spread:+g}")
+    try:
+        total = float(market.get("total"))
+    except (TypeError, ValueError):
+        total = None
+    if total is not None:
+        parts.append(f"O/U {total:g}")
+    if not parts:
+        return ""
+    return f"<i>{_esc(' · '.join(parts))}</i>"
 
 
 def picks_opinion_groups(
@@ -1434,31 +1519,28 @@ def render_picks_card(
     *,
     config: DeskConfig,
     view: Any = None,
-    back_to_games: bool = False,
+    records: dict[str, Any] | None = None,
+    latest_market: dict[str, Any] | None = None,
+    team_abbrevs: dict[str, str] | None = None,
 ) -> tuple[str, Keyboard]:
-    """Compact index, opinion picker, or one opinion in the same message."""
+    """One game's card: the glanceable picks summary (arms + betting voices
+    with records), the opinion picker, or one opinion — same message."""
     game = desk.game
     groups = picks_opinion_groups(desk)
     selected = resolve_picks_view(desk, view)
-    header = (
-        f"🏈 <b>{_esc(teams_label(game))}</b> · "
-        f"{kickoff_label(desk.kickoff)} ET"
-    )
+    header = f"🏈 <b>{_esc(teams_label(game))}</b>"
+    when = f"{kickoff_label(desk.kickoff)} ET"
+    if desk.week:
+        when += f" · Week {_esc(desk.week)}"
+    header_lines = [header, when]
+    market = market_summary_line(game, latest_market, team_abbrevs)
+    if market:
+        header_lines.append(market)
     summary_lines = [
-        header,
+        *header_lines,
         "",
-        "<b>GOD EXPERT</b>",
-        *god_pick_lines(desk),
+        *pick_lines(desk, records),
     ]
-    if desk.approved_voices:
-        summary_lines += [
-            "",
-            "<b>EXPERTS</b>",
-            *[voice_line(row) for row in desk.approved_voices],
-        ]
-        consensus = consensus_line(desk)
-        if consensus:
-            summary_lines += ["", consensus]
     if selected == "menu" and groups:
         keyboard = [
             [
@@ -1550,78 +1632,8 @@ def render_picks_card(
                 callback=f"{CALLBACK_PREFIX}show:{desk.event_id}",
             )
         )
-    if back_to_games:
-        actions.append(
-            _button(
-                "Back to games",
-                callback=f"{CALLBACK_PREFIX}games:{desk.event_id}",
-            )
-        )
     keyboard = [actions] if actions else []
     return "\n".join(summary_lines), keyboard
-
-
-def picks_day(desk: GameDesk) -> str:
-    return desk.kickoff.astimezone(ET).date().isoformat()
-
-
-def render_picks_day_card(
-    desks: Iterable[GameDesk],
-    *,
-    config: DeskConfig,
-    expanded_picks: dict[str, Any],
-    selected_event_id: str | None = None,
-    team_abbrevs: dict[str, str] | None = None,
-) -> tuple[str, Keyboard]:
-    """Render a date index or the selected game's view in the same message."""
-    desks = sorted(
-        (desk for desk in desks if desk.show_picks),
-        key=lambda desk: (desk.kickoff, desk.event_id),
-    )
-    if not desks:
-        raise ValueError("A Picks day card requires at least one visible game")
-    if selected_event_id:
-        selected = next(
-            (
-                desk
-                for desk in desks
-                if desk.event_id == selected_event_id
-            ),
-            None,
-        )
-        if selected is not None:
-            raw_view = expanded_picks.get(selected.event_id)
-            view = (
-                None
-                if raw_view == "game"
-                else resolve_picks_view(selected, raw_view)
-            )
-            return render_picks_card(
-                selected,
-                config=config,
-                view=view,
-                back_to_games=True,
-            )
-
-    local_day = desks[0].kickoff.astimezone(ET)
-    date_label = f"{local_day:%A, %B} {local_day.day}"
-    week = _week_label(desks)
-    header = f"🏈 <b>{_esc(date_label)}</b>"
-    if week:
-        header += f" · {_esc(week)}"
-    keyboard = [
-        [
-            _button(
-                (
-                    f"{clock_label(desk.kickoff)} · "
-                    f"{html.unescape(_teams_short(desk, team_abbrevs))}"
-                ),
-                callback=f"{CALLBACK_PREFIX}game:{desk.event_id}",
-            )
-        ]
-        for desk in desks
-    ]
-    return f"{header}\nSelect a game.", keyboard
 
 
 def _line_value(value: Any, *, signed: bool = False) -> str:
@@ -1726,75 +1738,10 @@ def render_offline_card(
     return "\n".join(lines), []
 
 
-def _week_label(desks: Iterable[GameDesk]) -> str:
-    weeks = sorted(
-        {int(desk.week) for desk in desks if desk.week.isdigit()}
-    )
-    if not weeks:
-        return ""
-    if len(weeks) == 1:
-        return f"Week {weeks[0]}"
-    return f"Weeks {weeks[0]}–{weeks[-1]}"
-
-
 def _teams_short(desk: GameDesk, team_abbrevs: dict[str, str] | None) -> str:
     away = _abbrev(desk.game.get("away_team"), team_abbrevs)
     home = _abbrev(desk.game.get("home_team"), team_abbrevs)
     return _esc(f"{away} @ {home}")
-
-
-def _week_legs(desk: GameDesk) -> str:
-    parts = []
-    parts.append(_short_legs(desk.rules) if desk.rules is not None else "rules —")
-    if desk.judge is not None:
-        side, total = arm_legs(desk.judge)
-        parts.append(
-            "judge "
-            f"{leg_label(side, kind='side', with_stars=False, with_reason=False, short_pass=True)}/"
-            f"{leg_label(total, kind='total', with_stars=False, with_reason=False, short_pass=True)}"
-        )
-    else:
-        parts.append("judge —")
-    return " · ".join(parts)
-
-
-def render_week_card(
-    desks: Iterable[GameDesk],
-    *,
-    team_abbrevs: dict[str, str] | None = None,
-) -> tuple[str, Keyboard]:
-    """One line per decided game (an approved God arm), then which required
-    voices still have no approved row — those are the games the judge
-    runner skips as "committee incomplete"."""
-    active = [desk for desk in desks if not desk.started]
-    decided = [desk for desk in active if desk.rules is not None or desk.judge is not None]
-    week = _week_label(active)
-    head = "🧠 <b>God Expert</b>"
-    if week:
-        head += f" · {week}"
-    lines = [head]
-    if not decided:
-        lines.append("No decided games yet.")
-    for desk in decided:
-        lines.append(
-            f"<b>{_teams_short(desk, team_abbrevs)}</b> {short_kickoff(desk.kickoff)} · "
-            f"{_esc(_week_legs(desk))}"
-        )
-    missing_counts: dict[str, int] = {}
-    for desk in active:
-        for expert_id in desk.missing_required:
-            missing_counts[expert_id] = missing_counts.get(expert_id, 0) + 1
-    if missing_counts:
-        lines.append(
-            _esc(
-                "Waiting on: "
-                + " · ".join(
-                    f"{expert_abbreviation(expert_id)} {count}"
-                    for expert_id, count in sorted(missing_counts.items())
-                )
-            )
-        )
-    return "\n".join(lines), []
 
 
 def _card_legs(desk: GameDesk, kind: str) -> dict[str, dict[str, Any] | None]:
@@ -2324,7 +2271,6 @@ def _upsert_card(
     summary: SyncSummary,
     pin: bool = False,
     reply_to: int | None = None,
-    edit_only: bool = False,
 ) -> int | None:
     digest = content_hash(text, keyboard, topic)
     entry = state["cards"].get(key)
@@ -2388,13 +2334,7 @@ def _upsert_card(
         except DeskApiError as exc:
             summary.errors.append(f"{key}: {exc}")
             return int(entry["message_id"])
-        if edit_only:
-            summary.errors.append(f"{key}: existing message could not be edited")
-            return None
         state["cards"].pop(key, None)
-    if edit_only:
-        summary.errors.append(f"{key}: existing message is not tracked")
-        return None
     if not budget.take():
         summary.deferred.append(key)
         return None
@@ -2427,53 +2367,18 @@ def _upsert_card(
     return message_id
 
 
-def _remove_legacy_picks_details(
-    *,
-    config: DeskConfig,
-    api: BotApi,
-    state: dict[str, Any],
-    summary: SyncSummary,
-) -> set[str]:
-    failed_events: set[str] = set()
-    for key in [
-        key for key in state["cards"] if key.startswith("picks-detail:")
-    ]:
-        entry = state["cards"][key]
-        if _delete_entry_messages(
-            key=key,
-            entry=entry,
-            config=config,
-            api=api,
-            summary=summary,
-        ):
-            state["cards"].pop(key, None)
-            summary.deleted.append(key)
-        else:
-            _, _, remainder = key.partition(":")
-            event_id, _, _ = remainder.partition(":")
-            if event_id:
-                failed_events.add(event_id)
-    return failed_events
-
-
-def _remove_legacy_picks_cards(
+def _remove_legacy_picks_day_cards(
     *,
     config: DeskConfig,
     api: BotApi,
     state: dict[str, Any],
     summary: SyncSummary,
 ) -> None:
-    """Delete the superseded per-game cards and pinned week summary."""
-    keys = [
-        key
-        for key in state["cards"]
-        if key == "week"
-        or (
-            key.startswith("picks:")
-            and not key.startswith("picks-day:")
-        )
-    ]
-    for key in keys:
+    """Delete the 2026-09-08-era shared daily cards: the Picks topic is one
+    card per game again (operator-asked 2026-09-20). The state entry is
+    dropped even when the delete fails — a surviving day card is inert
+    clutter to clean by hand, not load-bearing state."""
+    for key in [key for key in state["cards"] if key.startswith("picks-day:")]:
         error_count = len(summary.errors)
         removed = _delete_entry_messages(
             key=key,
@@ -2482,10 +2387,6 @@ def _remove_legacy_picks_cards(
             api=api,
             summary=summary,
         )
-        if not removed and key == "week":
-            message_id = state["cards"][key].get("message_id")
-            if message_id:
-                api.unpin(config.chat_id, int(message_id))
         state["cards"].pop(key, None)
         if removed:
             summary.deleted.append(key)
@@ -2549,9 +2450,8 @@ def sync_desk(
     now: datetime,
     team_abbrevs: dict[str, str] | None = None,
     latest_markets: dict[str, dict[str, Any]] | None = None,
+    records: dict[str, Any] | None = None,
     max_posts: int = MAX_POSTS_PER_SYNC,
-    priority_event_id: str | None = None,
-    edit_only_event_id: str | None = None,
 ) -> SyncSummary:
     """Reconcile the group with the model: post missing cards, edit changed
     ones, announce new bet legs and withdrawals of announced bets once
@@ -2560,43 +2460,36 @@ def sync_desk(
     spreads across passes."""
     desks = list(desks)
     summary = SyncSummary()
-    priority = None
-    if priority_event_id:
-        desks.sort(
-            key=lambda desk: (
-                desk.event_id != priority_event_id,
-                desk.kickoff,
-                desk.event_id,
-            )
-        )
-        priority = next(
-            (
-                desk
-                for desk in desks
-                if desk.event_id == priority_event_id
-            ),
-            None,
-        )
-        if not any(desk.event_id == priority_event_id for desk in desks):
-            summary.errors.append(
-                f"picks:{priority_event_id}: game is no longer available"
-            )
     budget = _Budget(max_posts)
     latest_markets = latest_markets or {}
     _drop_review_topic_state(state)
-    preserve = _remove_legacy_picks_details(
+    _remove_legacy_picks_day_cards(
         state=state,
         config=config,
         api=api,
         summary=summary,
     )
-    _remove_legacy_picks_cards(
-        state=state,
-        config=config,
-        api=api,
-        summary=summary,
-    )
-    prune_state(state, now=now, preserve_event_ids=preserve)
+    # Delete picks cards whose game left the model (aged out or removed) or
+    # dropped below the picks gate — before prune_state forgets the entry
+    # and the message would leak. Offline cards deliberately survive here.
+    active_picks = {
+        f"picks:{desk.event_id}" for desk in desks if desk.show_picks
+    }
+    for key in [
+        key
+        for key in state["cards"]
+        if key.startswith("picks:") and key not in active_picks
+    ]:
+        if _delete_entry_messages(
+            key=key,
+            entry=state["cards"][key],
+            config=config,
+            api=api,
+            summary=summary,
+        ):
+            state["cards"].pop(key, None)
+            summary.deleted.append(key)
+    prune_state(state, now=now)
     for desk in desks:
         state["kickoffs"][desk.event_id] = desk.kickoff.isoformat()
         if config.offline_topic:
@@ -2631,70 +2524,38 @@ def sync_desk(
                     state["cards"].pop(offline_key, None)
                     summary.deleted.append(offline_key)
 
-    day_groups: dict[str, list[GameDesk]] = {}
-    for desk in desks:
-        if desk.show_picks:
-            day_groups.setdefault(picks_day(desk), []).append(desk)
-    active_day_keys = {f"picks-day:{day}" for day in day_groups}
-    for key in [
-        key
-        for key in state["cards"]
-        if key.startswith("picks-day:") and key not in active_day_keys
-    ]:
-        if _delete_entry_messages(
-            key=key,
-            entry=state["cards"][key],
-            config=config,
-            api=api,
-            summary=summary,
-        ):
-            state["cards"].pop(key, None)
-            summary.deleted.append(key)
-
+    # The Picks topic: one card per game, frozen at kickoff (reposted only
+    # if it went missing), deleted when the game leaves the model — the
+    # topic stays one slate deep while offline keeps the archive.
     picks_ids: dict[str, int] = {}
-    for day, day_desks in sorted(day_groups.items()):
-        selected_event_id = None
-        if priority_event_id and any(
-            desk.event_id == priority_event_id for desk in day_desks
+    for desk in desks:
+        if not desk.show_picks:
+            continue
+        key = f"picks:{desk.event_id}"
+        entry = state["cards"].get(key)
+        if (
+            desk.started
+            and isinstance(entry, dict)
+            and entry.get("message_id")
         ):
-            selected_event_id = priority_event_id
+            picks_ids[desk.event_id] = int(entry["message_id"])
+            continue
+        raw_view = state["expanded_picks"].get(desk.event_id)
+        view = resolve_picks_view(desk, raw_view)
+        if view is None:
+            state["expanded_picks"].pop(desk.event_id, None)
         else:
-            selected_event_id = next(
-                (
-                    desk.event_id
-                    for desk in day_desks
-                    if desk.event_id in state["expanded_picks"]
-                ),
-                None,
-            )
-        if selected_event_id:
-            selected_desk = next(
-                desk
-                for desk in day_desks
-                if desk.event_id == selected_event_id
-            )
-            raw_view = state["expanded_picks"].get(selected_event_id)
-            if raw_view != "game":
-                normalized_view = resolve_picks_view(
-                    selected_desk,
-                    raw_view,
-                )
-                if normalized_view is None:
-                    state["expanded_picks"].pop(selected_event_id, None)
-                    selected_event_id = None
-                else:
-                    state["expanded_picks"][
-                        selected_event_id
-                    ] = normalized_view
-        text, keyboard = render_picks_day_card(
-            day_desks,
+            state["expanded_picks"][desk.event_id] = view
+        text, keyboard = render_picks_card(
+            desk,
             config=config,
-            expanded_picks=state["expanded_picks"],
-            selected_event_id=selected_event_id,
+            view=view,
+            records=records,
+            latest_market=latest_markets.get(desk.event_id),
             team_abbrevs=team_abbrevs,
         )
         picks_id = _upsert_card(
-            key=f"picks-day:{day}",
+            key=key,
             topic=config.picks_topic,
             text=text,
             keyboard=keyboard,
@@ -2703,17 +2564,9 @@ def sync_desk(
             state=state,
             budget=budget,
             summary=summary,
-            edit_only=(
-                edit_only_event_id is not None
-                and any(
-                    desk.event_id == edit_only_event_id
-                    for desk in day_desks
-                )
-            ),
         )
         if picks_id is not None:
-            for desk in day_desks:
-                picks_ids[desk.event_id] = picks_id
+            picks_ids[desk.event_id] = picks_id
 
     for desk in desks:
         if desk.started or not desk.show_picks:
@@ -2983,10 +2836,11 @@ def desk_ids_report(
 
 
 def parse_callback(data: str) -> tuple[str, str] | None:
-    """``desk:game:<event>``; ``desk:games:<event>``;
-    ``desk:show:<event>``; ``desk:hide:<event>``;
+    """``desk:show:<event>``; ``desk:hide:<event>``;
     ``desk:op:<event>:<expert>``; ``desk:part:<event>:<expert>:<chunk>``;
-    ``desk:refresh:<event>``. Anything else — including the removed review
+    ``desk:refresh:<event>``. ``game``/``games`` (the removed 2026-09-08
+    daily index) still parse so a stale keyboard collapses to the summary
+    view instead of erroring. Anything else — including the removed review
     actions ``ok``/``no``/``okarms`` — returns ``None``."""
     if not data.startswith(CALLBACK_PREFIX):
         return None

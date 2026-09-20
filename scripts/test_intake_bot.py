@@ -95,7 +95,7 @@ class DeskPicksViewTests(unittest.TestCase):
                 kickoff=datetime(2026, 8, 5, 20, tzinfo=timezone.utc),
             )
             initial_state = intake_bot.load_desk_state(config.state_path)
-            initial_state["cards"]["picks-day:2026-08-05"] = {
+            initial_state["cards"]["picks:401"] = {
                 "message_id": 30,
                 "hash": "old",
                 "topic": 5,
@@ -104,12 +104,13 @@ class DeskPicksViewTests(unittest.TestCase):
             with (
                 patch.object(intake_bot, "load_cached_moe_opinions", return_value=[]),
                 patch.object(intake_bot, "load_intake_data", return_value=([], [], {})),
+                patch.object(intake_bot, "load_expert_records", return_value={}),
                 patch.object(intake_bot, "load_moe_registry", return_value={}),
                 patch.object(intake_bot, "build_desk_model", return_value=[desk]),
                 patch.object(intake_bot, "expire_sheet_cache") as expire,
                 patch.object(
                     intake_bot,
-                    "render_picks_day_card",
+                    "render_picks_card",
                     return_value=(
                         "picker text",
                         [[{"text": "God Rules", "callback_data": "desk:op:401:god_rules"}]],
@@ -132,11 +133,11 @@ class DeskPicksViewTests(unittest.TestCase):
             state = intake_bot.load_desk_state(config.state_path)
             self.assertEqual(state["expanded_picks"]["401"], "menu")
             self.assertEqual(
-                state["cards"]["picks-day:2026-08-05"]["message_id"],
+                state["cards"]["picks:401"]["message_id"],
                 30,
             )
 
-    def test_stale_per_game_callback_cannot_replace_daily_card(self) -> None:
+    def test_stale_callback_cannot_replace_the_game_card(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = SimpleNamespace(
                 state_path=Path(tmp) / "moe_desk_state.json",
@@ -144,9 +145,9 @@ class DeskPicksViewTests(unittest.TestCase):
                 picks_topic=5,
             )
             state = intake_bot.load_desk_state(config.state_path)
-            state["cards"]["picks-day:2026-08-05"] = {
+            state["cards"]["picks:401"] = {
                 "message_id": 40,
-                "hash": "daily",
+                "hash": "current",
                 "topic": 5,
             }
             intake_bot.save_desk_state(config.state_path, state)
@@ -173,7 +174,7 @@ class DeskPicksViewTests(unittest.TestCase):
             api.edit.assert_not_called()
             saved = intake_bot.load_desk_state(config.state_path)
             self.assertEqual(
-                saved["cards"]["picks-day:2026-08-05"]["message_id"],
+                saved["cards"]["picks:401"]["message_id"],
                 40,
             )
 

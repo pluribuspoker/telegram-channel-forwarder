@@ -49,6 +49,7 @@ from nfl_lines import (
     OPENING_AWAY_COLUMN,
     OPENING_HOME_COLUMN,
     OPENING_TOTALS_COLUMN,
+    SNAPSHOT_HEADERS,
     decode_packed_markets,
     get_gspread_client,
 )
@@ -79,13 +80,18 @@ from moe_desk import (
     desk_ids_report,
     parse_start_param,
     resolve_picks_view,
-    picks_day,
-    render_picks_day_card,
+    render_picks_card,
     topic_id_from_reply,
     save_state as save_desk_state,
     sync_desk,
 )
-from moe_god import load_registry as load_moe_registry
+from moe_god import (
+    aggregator_policy as moe_aggregator_policy,
+    build_scoreboard as build_moe_scoreboard,
+    load_registry as load_moe_registry,
+)
+from nfl_game_annotations import load_game_annotations
+from nfl_game_history import GAME_HISTORY_HEADERS, GAME_HISTORY_TAB
 from moe_identity import (
     REVIEWER_ROLE,
     resolve_moe_expert_user_id_from_spreadsheet,
@@ -139,6 +145,9 @@ _MOE_STORE: Any | None = None
 GAMES_CACHE_TTL_SECONDS = 3600
 TEAM_EMOJI_CACHE_TTL_SECONDS = 600
 MOE_CACHE_TTL_SECONDS = 3600
+# Records change only when a night's games grade; an hour keeps the desk's
+# per-expert (W-L) tags a sheet-read + one ESPN scoreboard fetch per hour.
+MOE_RECORDS_CACHE_TTL_SECONDS = 3600
 DESK_REVIEWERS_CACHE_TTL_SECONDS = 300
 _DESK_SYNC_LOCK = threading.Lock()
 WIN_TOTALS_CACHE_TTL_SECONDS = 3600
@@ -1819,6 +1828,81 @@ def expire_sheet_cache(key: str) -> None:
             _SHEET_CACHE[key] = (float("-inf"), cached[1])
 
 
+def load_expert_records() -> dict[str, Any]:
+    """Per-expert season records for the desk picks cards: the scoreboard's
+    ``by_expert`` map, one standing row per expert per game — the same
+    numbers as the grading digest's "bets" section, so the card's ``(5-2)``
+    tags and the digest never disagree. Cached for an hour; ``{}`` (no
+    records shown) when any input is unavailable — records decorate the
+    cards and must never stall the desk sync."""
+
+    def _load() -> dict[str, Any]:
+        # Imported here because scripts.generate_moe_opinion imports
+        # intake_bot; a module-level import would be circular.
+        from scripts.generate_moe_opinion import current_season_finals
+
+        spreadsheet = _intake_spreadsheet()
+        history = spreadsheet.worksheet(GAME_HISTORY_TAB).get_all_records(
+            expected_headers=GAME_HISTORY_HEADERS
+        )
+        annotation_rows = load_game_annotations(spreadsheet)
+        snapshots = spreadsheet.worksheet("nfl_line_snapshots").get_all_records(
+            expected_headers=SNAPSHOT_HEADERS
+        )
+        approved = approved_moe_opinions(load_cached_moe_opinions())
+        seasons = sorted(
+            int(row["season"])
+            for row in approved
+            if str(row.get("season") or "").strip()
+        )
+        if not seasons:
+            return {}
+        registry = load_moe_registry()
+        return build_moe_scoreboard(
+            approved,
+            finals=current_season_finals(history, seasons[-1], annotation_rows),
+            snapshots=snapshots,
+            registry=registry,
+            policy=moe_aggregator_policy(registry),
+            as_of=datetime.now(timezone.utc).isoformat(),
+            latest_per_game=True,
+        )["by_expert"]
+
+    try:
+        return _cached_sheet_value(
+            "moe_expert_records", MOE_RECORDS_CACHE_TTL_SECONDS, _load
+        )
+    except Exception as exc:  # noqa: BLE001 - records are decoration
+        log.warning("desk: expert records unavailable: %s", exc)
+        # Cache the miss for a full TTL so an ESPN or Sheets outage costs
+        # one warning an hour, not one per 120 s sync pass.
+        _set_sheet_cache("moe_expert_records", {})
+        return {}
+
+
+def latest_markets_from_games(
+    games: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """The latest full-game market per event id, decoded from the packed
+    ``nfl_games`` columns, for the desk cards' line summaries."""
+    latest_markets: dict[str, dict[str, Any]] = {}
+    for game in games:
+        try:
+            latest = decode_packed_markets(
+                str(game.get(LATEST_AWAY_COLUMN) or ""),
+                str(game.get(LATEST_HOME_COLUMN) or ""),
+                str(game.get(LATEST_TOTALS_COLUMN) or ""),
+            )["game"]
+        except (KeyError, TypeError, ValueError):
+            continue
+        latest_markets[str(game.get("event_id") or "")] = {
+            **latest,
+            "bookmaker": game.get("bookmaker"),
+            "captured_at": game.get("latest_captured_at"),
+        }
+    return latest_markets
+
+
 def load_desk_reviewers() -> dict[int, str]:
     """Telegram id -> display name for every ``reviewer`` row in
     ``allowed_users``. Review itself is automatic (validation-approved at
@@ -1884,21 +1968,7 @@ def desk_sync_once(
     with _DESK_SYNC_LOCK:
         rows = load_cached_moe_opinions()
         games, _, team_abbrevs = load_intake_data()
-        latest_markets = {}
-        for game in games:
-            try:
-                latest = decode_packed_markets(
-                    str(game.get(LATEST_AWAY_COLUMN) or ""),
-                    str(game.get(LATEST_HOME_COLUMN) or ""),
-                    str(game.get(LATEST_TOTALS_COLUMN) or ""),
-                )["game"]
-            except (KeyError, TypeError, ValueError):
-                continue
-            latest_markets[str(game.get("event_id") or "")] = {
-                **latest,
-                "bookmaker": game.get("bookmaker"),
-                "captured_at": game.get("latest_captured_at"),
-            }
+        latest_markets = latest_markets_from_games(games)
         registry = load_moe_registry()
         desks = build_desk_model(
             games, rows, approved_moe_opinions(rows), registry, now=now
@@ -1913,6 +1983,7 @@ def desk_sync_once(
                 now=now,
                 team_abbrevs=team_abbrevs,
                 latest_markets=latest_markets,
+                records=load_expert_records(),
             )
         finally:
             save_desk_state(config.state_path, state)
@@ -1943,16 +2014,17 @@ def update_desk_picks_view(
     message_id: int,
     force_opinions_refresh: bool = False,
 ) -> tuple[Any, str | None]:
-    """Atomically select and edit one existing daily Picks card; never post it."""
+    """Atomically select and edit one existing per-game Picks card; never
+    post it. ``view`` ``None`` (or the legacy ``"game"``) collapses the
+    card back to its picks summary."""
     with _DESK_SYNC_LOCK:
         state = load_desk_state(config.state_path)
-        raw_previous = state["expanded_picks"].get(event_id)
-        previous = raw_previous
+        previous = state["expanded_picks"].get(event_id)
         now = datetime.now(timezone.utc)
         if force_opinions_refresh:
             expire_sheet_cache("moe_opinions")
         rows = load_cached_moe_opinions()
-        games, _, _ = load_intake_data()
+        games, _, team_abbrevs = load_intake_data()
         desks = build_desk_model(
             games,
             rows,
@@ -1966,36 +2038,27 @@ def update_desk_picks_view(
         )
         if desk is None or not desk.show_picks:
             return previous, "game is no longer available"
-        day = picks_day(desk)
-        card_key = f"picks-day:{day}"
+        card_key = f"picks:{event_id}"
         tracked = state["cards"].get(card_key)
         if (
             not isinstance(tracked, dict)
             or int(tracked.get("message_id") or 0) != int(message_id)
         ):
             return previous, "stale or untracked Picks message"
-        day_desks = [
-            item
-            for item in desks
-            if item.show_picks and picks_day(item) == day
-        ]
-        for item in day_desks:
-            state["expanded_picks"].pop(item.event_id, None)
-        if view == "game":
-            effective_view = "game"
-        elif view is None:
-            effective_view = None
+        effective_view = (
+            None if view in (None, "game") else resolve_picks_view(desk, view)
+        )
+        if effective_view is None:
+            state["expanded_picks"].pop(event_id, None)
         else:
-            effective_view = resolve_picks_view(desk, view)
-        if effective_view is not None:
             state["expanded_picks"][event_id] = effective_view
-        text, keyboard = render_picks_day_card(
-            day_desks,
+        text, keyboard = render_picks_card(
+            desk,
             config=config,
-            expanded_picks=state["expanded_picks"],
-            selected_event_id=(
-                event_id if effective_view is not None else None
-            ),
+            view=effective_view,
+            records=load_expert_records(),
+            latest_market=latest_markets_from_games(games).get(event_id),
+            team_abbrevs=team_abbrevs,
         )
         try:
             edited = api.edit(
@@ -2515,12 +2578,11 @@ async def main() -> None:
             "refresh",
         }:
             event_id = target
+            # "game"/"games"/"hide" all collapse to the picks summary — the
+            # first two are the removed daily index's actions, kept so a
+            # stale keyboard still lands somewhere sensible.
             desired_view: Any = (
-                "menu"
-                if action in {"show", "page", "refresh"}
-                else "game"
-                if action in {"game", "hide"}
-                else None
+                "menu" if action in {"show", "page", "refresh"} else None
             )
             if action == "page":
                 legacy_event_id, separator, _ = target.rpartition(":")
@@ -2560,10 +2622,8 @@ async def main() -> None:
             desk_inflight.add(key)
             try:
                 await event.answer(
-                    "Returning to games…"
-                    if action == "games"
-                    else "Returning to picks…"
-                    if desired_view == "game"
+                    "Returning to picks…"
+                    if desired_view is None
                     else "Loading opinions…"
                 )
                 message_id = (
