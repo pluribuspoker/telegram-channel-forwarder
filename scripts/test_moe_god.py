@@ -36,6 +36,8 @@ from moe_god import (
     MEAN_OF_ARMS_ID,
     NO_EXPECTATION_REASON,
     SIGN_NOTE,
+    _check_reason_citations,
+    _reference_form,
     aggregator_policy,
     american_to_implied,
     apply_policy,
@@ -1616,6 +1618,96 @@ class ReasonGuardTests(unittest.TestCase):
         # A derived record also grounds the cohort it implies.
         self.assertIn("217 games", tail)
         self.assertIn("49 games", tail)
+
+    def test_sampled_prose_variants_are_grounded(self) -> None:
+        # The win-total voice SAMPLES its factor prose, so the same facts
+        # arrive re-phrased across generations: noun-order records, two
+        # labeled-count ballot spellings, and implicit-zero unanimity.
+        # Five live judge responses were rejected for re-notating them,
+        # stalling two WAS@DAL committees on game day (2026-09-20). Every
+        # phrasing here is lifted from those requests byte-for-byte.
+        request = {
+            "voices": [
+                {
+                    # A structured tally implies its cohort: "its O/U
+                    # record is 5-10 over 15 games" (15 = w+l+p, which
+                    # "resolved" does not carry when pushes differ).
+                    "predicted_away_score": 21,
+                    "predicted_home_score": 27,
+                    "track_record": {
+                        "ou": {"w": 5, "l": 10, "p": 0},
+                        "resolved": 16,
+                    },
+                },
+            ],
+            "factors": [
+                "In the 2_to_3 prior-win-gap bucket matching the current "
+                "gap of 2, the side entering with more prior-season wins "
+                "went 106 wins, 83 losses, and 0 ties over 189 games, a "
+                "0.5608 win rate",
+                "Across the 5 forecasters with both teams, Dallas Cowboys "
+                "is ranked higher by every one (home_team_higher_count 5, "
+                "away_team_higher_count 0, tied_count 0); their average "
+                "season-win predictions are 9.6",
+                "all 5 forecasters rank Dallas higher, averaging 9.6 "
+                "versus 6.4 wins (home-minus-away 3.2)",
+                "the forecaster consensus agrees, averaging 10.6 home "
+                "wins to 8.2 away (home-higher count 4, away-higher 0, "
+                "tied 1) with medians of 11 and 7",
+            ],
+        }
+        reference = _reference_form(reason_reference_text(request))
+        derived = reference.split("\n")[-1].split()
+        for token in (
+            "106-83",  # "went 106 wins, 83 losses, and 0 ties"
+            "106-83-0",
+            "5-0",  # "home_team_higher_count 5, away_team_higher_count 0,
+            "5-0-0",  # tied_count 0", and unanimity ("all 5 forecasters")
+            "0-5",
+            "4-0-1",  # "home-higher count 4, away-higher 0, tied 1"
+            "0-4-1",
+        ):
+            self.assertIn(token, derived)
+        self.assertIn("189 games", reference)
+        # The exact reasons the live responses were rejected for.
+        for claim in (
+            "the 2-3 prior-win gap bucket went 106-83 (0.5608) over 189 "
+            "games",
+            "a 5-0 forecaster consensus (9.6 vs 6.4 wins)",
+            "a 4-0-1 forecaster consensus for the Chiefs",
+            "its O/U record is 5-10 over 15 games",
+        ):
+            _check_reason_citations(claim, reference, field="key_reasons")
+        # An invented record or tie tally is still caught.
+        for claim in ("went 107-83 over the bucket", "a 5-0-1 consensus"):
+            with self.assertRaises(ValueError):
+                _check_reason_citations(claim, reference, field="key_reasons")
+
+    def test_game_count_survives_intervening_words(self) -> None:
+        # The request writes "has 0 historical games"; the judge's
+        # "the exact 3-versus-11 prior-win analog has 0 games" was
+        # rejected because a word between the count and "games" defeated
+        # the proximity window (live rejection, 2026-09-20).
+        request = {
+            "voices": [],
+            "factors": [
+                "The exact current away/home prior-win pair of 3 away "
+                "prior wins and 11 home prior wins has 0 historical "
+                "games, so it is a zero-sample analog that provides no "
+                "signal and receives no weight.",
+            ],
+        }
+        reference = _reference_form(reason_reference_text(request))
+        _check_reason_citations(
+            "the exact 3-versus-11 prior-win analog has 0 games",
+            reference,
+            field="counterpoints",
+        )
+        # A count the request never puts near "games" is still invented.
+        with self.assertRaises(ValueError):
+            _check_reason_citations(
+                "a 7-game slice agrees", reference, field="counterpoints"
+            )
 
     def test_ascending_range_over_request_numbers_passes(self) -> None:
         # "3-5 game samples", "44-46 projections": ranges over numbers
