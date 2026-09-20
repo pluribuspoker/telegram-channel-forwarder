@@ -510,8 +510,8 @@ class RenderTests(unittest.TestCase):
                 "Sun Sep 13 · 4:05 PM ET · Week 1",
                 "<i>SEA -3.5 · O/U 44.5</i>",
                 "",
-                "<b>Rules</b> (4-3-1) · Seahawks -3.5 (+100) ★ 0.6u · "
-                "Over 44.5 (-105) ★ 0.5u",
+                "<b>Rules</b> (4-3-1) · Seahawks -3.5 (+100) 0.6u · "
+                "Over 44.5 (-105) 0.5u",
                 "",
                 "<b>AK</b> (3-1) · Seahawks -3.5 (+100) ★ 0.6u",
             ],
@@ -539,7 +539,7 @@ class RenderTests(unittest.TestCase):
             config=CONFIG,
             view="menu",
         )
-        self.assertIn("<b>Rules</b> · Seahawks -3.5 (+100) ★ 0.6u", picker_text)
+        self.assertIn("<b>Rules</b> · Seahawks -3.5 (+100) 0.6u", picker_text)
         self.assertIn("<b>Select an opinion</b>", picker_text)
         self.assertEqual(
             [
@@ -803,7 +803,7 @@ class RenderTests(unittest.TestCase):
         rows = committee(arms_status="approved")
         rows[6]["side_pick_json"] = json.dumps(SEA_SIDE)
         text, _ = render_picks_card(self.desk(rows), config=CONFIG)
-        self.assertIn("👑 <b>God</b> · Seahawks -3.5 (+100) ★ 0.6u", text)
+        self.assertIn("👑 <b>God</b> · Seahawks -3.5 (+100) 0.6u", text)
         self.assertNotIn("Rules", text)
         self.assertNotIn("no bet", text)
 
@@ -1085,7 +1085,7 @@ class SyncTests(unittest.TestCase):
         self.state["expanded_picks"].pop("401")
         summary = self.sync(rows)
         self.assertIn("picks:401", summary.edited)
-        self.assertIn("<b>Rules</b> · Seahawks -3.5 (+100) ★ 0.6u", self.api.edits[-1]["text"])
+        self.assertIn("<b>Rules</b> · Seahawks -3.5 (+100) 0.6u", self.api.edits[-1]["text"])
 
     def test_legacy_game_view_state_collapses_to_the_summary(self) -> None:
         # "game" was the daily index's selected-game marker; on a per-game
@@ -1137,7 +1137,7 @@ class SyncTests(unittest.TestCase):
             alert["text"],
             "🔔 <b>Seahawks -3.5</b> · Patriots @ Seahawks\n"
             "<b>God</b> no bet\n"
-            "<b>Rules</b> ★ 0.6u (+100)",
+            "<b>Rules</b> 0.6u (+100)",
         )
         summary = self.sync(rows)
         self.assertEqual(summary.alerts, [])
@@ -1169,7 +1169,7 @@ class SyncTests(unittest.TestCase):
             edit["text"],
             "🔔 <b>Seahawks -3.5</b> · Patriots @ Seahawks\n"
             "<b>God</b> no bet\n"
-            "<b>Rules</b> ★→★★ 0.6→1.4u (+100)",
+            "<b>Rules</b> 0.6→1.4u (+100)",
         )
         self.assertEqual(sum(1 for m in self.api.sent if not m["silent"]), 1)
         # a third pass with the same rows changes nothing
@@ -1187,7 +1187,7 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(
             alert["text"],
             "🔔 <b>Seahawks -3.5</b> · Patriots @ Seahawks\n"
-            "<b>God</b> ★ 0.6u (+100)\n"
+            "<b>God</b> 0.6u (+100)\n"
             "<b>Rules</b> no bet · line moved against",
         )
 
@@ -1212,7 +1212,7 @@ class SyncTests(unittest.TestCase):
             self.api.edits[-1]["text"],
             "🔔 <b>Seahawks -3.5→-2.5</b> · Patriots @ Seahawks\n"
             "<b>God</b> no bet\n"
-            "<b>Rules</b> ★ 0.6u (+100)",
+            "<b>Rules</b> 0.6u (+100)",
         )
 
     def test_an_arm_joining_reposts_the_card_loudly(self) -> None:
@@ -1240,8 +1240,8 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(
             alert["text"],
             "🔔 <b>Seahawks -3.5</b> · Patriots @ Seahawks\n"
-            "<b>God</b> ★ 0.6u (+100)\n"
-            "<b>Rules</b> ★ 0.6u (+100)",
+            "<b>God</b> 0.6u (+100)\n"
+            "<b>Rules</b> 0.6u (+100)",
         )
         entry = self.state["announced"]["betcard:401:side"]
         self.assertEqual(entry["message_id"], alert["id"])
@@ -1283,7 +1283,7 @@ class SyncTests(unittest.TestCase):
         entry = self.state["announced"]["betcard:401:side"]
         card_id = entry["message_id"]
         self.assertEqual(
-            entry["arms"]["god_rules"]["leg"], "Seahawks -3.5 (+100) ★ 0.6u"
+            entry["arms"]["god_rules"]["leg"], "Seahawks -3.5 (+100) 0.6u"
         )
 
         rows.append(
@@ -1306,7 +1306,7 @@ class SyncTests(unittest.TestCase):
             edit["text"],
             "🔕 <s>Seahawks -3.5</s> · Patriots @ Seahawks\n"
             "<b>God</b> no bet\n"
-            "<b>Rules</b> ✖ <s>★ 0.6u</s> · edge too thin",
+            "<b>Rules</b> ✖ <s>0.6u</s> · edge too thin",
         )
         # the card stays as the record — no delete, no separate message
         self.assertNotIn(card_id, self.api.deleted)
@@ -1348,8 +1348,8 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(
             self.api.edits[-1]["text"],
             "🔔 <b>Seahawks -3.5</b> · Patriots @ Seahawks\n"
-            "<b>God</b> ★ 0.6u (+100)\n"
-            "<b>Rules</b> ✖ <s>★ 0.6u</s> · line moved against",
+            "<b>God</b> 0.6u (+100)\n"
+            "<b>Rules</b> ✖ <s>0.6u</s> · line moved against",
         )
 
     def test_a_re_bet_after_a_withdrawal_revives_the_card_loudly(self) -> None:
@@ -1390,7 +1390,7 @@ class SyncTests(unittest.TestCase):
             alert["text"],
             "🔔 <b>Seahawks -3.5</b> · Patriots @ Seahawks\n"
             "<b>God</b> no bet\n"
-            "<b>Rules</b> ★ 1.1u (+100)",
+            "<b>Rules</b> 1.1u (+100)",
         )
         self.assertNotIn(
             "withdrawn",
@@ -1411,7 +1411,7 @@ class SyncTests(unittest.TestCase):
         summary = self.sync(rows)
         self.assertEqual(summary.alerts, [])
         self.assertIn(
-            "<b>Rules</b> ✖ <s>★ 1.1u</s> · line moved against",
+            "<b>Rules</b> ✖ <s>1.1u</s> · line moved against",
             self.api.edits[-1]["text"],
         )
 
@@ -1485,7 +1485,7 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(summary.posted, ["betcard:401:side"])
         card = self.api.sent[-1]
         self.assertTrue(card["silent"])
-        self.assertIn("<b>Rules</b> ★ 0.6→1.4u (+100)", card["text"])
+        self.assertIn("<b>Rules</b> 0.6→1.4u (+100)", card["text"])
         self.assertNotIn("bet:c884d868-0000:side", self.state["announced"])
 
     def test_legacy_announced_bets_never_fire_withdrawals(self) -> None:

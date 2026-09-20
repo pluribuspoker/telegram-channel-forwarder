@@ -909,9 +909,13 @@ either person sees or does.
   week line, an italic latest-market line (`DAL -2.5 · O/U 51`, from the
   packed `nfl_games` columns), then ONLY the experts that bet — 👑 God
   first when the judge bets (the crown is the operator-asked judge marker
-  — never a star, stars mean confidence), Rules when it bets
-  (`BET_ARM_NAMES`), then a blank line and one line per voice with an
-  actual bet leg (a shadow voice keeps an italic `Shadow` tag). **A
+  — never a star, ★ is the voices' confidence), Rules when it bets
+  (`BET_ARM_NAMES`); arm legs render units + price with no stars
+  (operator-picked later on 2026-09-20 — one conviction number per line:
+  the stake); then a blank line and one line per voice with an actual bet
+  leg, which keeps its ★ — a human pick's own rating and its only
+  conviction signal, since voice picks carry no stake (a shadow voice
+  keeps an italic `Shadow` tag). **A
   non-betting expert is simply absent — no `no bet` or `—` filler — and
   lean-only stances (predicted winner, probability, projected score with
   no staked leg) never show on this card** (operator-asked 2026-09-20);
@@ -973,14 +977,20 @@ either person sees or does.
   every judge pass, because every pass persists fresh arm rows): a bold
   selection headline plus a God row and a Rules row (`BET_ARM_NAMES`,
   deliberately not `ARM_LABELS` — the operator's own vocabulary), each row
-  stars + units + current price, replying to the game's picks card. A
+  units + current price (stars left the arms' rows on both card kinds
+  2026-09-20, operator-picked: units already carry the arms' conviction;
+  ★ remains only on picks-card voice lines, whose human picks have no
+  stake — stored `leg` labels are starless now, `_LEGACY_ALERT_LABEL`
+  parses both eras, and the pre-card quiet check compares labels modulo
+  stars so the format change alone never promotes a legacy alert),
+  replying to the game's picks card. A
   non-betting arm's row reads `no bet · <reason>` with the reason mapped
   to plain English by `PASS_REASON_SHORT` (ev floor → edge too thin,
   adverse move → line moved against, no positive expectation → no edge;
   operator-picked copy, 2026-09-13) — a withdrawn arm's struck row shares
   the mapping; an arm with no row yet stays a bare `—`. The
-  card is edited in place as numbers move; stars, units and the headline's
-  line render announced→current (`★★→★`, `2.3→1.2u`, `-3.5→-2.5`) from the
+  card is edited in place as numbers move; units and the headline's
+  line render announced→current (`2.3→1.2u`, `-3.5→-2.5`) from the
   per-arm `first` baselines in state, so drift is visible with no
   timestamps and no history growth (a value returning to its announced
   number drops the arrow). Price shows current only — it ticks too often
@@ -991,8 +1001,9 @@ either person sees or does.
   state (operator-picked (A) on 2026-09-13, superseding the 2026-09-12
   loud 🔕 message): the arm is marked `withdrawn` in the entry — its leg
   label and baselines frozen at the last bet — and its row renders
-  `✖ <s>★★ 1.5u</s> · <short reason>` (stake parsed from the frozen label
-  by `_label_stake`); once no arm bets, the headline flips to
+  `✖ <s>1.5u</s> · <short reason>` (stake parsed from the frozen label
+  by `_label_stake`; a pre-2026-09-20 frozen label still strikes with its
+  stars); once no arm bets, the headline flips to
   `🔕 <s>Over 44.5</s>` (`_label_head`) and the card is KEPT as the
   record — never deleted, no separate message, no ping. The operator
   accepted that a kill is glance-only: the 49ers@Rams failure was a stale

@@ -593,7 +593,7 @@ def _line_text(line: float | None, kind: str) -> str:
 
 
 _LEGACY_ALERT_LABEL = re.compile(
-    r"^(?P<head>.*?)\s*(?:\([+-]?\d+\))?\s*(?P<stars>★+)(?:\s+(?P<units>\d+(?:\.\d+)?)u)?\s*$"
+    r"^(?P<head>.*?)\s*(?:\([+-]?\d+\))?\s*(?P<stars>★+)?(?:\s+(?P<units>\d+(?:\.\d+)?)u)?\s*$"
 )
 
 
@@ -613,7 +613,7 @@ def _legacy_first(label: Any, leg: dict[str, Any], kind: str) -> Any:
         return "flip"
     first: dict[str, Any] = {
         "selection": selection,
-        "stars": len(match.group("stars")),
+        "stars": len(match.group("stars") or "") or None,
         "units": float(match.group("units")) if match.group("units") else None,
     }
     try:
@@ -628,10 +628,13 @@ def leg_label(
     *,
     kind: str,
     with_stars: bool = True,
+    with_units: bool | None = None,
     with_reason: bool = True,
     short_pass: bool = False,
 ) -> str:
-    """``49ers +3.5 (-110) ★ 1.1u`` / ``Over 44.5 (-105) ★`` / ``PASS (ev floor)``."""
+    """``49ers +3.5 (-110) ★ 1.1u`` / ``Over 44.5 (-105) 1.1u`` (arms show
+    units without stars) / ``PASS (ev floor)``. ``with_units`` defaults to
+    ``with_stars`` so existing callers keep their labels."""
     if leg is None:
         return "—"
     if not leg_is_bet(leg):
@@ -639,6 +642,8 @@ def leg_label(
             return "pass"
         reason = str(leg.get("pass_reason") or "").strip()
         return f"PASS ({reason})" if reason and with_reason else "PASS"
+    if with_units is None:
+        with_units = with_stars
     selection = str(leg.get("selection") or "")
     if kind == "side":
         selection = nickname(selection)
@@ -653,7 +658,9 @@ def leg_label(
             stars = "★" * max(1, int(leg.get("confidence_stars") or 1))
         except (TypeError, ValueError):
             stars = "★"
-        parts += [stars, _units_text(leg)]
+        parts.append(stars)
+    if with_units:
+        parts.append(_units_text(leg))
     return " ".join(part for part in parts if part)
 
 
@@ -1359,11 +1366,14 @@ def _record_text(record: Any) -> str:
     return f"({wins}-{losses}{tail})"
 
 
-def _bet_leg_labels(row: dict[str, Any]) -> list[str]:
-    """The row's actual bet legs, side before total; PASS legs are omitted."""
+def _bet_leg_labels(row: dict[str, Any], *, with_stars: bool = True) -> list[str]:
+    """The row's actual bet legs, side before total; PASS legs are omitted.
+    ``with_stars=False`` is the arms' style: units carry the conviction
+    (operator-picked 2026-09-20), stars stay on the human voices whose
+    picks have no stake."""
     side, total = arm_legs(row)
     return [
-        leg_label(leg, kind=kind)
+        leg_label(leg, kind=kind, with_stars=with_stars, with_units=True)
         for kind, leg in (("side", side), ("total", total))
         if leg_is_bet(leg)
     ]
@@ -1389,8 +1399,10 @@ def pick_lines(
             head += f" {_esc(record)}"
         return head
 
-    def _legs(row: dict[str, Any]) -> str:
-        return " · ".join(_esc(bet) for bet in _bet_leg_labels(row))
+    def _legs(row: dict[str, Any], *, with_stars: bool = True) -> str:
+        return " · ".join(
+            _esc(bet) for bet in _bet_leg_labels(row, with_stars=with_stars)
+        )
 
     arms = [
         (
@@ -1399,7 +1411,7 @@ def pick_lines(
                 expert_id,
                 icon=f"{JUDGE_ICON} " if expert_id == JUDGE_EXPERT_ID else "",
             )
-            + f" · {_legs(row)}"
+            + f" · {_legs(row, with_stars=False)}"
         )
         for expert_id, row in desk.betting_arm_rows
     ]
@@ -1778,8 +1790,9 @@ def render_bet_card(
     team_abbrevs: dict[str, str] | None = None,
 ) -> str:
     """The one 🔔 message per bet (event+kind): a bold headline with the
-    selection, then a row per arm — God first — with stars, units and price.
-    Stars/units (and the headline's line) render announced→current when they
+    selection, then a row per arm — God first — with units and price (stars
+    left the cards 2026-09-20: units carry the arms' conviction).
+    Units (and the headline's line) render announced→current when they
     have drifted from ``arms_state``'s ``first`` baselines; the card is
     edited in place as numbers move, so it carries no timestamps. A
     withdrawn arm stays on the card as ✖ with its last stake struck
@@ -1852,13 +1865,6 @@ def render_bet_card(
             lines.append(f"<b>{name}</b> no bet{suffix}")
             continue
         first = (arms_state.get(expert_id) or {}).get("first") or {}
-        stars = _leg_stars(leg)
-        first_stars = first.get("stars")
-        stars_text = (
-            "★" * stars
-            if first_stars in (None, stars)
-            else "★" * int(first_stars) + "→" + "★" * stars
-        )
         units = _leg_units(leg)
         first_units = first.get("units")
         if units is None:
@@ -1867,7 +1873,10 @@ def render_bet_card(
             units_text = f"{units:g}u"
         else:
             units_text = f"{first_units:g}→{units:g}u"
-        parts = [stars_text, units_text, _price_text(leg.get("price"))]
+        # Stars left the cards 2026-09-20 (operator-picked): units carry
+        # the arms' conviction; the snapshot still records stars so an old
+        # baseline stays parseable.
+        parts = [units_text, _price_text(leg.get("price"))]
         row_text = f"<b>{name}</b> " + " ".join(part for part in parts if part)
         if expert_id != primary:
             own_selection = str(leg.get("selection") or "")
@@ -1903,8 +1912,10 @@ def _label_stake(label: Any) -> str:
     match = _LEGACY_ALERT_LABEL.match(str(label or ""))
     if not match:
         return ""
+    stars = match.group("stars") or ""
     units = match.group("units")
-    return match.group("stars") + (f" {units}u" if units else "")
+    units_text = f"{units}u" if units else ""
+    return f"{stars} {units_text}".strip() if stars else units_text
 
 
 def render_scores_notice(text: str) -> str:
@@ -2623,8 +2634,7 @@ def _sync_bet_card(
 
     Loud send for a new bet leg (including an arm joining, re-betting or
     flipping its selection — the stale card is deleted and reposted); a
-    silent in-place edit for every other change (units, stars, line,
-    price). Withdrawals are silent card state (operator-picked,
+    silent in-place edit for every other change (units, line, price). Withdrawals are silent card state (operator-picked,
     2026-09-13): the arm is marked ``withdrawn`` and rendered struck
     through, and once no arm bets the card flips to a 🔕 headline and is
     kept as the record — never deleted, never a separate message. Pre-card
@@ -2715,14 +2725,19 @@ def _sync_bet_card(
             loud = True  # a bet leg nobody has announced yet
         arms_state[expert_id] = {
             "opinion_id": str((rows[expert_id] or {}).get("opinion_id") or ""),
-            "leg": leg_label(leg, kind=kind),
+            "leg": leg_label(leg, kind=kind, with_stars=False, with_units=True),
             "first": first or snapshot,
         }
     if entry is None and not loud and not promoted_withdrawn:
+        def _sans_stars(label: Any) -> str:
+            # Legacy alert labels carry ★; fresh labels dropped stars
+            # 2026-09-20 — the format change alone must not read as a move.
+            return re.sub(r"\s*★+", "", str(label or ""))
+
         covered = all(
             expert_id in legacy
-            and arms_state[expert_id]["leg"]
-            == str(legacy[expert_id][1].get("leg") or "")
+            and _sans_stars(arms_state[expert_id]["leg"])
+            == _sans_stars(legacy[expert_id][1].get("leg"))
             for expert_id in betting
         )
         if covered:
