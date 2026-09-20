@@ -680,6 +680,20 @@ def row_summary(row: dict[str, Any], *, thesis_chars: int = THESIS_CHARS) -> str
         if p_home:
             parts.append(_esc(p_home))
         return " · ".join(parts)
+    side_leg = leg_from_json(row.get("side_pick_json"))
+    if (
+        str(row.get("pick_market") or "") != "side_and_total"
+        and leg_is_bet(side_leg)
+    ):
+        # Single-market side bet (e.g. a Cee spread cover).
+        parts = [_esc(leg_label(side_leg, kind="side"))]
+        p_home = _p_home(row)
+        if p_home:
+            parts.append(_esc(p_home))
+        thesis = _clip(row.get("thesis"), thesis_chars)
+        if thesis:
+            parts.append(f"“{_esc(thesis)}”")
+        return " · ".join(parts)
     winner = nickname(row.get("predicted_winner"))
     try:
         probability = float(row.get("home_win_probability"))
@@ -1250,6 +1264,10 @@ def voice_line(row: dict[str, Any]) -> str:
         )
     if str(row.get("pick_market") or "") == "side_and_total" and row.get("side_pick_json"):
         return f"<b>{name}</b> {_esc(_labeled_legs(row))}"
+    side_leg = leg_from_json(row.get("side_pick_json"))
+    if leg_is_bet(side_leg):
+        # Single-market side bet (e.g. a Cee spread cover).
+        return f"<b>{name}</b> {_esc(leg_label(side_leg, kind='side'))}"
     winner = nickname(row.get("predicted_winner"))
     try:
         probability = float(row.get("home_win_probability"))
@@ -1285,7 +1303,13 @@ def consensus_line(desk: GameDesk) -> str:
                 else ""
             )
         else:
-            winner = str(row.get("predicted_winner") or "").strip()
+            side_leg = leg_from_json(row.get("side_pick_json"))
+            if leg_is_bet(side_leg):
+                # A cover pick counts toward its cover team, not the
+                # game's predicted outright winner.
+                winner = str(side_leg.get("selection") or "").strip()
+            else:
+                winner = str(row.get("predicted_winner") or "").strip()
         if winner:
             counts[winner] = counts.get(winner, 0) + 1
     if not counts:

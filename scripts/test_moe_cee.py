@@ -299,15 +299,41 @@ class CeeInputTest(unittest.TestCase):
             0,
         )
 
-    def test_requires_full_game_moneyline(self) -> None:
+    def test_allows_spread_only_pick(self) -> None:
+        payload = build_cee_input(
+            _game(),
+            _history(),
+            [_spread_lean(), _prior_spread_lean()],
+            _predictions(),
+            cee_user_id=CEE_ID,
+        )
+        self.assertEqual(payload["primary_market"], "spread")
+        self.assertIsNone(payload["cee_submissions"]["moneyline"])
+        self.assertEqual(
+            payload["cee_submissions"]["spread"]["selected_side"],
+            "Seattle Seahawks",
+        )
+        self.assertEqual(
+            payload["market_relationship"]["status"], "spread_only"
+        )
+        # No current moneyline pick means no moneyline decision-pattern bucket,
+        # but the spread decision-pattern calibration is present.
+        self.assertNotIn(
+            "matching_decision_pattern", payload["nfl_calibration"]
+        )
+        self.assertIn(
+            "matching_spread_decision_pattern", payload["nfl_calibration"]
+        )
+
+    def test_requires_a_moneyline_or_spread_pick(self) -> None:
         with self.assertRaisesRegex(
             ValueError,
-            "no full-game moneyline pick",
+            "no full-game moneyline or spread pick",
         ):
             build_cee_input(
                 _game(),
                 [],
-                [_spread_lean()],
+                [],
                 _predictions(),
                 cee_user_id=CEE_ID,
             )
@@ -903,13 +929,156 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
                 create_fn=create_fn,
             )
 
+    def _spread_output(self) -> dict:
+        return {
+            "predicted_winner": "Seattle Seahawks",
+            "predicted_away_score": 20,
+            "predicted_home_score": 26,
+            "home_win_probability": 0.60,
+            "expected_home_margin": 6.0,
+            "confidence_stars": 2,
+            "thesis": {
+                "claim": (
+                    "Cee's lone pre-kickoff pick is a Seattle Seahawks spread "
+                    "cover in a spread_only game with no supplied moneyline "
+                    "stance."
+                ),
+                "evidence_paths": [
+                    "cee_submissions.spread",
+                    "market_relationship",
+                ],
+            },
+            "supporting_factors": [
+                {
+                    "claim": (
+                        "Cee projected the New England Patriots for 12 wins "
+                        "and the Seattle Seahawks for 11, a one_win season gap "
+                        "preferring the New England Patriots, so the Seattle "
+                        "Seahawks pick is inconsistent with the season "
+                        "ordering."
+                    ),
+                    "evidence_paths": ["season_predictions_at_submission"],
+                },
+                {
+                    "claim": "Cee's spread submission is a Seattle Seahawks -4 pick.",
+                    "evidence_paths": ["cee_submissions.spread"],
+                },
+                {
+                    "claim": (
+                        "That Seattle Seahawks spread pick is inconsistent "
+                        "with Cee's separately frozen spread season "
+                        "predictions."
+                    ),
+                    "evidence_paths": [
+                        "spread_season_predictions_at_submission"
+                    ],
+                },
+                {
+                    "claim": (
+                        "Cee's spread decision pattern is initial_only across "
+                        "1 submission."
+                    ),
+                    "evidence_paths": ["decision_history.spread"],
+                },
+                {
+                    "claim": (
+                        "Cee's calibration draws on 0 eligible resolved "
+                        "pre-kickoff moneyline picks."
+                    ),
+                    "evidence_paths": ["nfl_calibration"],
+                },
+                {
+                    "claim": (
+                        "Cee's resolved NFL moneyline record is 0-0 across 0 "
+                        "games."
+                    ),
+                    "evidence_paths": ["nfl_calibration.overall"],
+                },
+                {
+                    "claim": (
+                        "The matching inconsistent-pick bucket is 0-0 across "
+                        "0 games."
+                    ),
+                    "evidence_paths": ["nfl_calibration.matching_consistency"],
+                },
+                {
+                    "claim": (
+                        "Cee's matching initial_only ATS decision-pattern "
+                        "bucket is 0-0-1 across 1 game."
+                    ),
+                    "evidence_paths": [
+                        "nfl_calibration.matching_spread_decision_pattern"
+                    ],
+                },
+            ],
+            "counterarguments": [
+                {
+                    "claim": (
+                        "This is a spread_only game: Cee supplied no moneyline "
+                        "pick, so the outright-winner signal is unavailable."
+                    ),
+                    "evidence_paths": ["market_relationship"],
+                },
+                {
+                    "claim": (
+                        "At the spread submission Seattle was -4 at -110 with "
+                        "a 45.5 total."
+                    ),
+                    "evidence_paths": ["submission_markets.spread"],
+                },
+            ],
+            "no_signal_factors": [
+                {
+                    "claim": (
+                        "The matching one_win season-gap bucket has 0 games, "
+                        "so it provides no signal."
+                    ),
+                    "evidence_paths": ["nfl_calibration.matching_season_gap"],
+                },
+            ],
+            "discarded_considerations": [
+                "Unverified factual premises in Cee's rationale were treated "
+                "only as her stated belief."
+            ],
+        }
+
+    async def test_generates_spread_only_cited_opinion(self) -> None:
+        async def create_fn(**_kwargs):
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(text=json.dumps(self._spread_output()))
+                ]
+            )
+
+        store = MemoryStore()
+        row = await generate_opinion(
+            expert_id="cee",
+            game=_game(),
+            history=_history(),
+            leans=[_spread_lean(), _prior_spread_lean()],
+            win_predictions=_predictions(),
+            cee_user_id=CEE_ID,
+            store=store,
+            create_fn=create_fn,
+        )
+
+        self.assertEqual(row["generation_status"], "valid")
+        # The bet is Cee's cover pick, not the predicted outright winner.
+        self.assertEqual(row["pick_market"], "spread")
+        self.assertEqual(row["pick_side"], "Seattle Seahawks")
+        side_leg = json.loads(row["side_pick_json"])
+        self.assertEqual(side_leg["selection"], "Seattle Seahawks")
+        self.assertEqual(float(side_leg["line"]), -4.0)
+        # full_opinion states the cover pick, not "winner over loser".
+        self.assertIn("Seattle Seahawks -4", row["full_opinion"])
+
     def test_expert_configuration_is_versioned(self) -> None:
         expert = load_expert("cee")
 
-        self.assertEqual(expert["version"], 4)
-        self.assertEqual(expert["prompt_version"], 4)
+        self.assertEqual(expert["version"], 5)
+        self.assertEqual(expert["prompt_version"], 5)
         self.assertEqual(expert["output_schema_version"], 3)
-        self.assertEqual(expert["prompt_path"], "moe/prompts/cee/v4.md")
+        self.assertEqual(expert["prompt_path"], "moe/prompts/cee/v5.md")
         self.assertIn(
             "discarded-consideration string must contain no digits",
             expert["prompt_text"],

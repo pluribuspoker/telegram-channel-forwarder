@@ -1709,9 +1709,29 @@ def _render_cited_opinion(
             ),
         ]
 
-    lines = [
-        "Pick",
-        (
+    cover_leg: dict[str, Any] = {}
+    raw_side = str(opinion.get("side_pick_json") or "")
+    if raw_side:
+        try:
+            decoded = json.loads(raw_side)
+            cover_leg = decoded if isinstance(decoded, dict) else {}
+        except ValueError:
+            cover_leg = {}
+    is_cover_bet = (
+        str(cover_leg.get("selection") or "") not in ("", "PASS")
+        and cover_leg.get("line") not in (None, "")
+    )
+    if is_cover_bet:
+        pick_line = (
+            f"- {cover_leg['selection']} {float(cover_leg['line']):+g} "
+            f"(projected {away_team} {opinion['predicted_away_score']}, "
+            f"{home_team} {opinion['predicted_home_score']}, "
+            f"{home_probability:.0%} home win probability, "
+            "expected home margin "
+            f"{float(opinion['expected_home_margin']):+.1f}), {stars}"
+        )
+    else:
+        pick_line = (
             f"- {opinion['predicted_winner']} over "
             f"{home_team if opinion['predicted_winner'] == away_team else away_team}, "
             f"{away_team} {opinion['predicted_away_score']}, "
@@ -1719,7 +1739,10 @@ def _render_cited_opinion(
             f"{home_probability:.0%} home win probability, "
             f"expected home margin {float(opinion['expected_home_margin']):+.1f}, "
             f"{stars}"
-        ),
+        )
+    lines = [
+        "Pick",
+        pick_line,
         "",
         *section("Why the pick", opinion["supporting_factors"]),
         "",
@@ -1744,6 +1767,27 @@ def _normalize_cited_opinion(
     input_payload: dict[str, Any],
 ) -> dict[str, Any]:
     normalized = dict(opinion)
+    if (
+        input_payload.get("input_profile") == "cee_calibration"
+        and str(input_payload.get("primary_market") or "moneyline") == "spread"
+    ):
+        # Cee's bet is her against-the-spread cover pick, taken verbatim from
+        # her submission (not the model). The game point-estimate
+        # (predicted_winner/probability/margin) is separate and may differ.
+        spread_submission = input_payload["cee_submissions"]["spread"]
+        cover_side = str(spread_submission["selected_side"])
+        line = float(
+            input_payload["market_relationship"]["selected_spread_line"]
+        )
+        normalized["pick_market"] = "spread"
+        normalized["pick_side"] = cover_side
+        normalized["side_pick_json"] = _canonical_json(
+            {
+                "selection": cover_side,
+                "line": line,
+                "confidence_stars": int(opinion["confidence_stars"]),
+            }
+        )
     thesis = _normalize_cited_claim(
         opinion.get("thesis"),
         input_payload,
@@ -2981,44 +3025,78 @@ def validate_opinion(
             *opinion.get("counterarguments", []),
             *opinion.get("no_signal_factors", []),
         ]
+        primary_market = str(
+            schedule_input.get("primary_market") or "moneyline"
+        )
+        moneyline_submission = schedule_input["cee_submissions"].get(
+            "moneyline"
+        )
+        spread_submission = schedule_input["cee_submissions"].get("spread")
         supplied_pick_market = str(opinion.get("pick_market") or "")
         supplied_pick_side = str(opinion.get("pick_side") or "")
-        if supplied_pick_market not in {"", "straight_up"}:
-            raise ValueError("Cee opinion must remain straight_up")
-        if supplied_pick_side and supplied_pick_side != str(
-            opinion.get("predicted_winner") or ""
-        ):
-            raise ValueError(
-                "Cee pick_side must match predicted_winner"
+        if primary_market == "moneyline":
+            if supplied_pick_market not in {"", "straight_up"}:
+                raise ValueError("Cee opinion must remain straight_up")
+            if supplied_pick_side and supplied_pick_side != str(
+                opinion.get("predicted_winner") or ""
+            ):
+                raise ValueError("Cee pick_side must match predicted_winner")
+        else:
+            # Spread-primary: the bet is Cee's cover pick, which may differ
+            # from the game's predicted outright winner.
+            if supplied_pick_market != "spread":
+                raise ValueError(
+                    "Cee spread opinion must set pick_market=spread"
+                )
+            cover_side = str(
+                (spread_submission or {}).get("selected_side") or ""
             )
+            if supplied_pick_side != cover_side:
+                raise ValueError(
+                    f"Cee spread pick_side must be the cover team {cover_side}"
+                )
         cited_paths = {
             str(evidence["path"])
             for claim in claims
             for evidence in claim.get("evidence", [])
         }
-        required_paths = {
-            "cee_submissions.moneyline",
-            "decision_history.moneyline",
-            "season_predictions_at_submission",
-            "market_relationship",
-            "submission_markets.moneyline",
-            "nfl_calibration",
-            "nfl_calibration.overall",
-            "nfl_calibration.matching_consistency",
-            "nfl_calibration.matching_season_gap",
-            "nfl_calibration.matching_decision_pattern",
-        }
-        spread_submission = schedule_input["cee_submissions"].get("spread")
-        if spread_submission is not None:
-            required_paths.update(
-                {
-                    "cee_submissions.spread",
-                    "decision_history.spread",
-                    "spread_season_predictions_at_submission",
-                    "submission_markets.spread",
-                    "nfl_calibration.matching_spread_decision_pattern",
-                }
-            )
+        if primary_market == "moneyline":
+            required_paths = {
+                "cee_submissions.moneyline",
+                "decision_history.moneyline",
+                "season_predictions_at_submission",
+                "market_relationship",
+                "submission_markets.moneyline",
+                "nfl_calibration",
+                "nfl_calibration.overall",
+                "nfl_calibration.matching_consistency",
+                "nfl_calibration.matching_season_gap",
+                "nfl_calibration.matching_decision_pattern",
+            }
+            if spread_submission is not None:
+                required_paths.update(
+                    {
+                        "cee_submissions.spread",
+                        "decision_history.spread",
+                        "spread_season_predictions_at_submission",
+                        "submission_markets.spread",
+                        "nfl_calibration.matching_spread_decision_pattern",
+                    }
+                )
+        else:
+            required_paths = {
+                "cee_submissions.spread",
+                "decision_history.spread",
+                "spread_season_predictions_at_submission",
+                "season_predictions_at_submission",
+                "market_relationship",
+                "submission_markets.spread",
+                "nfl_calibration",
+                "nfl_calibration.overall",
+                "nfl_calibration.matching_consistency",
+                "nfl_calibration.matching_season_gap",
+                "nfl_calibration.matching_spread_decision_pattern",
+            }
         missing = required_paths - cited_paths
         if missing:
             raise ValueError(
@@ -3051,14 +3129,15 @@ def validate_opinion(
             raise ValueError(
                 f"Cee opinion must state consistency={consistency}"
             )
+        primary_submission = (
+            moneyline_submission
+            if primary_market == "moneyline"
+            else spread_submission
+        )
         for required_text, label in (
             (
-                str(
-                    schedule_input["cee_submissions"]["moneyline"][
-                        "selected_side"
-                    ]
-                ),
-                "moneyline pick",
+                str(primary_submission["selected_side"]),
+                f"{primary_market} pick",
             ),
             (str(season["season_preferred_side"]), "season preferred side"),
             (str(season["season_gap_bucket"]), "season gap bucket"),
@@ -3111,9 +3190,11 @@ def validate_opinion(
                     f"{spread_line_text}"
                 )
         decision_history = schedule_input["decision_history"]
-        decision_views = [
-            ("decision_history.moneyline", decision_history["moneyline"]),
-        ]
+        decision_views = []
+        if moneyline_submission is not None:
+            decision_views.append(
+                ("decision_history.moneyline", decision_history["moneyline"])
+            )
         if spread_submission is not None:
             decision_views.append(
                 ("decision_history.spread", decision_history["spread"])
@@ -3162,12 +3243,15 @@ def validate_opinion(
                 "nfl_calibration.matching_season_gap",
                 calibration["matching_season_gap"],
             ),
-            (
-                "nfl_calibration.matching_decision_pattern",
-                calibration["matching_decision_pattern"],
-            ),
         ]
-        if spread_submission is not None:
+        if "matching_decision_pattern" in calibration:
+            calibration_views.append(
+                (
+                    "nfl_calibration.matching_decision_pattern",
+                    calibration["matching_decision_pattern"],
+                )
+            )
+        if "matching_spread_decision_pattern" in calibration:
             calibration_views.append(
                 (
                     "nfl_calibration.matching_spread_decision_pattern",
@@ -5032,6 +5116,34 @@ def _expert_display_name(row: dict[str, Any]) -> str:
     return str(row.get("expert_name") or row.get("expert_id") or "Expert")
 
 
+def _single_side_leg(row: dict[str, Any]) -> dict[str, Any] | None:
+    """A bettable single-market side leg (e.g. a Cee spread cover), else None.
+
+    Distinct from the two-leg ``side_and_total`` aggregator rows: this is a
+    side-only voice whose bet differs from a plain ``predicted_winner``.
+    """
+    if str(row.get("pick_market") or "") == "side_and_total":
+        return None
+    raw = str(row.get("side_pick_json") or "")
+    if not raw:
+        return None
+    try:
+        leg = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(leg, dict):
+        return None
+    if str(leg.get("selection") or "") in ("", "PASS") or leg.get(
+        "line"
+    ) in (None, ""):
+        return None
+    return leg
+
+
+def _side_leg_label(leg: dict[str, Any]) -> str:
+    return f"{leg['selection']} {float(leg['line']):+g}"
+
+
 def opinion_summary(
     game: dict[str, Any],
     rows: Iterable[dict[str, Any]],
@@ -5087,6 +5199,29 @@ def opinion_summary(
                 f"Total: {html.escape(total_label)} {total_stars} · "
                 f"score {int(row['predicted_away_score'])}-"
                 f"{int(row['predicted_home_score'])}"
+            )
+            lines.append(html.escape(str(row["thesis"])))
+            buttons.append(
+                [
+                    Button.inline(
+                        _expert_display_name(row),
+                        (
+                            f"moe:expert:{row['expert_id']}:"
+                            f"{callback_event_id}:0"
+                        ).encode(),
+                    )
+                ]
+            )
+            continue
+        cover_leg = _single_side_leg(row)
+        if cover_leg is not None:
+            leg_stars = "★" * int(
+                cover_leg.get("confidence_stars") or row["confidence_stars"]
+            )
+            lines.append(
+                f"<b>{html.escape(_expert_display_name(row))}</b> "
+                f"· <code>{html.escape(str(row['model']))}</code>: "
+                f"{html.escape(_side_leg_label(cover_leg))} {leg_stars}"
             )
             lines.append(html.escape(str(row["thesis"])))
             buttons.append(
@@ -5198,6 +5333,26 @@ def opinion_model_picker(
                 f"{'★' * int(side['confidence_stars'])} · "
                 f"Total {html.escape(total_label)} "
                 f"{'★' * int(total['confidence_stars'])} · "
+                f"score {int(row['predicted_away_score'])}-"
+                f"{int(row['predicted_home_score'])}"
+            )
+            buttons.append(
+                [
+                    Button.inline(
+                        model,
+                        f"moe:opinion:{row['opinion_id']}:0".encode(),
+                    )
+                ]
+            )
+            continue
+        cover_leg = _single_side_leg(row)
+        if cover_leg is not None:
+            leg_stars = "★" * int(
+                cover_leg.get("confidence_stars") or row["confidence_stars"]
+            )
+            lines.append(
+                f"<b>{html.escape(model)}</b> — "
+                f"{html.escape(_side_leg_label(cover_leg))} {leg_stars} · "
                 f"score {int(row['predicted_away_score'])}-"
                 f"{int(row['predicted_home_score'])}"
             )
@@ -5324,6 +5479,21 @@ def opinion_detail(
             f"{'★' * int(side['confidence_stars'])}\n"
             f"<b>Total:</b> {html.escape(total_label)} "
             f"{'★' * int(total['confidence_stars'])}\n"
+            f"<b>Predicted score:</b> "
+            f"{html.escape(str(row['away_team']))} {away_score} — "
+            f"{html.escape(str(row['home_team']))} {home_score}\n"
+            f"<b>Home win probability:</b> {home_probability:.0%}\n"
+            f"<b>Expected home margin:</b> {margin:+.1f}\n\n"
+        )
+    elif _single_side_leg(row) is not None:
+        cover_leg = _single_side_leg(row)
+        leg_stars = "★" * int(
+            cover_leg.get("confidence_stars") or row["confidence_stars"]
+        )
+        heading = (
+            f"🧠 <b>{html.escape(_expert_display_name(row))}</b>\n\n"
+            f"<b>Pick:</b> {html.escape(_side_leg_label(cover_leg))} "
+            f"{leg_stars}\n"
             f"<b>Predicted score:</b> "
             f"{html.escape(str(row['away_team']))} {away_score} — "
             f"{html.escape(str(row['home_team']))} {home_score}\n"

@@ -115,9 +115,9 @@ experts:
     name: Cee Expert
     mode: agent
     refresh_on_human_input: true
-    version: 4
-    prompt_version: 4
-    prompt: prompts/cee/v4.md
+    version: 5
+    prompt_version: 5
+    prompt: prompts/cee/v5.md
     input_profile: cee_calibration
     output_schema_version: 3
     default_model: claude-opus-4-8

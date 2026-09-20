@@ -456,6 +456,28 @@ class RenderTests(unittest.TestCase):
             leg_label(OVER, kind="total", with_stars=False), "Over 44.5 (-105)"
         )
 
+    def test_voice_line_renders_a_cee_spread_cover(self) -> None:
+        cee = row(
+            "op-cee",
+            "evt",
+            "cee",
+            status="approved",
+            pick_market="spread",
+            pick_side="New England Patriots",
+            side_pick_json=json.dumps(
+                {
+                    "selection": "New England Patriots",
+                    "line": 4.0,
+                    "confidence_stars": 2,
+                }
+            ),
+        )
+        line = moe_desk.voice_line(cee)
+        # Renders Cee's cover pick, not the game's predicted outright winner.
+        self.assertIn("Patriots +4", line)
+        self.assertNotIn("Seahawks", line)
+        self.assertNotIn("%", line)
+
     def test_picks_card_lists_god_and_every_approved_voice(self) -> None:
         rows = committee(arms_status="approved")
         rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)

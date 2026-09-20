@@ -183,7 +183,7 @@ def _calibration(
     predictions: Iterable[dict[str, Any]],
     history: Iterable[dict[str, Any]],
     user_id: str,
-    current_decision_pattern: str,
+    current_decision_pattern: str | None,
     current_spread: dict[str, Any] | None,
     current_spread_decision_pattern: str | None,
 ) -> dict[str, Any]:
@@ -254,7 +254,10 @@ def _calibration(
             == current_season["season_gap_bucket"]
         ):
             matching_gap.append(verdict)
-        if decision["decision_pattern"] == current_decision_pattern:
+        if (
+            current_decision_pattern is not None
+            and decision["decision_pattern"] == current_decision_pattern
+        ):
             matching_decision_pattern.append(verdict)
     calibration = {
         "method": (
@@ -274,11 +277,14 @@ def _calibration(
             "season_gap_bucket": current_season["season_gap_bucket"],
             **_record(matching_gap),
         },
-        "matching_decision_pattern": {
+    }
+    # A spread-only pick has no current moneyline decision pattern; the
+    # spread decision pattern below carries the decision-pattern signal.
+    if current_decision_pattern is not None:
+        calibration["matching_decision_pattern"] = {
             "decision_pattern": current_decision_pattern,
             **_record(matching_decision_pattern),
-        },
-    }
+        }
     if (
         current_spread is not None
         and current_spread_decision_pattern is not None
@@ -507,9 +513,26 @@ def _decision_history(
 def _market_relationship(
     *,
     game: dict[str, Any],
-    moneyline: dict[str, Any],
+    moneyline: dict[str, Any] | None,
     spread: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    if moneyline is None:
+        # Spread-only pick: the cover side IS Cee's stance; there is no
+        # outright moneyline position to relate it to.
+        if spread is None:
+            raise ValueError(
+                "Cee market relationship requires at least one submission"
+            )
+        spread_side = str(spread["side"])
+        selected_spread_line = _selected_spread_terms(spread)["line"]
+        if selected_spread_line is None:
+            raise ValueError("Cee spread submission has no spread line")
+        return {
+            "status": "spread_only",
+            "moneyline_side": None,
+            "spread_side": spread_side,
+            "selected_spread_line": selected_spread_line,
+        }
     moneyline_side = str(moneyline["side"])
     if spread is None:
         return {
@@ -544,34 +567,45 @@ def build_cee_input(
     *,
     cee_user_id: str,
 ) -> dict[str, Any]:
-    """Build a whitelisted Cee Expert input for one game."""
+    """Build a whitelisted Cee Expert input for one game.
+
+    Cee may express her stance as a full-game moneyline pick, a full-game
+    spread pick, or both. The PRIMARY pick is the moneyline when she made one,
+    otherwise the spread; the opinion's market follows the primary. This keeps
+    a moneyline-only game byte-identical to the historical behaviour while
+    allowing a spread-only pick to produce an against-the-spread opinion.
+    """
     moneyline_submissions = _eligible_submissions(
         leans,
         game=game,
         user_id=cee_user_id,
         market="moneyline",
     )
-    if not moneyline_submissions:
-        raise ValueError("Cee has no full-game moneyline pick for this event")
-    moneyline = moneyline_submissions[-1]
     spread_submissions = _eligible_submissions(
         leans,
         game=game,
         user_id=cee_user_id,
         market="spread",
     )
+    if not moneyline_submissions and not spread_submissions:
+        raise ValueError(
+            "Cee has no full-game moneyline or spread pick for this event"
+        )
+    moneyline = moneyline_submissions[-1] if moneyline_submissions else None
     spread = spread_submissions[-1] if spread_submissions else None
-    moneyline_decision = _decision_history(
-        moneyline_submissions,
-        market="moneyline",
+    primary_market = "moneyline" if moneyline is not None else "spread"
+    primary = moneyline if moneyline is not None else spread
+    moneyline_decision = (
+        _decision_history(moneyline_submissions, market="moneyline")
+        if moneyline_submissions
+        else None
     )
-    assert moneyline_decision is not None
     spread_decision = _decision_history(
         spread_submissions,
         market="spread",
     )
     season = _season_context(
-        moneyline,
+        primary,
         win_predictions,
         user_id=cee_user_id,
     )
@@ -590,14 +624,16 @@ def build_cee_input(
             "status": "unavailable_before_submission",
         }
     calibration = _calibration(
-        current=moneyline,
+        current=primary,
         current_season=season,
         leans=leans,
         predictions=win_predictions,
         history=history,
         user_id=cee_user_id,
-        current_decision_pattern=str(
-            moneyline_decision["decision_pattern"]
+        current_decision_pattern=(
+            str(moneyline_decision["decision_pattern"])
+            if moneyline_decision is not None
+            else None
         ),
         current_spread=spread,
         current_spread_decision_pattern=(
@@ -606,10 +642,13 @@ def build_cee_input(
             else None
         ),
     )
-    moneyline_market = _submission_market(moneyline)
+    moneyline_market = (
+        _submission_market(moneyline) if moneyline is not None else None
+    )
     spread_market = _submission_market(spread) if spread is not None else None
     return {
         "input_profile": "cee_calibration",
+        "primary_market": primary_market,
         "game": {
             "event_id": str(game["event_id"]),
             "season": int(game["season"]),
@@ -623,9 +662,10 @@ def build_cee_input(
             "home_team": str(game["home_team"]),
         },
         "cee_submissions": {
-            "moneyline": _submission_summary(
-                moneyline,
-                market="moneyline",
+            "moneyline": (
+                _submission_summary(moneyline, market="moneyline")
+                if moneyline is not None
+                else None
             ),
             "spread": (
                 _submission_summary(spread, market="spread")
