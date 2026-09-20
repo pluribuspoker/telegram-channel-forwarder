@@ -514,6 +514,22 @@ class AuditLog:
         # parlay that settled on one lost leg still passes its other (voided /
         # pending) legs so the whole ticket can be shown and priced.
         is_parlay = any(p.get("is_parlay_leg") for p, _, _o in pick_results)
+
+        # The ticket's verdict comes from ITS legs alone, by the one rule for
+        # the whole codebase (tracker_grading._overall_verdict): any LOSS ends
+        # it, pushed legs drop out (WIN+PUSH is a WIN, only all-push is a PUSH),
+        # and a pending leg holds it open. A ticket with no settled result must
+        # not render at all — a standalone sibling resolving first used to drag
+        # the untouched ticket in as a bogus "❓ … Parlay:" line (2026-09-20);
+        # the straight legs broadcast below and the ticket waits its turn.
+        parlay_all = [(p, v, o) for p, v, o in pick_results if p.get("is_parlay_leg")]
+        parlay_verdict = _overall_verdict(parlay_all) if parlay_all else "UNKNOWN"
+        if is_parlay and parlay_verdict not in ("WIN", "LOSS", "PUSH"):
+            is_parlay = False
+            resolved = [(p, v, o) for p, v, o in resolved if not p.get("is_parlay_leg")]
+            if not resolved:
+                return
+
         picks = [(_format_pick(p), v, _fmt_odds(o)) for p, v, o in resolved]
 
         def _pick_line(desc: str, verdict: str, odds_str: str) -> str:
@@ -522,25 +538,13 @@ class AuditLog:
 
         _parlay_combined_odds = parlay_combined_odds
 
-        def _overall_emoji(verdicts_only: list[str]) -> str:
-            # One rule for the whole codebase (tracker_grading._overall_verdict):
-            # pushed legs drop out of the ticket, so WIN+PUSH is a WIN and only
-            # an all-push parlay is a PUSH.
-            overall = _overall_verdict(
-                [({"is_parlay_leg": True}, v) for v in verdicts_only]
-            )
-            return VERDICT_EMOJI.get(overall, VERDICT_EMOJI["UNKNOWN"])
-
         # Check is_parlay BEFORE the single-pick case: a parlay that settled on
         # a single lost leg (siblings still pending/dropped) has len(picks)==1 but
         # must still render as a Parlay, not a lone straight pick.
         if is_parlay:
             # One ticket: list every leg and price the whole parlay from every
-            # leg's odds — not just the individually-resolved legs. The verdict
-            # emoji still comes from the resolved legs (a LOSS settles it).
-            parlay_all = [(p, v, o) for p, v, o in pick_results if p.get("is_parlay_leg")]
-            verdicts_only = [v for _, v, _ in parlay_all if v in ("WIN", "LOSS", "PUSH")]
-            overall_emoji = _overall_emoji(verdicts_only)
+            # leg's odds — not just the individually-resolved legs.
+            overall_emoji = VERDICT_EMOJI[parlay_verdict]
             # A pushed leg is voided from the ticket, so it can't multiply into
             # the payout — price only the live legs (all-push → no price at all).
             combined = _parlay_combined_odds(
@@ -555,7 +559,18 @@ class AuditLog:
                 e(_format_pick(p)) + (" ♻️" if v == "PUSH" else "")
                 for p, v, _ in parlay_all
             )
-            text = f"{overall_emoji} {capper_linked} · Parlay: {legs}{combined_part}"
+            ticket_line = f"Parlay: {legs}{combined_part}"
+            straight = [(_format_pick(p), v, _fmt_odds(o)) for p, v, o in resolved
+                        if not p.get("is_parlay_leg")]
+            if straight:
+                # Standalone picks sharing the message are separate bets: they
+                # keep their own lines and the settled ticket joins as one more,
+                # all under the one capper header (the multi-pick layout).
+                lines = [_pick_line(d, v, o) for d, v, o in straight]
+                lines.append(f"{overall_emoji} {ticket_line}")
+                text = capper_linked + "\n" + "\n".join(lines)
+            else:
+                text = f"{overall_emoji} {capper_linked} · {ticket_line}"
         elif len(picks) == 1:
             desc, verdict, odds_str = picks[0]
             emoji = VERDICT_EMOJI.get(verdict, "")

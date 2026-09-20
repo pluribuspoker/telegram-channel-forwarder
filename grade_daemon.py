@@ -262,21 +262,100 @@ class _ESPNCache:
 # ─── Main loop ───────────────────────────────────────────────────────────────
 
 def _parlay_broadcast_legs(picks, leg_verdicts, odds_by_pick, default_sport):
-    """Every leg of a parlay with its current verdict + odds, in message order.
+    """Every PARLAY leg of the ticket with its current verdict + odds, in message order.
 
-    A parlay is one ticket, so its broadcast must show all legs and the combined
-    price — even legs that aren't individually resolved (e.g. a leg voided when a
-    sibling already lost). Resolved legs carry their WIN/LOSS/PUSH verdict; the
-    rest carry PENDING so broadcast_results lists + prices them without counting
-    them toward the settled result.
+    A parlay is one ticket, so its broadcast must show all its legs and the
+    combined price — even legs that aren't individually resolved (e.g. a leg
+    voided when a sibling already lost). Resolved legs carry their WIN/LOSS/PUSH
+    verdict; the rest carry PENDING so broadcast_results lists + prices them
+    without counting them toward the settled result. Standalone picks sharing
+    the message are separate bets, not part of the ticket — they broadcast as
+    their own lines (see _bc_results_for), never inside it.
     """
     out = []
     for i, pick in enumerate(picks):
+        if not pick.get("is_parlay_leg"):
+            continue
         lv = leg_verdicts.get(str(i)) or {}
         if not pick.get("sport"):
             pick["sport"] = lv.get("sport", default_sport)
         out.append((pick, lv.get("verdict", "PENDING"), odds_by_pick.get(str(i), {}).get("odds")))
     return out
+
+
+def _parlay_lost(picks, leg_verdicts) -> bool:
+    """True when the parlay ticket is dead: one of its OWN legs lost.
+
+    Only legs with is_parlay_leg count — a standalone pick sharing the message
+    is a separate bet, and its loss must not kill (or settle) the ticket. The
+    2026-09-20 Midwest Mike incident was the inverse read: any leg's LOSS
+    settled "the parlay", so a lost ticket voided a still-unplayed standalone
+    sibling, and (in older entries) a lost standalone voided a live ticket.
+    """
+    return any(
+        (leg_verdicts.get(str(i)) or {}).get("verdict") == "LOSS"
+        for i, p in enumerate(picks) if p.get("is_parlay_leg")
+    )
+
+
+def _ticket_settled(picks, leg_verdicts) -> bool:
+    """True when the parlay ticket (judged on its OWN legs only) has a final result.
+
+    One rule for the whole codebase (tracker_grading._overall_verdict): any leg
+    LOSS ends the ticket, pushes drop out, a still-pending leg holds it open.
+    Standalone siblings in the message are excluded on both sides: they neither
+    settle the ticket early (the ❓-parlay broadcast of 2026-09-20) nor hold a
+    decided ticket hostage to an unrelated late game.
+    """
+    legs = [(p, (leg_verdicts.get(str(i)) or {}).get("verdict") or "PENDING")
+            for i, p in enumerate(picks) if p.get("is_parlay_leg")]
+    return bool(legs) and _overall_verdict(legs) in ("WIN", "LOSS", "PUSH")
+
+
+def _void_moot_parlay_legs(picks, leg_verdicts, default_sport, msg_date) -> bool:
+    """Mark the dead ticket's still-pending PARLAY legs VOID + broadcasted.
+
+    A parlay settled on a lost leg leaves its sibling legs moot: they will never
+    resolve or broadcast, and without a terminal verdict the tracker's
+    fully-broadcast skip never fires and it re-records the dead parlay to the
+    audit channel every run. Only the ticket's own legs are voided — a
+    standalone pick in the same message is a live bet that still needs grading.
+    Returns True when anything was written.
+    """
+    dirty = False
+    for i, pick in enumerate(picks):
+        if not pick.get("is_parlay_leg"):
+            continue
+        lv = leg_verdicts.get(str(i))
+        if (not lv or lv.get("verdict") not in ("WIN", "LOSS", "PUSH")) \
+                and not (lv and lv.get("broadcasted")):
+            leg_verdicts[str(i)] = {
+                "verdict": "VOID", "calc": "",
+                "sport": pick.get("sport") or default_sport,
+                "game_date": msg_date, "broadcasted": True,
+            }
+            dirty = True
+    return dirty
+
+
+def _bc_results_for(picks, newly_indices, nr_results, leg_verdicts, odds_by_pick,
+                    default_sport, include_ticket):
+    """Broadcast payload for this cycle's newly-settled legs of one message.
+
+    Standalone picks always ride as their own (pick, verdict, odds) lines. The
+    parlay ticket — every parlay leg via _parlay_broadcast_legs, so the result
+    shows the whole ticket and its combined price — joins only when one of ITS
+    legs is among the newly settled AND the ticket itself is settled
+    (include_ticket): a standalone sibling resolving first must not drag a
+    still-pending ticket into the broadcast as a bogus ❓ result, and a lone
+    ticket leg winning early broadcasts nothing until the ticket decides.
+    """
+    standalone = [r for i, r in zip(newly_indices, nr_results)
+                  if not picks[i].get("is_parlay_leg")]
+    if include_ticket and any(picks[i].get("is_parlay_leg") for i in newly_indices):
+        return standalone + _parlay_broadcast_legs(picks, leg_verdicts, odds_by_pick,
+                                                   default_sport)
+    return standalone
 
 
 # ─── Same-game broadcast grouping ────────────────────────────────────────────
@@ -454,6 +533,7 @@ def _queue_broadcast(
         "capper": capper, "reply_to_id": reply_to_id,
         "bc_results": bc_results, "sheets_results": sheets_results,
         "leg_indices": leg_indices, "mark_all_resolved": mark_all_resolved,
+        "parlay_legs": [i for i, p in enumerate(picks) if p.get("is_parlay_leg")],
         "html_text": html_text, "msg_date": msg_date,
         "game_key": None, "matchup": [], "event": None, "leg_games": leg_games,
     })
@@ -469,13 +549,17 @@ def _mark_broadcasted(cache: dict, item: dict) -> None:
         leg = leg_verdicts.get(str(i))
         if isinstance(leg, dict):
             leg["broadcasted"] = True
-    # A parlay broadcasts as ONE ticket covering every leg, so mark every resolved
-    # leg — not just the ones resolved this cycle. Otherwise an already-resolved
-    # sibling (e.g. an over that hit mid-game and was saved WIN/broadcasted=False
-    # while the parlay waited on its other leg) is left unbroadcast and the next
-    # cycle's broadcast-only path re-posts the identical ticket.
+    # A parlay broadcasts as ONE ticket covering every one of ITS legs, so mark
+    # every resolved parlay leg — not just the ones resolved this cycle.
+    # Otherwise an already-resolved sibling (e.g. an over that hit mid-game and
+    # was saved WIN/broadcasted=False while the parlay waited on its other leg)
+    # is left unbroadcast and the next cycle's broadcast-only path re-posts the
+    # identical ticket. Scoped to the ticket's legs: a resolved standalone pick
+    # in the same message that hasn't actually broadcast (e.g. its edit failed
+    # last cycle) must not be silently marked done by the ticket going out.
     if item["mark_all_resolved"]:
-        for leg in leg_verdicts.values():
+        for i in item.get("parlay_legs", []):
+            leg = leg_verdicts.get(str(i))
             if isinstance(leg, dict) and leg.get("verdict") in ("WIN", "LOSS", "PUSH"):
                 leg["broadcasted"] = True
     entry["leg_verdicts"] = leg_verdicts
@@ -638,24 +722,23 @@ async def _grade_cycle(
         capper = entry.get("capper_name", "")
         reply_to_id = entry.get("reply_to_id")  # pre-cached by tracker for threaded broadcasts
 
-        # A parlay is decided the instant any leg loses — the remaining legs
-        # are moot. Treat them as needing no grading so the parlay settles now
-        # (routes through the all-resolved broadcast path below) instead of
-        # waiting forever on a pending sibling. Also stops a later-resolving
-        # pending leg from broadcasting a second, redundant result.
+        # A parlay is decided the instant any of ITS legs loses — the remaining
+        # PARLAY legs are moot. Treat them as needing no grading so the parlay
+        # settles now (routes through the all-resolved broadcast path below)
+        # instead of waiting forever on a pending sibling. Also stops a
+        # later-resolving pending leg from broadcasting a second, redundant
+        # result. Standalone picks sharing the message are separate bets: they
+        # neither settle the ticket nor die with it (_parlay_lost).
         is_parlay_entry = any(p.get("is_parlay_leg") for p in picks)
-        parlay_lost = is_parlay_entry and any(
-            leg_verdicts.get(str(i), {}).get("verdict") == "LOSS"
-            for i in range(len(picks))
-        )
+        parlay_lost = is_parlay_entry and _parlay_lost(picks, leg_verdicts)
 
         # Figure out which legs still need grading
         unresolved_indices = []
         for i in range(len(picks)):
             leg = leg_verdicts.get(str(i))
             if not leg or leg.get("verdict") not in ("WIN", "LOSS", "PUSH"):
-                if parlay_lost:
-                    continue  # parlay already lost — pending leg is moot
+                if parlay_lost and picks[i].get("is_parlay_leg"):
+                    continue  # parlay already lost — its pending leg is moot
                 unresolved_indices.append(i)
 
         # Nothing here will ever resolve — retire instead of re-grading forever.
@@ -671,23 +754,14 @@ async def _grade_cycle(
                 continue
 
         if not unresolved_indices:
-            # A parlay settled on a lost leg: its still-pending legs are moot and
-            # will never resolve or broadcast. Mark them VOID + broadcasted so
-            # every leg counts as broadcast — otherwise the tracker's
-            # fully-broadcast skip never fires and it re-records the dead parlay
-            # to the audit channel every run.
-            if parlay_lost:
-                for i in range(len(picks)):
-                    lv = leg_verdicts.get(str(i))
-                    if (not lv or lv.get("verdict") not in ("WIN", "LOSS", "PUSH")) \
-                            and not (lv and lv.get("broadcasted")):
-                        leg_verdicts[str(i)] = {
-                            "verdict": "VOID", "calc": "",
-                            "sport": picks[i].get("sport") or sport,
-                            "game_date": msg_date, "broadcasted": True,
-                        }
-                        entry["leg_verdicts"] = leg_verdicts
-                        dirty = True
+            # A parlay settled on a lost leg: its still-pending PARLAY legs are
+            # moot and will never resolve or broadcast. Mark them VOID +
+            # broadcasted so every leg counts as broadcast — otherwise the
+            # tracker's fully-broadcast skip never fires and it re-records the
+            # dead parlay to the audit channel every run.
+            if parlay_lost and _void_moot_parlay_legs(picks, leg_verdicts, sport, msg_date):
+                entry["leg_verdicts"] = leg_verdicts
+                dirty = True
 
             # ── Broadcast picks graded by tracker but not yet broadcast ────
             unbroadcast = [
@@ -732,11 +806,13 @@ async def _grade_cycle(
                     if not pick.get("sport"):
                         pick["sport"] = lv.get("sport", sport)
                     nr_pick_results.append((pick, lv["verdict"], odds_by_pick.get(str(i), {}).get("odds")))
-                # A parlay broadcasts as one ticket — send all legs so the result
-                # shows every leg and the combined price, not just the settled one.
-                bc_results = (
-                    _parlay_broadcast_legs(picks, leg_verdicts, odds_by_pick, sport)
-                    if any(p.get("is_parlay_leg") for p in picks) else nr_pick_results
+                # Standalone legs broadcast as their own lines; the parlay ticket
+                # (all its legs + combined price) joins only when one of its legs
+                # is among the newly-broadcast. Everything is resolved or moot on
+                # this path, so a ticket that joins is by definition settled.
+                bc_results = _bc_results_for(
+                    picks, list(unbroadcast), nr_pick_results,
+                    leg_verdicts, odds_by_pick, sport, include_ticket=True,
                 )
                 # Queued, not sent: the end-of-cycle flush marks these legs
                 # broadcasted and persists BEFORE sending, so the "can never
@@ -853,13 +929,18 @@ async def _grade_cycle(
         is_parlay = any(p.get("is_parlay_leg") for p in picks)
         overall = _overall_verdict(all_verdicts)
         parlay_pending = is_parlay and overall == "PENDING"
+        # The ticket settles on its OWN legs (_ticket_settled) — a pending
+        # standalone sibling in the message must not hold a decided ticket
+        # open, and a settled standalone must not settle the ticket.
+        ticket_settled = is_parlay and _ticket_settled(picks, leg_verdicts)
 
-        # For parlays, only edit when all legs resolved (or a LOSS settles it)
+        # For parlays, only edit when the ticket is settled (a LOSS settles it)
         newly_resolved_non_parlay = [
             (i, p, v, c, ps, gd) for i, p, v, c, ps, gd in newly_resolved
             if not p.get("is_parlay_leg")
         ]
-        parlay_blocks_edit = parlay_pending and not newly_resolved_non_parlay
+        parlay_blocks_edit = (is_parlay and not ticket_settled
+                              and not newly_resolved_non_parlay)
 
         if parlay_blocks_edit:
             # Save resolved legs but don't edit/broadcast yet
@@ -945,11 +1026,14 @@ async def _grade_cycle(
                     pick["sport"] = ps
                 nr_pick_results.append((pick, verdict, odds_by_pick.get(str(i), {}).get("odds")))
 
-            # A parlay broadcasts as one ticket — send all legs so the result
-            # shows every leg and the combined price, not just the settled one.
-            bc_results = (
-                _parlay_broadcast_legs(picks, leg_verdicts, odds_by_pick, sport)
-                if is_parlay else nr_pick_results
+            # Standalone legs broadcast as their own lines; the settled parlay
+            # ticket (all its legs + combined price) joins only when one of its
+            # legs newly resolved. An unsettled ticket stays out entirely — the
+            # 2026-09-20 ❓-parlay broadcast was a standalone sibling's WIN
+            # dragging the untouched ticket into the result.
+            bc_results = _bc_results_for(
+                picks, [i for i, *_ in newly_resolved], nr_pick_results,
+                leg_verdicts, odds_by_pick, sport, include_ticket=ticket_settled,
             )
             _queue_broadcast(
                 pending_broadcasts,
@@ -957,10 +1041,10 @@ async def _grade_cycle(
                 capper=capper, reply_to_id=reply_to_id,
                 bc_results=bc_results, sheets_results=nr_pick_results,
                 leg_indices=[i for i, *_ in newly_resolved],
-                # Guard on `not parlay_pending` so a still-undecided parlay (mixed
-                # with a straight pick that broadcasts now) isn't prematurely marked
-                # and silently suppressed.
-                mark_all_resolved=is_parlay and not parlay_pending,
+                # Guard on ticket_settled so a still-undecided parlay (mixed
+                # with a straight pick that broadcasts now) isn't prematurely
+                # marked and silently suppressed.
+                mark_all_resolved=ticket_settled,
                 html_text=html_text, msg_date=msg_date, sport=sport,
                 picks=picks, leg_verdicts=leg_verdicts, odds_by_pick=odds_by_pick,
             )
