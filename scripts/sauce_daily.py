@@ -719,22 +719,12 @@ async def main():
     preview_path.parent.mkdir(parents=True, exist_ok=True)
     preview_path.write_bytes(img)
 
-    # Watcher sends announce the picks that triggered them (image caption)
+    # Watcher sends announce the trigger with a count-only caption (operator-picked
+    # format 2026-09-20 from A–E mockups; the image itself carries the pick details)
     caption = ""
     if args.only_if_new and new_picks:
-        shown = new_picks[:10]
-        lines = []
-        for p in shown:
-            parts = [p["date"], p["bet"]]
-            if p.get("odds"):
-                parts.append(f"({p['odds']})")
-            if p.get("unit"):
-                parts.append(p["unit"])
-            lines.append("• " + " ".join(parts))
-        if len(new_picks) > len(shown):
-            lines.append(f"…+{len(new_picks) - len(shown)} more")
         plural = "s" if len(new_picks) != 1 else ""
-        caption = f"🆕 {len(new_picks)} new SAUCE pick{plural}\n" + "\n".join(lines)
+        caption = f"🆕 {len(new_picks)} new pick{plural}"
 
     if args.no_send:
         print(f"Preview saved to {preview_path}")
