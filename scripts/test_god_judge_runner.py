@@ -451,22 +451,31 @@ class RunnerTests(_HarnessCase):
     async def test_two_invalid_rows_stop_further_attempts(self) -> None:
         self.harness.set_mode("invalid")
         await self.harness.run([_game()], _committee())
-        await self.harness.run([_game()], _committee())
+        self.assertEqual(self.harness.notifications, [])
+        # The failure that hits the cap sends the one stall DM.
+        summary = await self.harness.run([_game()], _committee())
         self.assertEqual(len(self.harness.calls()), 2)
         self.assertEqual(
             [row["expert_id"] for row in self.harness.store.rows],
             ["god_rules", "god_judge", "god_judge"],
         )
-
-        summary = await self.harness.run([_game()], _committee())
-
-        self.assertEqual(len(self.harness.calls()), 2)
-        self.assertEqual(summary["attempted"], [])
         self.assertEqual(len(summary["stalled"]), 1)
-        self.assertIn("failed validation 2 times", summary["skipped"][0]["reason"])
+        self.assertTrue(summary["stalled"][0]["new_stall"])
         self.assertEqual(len(self.harness.notifications), 1)
         self.assertIn("failed validation twice", self.harness.notifications[0])
         self.assertIn("New England Patriots @ Seattle Seahawks", self.harness.notifications[0])
+
+        # Later passes skip the stalled key silently — a pass every 30
+        # minutes re-announcing the same stall sprayed the operator four
+        # times overnight (2026-09-20).
+        for _ in range(2):
+            summary = await self.harness.run([_game()], _committee())
+            self.assertEqual(len(self.harness.calls()), 2)
+            self.assertEqual(summary["attempted"], [])
+            self.assertEqual(len(summary["stalled"]), 1)
+            self.assertFalse(summary["stalled"][0]["new_stall"])
+            self.assertIn("failed validation 2 times", summary["skipped"][0]["reason"])
+            self.assertEqual(len(self.harness.notifications), 1)
 
     async def test_failed_claude_call_is_logged_and_dmed_without_a_row(self) -> None:
         self.harness.set_mode("crash")

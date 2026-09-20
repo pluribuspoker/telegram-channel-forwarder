@@ -916,11 +916,16 @@ async def run_once(
             skip(game, f"a valid judge row already carries committee {key[:12]}")
             continue
         if judge_statuses.count("invalid") >= INVALID_ATTEMPT_CAP:
+            # An already-stalled key stays in the summary but not in the
+            # DM: the attempt that hit the cap alerted once, and a pass
+            # every 30 minutes re-announcing the same stall sprayed the
+            # operator four times overnight (2026-09-20).
             summary["stalled"].append(
                 {
                     "event_id": event_id,
                     "committee_key": key,
                     "game": describe_game(game),
+                    "new_stall": False,
                 }
             )
             skip(
@@ -1135,6 +1140,17 @@ async def run_once(
                 summary["failed"].append(
                     {**attempt, "stage": "judge_validation", "error": str(exc)}
                 )
+                if judge_statuses.count("invalid") + 1 >= INVALID_ATTEMPT_CAP:
+                    # This failure is the one that stalls the committee:
+                    # DM now, once, and let later passes skip silently.
+                    summary["stalled"].append(
+                        {
+                            "event_id": event_id,
+                            "committee_key": key,
+                            "game": describe_game(game),
+                            "new_stall": True,
+                        }
+                    )
                 continue
             judge_id = str(judge_row["opinion_id"])
             attempt["judge_opinion_id"] = judge_id
@@ -1161,14 +1177,15 @@ async def run_once(
                 )
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
-    if summary["stalled"]:
+    new_stalls = [item for item in summary["stalled"] if item.get("new_stall")]
+    if new_stalls:
         text = (
             "pickbot: God Expert judge failed validation twice on the current "
             "committee; no further attempts until a voice or the lines "
             "change:\n"
             + "\n".join(
                 f"- {item['game']} (committee {item['committee_key'][:12]})"
-                for item in summary["stalled"]
+                for item in new_stalls
             )
         )
         if dry_run:
