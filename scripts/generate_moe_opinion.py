@@ -179,11 +179,11 @@ async def main() -> None:
         "--input-file",
         type=Path,
         help=(
-            "JSON file holding the full aggregator input, as printed by "
-            "--expert god_rules --show-input. The rules arm persists it "
-            "verbatim; the judge persists the request derived from it. Valid "
-            "with --deterministic, --agent-response, and --show-input; the "
-            "sheet's opinions, snapshots, and finals are not read."
+            "JSON file holding a previously generated expert input. "
+            "Aggregator inputs are persisted verbatim by the rules arm and "
+            "converted to the judge request by the judge arm. Cee inputs are "
+            "accepted with --agent-response for guarded historical replay. "
+            "Live input-source tabs are not read for the supplied payload."
         ),
     )
     parser.add_argument(
@@ -249,8 +249,13 @@ async def main() -> None:
         parser.error(
             f"Expert {args.expert} requires --deterministic or --show-input"
         )
-    if args.input_file and expert["input_profile"] != AGGREGATOR_PROFILE:
-        parser.error("--input-file is only valid for the aggregator experts")
+    if args.input_file and expert["input_profile"] not in {
+        AGGREGATOR_PROFILE,
+        "cee_calibration",
+    }:
+        parser.error(
+            "--input-file is only valid for aggregator or Cee experts"
+        )
     prebuilt: dict | None = None
     if args.input_file:
         prebuilt = json.loads(args.input_file.read_text(encoding="utf-8"))
@@ -322,7 +327,7 @@ async def main() -> None:
         line_snapshots = spreadsheet.worksheet(
             "nfl_line_snapshots"
         ).get_all_records(expected_headers=SNAPSHOT_HEADERS)
-    elif expert["input_profile"] == "cee_calibration":
+    elif expert["input_profile"] == "cee_calibration" and prebuilt is None:
         current_results = _current_results()
         cee_user_id = resolve_moe_expert_user_id_from_spreadsheet(
             spreadsheet,
@@ -384,12 +389,16 @@ async def main() -> None:
                 ak_user_id=ak_user_id or "",
             )
         elif expert["input_profile"] == "cee_calibration":
-            input_payload = build_cee_input(
-                game,
-                [*history, *(current_results or [])],
-                leans or [],
-                win_predictions or [],
-                cee_user_id=cee_user_id or "",
+            input_payload = (
+                prebuilt
+                if prebuilt is not None
+                else build_cee_input(
+                    game,
+                    [*history, *(current_results or [])],
+                    leans or [],
+                    win_predictions or [],
+                    cee_user_id=cee_user_id or "",
+                )
             )
         elif expert["input_profile"] == "celebrity_patterns":
             from moe_celebrity import build_celebrity_input

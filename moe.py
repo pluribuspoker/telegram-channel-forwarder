@@ -3755,9 +3755,23 @@ async def generate_opinion(
                 raise ValueError(
                     "The prebuilt Pikkit input does not match this game"
                 )
+        elif expert["input_profile"] == "cee_calibration":
+            described = input_payload.get("game") or {}
+            if (
+                input_payload.get("input_profile") != "cee_calibration"
+                or str(described.get("event_id")) != str(game["event_id"])
+                or str(described.get("away_team"))
+                != str(game["away_team"])
+                or str(described.get("home_team"))
+                != str(game["home_team"])
+            ):
+                raise ValueError(
+                    "The prebuilt Cee input does not match this game"
+                )
         else:
             raise ValueError(
-                "A prebuilt input is accepted only for aggregator or Pikkit experts"
+                "A prebuilt input is accepted only for aggregator, Pikkit, "
+                "or Cee experts"
             )
     elif expert["input_profile"] == "schedule_only":
         input_payload = build_schedule_input(game, history)

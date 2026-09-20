@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import unittest
 from types import SimpleNamespace
@@ -793,6 +794,67 @@ class CeeGenerationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["pick_market"], "straight_up")
         self.assertEqual(row["pick_side"], "New England Patriots")
         self.assertEqual(store.rows, [row])
+
+    async def test_replays_prebuilt_cee_input_with_expected_hash(self) -> None:
+        payload = build_cee_input(
+            _game(),
+            _history(),
+            [_current_lean(), _spread_lean(), _prior_lean()],
+            _predictions(),
+            cee_user_id=CEE_ID,
+        )
+
+        async def create_fn(**_kwargs):
+            return SimpleNamespace(
+                content=[SimpleNamespace(text=json.dumps(self._output()))]
+            )
+
+        store = MemoryStore()
+        input_json = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        row = await generate_opinion(
+            expert_id="cee",
+            game=_game(),
+            history=[],
+            store=store,
+            create_fn=create_fn,
+            generation_backend="agent_runtime",
+            generation_effort="max",
+            expected_input_sha256=hashlib.sha256(
+                input_json.encode("utf-8")
+            ).hexdigest(),
+            input_payload=payload,
+        )
+
+        self.assertEqual(row["generation_status"], "valid")
+        self.assertEqual(row["input_json"], input_json)
+        self.assertEqual(store.rows, [row])
+
+    async def test_rejects_prebuilt_cee_input_for_another_game(self) -> None:
+        payload = build_cee_input(
+            _game(),
+            _history(),
+            [_current_lean(), _spread_lean(), _prior_lean()],
+            _predictions(),
+            cee_user_id=CEE_ID,
+        )
+        payload["game"]["event_id"] = "another-event"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "prebuilt Cee input does not match",
+        ):
+            await generate_opinion(
+                expert_id="cee",
+                game=_game(),
+                history=[],
+                store=MemoryStore(),
+                input_payload=payload,
+            )
 
     async def test_validation_repair_keeps_cee_identity(self) -> None:
         responses = [{}, self._output()]
