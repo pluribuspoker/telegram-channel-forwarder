@@ -61,6 +61,108 @@ def _period_tag(pick: dict) -> str:
     return f" {period.upper()}" if period and period != "game" else ""
 
 
+# Rendered team names are nickname-short ("Denver Broncos ML" → "Broncos ML") —
+# operator-picked format, 2026-09-20. An exact-full-name allowlist on purpose:
+# stripping a "city" heuristically mangles college ("Ohio State" → "State"),
+# soccer clubs ("Manchester United" → "United") and country teams ("Costa
+# Rica" → "Rica"), so anything not listed — KBO, soccer, college, national
+# teams, and the _clean_desc fallback's free text — renders unchanged. Values
+# repeat across leagues (Rangers, Panthers, Cardinals…) exactly the way
+# cappers themselves write; within one message the game disambiguates.
+_TEAM_SHORT_NAMES_RAW: dict[str, str] = {
+    # NFL
+    "Arizona Cardinals": "Cardinals", "Atlanta Falcons": "Falcons",
+    "Baltimore Ravens": "Ravens", "Buffalo Bills": "Bills",
+    "Carolina Panthers": "Panthers", "Chicago Bears": "Bears",
+    "Cincinnati Bengals": "Bengals", "Cleveland Browns": "Browns",
+    "Dallas Cowboys": "Cowboys", "Denver Broncos": "Broncos",
+    "Detroit Lions": "Lions", "Green Bay Packers": "Packers",
+    "Houston Texans": "Texans", "Indianapolis Colts": "Colts",
+    "Jacksonville Jaguars": "Jaguars", "Kansas City Chiefs": "Chiefs",
+    "Las Vegas Raiders": "Raiders", "Los Angeles Chargers": "Chargers",
+    "Los Angeles Rams": "Rams", "Miami Dolphins": "Dolphins",
+    "Minnesota Vikings": "Vikings", "New England Patriots": "Patriots",
+    "New Orleans Saints": "Saints", "New York Giants": "Giants",
+    "New York Jets": "Jets", "Philadelphia Eagles": "Eagles",
+    "Pittsburgh Steelers": "Steelers", "San Francisco 49ers": "49ers",
+    "Seattle Seahawks": "Seahawks", "Tampa Bay Buccaneers": "Buccaneers",
+    "Tennessee Titans": "Titans", "Washington Commanders": "Commanders",
+    # MLB
+    "Arizona Diamondbacks": "Diamondbacks", "Atlanta Braves": "Braves",
+    "Baltimore Orioles": "Orioles", "Boston Red Sox": "Red Sox",
+    "Chicago Cubs": "Cubs", "Chicago White Sox": "White Sox",
+    "Cincinnati Reds": "Reds", "Cleveland Guardians": "Guardians",
+    "Colorado Rockies": "Rockies", "Detroit Tigers": "Tigers",
+    "Houston Astros": "Astros", "Kansas City Royals": "Royals",
+    "Los Angeles Angels": "Angels", "Los Angeles Dodgers": "Dodgers",
+    "Miami Marlins": "Marlins", "Milwaukee Brewers": "Brewers",
+    "Minnesota Twins": "Twins", "New York Mets": "Mets",
+    "New York Yankees": "Yankees", "Oakland Athletics": "Athletics",
+    "Philadelphia Phillies": "Phillies", "Pittsburgh Pirates": "Pirates",
+    "San Diego Padres": "Padres", "San Francisco Giants": "Giants",
+    "Seattle Mariners": "Mariners", "St. Louis Cardinals": "Cardinals",
+    "St Louis Cardinals": "Cardinals", "Tampa Bay Rays": "Rays",
+    "Texas Rangers": "Rangers", "Toronto Blue Jays": "Blue Jays",
+    "Washington Nationals": "Nationals",
+    # NBA
+    "Atlanta Hawks": "Hawks", "Boston Celtics": "Celtics",
+    "Brooklyn Nets": "Nets", "Charlotte Hornets": "Hornets",
+    "Chicago Bulls": "Bulls", "Cleveland Cavaliers": "Cavaliers",
+    "Dallas Mavericks": "Mavericks", "Denver Nuggets": "Nuggets",
+    "Detroit Pistons": "Pistons", "Golden State Warriors": "Warriors",
+    "Houston Rockets": "Rockets", "Indiana Pacers": "Pacers",
+    "LA Clippers": "Clippers", "Los Angeles Clippers": "Clippers",
+    "Los Angeles Lakers": "Lakers", "Memphis Grizzlies": "Grizzlies",
+    "Miami Heat": "Heat", "Milwaukee Bucks": "Bucks",
+    "Minnesota Timberwolves": "Timberwolves",
+    "New Orleans Pelicans": "Pelicans", "New York Knicks": "Knicks",
+    "Oklahoma City Thunder": "Thunder", "Orlando Magic": "Magic",
+    "Philadelphia 76ers": "76ers", "Phoenix Suns": "Suns",
+    "Portland Trail Blazers": "Trail Blazers", "Sacramento Kings": "Kings",
+    "San Antonio Spurs": "Spurs", "Toronto Raptors": "Raptors",
+    "Utah Jazz": "Jazz", "Washington Wizards": "Wizards",
+    # NHL
+    "Anaheim Ducks": "Ducks", "Boston Bruins": "Bruins",
+    "Buffalo Sabres": "Sabres", "Calgary Flames": "Flames",
+    "Carolina Hurricanes": "Hurricanes", "Chicago Blackhawks": "Blackhawks",
+    "Colorado Avalanche": "Avalanche", "Columbus Blue Jackets": "Blue Jackets",
+    "Dallas Stars": "Stars", "Detroit Red Wings": "Red Wings",
+    "Edmonton Oilers": "Oilers", "Florida Panthers": "Panthers",
+    "Los Angeles Kings": "Kings", "Minnesota Wild": "Wild",
+    "Montreal Canadiens": "Canadiens", "Montréal Canadiens": "Canadiens",
+    "Nashville Predators": "Predators", "New Jersey Devils": "Devils",
+    "New York Islanders": "Islanders", "New York Rangers": "Rangers",
+    "Ottawa Senators": "Senators", "Philadelphia Flyers": "Flyers",
+    "Pittsburgh Penguins": "Penguins", "San Jose Sharks": "Sharks",
+    "Seattle Kraken": "Kraken", "St. Louis Blues": "Blues",
+    "St Louis Blues": "Blues", "Tampa Bay Lightning": "Lightning",
+    "Toronto Maple Leafs": "Maple Leafs", "Utah Mammoth": "Mammoth",
+    "Vancouver Canucks": "Canucks", "Vegas Golden Knights": "Golden Knights",
+    "Washington Capitals": "Capitals", "Winnipeg Jets": "Jets",
+    # WNBA
+    "Atlanta Dream": "Dream", "Chicago Sky": "Sky",
+    "Connecticut Sun": "Sun", "Dallas Wings": "Wings",
+    "Golden State Valkyries": "Valkyries", "Indiana Fever": "Fever",
+    "Las Vegas Aces": "Aces", "Los Angeles Sparks": "Sparks",
+    "Minnesota Lynx": "Lynx", "New York Liberty": "Liberty",
+    "Phoenix Mercury": "Mercury", "Portland Fire": "Fire",
+    "Seattle Storm": "Storm", "Toronto Tempo": "Tempo",
+    "Washington Mystics": "Mystics",
+    # CFL
+    "BC Lions": "Lions", "Calgary Stampeders": "Stampeders",
+    "Edmonton Elks": "Elks", "Hamilton Tiger-Cats": "Tiger-Cats",
+    "Montreal Alouettes": "Alouettes", "Ottawa Redblacks": "Redblacks",
+    "Saskatchewan Roughriders": "Roughriders",
+    "Toronto Argonauts": "Argonauts", "Winnipeg Blue Bombers": "Blue Bombers",
+}
+_TEAM_SHORT_NAMES = {k.casefold(): v for k, v in _TEAM_SHORT_NAMES_RAW.items()}
+
+
+def _short_team(name: str) -> str:
+    """Nickname for a mapped full team name; anything unlisted passes through."""
+    return _TEAM_SHORT_NAMES.get(" ".join(str(name).split()).casefold(), name)
+
+
 def _format_pick(pick: dict) -> str:
     """Build a standardized, odds-free pick description from structured parse fields.
 
@@ -82,7 +184,8 @@ def _format_pick(pick: dict) -> str:
 
 def _format_pick_body(pick: dict) -> str:
     bet_type  = pick.get("bet_type", "")
-    teams     = pick.get("teams") or []
+    # New list on purpose — never mutate the parse's own teams in place.
+    teams     = [_short_team(t) for t in (pick.get("teams") or [])]
     line      = pick.get("line")
     direction = pick.get("direction") or ""
     player    = pick.get("player") or ""
@@ -584,8 +687,12 @@ class AuditLog:
         link = _pick_link(channel_id, message_id)
         capper_label = _capper_label(capper_name)
 
-        # Capper name is the link; bold if present, plain link if not
+        # Bold header form for the multi-pick layout (one name over several
+        # lines); singles instead put the bet first and the capper after an
+        # em-dash — the exact line grammar broadcast_group uses — so every
+        # result line in the feed reads one way (operator-picked, 2026-09-20).
         capper_linked = f'<b><a href="{link}">{e(capper_label)}</a></b>' if capper_label else f'<a href="{link}">view</a>'
+        capper_tail = f'<a href="{link}">{e(capper_label) if capper_label else "view"}</a>'
 
         # Detect a parlay from ALL passed legs, not just the resolved ones: a
         # parlay that settled on one lost leg still passes its other (voided /
@@ -686,12 +793,12 @@ class AuditLog:
                 lines.append(f"{overall_emoji} {ticket_line}")
                 text = capper_linked + "\n" + "\n".join(lines)
             else:
-                text = f"{overall_emoji} {capper_linked} · {ticket_line}"
+                text = f"{overall_emoji} {ticket_line} — {capper_tail}"
         elif len(picks) == 1:
             desc, verdict, odds_str = picks[0]
             emoji = VERDICT_EMOJI.get(verdict, "")
             odds_part = f" [{e(odds_str)}]" if odds_str else ""
-            text = f"{emoji} {capper_linked} · {e(desc)}{odds_part}"
+            text = f"{emoji} {e(desc)}{odds_part} — {capper_tail}"
         else:
             # Non-parlay multi-pick: one emoji per pick
             lines = [_pick_line(d, v, o) for d, v, o in picks]

@@ -164,8 +164,9 @@ def render(pick_results) -> list[str]:
 posts = render([(picks[3], "WIN", -148)])
 check("standalone WIN posts once", len(posts) == 1, repr(posts))
 t = posts[0] if posts else ""
-check("standalone WIN is the compact single line",
-      t.startswith("✅ ") and " · " in t and "[-148]" in t, t)
+check("standalone WIN is the compact single line, bet before capper",
+      t.startswith("✅ ") and " — " in t and "[-148]" in t
+      and t.index("Broncos ML") < t.index("Midwest Mike"), t)
 check("standalone WIN carries no ticket and no ❓",
       "Parlay" not in t and "❓" not in t, t)
 
@@ -183,7 +184,8 @@ posts = render([(picks[1], "LOSS", -325), (picks[2], "PENDING", None)])
 check("lost ticket renders the compact Parlay line", len(posts) == 1, repr(posts))
 t = posts[0] if posts else ""
 check("lost ticket line format",
-      t.startswith("❌ ") and "· Parlay: Los Angeles Chargers ML / Los Angeles Rams ML" in t, t)
+      t.startswith("❌ Parlay: Chargers ML / Rams ML")
+      and " — " in t and "Midwest Mike" in t, t)
 check("unpriced leg -> no combined price", "[" not in t.split("Parlay:")[-1], t)
 
 pushed = [
@@ -209,7 +211,7 @@ lines = t.split("\n")
 check("mixed: capper header + straight line + ticket line",
       len(lines) == 3 and "Midwest Mike" in lines[0]
       and lines[1].startswith("✅ ") and "[-148]" in lines[1]
-      and lines[2].startswith("❌ Parlay: Los Angeles Chargers ML / Los Angeles Rams ML"), t)
+      and lines[2].startswith("❌ Parlay: Chargers ML / Rams ML"), t)
 
 # 10. An unsettled ticket alone posts nothing:
 posts = render([(picks[1], "WIN", -325), (picks[2], "PENDING", None)])

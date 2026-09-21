@@ -113,8 +113,9 @@ audit = mk(db, posts)
 br(audit, 3864, [(U475, "LOSS", -141)])
 check("first message's result posts", len(posts) == 1, repr(posts))
 t = posts[0] if posts else ""
-check("first post renders the unchanged compact line",
-      t.startswith("❌ ") and " · " in t and "U47.5 [-141]" in t, t)
+check("first post renders the compact line, bet before capper",
+      t.startswith("❌ Colts/Chiefs U47.5 [-141] — ")
+      and t.index("U47.5") < t.index("Midwest Mike"), t)
 
 br(audit, 3868, [(U475, "LOSS", -141)])
 check("recap restating the same pick does NOT post again (the incident)",
@@ -157,7 +158,7 @@ br(audit5, 2, TICKET)
 check("restated ticket does NOT post again", len(posts5) == 1, repr(posts5))
 br(audit5, 3, TICKET + [(BRONCOS, "WIN", -148)])
 check("restated ticket + a NEW straight posts only the straight, compact",
-      len(posts5) == 2 and "Parlay" not in posts5[1] and " · " in posts5[1],
+      len(posts5) == 2 and "Parlay" not in posts5[1] and " — " in posts5[1],
       repr(posts5))
 
 # ── 9-11: broadcast_group shares the same memory ─────────────────────────────
