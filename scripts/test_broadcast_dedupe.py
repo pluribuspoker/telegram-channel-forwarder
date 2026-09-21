@@ -114,7 +114,7 @@ br(audit, 3864, [(U475, "LOSS", -141)])
 check("first message's result posts", len(posts) == 1, repr(posts))
 t = posts[0] if posts else ""
 check("first post renders the compact line, bet before capper",
-      t.startswith("❌ Colts/Chiefs U47.5 [-141] — ")
+      t.startswith("❌ Colts/Chiefs U47.5 -141 — ")
       and t.index("U47.5") < t.index("Midwest Mike"), t)
 
 br(audit, 3868, [(U475, "LOSS", -141)])

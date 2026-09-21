@@ -170,7 +170,7 @@ print("single+final:", text.replace("\n", " | "))
 check("single+final posts once", len(posts) == 1, f"{len(posts)} posts")
 check("single+final has score header", "<b><u>" in text and "Marlins 1–6 Cubs" in text, text)
 check("single+final capper after dash", "— <a href=" in text and "Midwest Mike" in text, text)
-check("single+final pick line", "✅ Cubs ML [-167]" in text, text)
+check("single+final pick line", "✅ Cubs ML -167" in text, text)
 
 # ── 2. lone result, game in progress -> compact line, no running score ────────
 posts = run_flush({"events": [make_event(completed=False)]}, n_items=1)
@@ -179,7 +179,7 @@ print("single+live:", text.replace("\n", " | "))
 check("single+live posts once", len(posts) == 1, f"{len(posts)} posts")
 check("single+live stays compact", "<u>" not in text and " — " in text, text)
 check("single+live leads with the bet, capper after dash",
-      text.startswith("✅ Cubs ML [-167] — <a href="), text)
+      text.startswith("✅ Cubs ML -167 — <a href="), text)
 
 # ── 3. lone result, no ESPN event -> compact line ─────────────────────────────
 posts = run_flush({"events": []}, n_items=1)
@@ -207,7 +207,7 @@ check("merge+live posts once", len(posts) == 1, f"{len(posts)} posts")
 check("merge+live has no header", "<u>" not in text and "Marlins" not in text
       and not text.startswith("\n"), text)
 check("merge+live keeps both pick lines",
-      text.count("✅ Cubs ML [-167]") >= 1
+      text.count("✅ Cubs ML -167") >= 1
       and "Midwest Mike" in text and "Tony" in text, text)
 
 # ── 6. multi-pick, both legs on ONE game, final -> group format, line per leg ─

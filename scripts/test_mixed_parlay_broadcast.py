@@ -165,7 +165,7 @@ posts = render([(picks[3], "WIN", -148)])
 check("standalone WIN posts once", len(posts) == 1, repr(posts))
 t = posts[0] if posts else ""
 check("standalone WIN is the compact single line, bet before capper",
-      t.startswith("✅ ") and " — " in t and "[-148]" in t
+      t.startswith("✅ ") and " -148 — " in t
       and t.index("Broncos ML") < t.index("Midwest Mike"), t)
 check("standalone WIN carries no ticket and no ❓",
       "Parlay" not in t and "❓" not in t, t)
@@ -186,7 +186,7 @@ t = posts[0] if posts else ""
 check("lost ticket line format",
       t.startswith("❌ Parlay: Chargers ML / Rams ML")
       and " — " in t and "Midwest Mike" in t, t)
-check("unpriced leg -> no combined price", "[" not in t.split("Parlay:")[-1], t)
+check("unpriced leg -> no combined price", "-325" not in t, t)
 
 pushed = [
     ({"description": "Ko ML", "bet_type": "moneyline", "is_parlay_leg": True,
@@ -198,7 +198,7 @@ posts = render(pushed)
 t = posts[0] if posts else ""
 expected_price = parlay_combined_odds([-150])
 check("WIN+PUSH ticket: ✅, inline ♻️, pushed leg dropped from the price",
-      t.startswith("✅ ") and "♻️" in t and f"[{expected_price}]" in t, t)
+      t.startswith("✅ ") and "♻️" in t and f" {expected_price} — " in t, t)
 
 # 9. Straight WIN + settled ticket in one payload -> one multi-line message:
 posts = render([
@@ -210,7 +210,7 @@ t = posts[0] if posts else ""
 lines = t.split("\n")
 check("mixed: capper header + straight line + ticket line",
       len(lines) == 3 and "Midwest Mike" in lines[0]
-      and lines[1].startswith("✅ ") and "[-148]" in lines[1]
+      and lines[1].startswith("✅ ") and lines[1].endswith(" -148")
       and lines[2].startswith("❌ Parlay: Chargers ML / Rams ML"), t)
 
 # 10. An unsettled ticket alone posts nothing:

@@ -756,7 +756,7 @@ class AuditLog:
         picks = [(_format_pick(p), v, _fmt_odds(o)) for p, v, o in resolved]
 
         def _pick_line(desc: str, verdict: str, odds_str: str) -> str:
-            odds_part = f" [{e(odds_str)}]" if odds_str else ""
+            odds_part = f" {e(odds_str)}" if odds_str else ""
             return f"{VERDICT_EMOJI.get(verdict, '')} {e(desc)}{odds_part}"
 
         _parlay_combined_odds = parlay_combined_odds
@@ -773,7 +773,7 @@ class AuditLog:
             combined = _parlay_combined_odds(
                 [o for _, v, o in parlay_all if v != "PUSH"]
             )
-            combined_part = f" [{e(_fmt_odds(combined))}]" if combined is not None else ""
+            combined_part = f" {e(_fmt_odds(combined))}" if combined is not None else ""
             # Inline the legs on a single line (Ko ML / Duncan ML) instead of one
             # bullet per leg, so the whole ticket reads as one compact result.
             # A pushed leg carries its ♻️ inline — that's what explains a ✅
@@ -797,7 +797,7 @@ class AuditLog:
         elif len(picks) == 1:
             desc, verdict, odds_str = picks[0]
             emoji = VERDICT_EMOJI.get(verdict, "")
-            odds_part = f" [{e(odds_str)}]" if odds_str else ""
+            odds_part = f" {e(odds_str)}" if odds_str else ""
             text = f"{emoji} {e(desc)}{odds_part} — {capper_tail}"
         else:
             # Non-parlay multi-pick: one emoji per pick
@@ -904,7 +904,7 @@ class AuditLog:
         # and mobile wrapping of long descriptions blurs the rows together further.
         lines = []
         for (verdict, desc, odds_str), names in zip(specs, who):
-            odds_part = f" [{e(odds_str)}]" if odds_str else ""
+            odds_part = f" {e(odds_str)}" if odds_str else ""
             lines.append(
                 f"{VERDICT_EMOJI.get(verdict, '')} {e(desc)}{odds_part} — {', '.join(names)}"
             )
