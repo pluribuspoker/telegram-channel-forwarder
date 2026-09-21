@@ -688,8 +688,9 @@ class AuditLog:
         capper_label = _capper_label(capper_name)
 
         # Bold header form for the multi-pick layout (one name over several
-        # lines); singles instead put the bet first and the capper after an
-        # em-dash — the exact line grammar broadcast_group uses — so every
+        # lines); singles instead put the bet first and the capper after a
+        # middot (operator-picked over em-dash, 2026-09-21) — the exact line
+        # grammar broadcast_group uses — so every
         # result line in the feed reads one way (operator-picked, 2026-09-20).
         capper_linked = f'<b><a href="{link}">{e(capper_label)}</a></b>' if capper_label else f'<a href="{link}">view</a>'
         capper_tail = f'<a href="{link}">{e(capper_label) if capper_label else "view"}</a>'
@@ -793,12 +794,12 @@ class AuditLog:
                 lines.append(f"{overall_emoji} {ticket_line}")
                 text = capper_linked + "\n" + "\n".join(lines)
             else:
-                text = f"{overall_emoji} {ticket_line} — {capper_tail}"
+                text = f"{overall_emoji} {ticket_line} · {capper_tail}"
         elif len(picks) == 1:
             desc, verdict, odds_str = picks[0]
             emoji = VERDICT_EMOJI.get(verdict, "")
             odds_part = f" {e(odds_str)}" if odds_str else ""
-            text = f"{emoji} {e(desc)}{odds_part} — {capper_tail}"
+            text = f"{emoji} {e(desc)}{odds_part} · {capper_tail}"
         else:
             # Non-parlay multi-pick: one emoji per pick
             lines = [_pick_line(d, v, o) for d, v, o in picks]
@@ -828,7 +829,7 @@ class AuditLog:
 
         Also the renderer for a LONE pick whose final score resolved: the daemon
         routes those here so every scored result shares the score-header format
-        ("⚾️ Marlins 1–6 Cubs" + pick line with the capper after the dash), and
+        ("⚾️ Marlins 1–6 Cubs" + pick line with the capper after the middot), and
         `broadcast_results` stays the compact fallback for the rest (parlays,
         mid-game settles, sports ESPN doesn't carry).
 
@@ -906,7 +907,7 @@ class AuditLog:
         for (verdict, desc, odds_str), names in zip(specs, who):
             odds_part = f" {e(odds_str)}" if odds_str else ""
             lines.append(
-                f"{VERDICT_EMOJI.get(verdict, '')} {e(desc)}{odds_part} — {', '.join(names)}"
+                f"{VERDICT_EMOJI.get(verdict, '')} {e(desc)}{odds_part} · {', '.join(names)}"
             )
 
         text = "\n".join(([f"<b><u>{e(header)}</u></b>", ""] if header else []) + lines)
