@@ -20,7 +20,7 @@ import hashlib
 import os
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -216,6 +216,39 @@ CREATE TABLE IF NOT EXISTS api_costs (
 );
 """
 
+# One row per result line posted to a broadcast results channel — the memory
+# behind the cross-post dedupe (see broadcast_results). Keyed on the line's
+# identity, not its source message, because the whole point is catching the
+# same bet arriving from a DIFFERENT message.
+_SCHEMA_BROADCAST_LINES = """
+CREATE TABLE IF NOT EXISTS broadcast_lines (
+    target_channel INTEGER NOT NULL,
+    fingerprint    TEXT    NOT NULL,
+    sent_at        TEXT    NOT NULL,
+    source         TEXT,
+    PRIMARY KEY (target_channel, fingerprint)
+);
+"""
+
+# An identical result line re-posted to the same target within this window is
+# suppressed; past it, it may post again (a genuinely re-bet market weeks
+# later is a new result). Rows are pruned after _BROADCAST_LINES_KEEP_DAYS.
+BROADCAST_DEDUPE_DAYS = 3
+_BROADCAST_LINES_KEEP_DAYS = 30
+
+
+def _result_line_fingerprint(capper_label: str, verdict: str, bet_text: str) -> str:
+    """Identity of one result line in a results feed: who, which bet, which outcome.
+
+    The price is deliberately NOT part of the identity: the two copies of a
+    restated bet fetch odds at different times, and snapshot drift (-141 vs
+    -139) doesn't make them different bets. Different cappers on the same bet
+    stay distinct — each earns their own result line.
+    """
+    parts = [capper_label or "", verdict or "", bet_text or ""]
+    return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()[:32]
+
+
 _MIGRATIONS = [
     "ALTER TABLE grades ADD COLUMN capper_name TEXT",
     "ALTER TABLE grades ADD COLUMN odds INTEGER",
@@ -287,6 +320,7 @@ class AuditLog:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
             conn.executescript(_SCHEMA_API_COSTS)
+            conn.executescript(_SCHEMA_BROADCAST_LINES)
             for mig in _MIGRATIONS:
                 try:
                     conn.execute(mig)
@@ -318,6 +352,49 @@ class AuditLog:
             conn.execute(sql, list(row.values()))
             conn.commit()
         return changed
+
+    def _claim_broadcast_lines(
+        self, target: int, fingerprints: list[str], source: str
+    ) -> set[str]:
+        """Return the subset of `fingerprints` not yet posted to `target` within
+        BROADCAST_DEDUPE_DAYS, claiming them now.
+
+        Claimed BEFORE the send, same direction the daemon's flush takes with
+        `broadcasted`: a crash between claim and send drops a result rather
+        than duplicating one (a missed post is recoverable, a duplicate isn't).
+        A fingerprint repeated within one call is returned once — first wins.
+        Runs in a thread (own connection), like _insert.
+        """
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=BROADCAST_DEDUPE_DAYS)).isoformat()
+        keep: set[str] = set()
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM broadcast_lines WHERE sent_at < ?",
+                ((now - timedelta(days=_BROADCAST_LINES_KEEP_DAYS)).isoformat(),),
+            )
+            for fp in fingerprints:
+                if fp in keep:
+                    continue
+                row = conn.execute(
+                    "SELECT sent_at FROM broadcast_lines"
+                    " WHERE target_channel = ? AND fingerprint = ?",
+                    (target, fp),
+                ).fetchone()
+                if row and row["sent_at"] >= cutoff:
+                    continue  # already in the feed — noise
+                conn.execute(
+                    "INSERT INTO broadcast_lines"
+                    " (target_channel, fingerprint, sent_at, source)"
+                    " VALUES (?, ?, ?, ?)"
+                    " ON CONFLICT(target_channel, fingerprint)"
+                    " DO UPDATE SET sent_at = excluded.sent_at,"
+                    "               source = excluded.source",
+                    (target, fp, now.isoformat(), source),
+                )
+                keep.add(fp)
+            conn.commit()
+        return keep
 
     # ── Core record method ─────────────────────────────────────────────────────
 
@@ -530,6 +607,45 @@ class AuditLog:
             if not resolved:
                 return
 
+        # ── Cross-post dedupe ────────────────────────────────────────────
+        # The per-message guards (broadcasted flags, _post_fingerprint) can't
+        # see a capper RESTATING a bet in a later message — a recap listing
+        # the day's plays grades and broadcasts every line again (2026-09-20:
+        # Colts/Chiefs U47.5 posted twice, once from its own message, once
+        # from the evening recap). A line whose (capper, verdict, bet) this
+        # target already carries within BROADCAST_DEDUPE_DAYS is dropped, and
+        # the whole post is skipped when nothing survives. The ticket is one
+        # unit: a restated parlay dedupes whole, its legs aren't lines here.
+        source = f"{channel_id}:{message_id}"
+        ticket_fp = None
+        if is_parlay:
+            ticket_fp = _result_line_fingerprint(
+                capper_label, parlay_verdict,
+                "parlay:" + " / ".join(_format_pick(p) for p, _, _ in parlay_all),
+            )
+        leg_fps = {
+            j: _result_line_fingerprint(capper_label, v, _format_pick(p))
+            for j, (p, v, o) in enumerate(resolved)
+            if not p.get("is_parlay_leg")
+        }
+        claim = ([ticket_fp] if ticket_fp else []) + list(leg_fps.values())
+        kept = await asyncio.to_thread(
+            self._claim_broadcast_lines, target, claim, source
+        )
+        if len(kept) < len(set(claim)):
+            if ticket_fp and ticket_fp not in kept:
+                is_parlay = False
+            resolved = [
+                rv for j, rv in enumerate(resolved)
+                if (is_parlay and rv[0].get("is_parlay_leg"))
+                or leg_fps.get(j) in kept
+            ]
+            skipped = not resolved and not is_parlay
+            print(f"[broadcast_results] deduped already-posted line(s) from {source}"
+                  + (" — nothing new, skipping post" if skipped else ""))
+            if skipped:
+                return
+
         picks = [(_format_pick(p), v, _fmt_odds(o)) for p, v, o in resolved]
 
         def _pick_line(desc: str, verdict: str, odds_str: str) -> str:
@@ -623,6 +739,36 @@ class AuditLog:
         """
         if not target_channel or not self.bot_token or not items:
             return
+
+        # Cross-post dedupe — same memory broadcast_results consults: a line
+        # this feed already carries (same capper, same bet, same verdict,
+        # within BROADCAST_DEDUPE_DAYS) adds nothing, whichever format posted
+        # it first. Filtering per item also collapses one capper's restated
+        # bet landing twice inside a single merge group (two messages, one
+        # game), which would otherwise print the same name twice on the line.
+        fps = [
+            _result_line_fingerprint(
+                _capper_label(it.get("capper", "")),
+                it["verdict"],
+                _format_pick(it["pick"]),
+            )
+            for it in items
+        ]
+        kept = await asyncio.to_thread(
+            self._claim_broadcast_lines, target_channel, fps,
+            f"{items[0]['channel_id']}:{items[0]['message_id']}",
+        )
+        if len(kept) < len(fps):
+            pruned, seen = [], set()
+            for it, fp in zip(items, fps):
+                if fp in kept and fp not in seen:
+                    seen.add(fp)
+                    pruned.append(it)
+            print("[broadcast_group] deduped already-posted line(s)"
+                  + ("" if pruned else " — nothing new, skipping post"))
+            if not pruned:
+                return
+            items = pruned
 
         import html as _html
 
