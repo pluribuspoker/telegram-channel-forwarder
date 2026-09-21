@@ -1396,6 +1396,15 @@ _TEAM_ALIASES: dict[str, str] = {
     "tb bucs":       "tampa bay buccaneers",
     "jax jaguars":   "jacksonville jaguars",
     "jax jags":      "jacksonville jaguars",
+    # Bare short-form nicknames are NOT substrings of the full nickname, so the
+    # generic matcher can't bridge them without an alias ("Bucs" ⊄ "Buccaneers").
+    # Values are the full nickname word so each league's own scoreboard resolves
+    # the city ("Cards" → Arizona in NFL, St. Louis in MLB).
+    "bucs":          "buccaneers",
+    "pats":          "patriots",
+    "jags":          "jaguars",
+    "niners":        "49ers",
+    "cards":         "cardinals",
     # ── NHL ───────────────────────────────────────────────────────────
     "la kings":      "los angeles kings",
     "nj devils":     "new jersey devils",

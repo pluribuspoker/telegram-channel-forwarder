@@ -162,5 +162,39 @@ check("'Southern Mississippi' matches the Golden Eagles, not Ole Miss",
       and not _team_matches("Southern Mississippi", "Ole Miss Rebels"),
       True)
 
-print(f"\n{19 - len(failures)}/19 passed")
+# 9. Cappers also write bare short-form nicknames that are NOT substrings of
+#    the full name — "Bucs -8" matched nothing ("Bucs" ⊄ "Buccaneers"), so the
+#    leg got no_game odds and CONTEXT_SKIP'd past its final (2026-09-20) while
+#    the same message's "Philadelphia Eagles" leg graded fine. _TEAM_ALIASES
+#    must bridge the bare forms it already carries city-prefixed.
+NFL_WK3 = [
+    {"id": "nfl_tb_cle", "sport_key": "americanfootball_nfl",
+     "commence_time": "2026-09-20T17:00:00Z",
+     "home_team": "Cleveland Browns", "away_team": "Tampa Bay Buccaneers"},
+    {"id": "nfl_lar_nyg", "sport_key": "americanfootball_nfl",
+     "commence_time": "2026-09-22T00:15:00Z",
+     "home_team": "New York Giants", "away_team": "Los Angeles Rams"},
+]
+SEP20 = _snapshot_time("2026-09-20")
+check("bare 'Bucs' binds the Buccaneers game",
+      _find_event_id(NFL_WK3, ["Bucs"], as_of=SEP20),
+      "nfl_tb_cle")
+check("bare 'Bucs' matches the scoreboard name",
+      _team_matches("Bucs", "Tampa Bay Buccaneers"), True)
+check("'Bucs' does not leak onto other Tampa Bay teams",
+      _team_matches("Bucs", "Tampa Bay Rays")
+      or _team_matches("Bucs", "Tampa Bay Lightning"),
+      False)
+check("bare 'Pats' matches the Patriots",
+      _team_matches("Pats", "New England Patriots"), True)
+check("bare 'Jags' matches the Jaguars",
+      _team_matches("Jags", "Jacksonville Jaguars"), True)
+check("bare 'Niners' matches the 49ers",
+      _team_matches("Niners", "San Francisco 49ers"), True)
+check("bare 'Cards' matches both leagues' Cardinals",
+      _team_matches("Cards", "Arizona Cardinals")
+      and _team_matches("Cards", "St. Louis Cardinals"),
+      True)
+
+print(f"\n{26 - len(failures)}/26 passed")
 sys.exit(1 if failures else 0)
