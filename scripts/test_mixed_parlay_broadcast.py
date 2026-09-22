@@ -35,6 +35,17 @@ Pinned here: the ticket settles, voids, and renders on ITS OWN legs only.
   9. broadcast_results: straight WIN + settled ticket render as one multi-line
      message under the capper header
  10. broadcast_results: an unsettled ticket alone posts nothing
+
+Incident 2026-09-21 (FCS, -1002486251914:3867): the daemon's broadcast-only
+mop-up ran only on fully-resolved messages, so the standalone "Bucs -8" LOSS —
+graded by the nightly audit Monday 04:15 — waited for the teaser's MNF leg and
+broadcast Monday 23:12, a day after the game. _unbroadcast_legs pins the fix:
+
+ 11. standalone resolved+unbroadcast flushes despite an unresolved parlay
+     sibling (the incident state, real cache entry); the live ticket stays out
+ 12. a resolved parlay leg of an UNsettled ticket never flushes alone
+ 13. fully resolved message: every unbroadcast leg flushes, ticket included —
+     the pre-fix mop-up behavior, unchanged
 """
 import asyncio
 import sys
@@ -216,6 +227,66 @@ check("mixed: capper header + straight line + ticket line",
 # 10. An unsettled ticket alone posts nothing:
 posts = render([(picks[1], "WIN", -325), (picks[2], "PENDING", None)])
 check("unsettled ticket alone posts nothing", posts == [], repr(posts))
+
+# ── 11-13: _unbroadcast_legs — the 2026-09-21 late-Bucs incident ─────────────
+# Real parse of -1002486251914:3867 (FCS): 7pt teaser (Eagles Sun + Rams Mon)
+# mixed with a standalone 1U Bucs -8 (Sun).
+
+fcs_picks = [
+    {"description": "Eagles +7 (7pt teaser leg)", "sport": "NFL",
+     "bet_type": "spread", "is_parlay_leg": True, "period": "game",
+     "teams": ["Philadelphia Eagles"], "player": None, "prop_stat": None,
+     "line": 7, "direction": None},
+    {"description": "Rams +7.5 (7pt teaser leg)", "sport": "NFL",
+     "bet_type": "spread", "is_parlay_leg": True, "period": "game",
+     "teams": ["Rams"], "player": None, "prop_stat": None,
+     "line": 7.5, "direction": None},
+    {"description": "Bucs -8", "sport": "NFL",
+     "bet_type": "spread", "is_parlay_leg": False, "period": "game",
+     "teams": ["Bucs"], "player": None, "prop_stat": None,
+     "line": -8, "direction": None},
+]
+
+# The Monday-morning state: audit graded Bucs LOSS, daemon had saved the
+# Eagles WIN while the ticket waits on the Rams MNF leg (no verdict yet).
+fcs_lv = {
+    "0": {"verdict": "WIN", "calc": "[final] Philadelphia Eagles 24+7 vs 20 -> +11",
+          "sport": "NFL", "game_date": "2026-09-20"},
+    "2": {"verdict": "LOSS", "calc": "[final] Tampa Bay Buccaneers 19-8 vs 23 -> -12",
+          "sport": "NFL", "game_date": "2026-09-20"},
+}
+ticket_done = gd._ticket_settled(fcs_picks, fcs_lv)
+check("FCS ticket not settled while Rams leg pending", ticket_done is False)
+legs = gd._unbroadcast_legs(fcs_picks, fcs_lv, ticket_done)
+check("standalone Bucs flushes despite the pending teaser sibling",
+      legs == [2], f"{legs} — the incident held this leg 19h")
+bc = gd._bc_results_for(fcs_picks, legs, [(fcs_picks[2], "LOSS", None)],
+                        fcs_lv, {}, "NFL", include_ticket=ticket_done)
+check("Bucs flush carries no ticket",
+      [p["description"] for p, _, _ in bc] == ["Bucs -8"] and bc[0][1] == "LOSS",
+      repr(bc))
+posts = render([(fcs_picks[2], "LOSS", None)])
+check("Bucs line renders exactly as the live broadcast did",
+      len(posts) == 1 and posts[0].startswith("❌ Bucs -8")
+      and "Parlay" not in posts[0] and "❓" not in posts[0], repr(posts))
+
+# 12. A resolved parlay leg of a live ticket never flushes alone:
+check("Eagles WIN (live ticket) stays out of the mop-up",
+      gd._unbroadcast_legs(fcs_picks, {"0": fcs_lv["0"]}, False) == [])
+
+# 13. Fully resolved: everything unbroadcast flushes, old behavior intact —
+# the abort-recovery state (ticket settled Monday night, nothing sent yet).
+fcs_lv_final = {
+    "0": dict(fcs_lv["0"]),
+    "1": {"verdict": "WIN", "calc": "Rams won outright", "sport": "NFL",
+          "game_date": "2026-09-21"},
+    "2": dict(fcs_lv["2"], broadcasted=True),
+}
+check("settled ticket's unbroadcast legs flush together, sent legs stay out",
+      gd._ticket_settled(fcs_picks, fcs_lv_final) is True
+      and gd._unbroadcast_legs(fcs_picks, fcs_lv_final, True) == [0, 1])
+check("all-standalone message unchanged by the ticket gate",
+      gd._unbroadcast_legs(straight_only, {"0": {"verdict": "WIN"}}, False) == [0])
 
 print()
 if failures:

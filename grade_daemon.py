@@ -338,6 +338,24 @@ def _void_moot_parlay_legs(picks, leg_verdicts, default_sport, msg_date) -> bool
     return dirty
 
 
+def _unbroadcast_legs(picks, leg_verdicts, ticket_done) -> list[int]:
+    """Resolved-but-unbroadcast legs eligible to flush right now.
+
+    Standalone legs always qualify — a single graded by the tracker, the
+    nightly audit, or a manual repair must not wait for an unresolved sibling
+    (the FCS Bucs -8 ❌ of 2026-09-20 sat graded from Monday 04:15 until the
+    teaser's MNF leg settled at 23:12 because the mop-up required the whole
+    message resolved). Parlay legs qualify only once the ticket is settled:
+    the ticket broadcasts as one unit, never leg by leg.
+    """
+    return [
+        i for i in range(len(picks))
+        if leg_verdicts.get(str(i), {}).get("verdict") in ("WIN", "LOSS", "PUSH")
+        and not leg_verdicts.get(str(i), {}).get("broadcasted")
+        and (ticket_done or not picks[i].get("is_parlay_leg"))
+    ]
+
+
 def _bc_results_for(picks, newly_indices, nr_results, leg_verdicts, odds_by_pick,
                     default_sport, include_ticket):
     """Broadcast payload for this cycle's newly-settled legs of one message.
@@ -753,89 +771,95 @@ async def _grade_cycle(
                                     unresolved_indices, picks, stale_days)
                 continue
 
-        if not unresolved_indices:
+        fully_resolved = not unresolved_indices
+        if fully_resolved and parlay_lost:
             # A parlay settled on a lost leg: its still-pending PARLAY legs are
             # moot and will never resolve or broadcast. Mark them VOID +
             # broadcasted so every leg counts as broadcast — otherwise the
             # tracker's fully-broadcast skip never fires and it re-records the
             # dead parlay to the audit channel every run.
-            if parlay_lost and _void_moot_parlay_legs(picks, leg_verdicts, sport, msg_date):
+            if _void_moot_parlay_legs(picks, leg_verdicts, sport, msg_date):
                 entry["leg_verdicts"] = leg_verdicts
                 dirty = True
 
-            # ── Broadcast picks graded by tracker but not yet broadcast ────
-            unbroadcast = [
-                i for i in range(len(picks))
-                if leg_verdicts.get(str(i), {}).get("verdict") in ("WIN", "LOSS", "PUSH")
-                and not leg_verdicts.get(str(i), {}).get("broadcasted")
-            ]
-            if unbroadcast:
-                channel_id = int(cache_key.split(":")[0])
-                msg_id = int(cache_key.split(":")[1])
+        # ── Broadcast picks graded outside this loop but never sent ───────
+        # (the tracker, the nightly audit, a manual repair — or this daemon's
+        # own persist-then-abort window). A resolved STANDALONE leg flushes
+        # regardless of unresolved siblings: gating this mop-up on the whole
+        # message held an audit-graded Bucs -8 ❌ from Monday 04:15 until the
+        # teaser's MNF sibling settled at 23:12 (2026-09-21). Parlay legs
+        # flush only once the ticket itself is settled — as the whole ticket.
+        ticket_done = _ticket_settled(picks, leg_verdicts)
+        unbroadcast = _unbroadcast_legs(picks, leg_verdicts, ticket_done)
+        if unbroadcast:
+            channel_id = int(cache_key.split(":")[0])
+            msg_id = int(cache_key.split(":")[1])
 
-                # Retry emoji edit if not already on the message
-                if html_text and not any(ch in html_text for ch in _PICK_EMOJI.values()):
-                    all_v = []
-                    for i in range(len(picks)):
-                        lv2 = leg_verdicts.get(str(i))
-                        if lv2 and lv2.get("verdict") in ("WIN", "LOSS", "PUSH"):
-                            all_v.append((picks[i], lv2["verdict"], lv2.get("calc", ""), lv2.get("sport", sport)))
-                        else:
-                            all_v.append((picks[i], "PENDING", "", picks[i].get("sport") or sport))
-                    new_text = _insert_emojis(html_text, all_v)
-                    if new_text != html_text:
-                        ok, gone = await _bot_edit_message_status(
-                            bot_token, channel_id, msg_id, new_text, has_media
-                        )
-                        if ok:
-                            entry["html_text"] = new_text
+            # Retry emoji edit if not already on the message
+            if html_text and not any(ch in html_text for ch in _PICK_EMOJI.values()):
+                all_v = []
+                for i in range(len(picks)):
+                    lv2 = leg_verdicts.get(str(i))
+                    if lv2 and lv2.get("verdict") in ("WIN", "LOSS", "PUSH"):
+                        all_v.append((picks[i], lv2["verdict"], lv2.get("calc", ""), lv2.get("sport", sport)))
+                    else:
+                        all_v.append((picks[i], "PENDING", "", picks[i].get("sport") or sport))
+                new_text = _insert_emojis(html_text, all_v)
+                if new_text != html_text:
+                    ok, gone = await _bot_edit_message_status(
+                        bot_token, channel_id, msg_id, new_text, has_media
+                    )
+                    if ok:
+                        entry["html_text"] = new_text
+                        await asyncio.sleep(0.5)
+                        for linked_id in entry.get("linked_message_ids", []):
+                            await _bot_edit_message(bot_token, channel_id, linked_id, new_text, has_media)
                             await asyncio.sleep(0.5)
-                            for linked_id in entry.get("linked_message_ids", []):
-                                await _bot_edit_message(bot_token, channel_id, linked_id, new_text, has_media)
-                                await asyncio.sleep(0.5)
-                        elif gone:
-                            # Message deleted — the bet was retracted. Retire it
-                            # instead of broadcasting a result for it.
-                            _retire_deleted(entry, cache, cache_key)
-                            continue
+                    elif gone:
+                        # Message deleted — the bet was retracted. Retire it
+                        # instead of broadcasting a result for it.
+                        _retire_deleted(entry, cache, cache_key)
+                        continue
 
-                nr_pick_results = []
-                for i in unbroadcast:
-                    pick = picks[i]
-                    lv = leg_verdicts[str(i)]
-                    if not pick.get("sport"):
-                        pick["sport"] = lv.get("sport", sport)
-                    nr_pick_results.append((pick, lv["verdict"], odds_by_pick.get(str(i), {}).get("odds")))
-                # Standalone legs broadcast as their own lines; the parlay ticket
-                # (all its legs + combined price) joins only when one of its legs
-                # is among the newly-broadcast. Everything is resolved or moot on
-                # this path, so a ticket that joins is by definition settled.
-                bc_results = _bc_results_for(
-                    picks, list(unbroadcast), nr_pick_results,
-                    leg_verdicts, odds_by_pick, sport, include_ticket=True,
-                )
-                # Queued, not sent: the end-of-cycle flush marks these legs
-                # broadcasted and persists BEFORE sending, so the "can never
-                # re-broadcast after an abort" guarantee still holds — an abort
-                # before the flush leaves them broadcasted=False and this same
-                # path re-queues them next cycle.
-                _queue_broadcast(
-                    pending_broadcasts,
-                    cache_key=cache_key, channel_id=channel_id, message_id=msg_id,
-                    capper=capper, reply_to_id=reply_to_id,
-                    bc_results=bc_results, sheets_results=nr_pick_results,
-                    leg_indices=list(unbroadcast), mark_all_resolved=False,
-                    html_text=html_text, msg_date=msg_date, sport=sport,
-                    picks=picks, leg_verdicts=leg_verdicts, odds_by_pick=odds_by_pick,
-                )
-                entry["leg_verdicts"] = leg_verdicts
-                dirty = True
-                graded_count += len(unbroadcast)
-                for i in unbroadcast:
-                    pick = picks[i]
-                    emoji = VERDICT_EMOJI.get(leg_verdicts[str(i)]["verdict"], "")
-                    desc = pick.get("description", "")[:40]
-                    print(f"  {emoji} {cache_key} {capper[:15]:<15} {desc} (broadcast-only)")
+            nr_pick_results = []
+            for i in unbroadcast:
+                pick = picks[i]
+                lv = leg_verdicts[str(i)]
+                if not pick.get("sport"):
+                    pick["sport"] = lv.get("sport", sport)
+                nr_pick_results.append((pick, lv["verdict"], odds_by_pick.get(str(i), {}).get("odds")))
+            # Standalone legs broadcast as their own lines; the parlay ticket
+            # (all its legs + combined price) joins only when one of its legs
+            # is among the newly-broadcast AND the ticket is settled — a leg
+            # of a live ticket never qualifies for `unbroadcast` above, so an
+            # undecided ticket stays out entirely.
+            bc_results = _bc_results_for(
+                picks, list(unbroadcast), nr_pick_results,
+                leg_verdicts, odds_by_pick, sport, include_ticket=ticket_done,
+            )
+            # Queued, not sent: the end-of-cycle flush marks these legs
+            # broadcasted and persists BEFORE sending, so the "can never
+            # re-broadcast after an abort" guarantee still holds — an abort
+            # before the flush leaves them broadcasted=False and this same
+            # path re-queues them next cycle.
+            _queue_broadcast(
+                pending_broadcasts,
+                cache_key=cache_key, channel_id=channel_id, message_id=msg_id,
+                capper=capper, reply_to_id=reply_to_id,
+                bc_results=bc_results, sheets_results=nr_pick_results,
+                leg_indices=list(unbroadcast), mark_all_resolved=False,
+                html_text=html_text, msg_date=msg_date, sport=sport,
+                picks=picks, leg_verdicts=leg_verdicts, odds_by_pick=odds_by_pick,
+            )
+            entry["leg_verdicts"] = leg_verdicts
+            dirty = True
+            graded_count += len(unbroadcast)
+            for i in unbroadcast:
+                pick = picks[i]
+                emoji = VERDICT_EMOJI.get(leg_verdicts[str(i)]["verdict"], "")
+                desc = pick.get("description", "")[:40]
+                print(f"  {emoji} {cache_key} {capper[:15]:<15} {desc} (broadcast-only)")
+        if fully_resolved:
             continue
 
         # Check if all resolved legs are already broadcast
