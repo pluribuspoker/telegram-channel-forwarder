@@ -181,6 +181,7 @@ Classification rules:
 - "Snakes" is ambiguous and must NOT be resolved by nickname alone: it is standard US betting slang for the Arizona Diamondbacks (MLB), and it is also shorthand for the Maryland Whipsnakes (PLL lacrosse). Default "Snakes" to the Arizona Diamondbacks. Resolve "Snakes" to the Maryland Whipsnakes ONLY when the message carries lacrosse context — the words "PLL"/"lacrosse"/"@PremierLacrosse", the full "Whipsnakes", or another PLL club named as the OPPONENT (Outlaws, Chaos, Waterdogs, Archers, Cannons, Redwoods, Atlas). When that happens "Snakes" is still the side being bet: put "Maryland Whipsnakes" in "teams", never the opponent. "Snakes" is never a KBO team.
 - If a single surname with a moneyline has no clear sport context and is not a known boxer or MMA fighter, default to UFC.
 - For parlays: list each leg as a separate pick with its REAL bet_type (moneyline, spread, etc.) and set is_parlay_leg=true on each. Do NOT use bet_type="parlay". When players/teams are slash-separated (e.g. "FAA/Shapovalov MLP" or "SPURS/GARCIA MLP"), split them into ONE pick per player/team — do not put two teams in one pick's teams field. IMPORTANT: when multiple bets are combined on a single line with "+" or "&" (e.g. "Egypt Double Chance + Under 2.5 Goals"), that is a parlay — split into separate picks and set is_parlay_leg=true on each leg.
+- Teasers ("6 pt teaser", "7pt teaser: X / Y"): a teaser is a parlay whose legs are listed at their ALREADY-TEASED lines — the stated number IS the bet. Parse each leg as its own pick at exactly the stated line with is_parlay_leg=true; NEVER add or subtract the teaser points ("7pt teaser: Rams +0.5" = Rams +0.5, NOT +7.5). A stated "PK"/"pick'em" teaser leg = spread with line 0 (the team just has to win; a tie pushes).
 - Cross-sport parlays: if legs belong to different sports (e.g. one NBA team + one UFC fighter), set the pick-level "sport" field to override the top-level sport for that leg. Leave pick "sport" as null when it matches the top-level sport.
 - Double chance: "X or Draw", "Draw or X", "X or Y" bets that cover two of three outcomes. Use bet_type="double_chance". Put the first-named team in "teams". line and direction should be null.
 - Draw no bet (DNB): "X draw no bet", "X DNB". Like moneyline but draw = refund. Use bet_type="draw_no_bet". Put the team in "teams". line and direction should be null.
@@ -485,6 +486,71 @@ def _fix_bare_game_total(parsed: dict, text: str) -> None:
               f"{floor:g} → game total")
 
 
+# A stated teaser line: a signed spread-sized number ("+0.5", "-8"), not the
+# trailing half of a record ("29-12") or a price ("-110" — abs >= 60 is never a
+# tease), or a pick'em token. PK requires the word boundary so "PKC" etc. pass.
+_TEASER_RE = re.compile(r"\bteasers?\b", re.IGNORECASE)
+_STATED_LINE_RE = re.compile(r"(?<![\w.])([+-]\d+(?:\.\d+)?)(?!\s*pt\b)\b")
+_PK_RE = re.compile(r"\bpk\b|\bpick\s*'?em\b", re.IGNORECASE)
+
+
+def _fix_teaser_stated_lines(parsed: dict, text: str) -> None:
+    """Re-pin a teaser leg's line to the number the message actually states.
+
+    A teaser lists its legs at their ALREADY-TEASED lines — "7 pt teaser:
+    Eagles PK / Rams +0.5" is Eagles PK and Rams +0.5, but the model read the
+    stated lines as pre-tease and parsed +7/+7.5 (FCS, 2026-09-20), grading
+    every teaser leg ~7 points too generously: a leg losing by 1-7 would have
+    graded WIN. Verdicts happened to hold there (both teams won outright);
+    the class doesn't.
+
+    Fires only on the unambiguous shape: the message says "teaser", the pick
+    is a parlay-leg spread, its team tokens sit in exactly ONE slash segment
+    (same >3-char token rule as _mark_slash_parlay_legs) across all
+    non-blockquote lines that yield exactly one stated-line candidate — a
+    signed number below 60 (prices and record fragments never qualify) or a
+    PK/pick'em token (= line 0). Anything ambiguous is left alone, and the
+    description is rewritten so the grade prompt argues with nothing.
+    """
+    if not _TEASER_RE.search(text):
+        return
+    for pick in parsed.get("picks") or []:
+        if not pick.get("is_parlay_leg") or pick.get("bet_type") != "spread":
+            continue
+        tokens = {
+            w for subj in (pick.get("teams") or [])
+            for w in re.split(r"[^\w'-]+", subj.lower()) if len(w) > 3
+        }
+        if not tokens:
+            continue
+        stated: list[float] = []
+        ambiguous = False
+        for line in text.split("\n"):
+            if line.lstrip().startswith(">"):
+                continue
+            for seg in line.split("/"):
+                low = seg.lower()
+                if not any(t in low for t in tokens):
+                    continue
+                nums = [float(m) for m in _STATED_LINE_RE.findall(seg)
+                        if abs(float(m)) < 60]
+                if _PK_RE.search(seg):
+                    nums.append(0.0)
+                if len(nums) == 1:
+                    stated.append(nums[0])
+                elif nums:
+                    ambiguous = True  # a segment this pick owns names two lines
+        if ambiguous or len(stated) != 1 or stated[0] == pick.get("line"):
+            continue
+        old = pick.get("line")
+        pick["line"] = stated[0]
+        subject = (pick.get("teams") or [""])[0] or pick.get("description", "")
+        display = "PK" if stated[0] == 0 else f"{stated[0]:+g}"
+        pick["description"] = f"{subject} {display} (teaser leg)"
+        print(f"    [parse] teaser leg stated {display} ≠ parsed "
+              f"{old} → stated line")
+
+
 async def claude_parse(
     text: str,
     date: str | None = None,
@@ -725,7 +791,8 @@ async def claude_parse(
                     break
 
     if parsed:
-        _mark_slash_parlay_legs(parsed, text)
+        _mark_slash_parlay_legs(parsed, text)   # before teaser fix: it needs the flags
+        _fix_teaser_stated_lines(parsed, text)
         _fix_bare_game_total(parsed, text)
 
     return parsed
