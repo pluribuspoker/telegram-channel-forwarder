@@ -86,7 +86,8 @@ class _ClassifyError(Exception):
 
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
-SESSION = os.environ["TELEGRAM_SESSION"]
+BOT_SESSION = os.environ.get("BOT_SESSION", "")
+BOT_TOKEN = os.environ["BOT_TOKEN"]
 
 # ─── DB ──────────────────────────────────────────────────────────────────────
 
@@ -496,8 +497,12 @@ async def send_pick(tweet: dict, dest: int | str, dry_run: bool = False):
         print(f"  [dry-run] Would send:\n    {msg[:160]}...")
         return
 
-    client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
-    await client.start()
+    # Send as the BOT, never TELEGRAM_SESSION — that session IS the operator's
+    # own account, and Telegram suppresses notifications for your own outgoing
+    # messages on every device, so user-sent posts land silently (2026-09-22).
+    # The bot is a channel admin; tracker/daemon edits are bot-side already.
+    client = TelegramClient(StringSession(BOT_SESSION), API_ID, API_HASH)
+    await client.start(bot_token=BOT_TOKEN)
     try:
         entity = await client.get_entity(dest)
         # Download tweet images
