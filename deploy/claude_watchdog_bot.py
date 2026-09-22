@@ -8,17 +8,18 @@ the main Claude bot is stuck (context full, hanging, plan mode, etc.).
 
 Commands (only responds to ALLOWED_USER_ID):
   /restart  — restart the claude-channels service
+  /tmux     — capture last 50 lines of Claude's tmux pane (see what it's doing)
   /status   — show service status + last activity
   /logs     — show last 20 lines of claude-channels journal
-  /kill     — force-kill all claude/bun processes and restart
-  /ping     — responds "pong" (liveness check)
-  /mem      — live RAM + swap usage + top consumers (alias /ram)
-  /tmux     — capture last 50 lines of Claude's tmux pane (see what it's doing)
   /model    — show or switch the model, live and for restarts (credit limits)
-  /effort   — set the reasoning effort level
   /limit    — probe the session's model: is it serving, or out of credits?
+  /mem      — live RAM + swap usage + top consumers (alias /ram)
+  /effort   — set the reasoning effort level
+  /kill     — force-kill all claude/bun processes and restart
+  /auth     — check whether Claude's credentials still work
   /reauth   — mint a new 1-year OAuth token (start; DMs a login URL)
   /authcode — finish re-auth by pasting the code from that URL
+  /ping     — responds "pong" (liveness check)
 
 Re-auth lives here rather than in Claude itself for the obvious reason: it is
 needed precisely when Claude can't answer. This bot is a separate service with
@@ -61,6 +62,27 @@ if env_file.exists():
 TOKEN = os.environ.get("WATCHDOG_BOT_TOKEN", "")
 ALLOWED_USER_ID = int(os.environ.get("WATCHDOG_USER_ID", "0"))
 SERVICE = "claude-channels.service"
+
+# Telegram menu (default scope), registered on every startup so the order
+# lives here, not in a one-off curl. Usage-first: /restart dominates the
+# journal's 30-day window, then the what's-happening cluster, the
+# credit-limit kit, and last the rare recovery commands.
+MENU_COMMANDS = [
+    ("restart", "Restart claude-channels (fresh context)"),
+    ("tmux", "What Claude is doing right now"),
+    ("status", "Service status"),
+    ("logs", "Last 20 journal lines"),
+    ("model", "Show or switch Claude's model (credit limits)"),
+    ("limit", "Is the session's model out of credits right now?"),
+    ("mem", "RAM + swap usage"),
+    ("effort", "Set reasoning effort: low..max"),
+    ("kill", "Force-kill and restart"),
+    ("auth", "Check if Claude credentials still work"),
+    ("reauth", "Mint a new 1-year token (fixes Login expired)"),
+    ("authcode", "Finish re-auth with the code"),
+    ("ping", "Watchdog liveness check"),
+    ("help", "List commands"),
+]
 
 # --- nightly-audit card buttons (scripts/ungraded_audit.py sends them) ----
 APP_DIR = Path(__file__).resolve().parent.parent
@@ -564,26 +586,36 @@ async def handle_message(update, context):
     elif text == "/help":
         await msg.reply_text(
             "Emergency watchdog commands:\n"
-            "/ping — liveness check\n"
-            "/mem — live RAM + swap usage (alias /ram)\n"
-            "/status — service status\n"
             "/restart — restart claude-channels\n"
-            "/kill — force-kill and restart\n"
-            "/logs — last 20 journal lines\n"
             "/tmux — see what Claude is doing right now\n"
+            "/status — service status\n"
+            "/logs — last 20 journal lines\n"
             "/model — show/switch model (fixes \"You've reached your limit\")\n"
-            "/effort — low|medium|high|xhigh|max\n"
             "/limit — is the session's model out of credits right now?\n"
+            "/mem — live RAM + swap usage (alias /ram)\n"
+            "/effort — low|medium|high|xhigh|max\n"
+            "/kill — force-kill and restart\n"
             "/auth — check whether Claude's credentials still work\n"
-            "/reauth — mint a new 1-year token (fixes \"Login expired\")"
+            "/reauth — mint a new 1-year token (fixes \"Login expired\")\n"
+            "/ping — liveness check"
         )
 
 
 def main():
+    from telegram import BotCommand
     from telegram.ext import (ApplicationBuilder, CallbackQueryHandler,
                               MessageHandler, filters)
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    async def register_menu(app):
+        # Menu order is cosmetic — the escape hatch must come up regardless.
+        try:
+            await app.bot.set_my_commands(
+                [BotCommand(c, d) for c, d in MENU_COMMANDS]
+            )
+        except Exception as exc:
+            log.warning("setMyCommands failed: %s", exc)
+
+    app = ApplicationBuilder().token(TOKEN).post_init(register_menu).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_audit_callback))
