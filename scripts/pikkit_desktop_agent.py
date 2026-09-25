@@ -89,7 +89,7 @@ def poll(now: float) -> dict | None:
     rc, out = ssh(
         f"mkdir -p {REMOTE_DIR} && printf '%s\\n' {int(now)} > {REMOTE_DIR}/heartbeat.tmp "
         f"&& mv {REMOTE_DIR}/heartbeat.tmp {REMOTE_DIR}/heartbeat && chown -R forwarder:forwarder {REMOTE_DIR}; "
-        f"cat {REMOTE_DIR}/request.json 2>/dev/null"
+        f"cat {REMOTE_DIR}/request.json 2>/dev/null; exit 0"  # no request file is not a failure
     )
     if rc != 0:
         log.warning("poll failed rc=%s: %s", rc, out[-300:])
@@ -103,7 +103,7 @@ def poll(now: float) -> dict | None:
 
 
 def read_request() -> dict | None:
-    rc, out = ssh(f"cat {REMOTE_DIR}/request.json 2>/dev/null")
+    rc, out = ssh(f"cat {REMOTE_DIR}/request.json 2>/dev/null; exit 0")
     if rc != 0 or not out.strip():
         return None
     try:
