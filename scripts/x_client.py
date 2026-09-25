@@ -47,15 +47,18 @@ Two upstream/library quirks are worked around here so every caller gets them:
      candidate now serves this build, page-hopping no longer self-heals (the
      rollout was staged across X's edge starting 2026-09-23, which is why
      failures were intermittent for a day before going total on 2026-09-24).
-     Fix: `_parse_anim_idx`/`_find_indices_url` below scan the page-linked
-     scripts AND the .js files those reference (early-stopping, sentry-filter
-     first since it's the observed carrier), monkeypatched over
-     `twscrape.xclid.parse_anim_idx` — which `load_keys` resolves from module
-     globals at call time, same mechanism as the get_scripts_list rebind. This
-     supersedes the hand-patched level-1-only `_find_indices_url` in
-     site-packages (out-of-repo state a reinstall would lose anyway). Pinned by
-     `scripts/test_xclid_scripts_parse.py` over the verbatim 2026-09-24
-     page/chunk bytes.
+     Fix: `_parse_anim_idx`/`_find_indices_url` below walk the chunk graph
+     breadth-first from the page-linked scripts (3 deep, fetch-budgeted,
+     early-stopping, sentry-filter first since it's the observed carrier),
+     monkeypatched over `twscrape.xclid.parse_anim_idx` — which `load_keys`
+     resolves from module globals at call time, same mechanism as the
+     get_scripts_list rebind. If X renames the file away from both known names,
+     a content-signature last resort (clustered `(x[N],16)` sites) picks it —
+     loudly, and marked in `bootstrap_report()` so `diagnose_failure()` blames
+     the build, not the cookies. This supersedes the hand-patched level-1-only
+     `_find_indices_url` in site-packages (out-of-repo state a reinstall would
+     lose anyway). Pinned by `scripts/test_xclid_scripts_parse.py` over the
+     verbatim 2026-09-24 page/chunk bytes.
 
   2. add_account_cookies() silently ignores rotated cookies.
      It's a no-op when the account already exists, so twscrape keeps using the
@@ -149,10 +152,40 @@ _INDICES_FILE_RE = re.compile(r"(?:\.{0,2}/)?[\w./-]*?\b(?:ondemand\.s|sign\.o)[
 _JS_REF_RE = re.compile(r"""["'`]((?:\.{0,2}/)?[\w./-]+\.js)["'`]""")
 # Bound the scan so a future build change degrades to a fast failure (the
 # 7-page × 3-attempt loop above this multiplies everything), and batch fetches
-# so an early hit stops the scan after at most one batch of waste.
-_SCAN_WAVE1_CAP = 60
-_SCAN_WAVE2_CAP = 150
+# so an early hit stops the scan after at most one batch of waste. Depth 1 is
+# the page-linked scripts; sign.o sat at depth 2 on 2026-09-24, so depth 3 is
+# one more hop of headroom for the next move.
+_SCAN_MAX_DEPTH = 3
+_SCAN_FETCH_BUDGET = 400
 _SCAN_BATCH = 16
+# Content-signature last resort, for when X renames the indices file away from
+# both known names. 4+ `(x[N],16)` parseInt sites clustered within a few hundred
+# bytes is the observed shape of every real indices file ([15,34,11,27] in the
+# 2026-08-24 ondemand.s, [10,5,34,26] across 173 bytes in the 2026-09-24
+# sign.o); incidental parseInt-hex code elsewhere is scattered and fails the
+# cluster test. A wrong pick is worse than a loud failure UNLESS it is marked —
+# hence the bootstrap-report flag, which makes diagnose_failure() blame the
+# build instead of the cookies.
+_SIG_MIN_SITES = 4
+_SIG_MAX_SPAN = 4096
+
+# Per-process XClIdGen bootstrap health (see bootstrap_report). Never reset:
+# the watcher is a oneshot, so one process = one run.
+_BOOTSTRAP_REPORT: dict = {"create_failures": 0, "fallback_page": None, "heuristic": False}
+
+
+def bootstrap_report() -> dict:
+    """This process's XClIdGen bootstrap health, as a copy.
+
+    create_failures — create() calls that failed on EVERY candidate page (each
+                      is one twscrape "XClIdGen creation attempt N/3 failed")
+    fallback_page   — the non-primary _XCLID_PAGES entry that last succeeded
+    heuristic       — the indices file was picked by content signature, not name
+
+    All zero/None/False on a clean run. Anything else while requests still
+    succeed is X's build shifting under us (trent_watcher's early warning).
+    """
+    return dict(_BOOTSTRAP_REPORT)
 
 
 async def _fetch_text(url: str, clt) -> str:
@@ -162,48 +195,113 @@ async def _fetch_text(url: str, clt) -> str:
         return ""
 
 
+def _is_carrier(url: str) -> bool:
+    return url.rsplit("/", 1)[-1].startswith("sentry-filter")
+
+
+# What the scan needs from one chunk body, keyed by its content-hashed URL:
+# (indices-file URL it names, resolved x-web/responsive-web refs, content
+# signature (span, size, sites)). Process-scoped so repeat scans of one graph
+# download nothing: a failed run scans it ~28 times (7 pages × 3 twscrape create
+# attempts + diagnose_failure) inside the watcher's 90s fetch timeout, and a
+# full miss is _SCAN_FETCH_BUDGET fetches — re-downloading that per scan would
+# turn a loud bootstrap failure into the silent "Rate-limited" timeout. Failed
+# (empty) fetches are never cached, so the next scan retries them.
+_CHUNK_DIGESTS: dict[str, tuple[str | None, tuple[str, ...], tuple[int, int, int] | None]] = {}
+
+
+def _digest_chunk(url: str, body: str):
+    m = _INDICES_FILE_RE.search(body)
+    if m:
+        return urljoin(url, m.group(0)), (), None
+    sig = None
+    sites = list(_xclid.INDICES_REGEX.finditer(body))
+    if len(sites) >= _SIG_MIN_SITES:
+        span = sites[-1].end() - sites[0].start()
+        if span <= _SIG_MAX_SPAN:
+            sig = (span, len(body), len(sites))
+    refs: dict[str, None] = {}
+    for ref in _JS_REF_RE.findall(body) + _XWEB_ASSET_RE.findall(body):
+        full = urljoin(url, ref)
+        if "/x-web/" in full or "/responsive-web/" in full:
+            refs[full] = None
+    return None, tuple(refs), sig
+
+
 async def _find_indices_url(scripts: list[str], clt) -> str:
     """Locate the indices file behind the page's script graph (quirk 1c).
 
-    Wave 1 scans the page-linked scripts' bodies for a sign.o/ondemand.s
-    reference while collecting the .js files they reference; wave 2 scans
-    those. `sentry-filter-*` chunks go first in wave 2 — the observed carrier
-    of the sign.o import in the 2026-09 build — so the common case costs ~2
-    extra fetches, while a moved carrier is still found by the full scan.
+    Breadth-first: depth 1 is the page-linked scripts, each next frontier the
+    x-web/responsive-web .js files the previous one references, up to
+    _SCAN_MAX_DEPTH deep and _SCAN_FETCH_BUDGET chunks in total (cached ones
+    count too, so every call walks the same graph). The first body naming
+    sign.o/ondemand.s wins immediately. `sentry-filter-*` chunks go first in
+    every frontier — the observed carrier of the sign.o import in the 2026-09
+    build — so the common case costs ~17 fetches, while a moved carrier is still
+    found by the full scan. Only when NO body names the file does the content
+    signature (_SIG_MIN_SITES) decide: tightest cluster wins, logged loudly and
+    marked in the bootstrap report.
     """
-    wave1 = list(scripts)[:_SCAN_WAVE1_CAP]
-    seen = set(wave1)
-    refs: list[str] = []
-    for i in range(0, len(wave1), _SCAN_BATCH):
-        batch = wave1[i : i + _SCAN_BATCH]
-        bodies = await asyncio.gather(*(_fetch_text(u, clt) for u in batch))
-        for url, body in zip(batch, bodies):
-            m = _INDICES_FILE_RE.search(body)
-            if m:
-                return urljoin(url, m.group(0))
-            for ref in _JS_REF_RE.findall(body) + _XWEB_ASSET_RE.findall(body):
-                full = urljoin(url, ref)
-                if ("/x-web/" in full or "/responsive-web/" in full) and full not in seen:
-                    seen.add(full)
-                    refs.append(full)
-    # Stable sort: carrier candidates first, otherwise first-seen order.
-    refs.sort(key=lambda u: 0 if u.rsplit("/", 1)[-1].startswith("sentry-filter") else 1)
-    wave2 = refs[:_SCAN_WAVE2_CAP]
-    for i in range(0, len(wave2), _SCAN_BATCH):
-        batch = wave2[i : i + _SCAN_BATCH]
-        bodies = await asyncio.gather(*(_fetch_text(u, clt) for u in batch))
-        for url, body in zip(batch, bodies):
-            m = _INDICES_FILE_RE.search(body)
-            if m:
-                return urljoin(url, m.group(0))
+    frontier = list(dict.fromkeys(scripts))
+    seen = set(frontier)
+    candidates: list[tuple[int, int, str, int]] = []  # (span, body size, url, sites)
+    scanned: list[int] = []  # chunks per depth, for the summary
+    fetched = 0
+    for depth in range(1, _SCAN_MAX_DEPTH + 1):
+        if not frontier or fetched >= _SCAN_FETCH_BUDGET:
+            break
+        # Stable sort: carrier candidates first, otherwise first-seen order.
+        frontier.sort(key=lambda u: 0 if _is_carrier(u) else 1)
+        frontier = frontier[: _SCAN_FETCH_BUDGET - fetched]
+        expand = depth < _SCAN_MAX_DEPTH and fetched + len(frontier) < _SCAN_FETCH_BUDGET
+        nxt: list[str] = []
+        for i in range(0, len(frontier), _SCAN_BATCH):
+            batch = frontier[i : i + _SCAN_BATCH]
+            todo = [u for u in batch if u not in _CHUNK_DIGESTS]
+            bodies = dict(zip(todo, await asyncio.gather(*(_fetch_text(u, clt) for u in todo))))
+            fetched += len(batch)
+            for url in batch:
+                digest = _CHUNK_DIGESTS.get(url)
+                if digest is None:
+                    if not bodies.get(url):
+                        continue  # failed fetch: nothing to learn, retried next scan
+                    digest = _CHUNK_DIGESTS[url] = _digest_chunk(url, bodies[url])
+                named, refs, sig = digest
+                if named:
+                    return named
+                if sig:
+                    candidates.append((sig[0], sig[1], url, sig[2]))
+                if expand:
+                    for full in refs:
+                        if full not in seen:
+                            seen.add(full)
+                            nxt.append(full)
+        scanned.append(len(frontier))
+        frontier = nxt
+
+    summary = (
+        f"scanned {'+'.join(map(str, scanned)) or 0} chunks by depth, "
+        f"limits {_SCAN_MAX_DEPTH} deep / {_SCAN_FETCH_BUDGET} fetches"
+    )
+    if candidates:
+        span, size, url, sites = min(candidates)
+        _BOOTSTRAP_REPORT["heuristic"] = True
+        _log.warning(
+            "XClIdGen indices file picked by CONTENT HEURISTIC: %s (%d clustered "
+            "(x[N],16) sites within %d bytes; %d candidate(s); %s). No chunk names "
+            "sign.o/ondemand.s any more — X renamed the file: update "
+            "_INDICES_FILE_RE in scripts/x_client.py.",
+            url, sites, span, len(candidates), summary,
+        )
+        return url
     raise Exception(
-        "Couldn't get XClientTxId indices script "
-        f"(scanned {len(wave1)} linked + {len(wave2)} referenced chunks)"
+        f"Couldn't get XClientTxId indices script ({summary}; no name or "
+        "content-signature match)"
     )
 
 
 async def _parse_anim_idx(text: str, clt) -> list[int]:
-    """`twscrape.xclid.parse_anim_idx` with the two-level chunk scan (quirk 1c)."""
+    """`twscrape.xclid.parse_anim_idx` with the breadth-first chunk scan (quirk 1c)."""
     scripts = _get_scripts_list(text)
     direct = [u for u in scripts if _INDICES_FILE_RE.search(u)]
     url = direct[0] if direct else await _find_indices_url(scripts, clt)
@@ -238,6 +336,7 @@ def patch_xclid() -> None:
                     errors.append(f"{url} -> {type(e).__name__}: {e}")
                     continue
                 if idx > 0:
+                    _BOOTSTRAP_REPORT["fallback_page"] = url
                     _log.warning(
                         "XClIdGen recovered via fallback page %s; page(s) ahead of "
                         "it no longer ship the indices chunk — move it to the front "
@@ -247,6 +346,7 @@ def patch_xclid() -> None:
                 return _xclid.XClIdGen(vk_bytes, anim_key)
         finally:
             await clt.aclose()
+        _BOOTSTRAP_REPORT["create_failures"] += 1
         raise XClIdBootstrapError(
             "XClIdGen bootstrap failed on every candidate page — X likely changed "
             "its web build again; none still ship the transaction-id indices chunk. "
@@ -271,12 +371,25 @@ async def diagnose_failure() -> tuple[str, str]:
       ("auth", detail)      — XClIdGen builds fine (anti-bot layer OK), so an
           authenticated request being rejected points at the cookies
           (expired/revoked) — refresh X_AUTH_TOKEN / X_CT0.
+
+    A bootstrap that only succeeded via the content heuristic counts as
+    "bootstrap": a wrong indices pick yields rejected requests that look exactly
+    like dead cookies, the historical wrong-way alert.
     """
     patch_xclid()
     try:
         await _xclid.XClIdGen.create()
     except Exception as e:
         return ("bootstrap", f"{type(e).__name__}: {e}")
+    if bootstrap_report()["heuristic"]:
+        return (
+            "bootstrap",
+            "XClIdGen bootstrap succeeded only via the content heuristic (no chunk "
+            "names sign.o/ondemand.s any more). If authenticated requests still "
+            "fail, the heuristic likely picked the wrong indices file — update "
+            "_INDICES_FILE_RE / the scan in scripts/x_client.py (code fix); the "
+            "cookies are probably fine.",
+        )
     return (
         "auth",
         "XClIdGen bootstrap succeeded (anti-bot layer OK), so an authenticated "
