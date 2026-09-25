@@ -19,6 +19,8 @@ Commands (only responds to ALLOWED_USER_ID):
   /auth     — check whether Claude's credentials still work
   /reauth   — mint a new 1-year OAuth token (start; DMs a login URL)
   /authcode — finish re-auth by pasting the code from that URL
+  /pikkit   — refresh the Pikkit token from a phone (the desktop runs Chrome)
+  /pikkitcode — finish it with the SMS code
   /ping     — responds "pong" (liveness check)
 
 Re-auth lives here rather than in Claude itself for the obvious reason: it is
@@ -42,6 +44,7 @@ import time
 from pathlib import Path
 
 from claude_auth_watchdog import AUTH_ENV, probe as auth_probe
+import pikkit_relay as relay
 from claude_models import (
     CLAUDE_SETTINGS, EFFORT_LEVELS, HOME_DIR, MODEL_CHOICES, PANE,
     launched_model, named, resolve_model, session_model, settings_model,
@@ -80,6 +83,8 @@ MENU_COMMANDS = [
     ("auth", "Check if Claude credentials still work"),
     ("reauth", "Mint a new 1-year token (fixes Login expired)"),
     ("authcode", "Finish re-auth with the code"),
+    ("pikkit", "Refresh the Pikkit token from your phone"),
+    ("pikkitcode", "Finish the Pikkit refresh with the SMS code"),
     ("ping", "Watchdog liveness check"),
     ("help", "List commands"),
 ]
@@ -317,6 +322,49 @@ def finish_reauth(code: str) -> str:
     )
 
 
+# --- Pikkit token from a phone -------------------------------------------
+# The browser step (Cloudflare Turnstile) only passes on the desktop, so the
+# bot just posts a request on the relay and hands the SMS code back; the
+# desktop agent (scripts/pikkit_desktop_agent.py) does the rest and DMs.
+PIKKIT_RELAY_DIR = relay.RELAY_DIR
+
+
+def pikkit_command(arg: str) -> tuple[str, bool]:
+    """/pikkit [status|cancel] -> (reply, started)."""
+    now = time.time()
+    arg = arg.strip().lower()
+    if arg == "cancel":
+        return relay.cancel_request(now, PIKKIT_RELAY_DIR), False
+    if arg == "status":
+        _, agent = relay.agent_status(now, PIKKIT_RELAY_DIR)
+        return f"{relay.describe(relay.read_request(PIKKIT_RELAY_DIR), now)}\n{agent}", False
+    started, reply = relay.start_request(now, PIKKIT_RELAY_DIR)
+    return reply, started
+
+
+def pikkit_code_command(arg: str) -> str:
+    """/pikkitcode <digits> -> reply."""
+    code = re.sub(r"\D", "", arg)
+    _, reply = relay.relay_code(code, time.time(), PIKKIT_RELAY_DIR)
+    return reply
+
+
+async def pikkit_watch_pickup(msg) -> None:
+    """DM if the desktop never claims the request (it is off, or the agent is)."""
+    await asyncio.sleep(relay.PICKUP_TIMEOUT)
+    req = relay.read_request(PIKKIT_RELAY_DIR)
+    if req and req.get("state") == "requested":
+        _, agent = relay.agent_status(time.time(), PIKKIT_RELAY_DIR)
+        try:
+            await msg.reply_text(
+                f"\u26a0\ufe0f Nobody picked up the Pikkit request after {relay.PICKUP_TIMEOUT}s. {agent}.\n"
+                "The desktop must be on and logged in (it runs the Chrome login). "
+                "/pikkit cancel to clear it."
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def mem_summary() -> str:
     """Live RAM + swap snapshot with the top consumers and a health flag."""
     info = {}
@@ -501,6 +549,17 @@ async def handle_message(update, context):
             result = await asyncio.to_thread(finish_reauth, parts[1].strip())
             await msg.reply_text(result, disable_web_page_preview=True)
 
+    elif text.startswith("/pikkitcode"):
+        parts = raw.split(None, 1)
+        await msg.reply_text(pikkit_code_command(parts[1] if len(parts) > 1 else ""))
+
+    elif text.startswith("/pikkit"):
+        parts = raw.split(None, 1)
+        reply, started = pikkit_command(parts[1] if len(parts) > 1 else "")
+        await msg.reply_text(reply)
+        if started:
+            asyncio.get_running_loop().create_task(pikkit_watch_pickup(msg))
+
     elif text == "/auth":
         out = await asyncio.to_thread(
             run,
@@ -597,6 +656,7 @@ async def handle_message(update, context):
             "/kill — force-kill and restart\n"
             "/auth — check whether Claude's credentials still work\n"
             "/reauth — mint a new 1-year token (fixes \"Login expired\")\n"
+            "/pikkit — refresh the Pikkit token from your phone (then /pikkitcode <code>)\n"
             "/ping — liveness check"
         )
 

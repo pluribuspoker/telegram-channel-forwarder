@@ -68,22 +68,83 @@ async def _find_empty_input(page):
     return None
 
 
-async def run(phone: str, code_file: Path, wait_s: int) -> str:
+async def _dump_debug(page, debug_dir: Path, console: list, net: list, note: str) -> None:
+    """Screenshot + page state for a Turnstile post-mortem (only with --debug-dir)."""
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        await page.screenshot(path=str(debug_dir / "page.png"), full_page=True)
+    except Exception as e:  # noqa: BLE001
+        console.append(f"screenshot failed: {e}")
+    try:
+        body = await page.evaluate("document.body ? document.body.innerText : ''")
+    except Exception as e:  # noqa: BLE001
+        body = f"innerText failed: {e}"
+    info = {
+        "note": note,
+        "url": page.url,
+        "title": await page.title(),
+        "frames": [f.url for f in page.frames],
+        "body_text": body[:2000],
+        "console": console[-60:],
+        "network": net[-80:],
+    }
+    (debug_dir / "debug.json").write_text(json.dumps(info, indent=2))
+    print(f"[page-login] debug written to {debug_dir}", flush=True)
+
+
+async def _try_interactive_challenge(page, console: list) -> bool:
+    """If Turnstile rendered an interactive widget, click its checkbox once."""
+    for frame in page.frames:
+        if "challenges.cloudflare.com" not in frame.url:
+            continue
+        for sel in ('input[type="checkbox"]', "label", "body"):
+            try:
+                loc = frame.locator(sel).first
+                if await loc.count() and await loc.is_visible():
+                    await loc.click(timeout=5000)
+                    console.append(f"clicked turnstile {sel} in {frame.url[:60]}")
+                    return True
+            except Exception as e:  # noqa: BLE001
+                console.append(f"turnstile click {sel} failed: {e}")
+    return False
+
+
+async def run(phone: str, code_file: Path, wait_s: int, debug_dir: Path | None = None) -> str:
     from playwright.async_api import async_playwright
 
     reqs, resps = [], []
+    console: list[str] = []
+    net: list[str] = []
 
     def code_resp():
         return next((r for r in resps if "/login/code" in r.url), None)
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=False, channel="chrome")
-        page = await (await browser.new_context()).new_page()
-        await page.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
-        )
+        extra_args = [a for a in os.getenv("PIKKIT_CHROME_ARGS", "").split() if a]
+        ctx_kw = dict(locale="en-US", timezone_id="America/New_York",
+                      viewport={"width": 1280, "height": 800})
+        profile_dir = os.getenv("PIKKIT_PROFILE_DIR", "")
+        if profile_dir:
+            # A persistent profile looks like a real install; the ephemeral one is a tell.
+            context = await pw.chromium.launch_persistent_context(
+                profile_dir, headless=False, channel="chrome", args=extra_args, **ctx_kw
+            )
+            browser = context
+        else:
+            browser = await pw.chromium.launch(headless=False, channel="chrome", args=extra_args)
+            context = await browser.new_context(**ctx_kw)
+        page = context.pages[0] if context.pages else await context.new_page()
+        if not os.getenv("PIKKIT_KEEP_WEBDRIVER"):
+            await page.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
+            )
         page.on("request", lambda r: reqs.append(r) if "/login/" in r.url else None)
         page.on("response", lambda r: resps.append(r) if "/login/" in r.url else None)
+        if debug_dir is not None:
+            page.on("console", lambda m: console.append(f"{m.type}: {m.text[:200]}"))
+            page.on("response", lambda r: net.append(f"{r.status} {r.url[:140]}")
+                    if any(k in r.url for k in ("cloudflare", "turnstile", "pikkit")) else None)
+            page.on("requestfailed", lambda r: net.append(f"FAILED {r.failure} {r.url[:140]}"))
 
         print("[page-login] loading app.pikkit.com (real Chrome)...", flush=True)
         # "networkidle" is flaky on this SPA -- wait for the DOM, then the field.
@@ -94,12 +155,21 @@ async def run(phone: str, code_file: Path, wait_s: int) -> str:
         await page.get_by_role("button", name="Continue").click()
 
         phone_resp = None
-        for _ in range(60):
+        clicked = False
+        for tick in range(60):
             phone_resp = next((r for r in resps if "/login/phone" in r.url), None)
             if phone_resp:
                 break
+            if tick == 15 and not clicked:
+                # A datacenter IP often gets the interactive widget instead of
+                # the invisible check: give its checkbox one click.
+                clicked = await _try_interactive_challenge(page, console)
+                if clicked:
+                    print("[page-login] clicked the interactive Turnstile widget", flush=True)
             await page.wait_for_timeout(1000)
         if not phone_resp:
+            if debug_dir is not None:
+                await _dump_debug(page, debug_dir, console, net, "no /login/phone response")
             raise RuntimeError("no /login/phone response within 60s (Turnstile?)")
         sent = [r for r in reqs if "/login/phone" in r.url]
         print(f"[page-login] page sent: {json.dumps(_redact(sent[-1].post_data_json))}", flush=True)
@@ -167,10 +237,22 @@ def main() -> None:
                     help="file to drop the SMS code into (alternative: type it in the window)")
     ap.add_argument("--wait", type=int, default=420, help="seconds to wait for the code")
     ap.add_argument("--no-save", action="store_true", help="print the token; don't write .env.local")
+    ap.add_argument("--token-file", type=Path, default=None,
+                    help="write the token here (for the desktop agent) instead of .env.local")
+    ap.add_argument("--debug-dir", type=Path, default=None,
+                    help="write a screenshot + page state here when Turnstile never resolves")
     args = ap.parse_args()
 
-    session_id = asyncio.run(run(args.phone, args.code_file, args.wait))
-    if args.no_save:
+    session_id = asyncio.run(run(args.phone, args.code_file, args.wait, args.debug_dir))
+    if args.token_file is not None:
+        args.token_file.parent.mkdir(parents=True, exist_ok=True)
+        args.token_file.write_text(session_id)
+        try:
+            os.chmod(args.token_file, 0o600)
+        except OSError:
+            pass
+        print(f"[page-login] token written to {args.token_file}")
+    elif args.no_save:
         print(f"[page-login] PIKKIT_TOKEN={session_id}")
     else:
         _save_token(session_id)

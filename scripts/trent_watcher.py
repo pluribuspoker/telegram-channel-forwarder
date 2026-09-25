@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 load_dotenv(ROOT / ".env.local", override=True)
 
-from scripts.x_client import XCredentialsError, build_api, diagnose_failure
+from scripts.x_client import XCredentialsError, bootstrap_report, build_api, diagnose_failure
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -65,8 +65,9 @@ class _XFetchError(Exception):
     blaming the cookies — the 2026-07-21 outage was an anti-bot build change, not
     cookies, and the old "refresh X_AUTH_TOKEN" message sent the fix the wrong way:
       kind="missing"   — X_AUTH_TOKEN / X_CT0 absent from the environment
-      kind="bootstrap" — XClIdGen anti-bot bootstrap failed; X changed its web
-                         build. Code fix (repoint _XCLID_PAGES), NOT cookies.
+      kind="bootstrap" — XClIdGen anti-bot bootstrap failed (or only succeeded
+                         via the content heuristic); X changed its web build.
+                         Code fix in x_client.py, NOT cookies.
       kind="auth"      — bootstrap works but the request was rejected; the cookies
                          are the likely cause — refresh them.
     """
@@ -152,9 +153,10 @@ async def _fetch_impl(since: datetime, limit: int) -> list[dict]:
                 f"bootstrap failed — X likely changed its web build again. This is "
                 f"a CODE fix, not a cookie problem. {detail}",
                 kind="bootstrap",
-                remedy="Repoint the candidate pages (_XCLID_PAGES) in "
-                       "scripts/x_client.py to one still on the full webpack build, "
-                       "then redeploy. Do NOT refresh the cookies — they're fine.",
+                remedy="Code fix in scripts/x_client.py — update the indices scan "
+                       "(_INDICES_FILE_RE / _find_indices_url) or repoint "
+                       "_XCLID_PAGES, then redeploy. Do NOT refresh the cookies — "
+                       "they're fine.",
             )
         raise _XFetchError(
             f"Could not resolve @{USERNAME}. {detail}",
@@ -204,52 +206,44 @@ async def _fetch_impl(since: datetime, limit: int) -> list[dict]:
     return results
 
 
-# State for alert rate-limiting, kept outside the repo (same spot as mem_watchdog).
+# ─── Operator alerts ─────────────────────────────────────────────────────────
+#
+# Three plain-text DMs via the watchdog bot:
+#   🔴 DOWN      — only from the runner's FINAL attempt (TRENT_FINAL_ATTEMPT=0
+#                  defers it: on 2026-09-24 attempt 1 paged "DOWN" and attempt 2
+#                  succeeded 90s later); at most once per _ALERT_EVERY_HOURS.
+#   ✅ recovered — once, on the first conclusive fetch after a sent 🔴.
+#   ℹ️ degraded  — bootstrap still recovering but wobbling (failed create
+#                  attempts / fallback page / content heuristic) on
+#                  _DEGRADED_MIN_EVENTS+ runs within 24h: the staged-rollout early
+#                  warning. 2026-09-23 had 6 such runs; the 4th (19:23 ET) came
+#                  ~25h before the 2026-09-24 outage. At most once per 24h.
+
+# Alert state, kept outside the repo (same spot as mem_watchdog). A module-level
+# Path so tests can point it at a temp file.
 _ALERT_STATE = Path.home() / ".trent_watcher_state.json"
 _ALERT_EVERY_HOURS = 6
+_DEGRADED_MIN_EVENTS = 4
+_DEGRADED_WINDOW_HOURS = 24
+_DEGRADED_KEEP_HOURS = 48
+_DEGRADED_REALERT_HOURS = 24
+_RECOVERED_MSG = "✅ Trent watcher recovered — picks are flowing again."
 
 
-def _alert_operator(text: str) -> None:
-    """DM the operator via the watchdog bot, at most once per _ALERT_EVERY_HOURS.
-
-    Rate-limited so a multi-day credential outage doesn't DM every 15 minutes
-    (and so the runner's built-in retry doesn't double-send).
-    """
-    now = datetime.now(timezone.utc)
+def _load_state() -> dict:
+    """The alert state; {} when missing or corrupt. Never raises."""
     try:
-        state = json.loads(_ALERT_STATE.read_text()) if _ALERT_STATE.exists() else {}
-    except Exception:
-        state = {}
-
-    last = state.get("last_auth_alert")
-    if last:
-        try:
-            if (now - datetime.fromisoformat(last)) < timedelta(hours=_ALERT_EVERY_HOURS):
-                print("  (operator already alerted recently, not re-sending)")
-                return
-        except Exception:
-            pass
-
-    token = os.environ.get("WATCHDOG_BOT_TOKEN", "")
-    uid = os.environ.get("WATCHDOG_USER_ID", "")
-    if not token or not uid:
-        print("  WATCHDOG_BOT_TOKEN / WATCHDOG_USER_ID not set, cannot alert", file=sys.stderr)
-        return
-
-    try:
-        r = httpx.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data={"chat_id": uid, "text": text},
-            timeout=20,
-        )
-        if r.status_code != 200:
-            print(f"  alert send failed: HTTP {r.status_code}", file=sys.stderr)
-            return
+        state = json.loads(_ALERT_STATE.read_text())
+    except FileNotFoundError:
+        return {}
     except Exception as e:
-        print(f"  alert send failed: {e}", file=sys.stderr)
-        return
+        print(f"  alert state unreadable, starting fresh: {e}", file=sys.stderr)
+        return {}
+    return state if isinstance(state, dict) else {}
 
-    state["last_auth_alert"] = now.isoformat()
+
+def _save_state(state: dict) -> None:
+    """Atomic replace. Keys this version doesn't know round-trip untouched."""
     try:
         tmp = _ALERT_STATE.with_suffix(".tmp")
         tmp.write_text(json.dumps(state))
@@ -258,13 +252,162 @@ def _alert_operator(text: str) -> None:
         print(f"  could not persist alert state: {e}", file=sys.stderr)
 
 
-async def fetch_recent_tweets(since: datetime, limit: int = 50) -> list[dict]:
-    """Fetch tweets with a timeout so we don't block when rate-limited."""
+def _parse_ts(value) -> datetime | None:
+    """A tz-aware ISO timestamp from the state file, or None for anything else."""
     try:
-        return await asyncio.wait_for(_fetch_impl(since, limit), timeout=90)
+        ts = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    return ts if ts.tzinfo else None
+
+
+def _send_dm(text: str) -> bool:
+    """One plain-text DM to the operator via the watchdog bot. True if sent."""
+    token = os.environ.get("WATCHDOG_BOT_TOKEN", "")
+    uid = os.environ.get("WATCHDOG_USER_ID", "")
+    if not token or not uid:
+        print("  WATCHDOG_BOT_TOKEN / WATCHDOG_USER_ID not set, cannot alert", file=sys.stderr)
+        return False
+    try:
+        r = httpx.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": uid, "text": text},
+            timeout=20,
+        )
+    except Exception as e:
+        print(f"  alert send failed: {e}", file=sys.stderr)
+        return False
+    if r.status_code != 200:
+        print(f"  alert send failed: HTTP {r.status_code}", file=sys.stderr)
+        return False
+    return True
+
+
+def _alert_operator(text: str) -> None:
+    """Send the 🔴 DOWN DM, at most once per _ALERT_EVERY_HOURS.
+
+    Rate-limited so a multi-day outage doesn't DM every 15 minutes. A sent DM
+    arms the ✅ recovery DM (down_alerted_at); last_auth_alert keeps the
+    rate-limit window under its old name, so older state files carry over.
+    """
+    now = datetime.now(timezone.utc)
+    state = _load_state()
+    last = _parse_ts(state.get("last_auth_alert"))
+    if last and now - last < timedelta(hours=_ALERT_EVERY_HOURS):
+        print("  (operator already alerted recently, not re-sending)")
+        return
+    if not _send_dm(text):
+        return
+    state["last_auth_alert"] = state["down_alerted_at"] = now.isoformat()
+    _save_state(state)
+
+
+def _summarize_failures(text: str) -> str:
+    """Collapse a " Failures: url -> err | url -> err | …" tail to its first entry
+    plus a count — seven identical per-page failures buried the DM. The full
+    text still reaches the journal via the FATAL line."""
+    head, sep, tail = text.partition(" Failures: ")
+    if not sep:
+        return text
+    first, *rest = tail.split(" | ")
+    if not rest:
+        return text
+    err = first.partition(" -> ")[2]
+    if all(entry.partition(" -> ")[2] == err for entry in rest):
+        return f"{head}{sep}{first} (+{len(rest)} more pages, all same)"
+    return f"{head}{sep}{first} (+{len(rest)} more)"
+
+
+def _down_message(e: _XFetchError) -> str:
+    return (
+        "🔴 Trent watcher DOWN (both attempts failed) — picks are NOT being forwarded.\n\n"
+        f"{_summarize_failures(str(e))}\n\n"
+        f"Fix: {e.remedy}\n\n"
+        f"Auto-retries every 15 min; ✅ will follow on recovery. "
+        f"(Repeat alerts muted {_ALERT_EVERY_HOURS}h.)"
+    )
+
+
+def _report_fetch_failure(e: _XFetchError) -> None:
+    """FATAL to the journal always; the 🔴 DM only from the final attempt.
+
+    run_trent_watcher.sh sets TRENT_FINAL_ATTEMPT=0 on the attempt it will retry
+    60s later — a failure there is not yet an outage. Unset (manual runs) pages.
+    """
+    print(f"FATAL [{e.kind}]: {e}", file=sys.stderr)
+    if os.environ.get("TRENT_FINAL_ATTEMPT", "1") == "0":
+        print("  (TRENT_FINAL_ATTEMPT=0 — operator alert deferred to the final attempt)")
+        return
+    _alert_operator(_down_message(e))
+
+
+def _degraded_message(count: int, report: dict) -> str:
+    parts = [
+        "ℹ️ Trent watcher: X's web build may be shifting again (staged rollout) — "
+        f"{count} runs in the last 24h needed a bootstrap fallback to get through.",
+        "The watcher is still healthy and self-recovering; expect a possible code "
+        "fix if it worsens.",
+    ]
+    detail = []
+    if report.get("fallback_page"):
+        detail.append(f"fell back to {report['fallback_page']}")
+    if report.get("heuristic"):
+        detail.append("indices file found only by the content heuristic (update "
+                      "_INDICES_FILE_RE in scripts/x_client.py)")
+    if detail:
+        parts.append("This run: " + "; ".join(detail) + ".")
+    return "\n\n".join(parts)
+
+
+def _after_conclusive_fetch(report: dict, now: datetime | None = None) -> None:
+    """Health bookkeeping once a fetch PROVED X access works: the ✅ recovery DM
+    and the ℹ️ bootstrap-degradation early warning. `report` is x_client's
+    bootstrap_report() for this process."""
+    now = now or datetime.now(timezone.utc)
+    state = _load_state()
+    before = json.dumps(state, sort_keys=True)
+
+    if state.get("down_alerted_at"):
+        # Not rate-limited. A failed send keeps the flag so the next run retries;
+        # last_auth_alert stays, so the 6h DOWN window still holds after this.
+        if _send_dm(_RECOVERED_MSG):
+            del state["down_alerted_at"]
+
+    raw = state.get("degraded_events")
+    events = [
+        ts for ts in (raw if isinstance(raw, list) else [])
+        if (t := _parse_ts(ts)) and now - t <= timedelta(hours=_DEGRADED_KEEP_HOURS)
+    ]
+    if report.get("create_failures") or report.get("fallback_page") or report.get("heuristic"):
+        events.append(now.isoformat())
+    if events or raw is not None:
+        state["degraded_events"] = events
+    recent = sum(
+        1 for ts in events if now - _parse_ts(ts) <= timedelta(hours=_DEGRADED_WINDOW_HOURS)
+    )
+    last = _parse_ts(state.get("last_degraded_alert"))
+    if recent >= _DEGRADED_MIN_EVENTS and (
+        last is None or now - last >= timedelta(hours=_DEGRADED_REALERT_HOURS)
+    ):
+        if _send_dm(_degraded_message(recent, report)):
+            state["last_degraded_alert"] = now.isoformat()
+
+    if json.dumps(state, sort_keys=True) != before:
+        _save_state(state)
+
+
+async def fetch_recent_tweets(since: datetime, limit: int = 50) -> tuple[list[dict], bool]:
+    """Fetch tweets with a timeout so we don't block when rate-limited.
+
+    Returns (tweets, conclusive): conclusive means @USERNAME resolved and the
+    timeline was iterated — X access provably works, the only thing that may
+    clear a 🔴. The rate-limit timeout proves nothing either way: ([], False).
+    """
+    try:
+        return await asyncio.wait_for(_fetch_impl(since, limit), timeout=90), True
     except asyncio.TimeoutError:
         print("  Rate-limited by Twitter, skipping this run")
-        return []
+        return [], False
 
 
 # ─── Pick detection ──────────────────────────────────────────────────────────
@@ -580,19 +723,22 @@ async def main():
     since = datetime.now(timezone.utc) - timedelta(hours=args.lookback)
     print(f"Fetching @{USERNAME} tweets since {since.strftime('%H:%M UTC')}...")
     try:
-        tweets = await fetch_recent_tweets(since)
+        tweets, conclusive = await fetch_recent_tweets(since)
     except _XFetchError as e:
         # Hard stop: silently fetching 0 tweets forever is how a 2-day outage
         # hides behind "No new tweets" + a green systemd status.
         con.close()
-        print(f"FATAL [{e.kind}]: {e}", file=sys.stderr)
-        _alert_operator(
-            f"🔴 Trent watcher is DOWN — no picks are being forwarded.\n\n"
-            f"{e}\n\n"
-            f"Fix: {e.remedy}"
-        )
+        _report_fetch_failure(e)
         sys.exit(1)
     print(f"  {len(tweets)} tweets fetched")
+
+    # ✅/ℹ️ bookkeeping needs proof that X access works (a conclusive fetch, not
+    # the rate-limit timeout), and a dry run must stay traceless.
+    if conclusive and not args.dry_run:
+        try:
+            _after_conclusive_fetch(bootstrap_report())
+        except Exception as e:  # bookkeeping must never block forwarding picks
+            print(f"  alert bookkeeping failed: {e}", file=sys.stderr)
 
     # Filter to unseen
     new_tweets = [t for t in tweets if t["id"] not in seen]

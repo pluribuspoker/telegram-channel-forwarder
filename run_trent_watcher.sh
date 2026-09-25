@@ -32,6 +32,10 @@ SUCCESS=0
 
 for attempt in 1 2; do
     [ "$attempt" -gt 1 ] && log "Retry (attempt 2/2)..."
+    # Only the final attempt may page the operator: attempt 1 failing and
+    # attempt 2 succeeding 90s later is a blip, not an outage (the false 🔴
+    # DOWN of 2026-09-24). trent_watcher.py defers its alert when this is 0.
+    if [ "$attempt" -lt 2 ]; then export TRENT_FINAL_ATTEMPT=0; else export TRENT_FINAL_ATTEMPT=1; fi
     if $PYTHON scripts/trent_watcher.py 2>&1 | tee "$LOGFILE"; then
         SUCCESS=1
         break

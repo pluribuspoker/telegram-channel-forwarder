@@ -110,6 +110,18 @@ Token is saved to the local `.env.local`. Put it on the VPS with `python3 script
 python scripts/pikkit_auth.py --validate
 ```
 
+### Pikkit token from a phone (2026-09-24)
+
+`/pikkit` in the watchdog bot, then `/pikkitcode <8 digits>` when the SMS arrives — nothing else. The browser step still runs on the **desktop**, because Cloudflare Turnstile passes in real Chrome there and fails on the VPS: two attempts under Xvfb with real Chrome (with and without automation flags, persistent profile, software GL) ended in "Please complete verification and try again"; the challenge probes an IPv6-only host (`brunhild.challenges.cloudflare.com`) the droplet can't reach, on a datacenter IP with no GPU. Enabling IPv6 on the droplet might change that — untested.
+
+How it fits together (`deploy/pikkit_relay.py`, `scripts/pikkit_desktop_agent.py`, `deploy/claude_watchdog_bot.py`):
+
+- **Relay** = `/home/forwarder/pikkit_relay/request.json` (one request at a time, `requested → claimed → sms_sent → code_relayed → done | failed | expired | cancelled`, atomic writes) + `heartbeat` (agent's epoch, every poll). `/pikkit` reports the heartbeat up front ("desktop agent: online (12s ago)" / OFFLINE) and DMs a warning if nobody claims the request within 120 s. `/pikkit status`, `/pikkit cancel`.
+- **Desktop agent** = Windows logon task `PikkitDesktopAgent` (`pythonw.exe scripts/pikkit_desktop_agent.py`, no time limit, restarts on failure, single instance via localhost port 48731). One SSH session per 30 s poll (heartbeat + read, as root with the desktop's key). On a request: runs `pikkit_page_login.py` in real Chrome (a window appears on the desktop), DMs "📲 SMS sent", picks the relayed code up every 3 s, installs the token on the VPS through `set_env_local.py` (stdin), validates there, DMs ✅/🚫, marks the request. Log: `logs/pikkit_desktop_agent.log`; Turnstile post-mortems in `%LOCALAPPDATA%\pikkit_agent\debug`.
+- **Limits:** the desktop must be on and logged in (a locked screen is fine); the code lives 300 s; `--wait 420` then `expired`. The token never touches the relay.
+
+Re-register the task after moving the repo: `Register-ScheduledTask -TaskName PikkitDesktopAgent …` (see the commit that added it, 2026-09-24). Manual one-shot: `python scripts/pikkit_desktop_agent.py --once`. Tests: `scripts/test_pikkit_relay.py`.
+
 ### Token refresh 2026-09-24 — what changed and how to diagnose the next change
 
 The 2026-07 token expired ~2026-09-23 (tracker logged `[pikkit] events unavailable (403)`, NFL snapshots `event_not_found` for every game). The stock `--send-sms` step solved Turnstile fine but `/login/phone` answered `{"message": "INVALID_PHONE_NUMBER"}`:
