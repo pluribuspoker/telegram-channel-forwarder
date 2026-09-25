@@ -12,6 +12,7 @@ import logging
 import time
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -25,27 +26,92 @@ _TIMEOUT = 15  # seconds
 
 _events_cache: dict[str, dict[str, list[dict]]] = {}   # date -> sport -> [event]
 _splits_cache: dict[str, dict] = {}                     # event_id -> splits dict
-_last_401_alert: float = 0  # epoch -- rate-limit alerts to once per hour
+_session_state: bool | None = None  # per-process /login/validate verdict (None = not probed)
+_last_401_alert: float = 0  # epoch -- in-process guard on top of the stamp file
+
+# A dead Pikkit session answers 403 everywhere (never 401) -- that is how the
+# July token's death on 2026-09-11 went unnoticed for 13 days while the tracker
+# logged thousands of "events unavailable (403)" lines.  So an events 403 now
+# probes /login/validate once per process and DMs the operator when the
+# session is really gone.  Every consumer is a fresh process per timer pass,
+# so the throttle lives in a stamp file, not in memory.
+_ALERT_STAMP = Path(__file__).resolve().parent / "logs" / "pikkit_token_alert.ts"
+_ALERT_INTERVAL = 6 * 3600  # seconds between operator DMs about the same dead session
+_REFRESH_HINT = (
+    "Refresh on the desktop: python scripts/pikkit_page_login.py, then on the VPS: "
+    "python3 scripts/set_env_local.py PIKKIT_TOKEN=<token>"
+)
 
 
-def _alert_token_expired() -> None:
-    """Send a one-time-per-hour Telegram alert when the Pikkit token expires."""
+def _alert_due(now: float) -> bool:
+    """True when no alert stamp exists or the last one is older than the interval."""
+    try:
+        last = float(_ALERT_STAMP.read_text().strip() or 0)
+    except (OSError, ValueError):
+        last = 0.0
+    return now - last >= _ALERT_INTERVAL
+
+
+def _record_alert(now: float) -> None:
+    try:
+        _ALERT_STAMP.parent.mkdir(parents=True, exist_ok=True)
+        _ALERT_STAMP.write_text(f"{now:.0f}\n")
+    except OSError as e:
+        log.warning("[pikkit] could not write alert stamp %s: %s", _ALERT_STAMP, e)
+
+
+def _send_token_alert(text: str) -> bool:
+    """DM the operator through the watchdog bot, at most once per _ALERT_INTERVAL."""
     global _last_401_alert
     now = time.time()
-    if now - _last_401_alert < 3600:
-        return
-    _last_401_alert = now
+    if now - _last_401_alert < 3600 or not _alert_due(now):
+        return False
     token = os.getenv("WATCHDOG_BOT_TOKEN", "")
     uid = os.getenv("WATCHDOG_USER_ID", "")
     if not token or not uid:
-        return
-    text = "\U0001f6a8 Pikkit token expired (401). Run: python scripts/pikkit_auth.py"
+        return False
+    _last_401_alert = now
+    _record_alert(now)
     data = urllib.parse.urlencode({"chat_id": uid, "text": text}).encode()
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=10)
     except Exception:
-        pass
+        return False
+    return True
+
+
+def _alert_token_expired() -> None:
+    """Telegram alert for a 401 (throttled)."""
+    _send_token_alert("\U0001f6a8 Pikkit token expired (401). " + _REFRESH_HINT)
+
+
+def _alert_session_dead() -> None:
+    """Telegram alert when /login/validate says the session is gone (throttled)."""
+    _send_token_alert(
+        "\U0001f6a8 Pikkit session invalid: 403 on /login/validate, splits are "
+        "not being fetched. " + _REFRESH_HINT
+    )
+
+
+async def _session_alive() -> bool | None:
+    """GET /login/validate once per process. None when the probe itself fails."""
+    global _session_state
+    if _session_state is not None:
+        return _session_state
+    tok = _token()
+    if not tok:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(
+                f"{BASE}/login/validate", headers={"Authorization": tok}
+            )
+        _session_state = resp.status_code == 200
+    except Exception as e:  # noqa: BLE001 -- best-effort probe, fail open
+        log.warning("[pikkit] validate probe failed: %s", e)
+        return None
+    return _session_state
 
 
 # -- Sport mapping -------------------------------------------------------------
@@ -114,6 +180,11 @@ async def fetch_events_for_date(dt: str) -> dict[str, list[dict]]:
                 return {}
             if resp.status_code == 403:
                 log.warning("[pikkit] events unavailable (403) for %s", dt)
+                # One attempt per date per process: a dead session must not be
+                # hammered once per pick (it was ~10 x 403 per tracker pass).
+                _events_cache[dt] = {}
+                if await _session_alive() is False:
+                    _alert_session_dead()
                 return {}
             if resp.status_code != 200:
                 log.warning("[pikkit] events status %d", resp.status_code)

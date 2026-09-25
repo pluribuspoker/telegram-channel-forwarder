@@ -94,6 +94,7 @@ liability.
 - **NFL final:** T−2h is terminal; a successful final suppresses later captures
 - **Setup:** `python scripts/setup_nfl_pikkit.py` creates or validates the worksheet
 - **Manual collection:** `python scripts/fetch_nfl_pikkit.py` (read-only unless `--write`; there is no `--dry-run` flag) — **do not run it while a token you care about is live**: its capture burst gets the session revoked (see the 2026-09-24 note below); the timer is disabled until that is fixed.
+- **Dead-session detection (2026-09-24):** a revoked or expired session answers 403 everywhere, never 401 — the July token's death went unnoticed for 13 days behind thousands of `events unavailable (403)` lines. `fetch_events_for_date` now caches a 403 for the date (one attempt per date per process instead of one per pick), probes `/login/validate` once per process, and DMs the operator through the watchdog bot only when validate is not 200; the throttle is a stamp file (`logs/pikkit_token_alert.ts`, 6 h) because every consumer is a fresh process per pass. A 403 on splits stays silent (normal for finished games). Tests: `DeadSessionTests` in `scripts/test_pikkit.py`.
 - **Token generation:** `scripts/pikkit_auth.py` — must run locally (real Chrome + display), NOT on VPS. Turnstile rejects headless/bundled Chromium. Session is NOT IP-bound (tested 2026-07-24).
 
 **Two-step manual auth flow (run locally):**
