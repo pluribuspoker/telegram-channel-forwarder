@@ -1,27 +1,45 @@
 #!/usr/bin/env python3
-"""Regression: XClIdGen bootstrap must parse webpack chunk maps at any hash length.
+"""Regression: XClIdGen bootstrap must survive X's web-build changes.
 
-Pins the 2026-08-24 Trent outage. X redeployed its legacy webpack build with
-16-hex chunk hashes (7-hex for years before), so twscrape's hash-map regex
-(`[0-9a-f]{7}` exact) matched nothing and every candidate page raised "Failed
-to parse scripts" — a total XClIdGen bootstrap failure that took the watcher
-down. Also pins the subtle half of the fix: the name map must exclude hash-like
-values by the SAME length-agnostic pattern, otherwise the 16-hex hashes leak in
-as chunk NAMES and every reconstructed URL doubles the hash
+Pins two total Trent outages, both "every candidate page failed at once":
+
+2026-08-24 — X redeployed its legacy webpack build with 16-hex chunk hashes
+(7-hex for years before), so twscrape's hash-map regex (`[0-9a-f]{7}` exact)
+matched nothing and every candidate page raised "Failed to parse scripts".
+Also pins the subtle half of the fix: the name map must exclude hash-like
+values by the SAME length-agnostic pattern, otherwise the 16-hex hashes leak
+in as chunk NAMES and every reconstructed URL doubles the hash
 (`{hash}.{hash}a.js`).
 
-Fixture is the verbatim inline <script> block from https://x.com/home captured
-during the outage (real bytes, never retyped). Fully offline.
+2026-09-24 — the x-web build stopped linking its chunks in the page HTML (one
+entry script only) and the `sign.o-*.js` indices file moved behind a dynamic
+import in a chunk the entry references (`sentry-filter-*.js`): two hops from
+the HTML, so a level-1 scan found nothing on any page. Pinned over the
+verbatim capture from that night: page HTML -> entry chunk -> sentry-filter
+slice (byte-exact window [288000:304000] of the 538KB chunk, containing the
+sign.o import) -> sign.o file. `_parse_anim_idx` must walk that chain, fetch
+the carrier FIRST in wave 2 (priority), and stop early.
+
+Fixtures are verbatim captured bytes, never retyped. Fully offline.
 
     python scripts/test_xclid_scripts_parse.py
 """
+import asyncio
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urljoin
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.x_client import _get_scripts_list, patch_xclid  # noqa: E402
+from scripts.x_client import (  # noqa: E402
+    _JS_REF_RE,
+    _SCAN_BATCH,
+    _find_indices_url,
+    _get_scripts_list,
+    _parse_anim_idx,
+    patch_xclid,
+)
 from twscrape import xclid as _xclid  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "x_home_webpack_maps_20260824.html"
@@ -98,11 +116,80 @@ try:
 except Exception:
     check("script-less page raises", True)
 
-# 7. patch_xclid() actually rebinds the module-global twscrape resolves at call
-#    time (parse_anim_idx looks it up in module globals on every call).
+# 7. patch_xclid() actually rebinds the module-globals twscrape resolves at
+#    call time (load_keys/parse_anim_idx look them up on every call).
 patch_xclid()
 check("patch_xclid rebinds twscrape.xclid.get_scripts_list",
       _xclid.get_scripts_list is _get_scripts_list)
+check("patch_xclid rebinds twscrape.xclid.parse_anim_idx",
+      _xclid.parse_anim_idx is _parse_anim_idx)
+
+# --- 2026-09-24: two-level indices scan ------------------------------------
+
+FIXDIR = Path(__file__).resolve().parent / "fixtures"
+PAGE_0924 = (FIXDIR / "x_home_xweb_20260924.html").read_text()
+ENTRY_0924 = (FIXDIR / "x_entry_chunk_20260924.js").read_text()
+SENTRY_0924 = (FIXDIR / "x_sentry_filter_slice_20260924.js").read_text()
+SIGN_0924 = (FIXDIR / "x_sign_o_20260924.js").read_text()
+
+
+class _FakeResp:
+    def __init__(self, text: str):
+        self.text = text
+
+    def raise_for_status(self):
+        pass
+
+
+class _FakeClient:
+    """Serves mapped URLs; anything else raises (-> _fetch_text yields "")."""
+
+    def __init__(self, mapping: dict[str, str]):
+        self.mapping = mapping
+        self.log: list[str] = []
+
+    async def get(self, url: str, *a, **k):
+        self.log.append(url)
+        if url in self.mapping:
+            return _FakeResp(self.mapping[url])
+        raise Exception(f"unmapped {url}")
+
+
+entry_url = _get_scripts_list(PAGE_0924)[0]
+sentry_url = urljoin(entry_url, "./assets/sentry-filter-DA8h2Jwu.js")
+sign_url = urljoin(sentry_url, "./sign.o-DjU_k1xX.js")
+
+# 8. The 2026-09-24 page links exactly one script and names nothing directly —
+#    the shape that blinded the level-1 scanner.
+check("2026-09 page links a single entry script",
+      len(_get_scripts_list(PAGE_0924)) == 1, f"got {len(_get_scripts_list(PAGE_0924))}")
+check("entry references the carrier chunk", "sentry-filter-DA8h2Jwu.js" in ENTRY_0924)
+check("carrier slice holds the sign.o import", "`./sign.o-DjU_k1xX.js`" in SENTRY_0924)
+
+# 9. Full chain over the real bytes: page -> entry -> sentry-filter -> sign.o.
+clt = _FakeClient({entry_url: ENTRY_0924, sentry_url: SENTRY_0924, sign_url: SIGN_0924})
+items = asyncio.run(_parse_anim_idx(PAGE_0924, clt))
+check("indices parsed from sign.o via two-level scan",
+      items == [10, 5, 34, 26], f"got {items}")
+check("entry fetched first", clt.log[0] == entry_url)
+check("carrier prioritized to front of wave 2", clt.log[1] == sentry_url)
+check("indices file fetched last", clt.log[-1] == sign_url)
+check("early stop bounds fetch count",
+      len(clt.log) <= 2 + _SCAN_BATCH, f"{len(clt.log)} fetches")
+
+# 10. No indices reference anywhere in the graph -> raises so the page-level
+#     self-heal (next _XCLID_PAGES candidate) still engages.
+clt_miss = _FakeClient({entry_url: ENTRY_0924.replace("sentry-filter", "sentry-flitre")})
+try:
+    asyncio.run(_parse_anim_idx(PAGE_0924, clt_miss))
+    check("graph without indices file raises", False, "returned instead of raising")
+except Exception as e:
+    check("graph without indices file raises", "indices script" in str(e), str(e)[:80])
+
+# 11. Ref collector sees quoted AND backticked imports (Vite emits both).
+refs = _JS_REF_RE.findall('import("./assets/a.js");x=`./b.o-C1.js`;"no.txt"')
+check("ref regex matches quoted and backticked .js", refs == ["./assets/a.js", "./b.o-C1.js"],
+      f"got {refs}")
 
 print()
 if failures:

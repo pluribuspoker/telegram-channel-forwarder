@@ -37,15 +37,37 @@ Two upstream/library quirks are worked around here so every caller gets them:
      `parse_anim_idx` then finds `ondemand.s.{hash}a.js` in the URL list by
      itself, so this patch alone also survives a stock reinstall.
 
+  1c. The indices import moved two levels deep (2026-09-24 outage).
+     The x-web (Vite) build stopped linking its bundle chunks in the page HTML:
+     the page now links ONE entry script, and the transaction-id indices file
+     (`sign.o-*.js`, the successor of `ondemand.s-*.js`) is dynamically
+     imported from a chunk the ENTRY references (observed carrier:
+     `sentry-filter-*.js`) — two hops from the HTML. A scanner that only greps
+     the page-linked scripts finds nothing, and since every `_XCLID_PAGES`
+     candidate now serves this build, page-hopping no longer self-heals (the
+     rollout was staged across X's edge starting 2026-09-23, which is why
+     failures were intermittent for a day before going total on 2026-09-24).
+     Fix: `_parse_anim_idx`/`_find_indices_url` below scan the page-linked
+     scripts AND the .js files those reference (early-stopping, sentry-filter
+     first since it's the observed carrier), monkeypatched over
+     `twscrape.xclid.parse_anim_idx` — which `load_keys` resolves from module
+     globals at call time, same mechanism as the get_scripts_list rebind. This
+     supersedes the hand-patched level-1-only `_find_indices_url` in
+     site-packages (out-of-repo state a reinstall would lose anyway). Pinned by
+     `scripts/test_xclid_scripts_parse.py` over the verbatim 2026-09-24
+     page/chunk bytes.
+
   2. add_account_cookies() silently ignores rotated cookies.
      It's a no-op when the account already exists, so twscrape keeps using the
      cookies cached in accounts.db and pasting fresh ones into .env.local has no
      effect. We drop the account first when the stored cookies differ.
 """
 
+import asyncio
 import logging
 import os
 import re
+from urllib.parse import urljoin
 
 import bs4
 from twscrape import API
@@ -117,14 +139,91 @@ def _get_scripts_list(text: str) -> list[str]:
     ]
 
 
+# The file holding the animation indices: `ondemand.s-*.js` on the legacy
+# webpack build, `sign.o-*.js` on x-web. \b guards against substring hits like
+# `design.o-*.js`.
+_INDICES_FILE_RE = re.compile(r"(?:\.{0,2}/)?[\w./-]*?\b(?:ondemand\.s|sign\.o)[\w.-]*\.js")
+# A .js reference inside a chunk body: Vite emits both "./assets/x.js" static
+# imports and `./x.js` backticked dynamic imports; absolute URLs are covered by
+# _XWEB_ASSET_RE at the call site.
+_JS_REF_RE = re.compile(r"""["'`]((?:\.{0,2}/)?[\w./-]+\.js)["'`]""")
+# Bound the scan so a future build change degrades to a fast failure (the
+# 7-page × 3-attempt loop above this multiplies everything), and batch fetches
+# so an early hit stops the scan after at most one batch of waste.
+_SCAN_WAVE1_CAP = 60
+_SCAN_WAVE2_CAP = 150
+_SCAN_BATCH = 16
+
+
+async def _fetch_text(url: str, clt) -> str:
+    try:
+        return (await clt.get(url)).text
+    except Exception:
+        return ""
+
+
+async def _find_indices_url(scripts: list[str], clt) -> str:
+    """Locate the indices file behind the page's script graph (quirk 1c).
+
+    Wave 1 scans the page-linked scripts' bodies for a sign.o/ondemand.s
+    reference while collecting the .js files they reference; wave 2 scans
+    those. `sentry-filter-*` chunks go first in wave 2 — the observed carrier
+    of the sign.o import in the 2026-09 build — so the common case costs ~2
+    extra fetches, while a moved carrier is still found by the full scan.
+    """
+    wave1 = list(scripts)[:_SCAN_WAVE1_CAP]
+    seen = set(wave1)
+    refs: list[str] = []
+    for i in range(0, len(wave1), _SCAN_BATCH):
+        batch = wave1[i : i + _SCAN_BATCH]
+        bodies = await asyncio.gather(*(_fetch_text(u, clt) for u in batch))
+        for url, body in zip(batch, bodies):
+            m = _INDICES_FILE_RE.search(body)
+            if m:
+                return urljoin(url, m.group(0))
+            for ref in _JS_REF_RE.findall(body) + _XWEB_ASSET_RE.findall(body):
+                full = urljoin(url, ref)
+                if ("/x-web/" in full or "/responsive-web/" in full) and full not in seen:
+                    seen.add(full)
+                    refs.append(full)
+    # Stable sort: carrier candidates first, otherwise first-seen order.
+    refs.sort(key=lambda u: 0 if u.rsplit("/", 1)[-1].startswith("sentry-filter") else 1)
+    wave2 = refs[:_SCAN_WAVE2_CAP]
+    for i in range(0, len(wave2), _SCAN_BATCH):
+        batch = wave2[i : i + _SCAN_BATCH]
+        bodies = await asyncio.gather(*(_fetch_text(u, clt) for u in batch))
+        for url, body in zip(batch, bodies):
+            m = _INDICES_FILE_RE.search(body)
+            if m:
+                return urljoin(url, m.group(0))
+    raise Exception(
+        "Couldn't get XClientTxId indices script "
+        f"(scanned {len(wave1)} linked + {len(wave2)} referenced chunks)"
+    )
+
+
+async def _parse_anim_idx(text: str, clt) -> list[int]:
+    """`twscrape.xclid.parse_anim_idx` with the two-level chunk scan (quirk 1c)."""
+    scripts = _get_scripts_list(text)
+    direct = [u for u in scripts if _INDICES_FILE_RE.search(u)]
+    url = direct[0] if direct else await _find_indices_url(scripts, clt)
+
+    body = await _xclid.get_tw_page_text(url, clt)
+    items = [int(m.group(2)) for m in _xclid.INDICES_REGEX.finditer(body)]
+    if not items:
+        raise Exception("Couldn't get XClientTxId indices")
+    return items
+
+
 def patch_xclid() -> None:
     """Bootstrap XClIdGen from the first `_XCLID_PAGES` entry on the full build."""
     if getattr(_xclid.XClIdGen, "_home_patched", False):
         return
 
-    # parse_anim_idx resolves get_scripts_list from module globals at call time,
-    # so rebinding the attribute is enough.
+    # load_keys/parse_anim_idx resolve these from module globals at call time,
+    # so rebinding the attributes is enough.
     _xclid.get_scripts_list = _get_scripts_list
+    _xclid.parse_anim_idx = _parse_anim_idx
 
     async def _create_from_candidates() -> "_xclid.XClIdGen":
         clt = _xclid._make_client()
