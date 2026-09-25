@@ -415,6 +415,136 @@ class ReaderAndAnalysisTests(unittest.TestCase):
         )
 
 
+def games_and_events(count: int, kickoff: str = "2026-09-13T17:00:00+00:00"):
+    """Distinct upcoming games with their matching Pikkit listings."""
+    pairs = [
+        ("Chicago Bears", "Carolina Panthers"),
+        ("Green Bay Packers", "Minnesota Vikings"),
+        ("Dallas Cowboys", "New York Giants"),
+        ("Miami Dolphins", "Buffalo Bills"),
+    ]
+    games, events = [], []
+    for index in range(count):
+        away, home = pairs[index]
+        games.append({
+            **game(),
+            "event_id": f"nfl-{index + 1}",
+            "away_team": away,
+            "home_team": home,
+            "commence_time_utc": kickoff,
+        })
+        events.append({
+            **event(),
+            "event_id": f"pikkit-{index + 1}",
+            "away_full": away,
+            "home_full": home,
+            "start_time": kickoff.replace("+00:00", ".000Z"),
+        })
+    return games, events
+
+
+class RunLimitTests(unittest.IsolatedAsyncioTestCase):
+    """The limits that keep a run from looking like the burst Pikkit revoked."""
+
+    NOW = datetime(2026, 9, 11, 17, 5, tzinfo=timezone.utc)
+
+    def test_games_beyond_max_lead_are_not_due(self):
+        far = {**game(), "commence_time_utc": "2026-09-21T17:00:00+00:00"}
+        near = {**game(), "commence_time_utc": "2026-09-17T17:00:00+00:00"}
+
+        self.assertEqual(capture_tasks([far], [], self.NOW), [])
+        self.assertEqual(len(capture_tasks([far], [], self.NOW, max_lead=None)), 1)
+        self.assertEqual(len(capture_tasks([near], [], self.NOW)), 1)
+
+    async def test_max_captures_defers_the_rest(self):
+        games, events = games_and_events(3)
+        split_calls = []
+
+        async def loader(_date):
+            return {"NFL": events}
+
+        async def split(event_id):
+            split_calls.append(event_id)
+            return splits()
+
+        rows, outcomes = await collect_due_snapshots(
+            games, [], self.NOW,
+            event_loader=loader, split_loader=split, max_captures=2,
+        )
+
+        self.assertEqual(
+            [item["status"] for item in outcomes],
+            ["captured", "captured", "deferred"],
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(split_calls, ["pikkit-1", "pikkit-2"])
+        self.assertIn("cap of 2", outcomes[2]["note"])
+
+    async def test_unavailable_breaker_stops_the_run(self):
+        games, events = games_and_events(4)
+        split_calls = []
+
+        async def loader(_date):
+            return {"NFL": events}
+
+        async def split(event_id):
+            split_calls.append(event_id)
+            return None
+
+        rows, outcomes = await collect_due_snapshots(
+            games, [], self.NOW,
+            event_loader=loader, split_loader=split, max_unavailable=2,
+        )
+
+        self.assertEqual(rows, [])
+        self.assertEqual(
+            [item["status"] for item in outcomes],
+            ["splits_unavailable", "splits_unavailable", "deferred", "deferred"],
+        )
+        self.assertEqual(len(split_calls), 2)
+        self.assertIn("403", outcomes[3]["note"])
+
+    async def test_requests_are_paced(self):
+        games, events = games_and_events(2)
+        sleeps = []
+
+        async def loader(_date):
+            return {"NFL": events}
+
+        async def split(_event_id):
+            return splits()
+
+        async def sleeper(seconds):
+            sleeps.append(seconds)
+
+        rows, _ = await collect_due_snapshots(
+            games, [], self.NOW,
+            event_loader=loader, split_loader=split,
+            request_delay=1.5, sleeper=sleeper,
+        )
+
+        # one events call, then two splits calls: a pause before each request
+        # after the first, none before the first.
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(sleeps, [1.5, 1.5])
+
+    async def test_unlimited_run_matches_legacy_behaviour(self):
+        games, events = games_and_events(4)
+
+        async def loader(_date):
+            return {"NFL": events}
+
+        async def split(_event_id):
+            return splits()
+
+        rows, outcomes = await collect_due_snapshots(
+            games, [], self.NOW, event_loader=loader, split_loader=split,
+        )
+
+        self.assertEqual(len(rows), 4)
+        self.assertTrue(all(item["status"] == "captured" for item in outcomes))
+
+
 if __name__ == "__main__":
     unittest.main()
     analyze_snapshot,

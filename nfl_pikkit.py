@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
@@ -26,6 +27,18 @@ from nfl_lines import (
 PIKKIT_SNAPSHOTS_TAB = "nfl_pikkit_snapshots"
 BASELINE_INTERVAL = timedelta(hours=12)
 FINAL_LEAD = timedelta(hours=2)
+
+# Run limits.  Pikkit revoked the session twice (2026-09-11 and 2026-09-24)
+# within minutes of a backlog run: ~40 requests in seconds, including 403s from
+# /event/foryou for games more than a week out.  The tracker's light use
+# (a handful of requests per pass) ran 49 days on one token, so a run is
+# bounded to look like that: no far-out games, a per-run cap, spaced requests,
+# and a stop after a couple of 403s.  Never loosen these without re-proving
+# the token survives (docs/odds.md, "Token refresh 2026-09-24").
+MAX_LEAD = timedelta(days=7)
+DEFAULT_MAX_CAPTURES = 8
+DEFAULT_REQUEST_DELAY = 2.0
+DEFAULT_MAX_UNAVAILABLE = 2
 PERCENT_TOLERANCE = 0.002
 
 PIKKIT_SNAPSHOT_HEADERS = [
@@ -259,8 +272,14 @@ def capture_tasks(
     games: Iterable[dict[str, Any]],
     snapshots: Iterable[dict[str, Any]],
     now: datetime,
+    *,
+    max_lead: timedelta | None = MAX_LEAD,
 ) -> list[CaptureTask]:
-    """Return the baseline or final capture currently due for each game."""
+    """Return the baseline or final capture currently due for each game.
+
+    Games kicking off more than ``max_lead`` ahead are not due at all: Pikkit
+    answers 403 for their splits, and asking is what got the session revoked.
+    """
     now = now.astimezone(timezone.utc)
     rows = list(snapshots)
     by_event: dict[str, list[dict[str, Any]]] = {}
@@ -273,6 +292,8 @@ def capture_tasks(
         event_id = str(game.get("event_id") or "")
         kickoff = parse_time(game["commence_time_utc"])
         if not event_id or now >= kickoff:
+            continue
+        if max_lead is not None and kickoff - now > max_lead:
             continue
         existing = by_event.get(event_id, [])
         if any(
@@ -311,9 +332,21 @@ async def collect_due_snapshots(
     event_loader: EventLoader,
     split_loader: SplitLoader,
     target_event_id: str | None = None,
+    max_lead: timedelta | None = MAX_LEAD,
+    max_captures: int | None = None,
+    request_delay: float = 0.0,
+    max_unavailable: int | None = None,
+    sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """Fetch every due capture while keeping per-game failures isolated."""
-    tasks = capture_tasks(games, snapshots, now)
+    """Fetch due captures while keeping per-game failures isolated.
+
+    The run is bounded so it never looks like the burst that got the session
+    revoked: ``max_captures`` caps the tasks attempted (the rest come back as
+    ``deferred`` for the next run), ``request_delay`` seconds separate every
+    Pikkit request, and ``max_unavailable`` unavailable (403) splits stop the
+    run.  Tasks are attempted in kickoff order, so finals go first.
+    """
+    tasks = capture_tasks(games, snapshots, now, max_lead=max_lead)
     if target_event_id is not None:
         tasks = [
             task
@@ -323,7 +356,39 @@ async def collect_due_snapshots(
     rows: list[dict[str, Any]] = []
     outcomes: list[dict[str, str]] = []
     events_by_date: dict[str, list[dict[str, Any]]] = {}
-    for task in tasks:
+    requests_made = 0
+    attempted = 0
+    unavailable = 0
+
+    async def paced(call, *args):
+        nonlocal requests_made
+        if requests_made and request_delay > 0:
+            await sleeper(request_delay)
+        requests_made += 1
+        return await call(*args)
+
+    def defer(remaining: list[CaptureTask], note: str) -> None:
+        for task in remaining:
+            outcomes.append(
+                {
+                    "event_id": str(task.game["event_id"]),
+                    "capture_kind": task.capture_kind,
+                    "status": "deferred",
+                    "note": note,
+                }
+            )
+
+    for index, task in enumerate(tasks):
+        if max_captures is not None and attempted >= max_captures:
+            defer(tasks[index:], f"per-run cap of {max_captures} reached")
+            break
+        if max_unavailable is not None and unavailable >= max_unavailable:
+            defer(
+                tasks[index:],
+                f"stopped after {unavailable} unavailable (403) splits",
+            )
+            break
+        attempted += 1
         event_id = str(task.game["event_id"])
         date = (
             parse_time(task.game["commence_time_utc"])
@@ -333,7 +398,7 @@ async def collect_due_snapshots(
         )
         try:
             if date not in events_by_date:
-                leagues = await event_loader(date)
+                leagues = await paced(event_loader, date)
                 events_by_date[date] = list(leagues.get("NFL", []))
             event = match_nfl_game_to_pikkit_event(
                 task.game, events_by_date[date]
@@ -347,8 +412,9 @@ async def collect_due_snapshots(
                     }
                 )
                 continue
-            splits = await split_loader(str(event["event_id"]))
+            splits = await paced(split_loader, str(event["event_id"]))
             if not splits:
+                unavailable += 1
                 outcomes.append(
                     {
                         "event_id": event_id,

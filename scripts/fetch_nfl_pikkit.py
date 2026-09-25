@@ -8,7 +8,7 @@ import asyncio
 import os
 import sys
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,6 +20,10 @@ load_dotenv(ROOT / ".env")
 
 from nfl_lines import GAME_HEADERS, SHEET_TABS, get_gspread_client
 from nfl_pikkit import (
+    DEFAULT_MAX_CAPTURES,
+    DEFAULT_MAX_UNAVAILABLE,
+    DEFAULT_REQUEST_DELAY,
+    MAX_LEAD,
     PIKKIT_SNAPSHOTS_TAB,
     append_snapshot_rows,
     collect_due_snapshots,
@@ -53,6 +57,10 @@ async def run(args: argparse.Namespace) -> int:
     )
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
+    print(
+        f"Run limits: max_captures={args.max_captures}, delay={args.delay}s, "
+        f"max_lead={args.max_lead_days}d, max_unavailable={args.max_unavailable}"
+    )
     rows, outcomes = await collect_due_snapshots(
         games,
         existing,
@@ -60,10 +68,15 @@ async def run(args: argparse.Namespace) -> int:
         event_loader=fetch_events_for_date,
         split_loader=fetch_splits,
         target_event_id=args.target,
+        max_lead=timedelta(days=args.max_lead_days),
+        max_captures=args.max_captures,
+        request_delay=args.delay,
+        max_unavailable=args.max_unavailable,
     )
     counts = Counter(item["status"] for item in outcomes)
     for item in outcomes:
-        detail = f" ({item['error']})" if item.get("error") else ""
+        note = item.get("error") or item.get("note")
+        detail = f" ({note})" if note else ""
         print(
             f"{item['event_id']} {item['capture_kind']}: "
             f"{item['status']}{detail}"
@@ -93,6 +106,25 @@ def main() -> None:
     parser.add_argument(
         "--now",
         help="Override current time with an ISO timestamp for diagnostics.",
+    )
+    parser.add_argument(
+        "--max-captures", type=int, default=DEFAULT_MAX_CAPTURES,
+        help="Tasks attempted per run; the rest are deferred to the next run "
+             "(default %(default)s).",
+    )
+    parser.add_argument(
+        "--delay", type=float, default=DEFAULT_REQUEST_DELAY,
+        help="Seconds between Pikkit requests (default %(default)s).",
+    )
+    parser.add_argument(
+        "--max-lead-days", type=float, default=MAX_LEAD.days,
+        help="Ignore games kicking off more than this many days out "
+             "(default %(default)s).",
+    )
+    parser.add_argument(
+        "--max-unavailable", type=int, default=DEFAULT_MAX_UNAVAILABLE,
+        help="Stop the run after this many unavailable (403) splits "
+             "(default %(default)s).",
     )
     args = parser.parse_args()
     raise SystemExit(asyncio.run(run(args)))
