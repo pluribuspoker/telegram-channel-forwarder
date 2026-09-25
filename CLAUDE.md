@@ -100,7 +100,8 @@ Rules here are terse on purpose. Each section points to a `docs/*.md` file holdi
 ## Pikkit splits — docs/odds.md
 
 - `pikkit.py` → `get_pick_splits()` → `pikkit_by_pick`. Completed games return 403 — fetch before/during the game.
-- Token: `scripts/pikkit_auth.py` **locally only** (Turnstile rejects headless), two-step SMS flow; health check `--validate`. `PIKKIT_TOKEN` lives in `.env.local` only.
+- Token: `scripts/pikkit_page_login.py` **locally only** (real Chrome; Turnstile rejects headless) while the operator is at their phone — the code lives 300 s; `pikkit_auth.py --validate` for health; install with `set_env_local.py`, no restart. `PIKKIT_TOKEN` lives in `.env.local` only.
+- **Never run `fetch_nfl_pikkit.py` / `nfl-pikkit-snapshots` against a live token** — its capture burst got the session revoked twice (2026-09-11, 2026-09-24); the timer is disabled until the job is throttled and proven safe (docs/odds.md).
 
 ## Broadcast results — docs/tracker.md
 
