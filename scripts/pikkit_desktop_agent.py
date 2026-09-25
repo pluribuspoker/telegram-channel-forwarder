@@ -62,6 +62,18 @@ LOGIN_SCRIPT = ROOT / "scripts" / "pikkit_page_login.py"
 log = logging.getLogger("pikkit-agent")
 
 
+def _hidden() -> dict:
+    """Spawn children without a console window: the agent runs under pythonw,
+    so a plain subprocess.run of ssh.exe flashes a cmd window every poll."""
+    kw: dict = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    if os.name == "nt":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = subprocess.SW_HIDE
+        kw["startupinfo"] = si
+    return kw
+
+
 def _ssh_binary() -> str:
     win = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "OpenSSH" / "ssh.exe"
     if win.exists():
@@ -73,7 +85,7 @@ def ssh(script: str, stdin: str | None = None, timeout: int = 40) -> tuple[int, 
     """Run a shell snippet on the VPS; returns (rc, combined output)."""
     argv = [_ssh_binary(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", VPS, script]
     try:
-        r = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout, **_hidden())
     except subprocess.TimeoutExpired:
         return 124, "(ssh timed out)"
     except OSError as e:
@@ -177,7 +189,7 @@ def run_login(req: dict) -> None:
     log.info("starting login for request %s", req.get("id"))
     proc = subprocess.Popen(
         argv, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        **_hidden(),
     )
     lines: list[str] = []
 
