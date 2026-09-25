@@ -1,0 +1,37 @@
+# Trent watcher auto-repair: when trent-monitor fails BOTH runner attempts,
+# its failure branch fire-and-forgets `systemctl start --no-block` on this
+# unit, which spawns one headless /investigate agent (Opus 5.5, high effort,
+# subscription-billed) to root-cause and fix the outage, then DMs the
+# operator a card via the watchdog bot (scripts/trent_repair.py — all
+# guards live there: kill switch TRENT_REPAIR_DISABLED=1, 6h cooldown,
+# 2-attempt cap with parking, flock). No timer: on-demand only.
+#
+# TimeoutStartSec=2400 = pre-verify (≤180s) + agent (1500s) + post-verify
+# (≤180s) + push/DM overhead.
+#
+# Environment: .env (watchdog DM config), .env.local (server-only values),
+# ~/.claude/auth.env (CLAUDE_CODE_OAUTH_TOKEN — the agent bills the
+# subscription; the runner refuses to spawn without it).
+[Unit]
+Description=Trent watcher auto-repair (headless /investigate agent)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+EnvironmentFile=-/home/forwarder/.claude/auth.env
+Environment=PATH=/home/forwarder/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/forwarder
+ExecStart=/home/forwarder/app/run_trent_repair.sh
+TimeoutStartSec=2400
+SyslogIdentifier=trent-repair
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
