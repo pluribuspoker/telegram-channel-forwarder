@@ -91,7 +91,7 @@ liability.
 - **Key constraint:** completed games return 403 — splits must be fetched before/during the game
 - **NFL final:** T−2h is terminal; a successful final suppresses later captures
 - **Setup:** `python scripts/setup_nfl_pikkit.py` creates or validates the worksheet
-- **Manual collection:** `python scripts/fetch_nfl_pikkit.py [--dry-run]`
+- **Manual collection:** `python scripts/fetch_nfl_pikkit.py` (read-only unless `--write`; there is no `--dry-run` flag) — **do not run it while a token you care about is live**: its capture burst gets the session revoked (see the 2026-09-24 note below); the timer is disabled until that is fixed.
 - **Token generation:** `scripts/pikkit_auth.py` — must run locally (real Chrome + display), NOT on VPS. Turnstile rejects headless/bundled Chromium. Session is NOT IP-bound (tested 2026-07-24).
 
 **Two-step manual auth flow (run locally):**
@@ -100,9 +100,21 @@ python scripts/pikkit_auth.py --send-sms --phone +19545361686
 # Read SMS code, then:
 python scripts/pikkit_auth.py --submit-code <CODE> --auth-id <from step 1> --phone +19545361686
 ```
-Token is saved to `.env.local`. SCP to VPS or update `.env.local` there manually. `PIKKIT_TOKEN` must be in `.env.local`, NOT `.env` — `syncenv` would wipe it.
+Token is saved to the local `.env.local`. Put it on the VPS with `python3 scripts/set_env_local.py PIKKIT_TOKEN=<token>` (never a hand edit) — no restart needed, every consumer (`telegram-tracker`, `nfl-pikkit-snapshots`, `pikkit-opinions` timers) is a fresh process per run. `PIKKIT_TOKEN` must be in `.env.local`, NOT `.env` — `syncenv` would wipe it.
 
 **Token health check (from VPS or locally):**
 ```bash
 python scripts/pikkit_auth.py --validate
 ```
+
+### Token refresh 2026-09-24 — what changed and how to diagnose the next change
+
+The 2026-07 token expired ~2026-09-23 (tracker logged `[pikkit] events unavailable (403)`, NFL snapshots `event_not_found` for every game). The stock `--send-sms` step solved Turnstile fine but `/login/phone` answered `{"message": "INVALID_PHONE_NUMBER"}`:
+
+- **`/login/phone` now takes the ten national digits, no country code** — captured from the page's own request: `{"phoneNumber": "9545361686", "turnstileToken": ...}`. The E.164 form that worked in July is rejected. `_request_code` was fixed to send `_phone_digits(phone)`; the CLI still takes `+1XXXXXXXXXX`.
+- **`/login/code` is unchanged**: `{"code", "auth_id", "turnstileToken"}` → `{"success": true, ..., "data": {"session_id": ...}}`; the session_id is 24 hex chars and is sent as a bare `Authorization` header.
+- **`auth_id` is a JWT with a 300 s TTL** (read from its claims). Only send the SMS when the operator is actually at their phone — the first code of the night expired unread.
+- **The NFL snapshot job revokes the session (2026-09-24, seen twice).** The July token did not age out: it died 2026-09-11 20:48–20:50 ET, within three minutes of the first `nfl-pikkit-snapshots` capture run (`Summary: captured=19, error=1, event_not_found=2, splits_unavailable=9`), and the fresh 2026-09-24 token — valid from local and VPS at 20:41 — was 403 everywhere (even `/login/validate`, empty body) by 20:45 after a manual `fetch_nfl_pikkit.py` run at 20:42 printed the identical summary. The tracker's own use (≈7 requests per 5-min pass) ran 49 days on the July token. `nfl-pikkit-snapshots.timer` was **disabled** (`systemctl disable --now`) on 2026-09-24 so the next token survives. Suspects: the burst (events for several dates plus `/event/foryou` for ~32 games in seconds) or the nine `/event/foryou` 403s on started/finished games. Re-enable only after a throttled run is shown NOT to kill a token (`pikkit_auth.py --validate` ten minutes later).
+- **`page.goto(..., wait_until="networkidle")` is flaky on the SPA** (30 s timeout on a run identical to one that had just worked) — the script now waits for `domcontentloaded` and then for the phone field.
+
+**Diagnosis + fallback when the API shape changes again — `scripts/pikkit_page_login.py`** (exercised live 2026-09-24): don't guess payloads. It lets the PAGE do the login in real Chrome and only watches `**/login/**` requests/responses (no `route.abort`), prints the exact body the page sent (that is what proved the phone format), then harvests `session_id` from the page's `/login/code` response — whether the operator drops the code into the code file or types it straight into the Chrome window — validates it and saves it via `_save_token`. The session lives only in memory/cookies (Local Storage stays empty), so the window must stay open until the token prints; a reload would drop the buffered response.

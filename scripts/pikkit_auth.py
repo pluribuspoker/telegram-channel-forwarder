@@ -82,10 +82,13 @@ async def _solve_turnstile(phone_digits: str) -> str:
         await page.route("**/login/phone", intercept)
 
         print("[pikkit-auth] Loading app.pikkit.com (real Chrome)...")
-        await page.goto("https://app.pikkit.com", wait_until="networkidle")
+        # "networkidle" never fires reliably on this SPA (2026-09-24: a 30s
+        # goto timeout on a run that had worked minutes earlier) -- wait for the
+        # DOM and then for the phone field itself.
+        await page.goto("https://app.pikkit.com", wait_until="domcontentloaded", timeout=60000)
 
         phone_input = page.locator('input[type="tel"]')
-        await phone_input.wait_for(timeout=10000)
+        await phone_input.wait_for(timeout=45000)
         await phone_input.press_sequentially(phone_digits, delay=80)
 
         await page.get_by_role("button", name="Continue").click()
@@ -148,11 +151,17 @@ async def _poll_sms_code(
 
 
 async def _request_code(phone: str, turnstile_token: str) -> str:
-    """POST /login/phone -> auth_id.  SMS is sent to *phone*."""
+    """POST /login/phone -> auth_id.  SMS is sent to *phone*.
+
+    The API takes the number exactly as the login form submits it: the ten
+    national digits with NO country code (captured from the page 2026-09-24:
+    ``{"phoneNumber": "9545361686", "turnstileToken": ...}``).  Sending the
+    E.164 form that worked in 2026-07 now returns ``INVALID_PHONE_NUMBER``.
+    """
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             f"{PIKKIT_BASE}/login/phone",
-            json={"phoneNumber": phone, "turnstileToken": turnstile_token},
+            json={"phoneNumber": _phone_digits(phone), "turnstileToken": turnstile_token},
             headers={"Origin": "https://app.pikkit.com", "Referer": "https://app.pikkit.com/"},
         )
     data = resp.json()
