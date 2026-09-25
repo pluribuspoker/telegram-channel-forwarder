@@ -49,5 +49,10 @@ if [ "$SUCCESS" -eq 1 ]; then
 else
     log "Both attempts failed"
     ping_hc "/fail" "$(tail -50 "$LOGFILE")"
+    # Fire-and-forget the auto-repair agent (scripts/trent_repair.py — every
+    # guard lives there: kill switch, cooldown, attempt cap, flock). --no-block
+    # detaches it from this dying unit; a failed start must not mask exit 1.
+    sudo -n systemctl start --no-block trent-repair.service 2>/dev/null \
+        || log "could not start trent-repair.service"
     exit 1
 fi
