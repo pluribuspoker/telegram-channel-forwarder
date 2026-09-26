@@ -423,14 +423,14 @@ YES signals:
 - "I have $X on [team]" / "dropping $X on"
 - "10u" / "10 unit" / "$X,000" — unit/dollar sizing
 - "play of year" / "square of year" / "play of the day"
-- "FUGAZI 5" / "[N]-man nuke" / "Last Chance U slip" — named bet formats
 - Explicit first-person declaration of placing a specific bet
 - Terse pick announcement: "[team/player] ML", "[team/player] moneyline", "[team/player] +/-spread" — naming a specific bet even without fanfare
 - Short tweet stating a pick with a bet type (ML, spread, over, under, total, 1H, o/u, BTTS / both teams to score, corners, cards) counts as an announcement
 - A named matchup ("[Team] x [Team]" / "[Team] vs [Team]") paired with "mortal mega" / "mega" / "nuke" branding IS a single-game pick announcement, even if the specific bet lives in an attached slip image
+- A CARD of several SEPARATE straight bets — a header ("OFFICIAL COLLEGE FOOTBALL MEGAS:", "SUNDAY PLAYS:") followed by one team/line per row, often each with its own units ("TEXAS -4.5 (5u)"). Each row is its own independent wager, not a parlay; on Saturdays/Sundays he routinely posts his whole slate at once
 
 NO — return false for:
-- Multi-leg parlays: "FUGAZI 5", "[N]-man nuke" with multiple legs listed, "Last Chance U slip" with multiple legs — we only want SINGLE-GAME bets
+- Multi-leg parlays: selections COMBINED into one ticket that must all win — "FUGAZI 5", "[N]-man nuke", "Last Chance U slip", "parlay", "SGP", "N-leg", "N-pick", or one combined price/payout across the legs. Several rows alone do NOT make a parlay — a list of separate straight bets is a pick (see above)
 - Celebrations/results: "BANGGGG", "✅✅✅", "CASH THE MORTAL MEGA", win announcements
 - Loss reactions: "chalked", "GGs", "dead", "horrible wager"
 - In-game commentary, hopes/wishes without placement
@@ -450,13 +450,13 @@ Tweet:
 {text}"""
 
 _IMAGE_IS_PICK_PROMPT = """\
-This tweet has an attached image. Does it show a SINGLE sports bet being placed (bet slip, wager confirmation)?
+This tweet has an attached image. Does it show a sports bet being placed (bet slip, wager confirmation)?
 
-Return true if the image shows a single-game bet slip with real money.
+Return true if the image shows a single-game bet slip with real money, or several \
+INDEPENDENT single-game slips (each with its own stake and payout).
 
 Return false if:
-- Multi-leg parlay (multiple bets on one slip)
-- Multiple separate bets
+- Multi-leg parlay (multiple selections combined on one slip with one stake/payout)
 - No bet slip / not a pick image
 
 Tweet text: {text}
