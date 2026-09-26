@@ -34,8 +34,8 @@ experts:
     prompt: prompts/schedule/v15.md
     input_profile: schedule_only
     output_schema_version: 6
-    default_model: claude-opus-4-8
-    reasoning_effort: max
+    default_model: claude-opus-5-5
+    reasoning_effort: high
     model_reasoning_effort:
       claude-fable-5: medium
       claude-sonnet-4-6: max
@@ -46,6 +46,7 @@ experts:
         prompt: prompts/schedule_haiku/v1.md
         output_schema_version: 3
     allowed_models:
+      - claude-opus-5-5
       - claude-opus-4-8
       - claude-fable-5
       - claude-sonnet-4-6
@@ -61,8 +62,8 @@ experts:
     prompt: prompts/divisional/v20.md
     input_profile: divisional
     output_schema_version: 4
-    default_model: claude-opus-4-8
-    reasoning_effort: max
+    default_model: claude-opus-5-5
+    reasoning_effort: high
     model_reasoning_effort:
       claude-fable-5: medium
       claude-sonnet-4-6: max
@@ -73,6 +74,7 @@ experts:
         prompt: prompts/divisional_haiku/v1.md
         output_schema_version: 7
     allowed_models:
+      - claude-opus-5-5
       - claude-opus-4-8
       - claude-fable-5
       - claude-sonnet-4-6
@@ -88,9 +90,10 @@ experts:
     prompt: prompts/win_total/v6.md
     input_profile: win_total
     output_schema_version: 3
-    default_model: claude-opus-4-8
-    reasoning_effort: max
+    default_model: claude-opus-5-5
+    reasoning_effort: high
     allowed_models:
+      - claude-opus-5-5
       - claude-opus-4-8
     enabled: true
     initial_weight: 1.0
@@ -104,9 +107,10 @@ experts:
     prompt: prompts/ak/v1.md
     input_profile: ak_calibration
     output_schema_version: 5
-    default_model: claude-opus-4-8
-    reasoning_effort: max
+    default_model: claude-opus-5-5
+    reasoning_effort: high
     allowed_models:
+      - claude-opus-5-5
       - claude-opus-4-8
     enabled: true
     initial_weight: 1.0
@@ -120,13 +124,14 @@ experts:
     prompt: prompts/cee/v5.md
     input_profile: cee_calibration
     output_schema_version: 3
-    default_model: claude-opus-4-8
-    reasoning_effort: max
+    default_model: claude-opus-5-5
+    reasoning_effort: high
     model_reasoning_effort:
       claude-fable-5: medium
       claude-sonnet-4-6: max
       claude-haiku-4-5: max
     allowed_models:
+      - claude-opus-5-5
       - claude-opus-4-8
       - claude-fable-5
       - claude-sonnet-4-6
@@ -144,9 +149,10 @@ experts:
     prompt: prompts/celebrity/v3.md
     input_profile: celebrity_patterns
     output_schema_version: 5
-    default_model: claude-opus-4-8
-    reasoning_effort: max
+    default_model: claude-opus-5-5
+    reasoning_effort: high
     allowed_models:
+      - claude-opus-5-5
       - claude-opus-4-8
     enabled: true
     committee_optional: true
@@ -160,9 +166,10 @@ experts:
     prompt: prompts/hi_lo/v2.md
     input_profile: hi_lo_outliers
     output_schema_version: 3
-    default_model: claude-opus-4-8
-    reasoning_effort: max
+    default_model: claude-opus-5-5
+    reasoning_effort: high
     allowed_models:
+      - claude-opus-5-5
       - claude-opus-4-8
     enabled: true
     committee_optional: true
@@ -195,9 +202,10 @@ experts:
     prompt: prompts/pikkit/v1.md
     input_profile: pikkit_splits
     output_schema_version: 10
-    default_model: claude-opus-4-8
-    reasoning_effort: max
+    default_model: claude-opus-5-5
+    reasoning_effort: high
     allowed_models:
+      - claude-opus-5-5
       - claude-opus-4-8
     enabled: true
     committee_optional: true
@@ -224,9 +232,10 @@ experts:
     prompt: prompts/god_judge/v3.md
     input_profile: aggregator
     output_schema_version: 8
-    default_model: claude-fable-5-1
-    reasoning_effort: max
+    default_model: claude-opus-5-5
+    reasoning_effort: high
     allowed_models:
+      - claude-opus-5-5
       - claude-fable-5-1
     allowed_backends:
       - agent_runtime

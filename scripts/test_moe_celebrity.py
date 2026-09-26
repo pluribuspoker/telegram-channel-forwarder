@@ -761,7 +761,7 @@ class CelebrityGenerationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(expert["prompt_version"], 3)
         self.assertEqual(expert["prompt"], "prompts/celebrity/v3.md")
         self.assertEqual(expert["input_profile"], "celebrity_patterns")
-        self.assertEqual(expert["allowed_models"], ["claude-opus-4-8"])
+        self.assertEqual(expert["allowed_models"], ["claude-opus-5-5", "claude-opus-4-8"])
         self.assertTrue(expert["committee_optional"])
         self.assertEqual(expert["markets"], ["side", "total"])
 

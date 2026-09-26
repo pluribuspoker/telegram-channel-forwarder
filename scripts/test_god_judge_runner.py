@@ -273,9 +273,9 @@ class RunnerTests(_HarnessCase):
         rules, judge = rows
         self.assertEqual(rules["generation_backend"], "deterministic")
         self.assertEqual(rules["generation_status"], "valid")
-        self.assertEqual(judge["model"], "claude-fable-5-1")
+        self.assertEqual(judge["model"], "claude-opus-5-5")
         self.assertEqual(judge["generation_backend"], "claude_headless")
-        self.assertEqual(judge["generation_effort"], "max")
+        self.assertEqual(judge["generation_effort"], "high")
         self.assertEqual(judge["generation_status"], "valid")
         self.assertEqual(rules["review_status"], "approved")
         self.assertEqual(judge["review_status"], "approved")
@@ -297,8 +297,8 @@ class RunnerTests(_HarnessCase):
         self.assertEqual(argv[argv.index("--system-prompt") + 1], load_expert("god_judge")["prompt_text"])
         for flag in ("-p", "--safe-mode", "--strict-mcp-config", "--no-session-persistence"):
             self.assertIn(flag, argv)
-        self.assertEqual(argv[argv.index("--model") + 1], "claude-fable-5-1")
-        self.assertEqual(argv[argv.index("--effort") + 1], "max")
+        self.assertEqual(argv[argv.index("--model") + 1], "claude-opus-5-5")
+        self.assertEqual(argv[argv.index("--effort") + 1], "high")
         self.assertEqual(argv[argv.index("--tools") + 1], "")
         self.assertEqual(argv[argv.index("--output-format") + 1], "json")
         self.assertTrue(call["stdin"].startswith(json.dumps(request, indent=2, sort_keys=True)))
@@ -583,8 +583,8 @@ class EnsembleRunnerTests(_HarnessCase):
         for index, row in enumerate(samples):
             self.assertEqual(row["review_status"], "not_applicable")
             self.assertEqual(row["generation_backend"], "claude_headless")
-            self.assertEqual(row["model"], "claude-fable-5-1")
-            self.assertEqual(row["generation_effort"], "max")
+            self.assertEqual(row["model"], "claude-opus-5-5")
+            self.assertEqual(row["generation_effort"], "high")
             self.assertEqual(row["generation_error"], "")
             self.assertEqual(row["input_json"], canonical_json(request))
             self.assertEqual(row["input_sha256"], request_sha256)

@@ -52,8 +52,8 @@ from scripts.god_judge_runner import (
 )
 
 EXPERT_ID = "pikkit"
-MODEL = "claude-opus-4-8"
-EFFORT = "max"
+MODEL = "claude-opus-5-5"
+EFFORT = "high"
 BACKEND = "claude_headless"
 FINAL_RETRY_CUTOFF = timedelta(hours=1)
 INVALID_ATTEMPT_CAP = 2

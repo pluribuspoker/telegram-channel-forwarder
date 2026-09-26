@@ -230,7 +230,7 @@ def _opinion(
 
 def _committee() -> list[dict]:
     return [
-        _opinion("schedule", model="claude-opus-4-8", probability=0.66, margin=6, away_score=20, home_score=26),
+        _opinion("schedule", model="claude-opus-5-5", probability=0.66, margin=6, away_score=20, home_score=26),
         # A newer Fable run of the same expert must NOT displace the default-model row.
         _opinion(
             "schedule",
@@ -241,11 +241,11 @@ def _committee() -> list[dict]:
             home_score=27,
             generated_at="2026-09-06T02:00:00+00:00",
         ),
-        _opinion("divisional", model="claude-opus-4-8", probability=0.70, margin=5, away_score=19, home_score=24),
-        _opinion("win_total", model="claude-opus-4-8", probability=0.57, margin=1, away_score=23, home_score=24, stars=2),
+        _opinion("divisional", model="claude-opus-5-5", probability=0.70, margin=5, away_score=19, home_score=24),
+        _opinion("win_total", model="claude-opus-5-5", probability=0.57, margin=1, away_score=23, home_score=24, stars=2),
         _opinion(
             "ak",
-            model="claude-opus-4-8",
+            model="claude-opus-5-5",
             probability=0.62,
             margin=6,
             away_score=21,
@@ -257,7 +257,7 @@ def _committee() -> list[dict]:
         # Pending rows never count.
         _opinion(
             "divisional",
-            model="claude-opus-4-8",
+            model="claude-opus-5-5",
             probability=0.90,
             margin=20,
             away_score=10,
@@ -669,7 +669,7 @@ class VoiceSelectionTests(unittest.TestCase):
         selected = select_voice_rows(_committee(), event_id=EVENT_ID, registry=registry, policy=policy)
         by_expert = {expert_id: (row, rule) for expert_id, _config, row, rule in selected}
         self.assertEqual(set(by_expert), {"ak", "divisional", "schedule", "win_total"})
-        self.assertEqual(by_expert["schedule"][0]["model"], "claude-opus-4-8")
+        self.assertEqual(by_expert["schedule"][0]["model"], "claude-opus-5-5")
         self.assertEqual(by_expert["schedule"][1], "default_model")
         self.assertEqual(by_expert["divisional"][0]["home_win_probability"], 0.70)
 
@@ -729,7 +729,7 @@ class InputTests(unittest.TestCase):
         prior_kickoff = "2026-09-08T00:20:00+00:00"
         prior_row = _opinion(
             "schedule",
-            model="claude-opus-4-8",
+            model="claude-opus-5-5",
             probability=0.7,
             margin=5,
             away_score=20,
@@ -777,7 +777,7 @@ class InputTests(unittest.TestCase):
     def test_judge_request_is_masked_and_deterministic(self) -> None:
         request = build_judge_request(self.payload)
         rendered = json.dumps(request)
-        for leak in ("Schedule Expert", "claude-opus-4-8", "opinion_id", "expert_id", '"ak"', "Divisional"):
+        for leak in ("Schedule Expert", "claude-opus-5-5", "opinion_id", "expert_id", '"ak"', "Divisional"):
             self.assertNotIn(leak, rendered)
         self.assertEqual(request["input_profile"], JUDGE_REQUEST_PROFILE)
         self.assertEqual([voice["label"] for voice in request["voices"]], ["Voice A", "Voice B", "Voice C", "Voice D"])
@@ -793,7 +793,7 @@ class InputTests(unittest.TestCase):
     def test_factor_lists_are_capped(self) -> None:
         long_factors = [f"factor {index} " + "x" * 300 for index in range(12)]
         rows = [
-            _opinion("schedule", model="claude-opus-4-8", probability=0.6, margin=3, away_score=20, home_score=23, factors=long_factors)
+            _opinion("schedule", model="claude-opus-5-5", probability=0.6, margin=3, away_score=20, home_score=23, factors=long_factors)
         ]
         payload = build_aggregator_input(
             _game(), approved_opinions=rows, finals=[], snapshots=[], registry=self.registry, policy=self.policy
@@ -829,19 +829,19 @@ class GenerationBoardTests(unittest.TestCase):
             _snapshot("other-event", "2026-09-01T12:00:00Z", **self.OLD_BOARD),
         ]
         self.rows = [
-            _opinion("schedule", model="claude-opus-4-8", probability=0.66, margin=6, away_score=20, home_score=26),
-            _opinion("divisional", model="claude-opus-4-8", probability=0.70, margin=5, away_score=19, home_score=24),
+            _opinion("schedule", model="claude-opus-5-5", probability=0.66, margin=6, away_score=20, home_score=26),
+            _opinion("divisional", model="claude-opus-5-5", probability=0.70, margin=5, away_score=19, home_score=24),
             # Generated after the second snapshot; the other voices before it.
             _opinion(
                 "win_total",
-                model="claude-opus-4-8",
+                model="claude-opus-5-5",
                 probability=0.57,
                 margin=1,
                 away_score=23,
                 home_score=24,
                 generated_at="2026-09-06T13:00:00+00:00",
             ),
-            _opinion("ak", model="claude-opus-4-8", probability=0.62, margin=6, away_score=21, home_score=27),
+            _opinion("ak", model="claude-opus-5-5", probability=0.62, margin=6, away_score=21, home_score=27),
         ]
         self.payload = build_aggregator_input(
             _game(), approved_opinions=self.rows, finals=[], snapshots=self.snapshots, registry=self.registry, policy=self.policy
@@ -1038,7 +1038,7 @@ class GradingTests(unittest.TestCase):
         self.assertTrue(graded["closing_available"])
 
     def test_unresolved_and_missing_closing(self) -> None:
-        row = _opinion("schedule", model="claude-opus-4-8", probability=0.6, margin=3, away_score=20, home_score=23)
+        row = _opinion("schedule", model="claude-opus-5-5", probability=0.6, margin=3, away_score=20, home_score=23)
         self.assertIsNone(grade_opinion_row(row, finals=[], snapshots=self._snapshots()))
         graded = grade_opinion_row(row, finals=self._finals(), snapshots=[])
         self.assertIsNone(graded["ats_at_close"])
@@ -1050,7 +1050,7 @@ class GradingTests(unittest.TestCase):
         policy = aggregator_policy(registry)
         initial = _opinion(
             "pikkit",
-            model="claude-opus-4-8",
+            model="claude-opus-5-5",
             probability=0.55,
             margin=1,
             away_score=21,
@@ -1062,7 +1062,7 @@ class GradingTests(unittest.TestCase):
         )
         final_old = _opinion(
             "pikkit",
-            model="claude-opus-4-8",
+            model="claude-opus-5-5",
             probability=0.60,
             margin=3,
             away_score=20,
@@ -1074,7 +1074,7 @@ class GradingTests(unittest.TestCase):
         )
         final_latest = _opinion(
             "pikkit",
-            model="claude-opus-4-8",
+            model="claude-opus-5-5",
             probability=0.70,
             margin=5,
             away_score=20,
@@ -1113,8 +1113,8 @@ class GradingTests(unittest.TestCase):
             event_id = f"event-{index}"
             kickoff = f"2026-09-{13 + index:02d}T17:00:00+00:00"
             finals.append({"event_id": f"espn-{index}", "kickoff_utc": kickoff, "away_team": AWAY, "home_team": HOME, "away_score": 17, "home_score": 24})
-            rows.append(_opinion("schedule", model="claude-opus-4-8", probability=0.75, margin=7, away_score=17, home_score=24, event_id=event_id, kickoff=kickoff))
-            rows.append(_opinion("divisional", model="claude-opus-4-8", probability=0.55, margin=1, away_score=21, home_score=22, event_id=event_id, kickoff=kickoff))
+            rows.append(_opinion("schedule", model="claude-opus-5-5", probability=0.75, margin=7, away_score=17, home_score=24, event_id=event_id, kickoff=kickoff))
+            rows.append(_opinion("divisional", model="claude-opus-5-5", probability=0.55, margin=1, away_score=21, home_score=22, event_id=event_id, kickoff=kickoff))
         board = build_scoreboard(rows, finals=finals, snapshots=[], registry=registry, policy=policy, as_of="now")
         self.assertEqual(board["resolved_games"], policy["weights_min_resolved"])
         self.assertAlmostEqual(board["by_expert"]["schedule"]["brier"], 0.0625, places=4)
@@ -1138,7 +1138,7 @@ class GradingTests(unittest.TestCase):
         policy = aggregator_policy(registry)
         finals = [{"event_id": "espn-0", "kickoff_utc": KICKOFF, "away_team": AWAY, "home_team": HOME, "away_score": 17, "home_score": 24}]
         rows = [
-            _opinion("schedule", model="claude-opus-4-8", probability=0.75, margin=7, away_score=17, home_score=24),
+            _opinion("schedule", model="claude-opus-5-5", probability=0.75, margin=7, away_score=17, home_score=24),
             _opinion(
                 "god_rules",
                 model=DETERMINISTIC_MODEL,
@@ -1428,7 +1428,7 @@ class CommitteeKeyTests(unittest.TestCase):
         self.assertNotEqual(self._payload(moved)["committee_key"], base["committee_key"])
         rows = _committee() + [
             # A newer default-model row displaces the voice: new opinion id, same numbers.
-            _opinion("schedule", model="claude-opus-4-8", probability=0.66, margin=6, away_score=20, home_score=26, generated_at="2026-09-07T02:00:00+00:00")
+            _opinion("schedule", model="claude-opus-5-5", probability=0.66, margin=6, away_score=20, home_score=26, generated_at="2026-09-07T02:00:00+00:00")
         ]
         self.assertNotEqual(self._payload(rows=rows)["committee_key"], base["committee_key"])
 
@@ -1851,12 +1851,12 @@ class RegistryTests(unittest.TestCase):
         self.assertIn("God Expert Judge v3", judge["prompt_text"])
         self.assertIn("`market_at_generation`", judge["prompt_text"])
         self.assertIn("`overlap`", judge["prompt_text"])
-        self.assertEqual(judge["default_model"], "claude-fable-5-1")
-        self.assertEqual(judge["allowed_models"], ["claude-fable-5-1"])
+        self.assertEqual(judge["default_model"], "claude-opus-5-5")
+        self.assertEqual(judge["allowed_models"], ["claude-opus-5-5", "claude-fable-5-1"])
         self.assertEqual(
             judge["allowed_backends"], ["agent_runtime", "claude_headless"]
         )
-        self.assertEqual(judge["reasoning_effort"], "max")
+        self.assertEqual(judge["reasoning_effort"], "high")
         self.assertIn("Return exactly one JSON object", judge["prompt_text"])
         registry = load_registry()
         self.assertEqual(
@@ -2582,7 +2582,7 @@ class EvidenceTests(unittest.TestCase):
         # Twelve factors: the voice keeps five, the evidence sees all twelve.
         factors = [f"cohort {index}: {index + 1}-{index + 2} ({2 * index + 3} games)" for index in range(12)]
         rows = [
-            _opinion("divisional", model="claude-opus-4-8", probability=0.6, margin=3, away_score=20, home_score=23, factors=factors, counters=[])
+            _opinion("divisional", model="claude-opus-5-5", probability=0.6, margin=3, away_score=20, home_score=23, factors=factors, counters=[])
         ]
         payload = build_aggregator_input(_game(), approved_opinions=rows, finals=[], snapshots=[], registry=registry, policy=policy)
         voice = payload["voices"][0]
@@ -2596,7 +2596,7 @@ class EvidenceTests(unittest.TestCase):
         policy = aggregator_policy(registry)
         row = _opinion(
             "celebrity",
-            model="claude-opus-4-8",
+            model="claude-opus-5-5",
             probability=0.52,
             margin=1,
             away_score=21,
@@ -2647,9 +2647,9 @@ class OverlapWeightTests(unittest.TestCase):
 
     def _duplicates(self) -> list[dict]:
         return [
-            _opinion("divisional", model="claude-opus-4-8", probability=0.66, margin=6, away_score=20, home_score=26, factors=SHARED_TABLE, counters=[]),
-            _opinion("schedule", model="claude-opus-4-8", probability=0.66, margin=6, away_score=20, home_score=26, factors=SHARED_TABLE, counters=[]),
-            _opinion("win_total", model="claude-opus-4-8", probability=0.57, margin=1, away_score=23, home_score=24, factors=["no records"], counters=[]),
+            _opinion("divisional", model="claude-opus-5-5", probability=0.66, margin=6, away_score=20, home_score=26, factors=SHARED_TABLE, counters=[]),
+            _opinion("schedule", model="claude-opus-5-5", probability=0.66, margin=6, away_score=20, home_score=26, factors=SHARED_TABLE, counters=[]),
+            _opinion("win_total", model="claude-opus-5-5", probability=0.57, margin=1, away_score=23, home_score=24, factors=["no records"], counters=[]),
         ]
 
     def test_duplicate_voices_are_discounted_by_rank(self) -> None:
@@ -2709,7 +2709,7 @@ class OverlapWeightTests(unittest.TestCase):
         )
 
     def test_empty_total_pool_takes_the_market_total(self) -> None:
-        rows = [_opinion("divisional", model="claude-opus-4-8", probability=0.70, margin=5, away_score=19, home_score=24)]
+        rows = [_opinion("divisional", model="claude-opus-5-5", probability=0.70, margin=5, away_score=19, home_score=24)]
         payload = self._payload(rows)
         feature = payload["feature_block"]
         self.assertEqual(feature["markets"], {"side": ["divisional"], "total": []})

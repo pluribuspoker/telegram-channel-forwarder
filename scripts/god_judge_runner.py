@@ -28,7 +28,7 @@ hash-verified row for every enabled non-aggregator expert -- it:
 2. persists the rules arm on that exact input, unless a valid ``god_rules``
    row already carries the same committee key;
 3. runs ``--samples`` ``claude -p`` calls (``GOD_JUDGE_SAMPLES``, default
-   1): Fable 5.1 at max effort, every tool disabled, the registered judge
+   1): Opus 5.5 at high effort, every tool disabled, the registered judge
    prompt as the whole system prompt, the request on stdin, from the empty
    directory, in an environment that holds no sheet credentials and no API
    key; each JSON result envelope is captured;
@@ -137,8 +137,8 @@ from scripts.generate_moe_opinion import current_season_finals
 ET = ZoneInfo("America/New_York")
 RULES_EXPERT_ID = "god_rules"
 JUDGE_EXPERT_ID = "god_judge"
-JUDGE_MODEL = "claude-fable-5-1"
-JUDGE_EFFORT = "max"
+JUDGE_MODEL = "claude-opus-5-5"
+JUDGE_EFFORT = "high"
 JUDGE_BACKEND = "claude_headless"
 KICKOFF_CUTOFF = timedelta(hours=1)
 # The timer fires every 30 minutes (:12/:42), so a game's final two eligible

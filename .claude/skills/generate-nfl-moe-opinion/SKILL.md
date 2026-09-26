@@ -126,7 +126,8 @@ and billing.
   --event-id <event-id> --expert god_rules --deterministic` computes and
   persists the rules opinion from the approved committee rows and the
   BetOnline market.
-- `god_judge` accepts exactly one model, `claude-fable-5-1`, and two
+- `god_judge` defaults to `claude-opus-5-5` at high effort (`claude-fable-5-1`
+  stays allowed for the rows it wrote before 2026-09-26), and two
   backends: `claude_headless` (the timer) and `agent_runtime` (the manual
   fallback below); `--api` is refused. Its `--show-input` output is the
   masked judge request: voices labeled `Voice A…` in a seeded shuffle, lenses
@@ -149,7 +150,7 @@ and billing.
 `god-judge.timer` runs `scripts/god_judge_runner.py` every 30 minutes at :12
 and :42. For each upcoming game with a complete committee (an approved row
 for every enabled non-aggregator expert) it builds one input, persists the
-rules arm on it, runs one headless `claude -p` call (Fable 5.1 at max
+rules arm on it, runs one headless `claude -p` call (Opus 5.5 at high
 effort, every tool disabled, the registered prompt as the whole system
 prompt, from an empty directory whose environment holds no sheet
 credentials), persists the judge row with backend `claude_headless`, and
@@ -194,12 +195,12 @@ state, so the judge no longer races the 30-minute lines fetcher:
    masked request derived from the file; note its `input_sha256` (the
    request's hash, which is what the judge row persists). Nothing is re-read
    from the sheet's opinions, snapshots, or finals.
-4. Run one isolated Fable 5.1 inference at max effort with
+4. Run one isolated Opus 5.5 inference at high effort with
    `moe/prompts/god_judge/v2.md` as the whole prompt and `request.json` as
    the only input, and save its exact raw JSON as `response.json`.
 5. `python scripts/generate_moe_opinion.py --event-id <id> --expert
    god_judge --agent-response response.json --input-file input.json
-   --expected-input-sha256 <request sha> --model claude-fable-5-1
+   --expected-input-sha256 <request sha> --model claude-opus-5-5
    --generation-effort <effort>` persists the judge row; the backend is
    `agent_runtime` by default (`--generation-backend claude_headless` only
    for a response captured from a headless `claude -p` call).

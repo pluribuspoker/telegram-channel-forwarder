@@ -495,8 +495,8 @@ class WinTotalGenerationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             expert["prompt_path"], "moe/prompts/win_total/v6.md"
         )
-        self.assertEqual(expert["default_model"], "claude-opus-4-8")
-        self.assertEqual(expert["reasoning_effort"], "max")
+        self.assertEqual(expert["default_model"], "claude-opus-5-5")
+        self.assertEqual(expert["reasoning_effort"], "high")
         self.assertIn(
             "Keep `thesis.claim` at or below 400 characters",
             expert["prompt_text"],

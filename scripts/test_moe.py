@@ -2698,8 +2698,8 @@ class OpinionViewTest(unittest.TestCase):
         self.assertEqual(expert["prompt_version"], 15)
         self.assertEqual(expert["prompt_path"], "moe/prompts/schedule/v15.md")
         self.assertEqual(expert["output_schema_version"], 6)
-        self.assertEqual(expert["default_model"], "claude-opus-4-8")
-        self.assertEqual(expert["reasoning_effort"], "max")
+        self.assertEqual(expert["default_model"], "claude-opus-5-5")
+        self.assertEqual(expert["reasoning_effort"], "high")
         self.assertEqual(
             expert["model_reasoning_effort"],
             {
@@ -2711,6 +2711,7 @@ class OpinionViewTest(unittest.TestCase):
         self.assertEqual(
             expert["allowed_models"],
             [
+                "claude-opus-5-5",
                 "claude-opus-4-8",
                 "claude-fable-5",
                 "claude-sonnet-4-6",
@@ -2727,8 +2728,8 @@ class OpinionViewTest(unittest.TestCase):
             divisional["prompt_path"],
             "moe/prompts/divisional/v20.md",
         )
-        self.assertEqual(divisional["default_model"], "claude-opus-4-8")
-        self.assertEqual(divisional["reasoning_effort"], "max")
+        self.assertEqual(divisional["default_model"], "claude-opus-5-5")
+        self.assertEqual(divisional["reasoning_effort"], "high")
         self.assertEqual(
             divisional["model_reasoning_effort"],
             {
@@ -2740,6 +2741,7 @@ class OpinionViewTest(unittest.TestCase):
         self.assertEqual(
             divisional["allowed_models"],
             [
+                "claude-opus-5-5",
                 "claude-opus-4-8",
                 "claude-fable-5",
                 "claude-sonnet-4-6",
