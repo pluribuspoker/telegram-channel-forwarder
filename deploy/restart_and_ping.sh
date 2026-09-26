@@ -3,22 +3,26 @@
 # session itself when the operator asks for a restart/reset in the Claude chat:
 #
 #   sudo -n systemd-run --collect --unit="claude-restart-$(date +%s)" \
-#     /home/forwarder/app/deploy/restart_and_ping.sh <chat_id>
+#     /home/forwarder/app/deploy/restart_and_ping.sh <chat_id> [message_id]
 #
 # systemd-run puts us in our own scope, so we survive the KillMode=control-group
 # stop of claude-channels.service that kills the session and everything it
 # spawned — an inline `systemctl restart` run by the session dies mid-call with
 # no confirmation. Flow: settle pause (lets the session's goodbye reply flush) →
 # restart the service → wait for tmux + claude + bun (the receive loop) → ping
-# the chat through the plugin's own bot token. On timeout the ping says to fall
-# back to the watchdog bot.
+# the chat through the plugin's own bot token. With <message_id> (the operator's
+# restart request, which the session reacts ⚡ to instead of replying) success
+# is a 👍 reaction on that message — no text (operator request, 2026-09-26);
+# without it, or if the reaction is refused, a one-line text. On timeout the
+# ping says to fall back to the watchdog bot.
 #
 # --check: validate config + current liveness (no restart, no message sent).
 set -uo pipefail
 
-CHAT_ID="${1:-}"
 CHECK=0
-[ "$CHAT_ID" = "--check" ] && { CHECK=1; CHAT_ID="${2:-}"; }
+[ "${1:-}" = "--check" ] && { CHECK=1; shift; }
+CHAT_ID="${1:-}"
+MSG_ID="${2:-}"
 
 APP_ENV="/home/forwarder/app/.env"
 PLUGIN_ENV="/home/forwarder/.claude/channels/telegram/.env"
@@ -40,6 +44,15 @@ ping() {
   curl -s --max-time 20 "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
     --data-urlencode "chat_id=${CHAT_ID}" \
     --data-urlencode "text=$1" >/dev/null 2>&1
+}
+
+react() {  # react EMOJI — set the bot's reaction on MSG_ID; fails without one
+  [ -n "$BOT_TOKEN" ] && [ -n "$MSG_ID" ] || return 1
+  curl -s --max-time 20 "https://api.telegram.org/bot${BOT_TOKEN}/setMessageReaction" \
+    --data-urlencode "chat_id=${CHAT_ID}" \
+    --data-urlencode "message_id=${MSG_ID}" \
+    --data-urlencode "reaction=[{\"type\":\"emoji\",\"emoji\":\"$1\"}]" \
+    2>/dev/null | grep -q '"ok":true'
 }
 
 stack_up() {  # tmux session + claude process + bun poller (the receive loop)
@@ -80,7 +93,8 @@ done
 sleep 8
 
 if [ "$up" = "1" ]; then
-  ping "✅ Back online — fresh session, clean context. Wait for the 👀 on your next message before firing a real task."
+  react "👍" || ping "👍 back"
 else
+  react "👎"
   ping "⚠️ Restart fired but the new session didn't come up within ~2 min. Check the watchdog bot: /status /logs /restart."
 fi

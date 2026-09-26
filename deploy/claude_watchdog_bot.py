@@ -456,6 +456,41 @@ async def handle_audit_callback(update, context):
             pass
 
 
+async def _react(msg, emoji: str) -> bool:
+    """Best-effort reaction on the command message; False if Telegram refused."""
+    try:
+        await msg.set_reaction(emoji)
+        return True
+    except Exception as exc:
+        log.warning("reaction %s failed: %s", emoji, exc)
+        return False
+
+
+async def _report_restart(msg, out: str, budget: int = 60) -> None:
+    """/restart and /kill outcome as a reaction: 👍 once the service is active
+    with the bun poller up, else 👎 plus one text line with the details.
+    Operator asked for emoji over status text (2026-09-26); a failure still
+    texts, and so does a success whose reaction Telegram refuses."""
+    up = False
+    for _ in range(budget // 3):
+        await asyncio.sleep(3)
+        if (run(f"systemctl is-active {SERVICE}") == "active"
+                and run("pgrep -f 'bun server'")):
+            up = True
+            break
+    if up:
+        if not await _react(msg, "👍"):
+            await msg.reply_text("👍 back up")
+        return
+    await _react(msg, "👎")
+    status = run(f"systemctl is-active {SERVICE}")
+    bun = "yes" if run("pgrep -f 'bun server'") else "no"
+    detail = f"\n{out}" if out else ""
+    await msg.reply_text(
+        f"⚠️ Not back after {budget}s — service: {status}, bun: {bun}{detail}"
+    )
+
+
 async def handle_message(update, context):
     """Handle incoming messages."""
     msg = update.message
@@ -485,26 +520,18 @@ async def handle_message(update, context):
         await msg.reply_text(reply, parse_mode="Markdown")
 
     elif text == "/restart":
-        await msg.reply_text("Restarting claude-channels...")
+        await _react(msg, "⚡")
         out = run(f"sudo -n systemctl restart {SERVICE}", timeout=60)
-        await asyncio.sleep(15)
-        status = run(f"systemctl is-active {SERVICE}")
-        bun = "yes" if run("pgrep -f 'bun server'") else "no"
-        await msg.reply_text(
-            f"Service: {status}\nBun running: {bun}\n{out or '(clean restart)'}"
-        )
+        await _report_restart(msg, out)
 
     elif text == "/kill":
-        await msg.reply_text("Force-killing all claude/bun processes and restarting...")
+        await _react(msg, "⚡")
         run("sudo -n systemctl stop claude-channels")
         run("pkill -9 -f 'claude --channels' || true")
         run("pkill -9 -f 'bun server.ts' || true")
         await asyncio.sleep(3)
-        run(f"sudo -n systemctl start {SERVICE}")
-        await asyncio.sleep(15)
-        status = run(f"systemctl is-active {SERVICE}")
-        bun = "yes" if run("pgrep -f 'bun server'") else "no"
-        await msg.reply_text(f"Service: {status}\nBun running: {bun}")
+        out = run(f"sudo -n systemctl start {SERVICE}")
+        await _report_restart(msg, out)
 
     elif text == "/logs":
         logs = run(f"journalctl -u {SERVICE} --no-pager -n 20 2>&1")
