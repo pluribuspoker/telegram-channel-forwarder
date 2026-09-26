@@ -19,6 +19,9 @@ whenever the pick's period isn't "game":
      per-cycle fetch volume)
   3. build_context plumb: a real parsed 1h pick reaches the summary halves,
      the same pick as a full-game total does not
+  4. international windows: uefa.nations is in the SOCCER_LEAGUES fan-out
+     (Italy 0-2 Belgium, Nations League 2026-09-25, graded UNKNOWN while the
+     final sat on ESPN because only fifa.world was listed)
 """
 
 import asyncio
@@ -36,6 +39,7 @@ from ai import build_context
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SCOREBOARD = json.loads((FIXTURES / "espn_ucl_scoreboard_20260910.json").read_text())
 SUMMARY = json.loads((FIXTURES / "espn_ucl_summary_bayern_bodo_20260910.json").read_text())
+NATIONS = json.loads((FIXTURES / "espn_nations_scoreboard_20260925.json").read_text())
 
 # The exact parsed pick from parse_cache.json -1002486251914:3801
 PICK_1H = {
@@ -81,6 +85,8 @@ class _StubClient:
             return _Resp(SUMMARY)
         if "uefa.champions/scoreboard" in url:
             return _Resp(SCOREBOARD)
+        if "uefa.nations/scoreboard" in url:
+            return _Resp(NATIONS)
         return _Resp({"events": []})
 
 
@@ -126,6 +132,16 @@ def main() -> int:
         ctx4, _ = asyncio.run(build_context("Soccer", "2026-09-10", full_game, None, {}))
         check("build_context full-game pick skips summary",
               _StubClient.summary_gets == 0 and "P1=" not in ctx4, ctx4)
+
+        # 4. International windows are in the fan-out: the fixture answers only
+        #    on the uefa.nations URL, so this fails if the league leaves
+        #    SOCCER_LEAGUES (Italy/Belgium BTTS sat UNKNOWN without it).
+        ctx5, d5 = asyncio.run(
+            scores.fetch_soccer_context(["Italy", "Belgium"], "2026-09-25"))
+        check("nations league final found",
+              "Italy" in ctx5 and "Belgium" in ctx5 and ctx5 not in ("", "PENDING"),
+              ctx5)
+        check("nations game_date matched", d5 == "2026-09-25", d5)
     finally:
         httpx.AsyncClient = real_client
 

@@ -58,6 +58,11 @@ SOCCER_LEAGUES: list[tuple[str, str]] = [
     ("soccer", "uefa.europa_qual"),     # Europa League Qualifying
     ("soccer", "uefa.conf"),       # Conference League
     ("soccer", "fifa.world"),      # FIFA World Cup
+    # International national-team windows beyond the World Cup — ESPN covers
+    # both. Only fifa.world was listed, so a Nations League pick graded
+    # UNKNOWN with its final sitting on ESPN.
+    ("soccer", "uefa.nations"),    # UEFA Nations League
+    ("soccer", "fifa.friendly"),   # International friendlies
     # Domestic leagues cappers bet that aren't in the top 5 — ESPN covers
     # scores for all of these. Missing them made picks grade as UNKNOWN.
     ("soccer", "swe.1"),           # Swedish Allsvenskan
