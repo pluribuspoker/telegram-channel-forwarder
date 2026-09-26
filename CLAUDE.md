@@ -44,7 +44,8 @@ Rules here are terse on purpose. Each section points to a `docs/*.md` file holdi
 - Auth: 1-year `CLAUDE_CODE_OAUTH_TOKEN` in `~/.claude/auth.env` (not `.credentials.json`). Phone re-auth: `/reauth` → `/authcode <code>` in the watchdog bot; the `setup-token` tmux needs its dedicated socket (`-L authtok`) and wide pane (`-x 400`) — both load-bearing (docs/vps.md).
 - **Investigate trigger:** a message starting `inv `, or reporting a pick/grading problem, or asking why something did/didn't happen (esp. with a `t.me/...` link) → invoke the **investigate skill** (real Skill call). Don't answer ad-hoc.
 - On VPS (hostname `pickbot`): run commands directly; `sudo -n systemctl ...` (bare aliases are interactive-SSH-only); git works from `~/app`.
-- 👀 reaction = harness received the message (UserPromptSubmit hook). No 👀 after a few seconds = dropped, resend. The "▶️ Restarted" hook message does NOT prove the receive loop is up.
+- 👀 reaction = harness received the message (UserPromptSubmit hook). No 👀 after a few seconds = dropped, resend. The "▶️ resume" hook message does NOT prove the receive loop is up.
+- **`resume <uuid>`** (the SessionStart hook's post-restart pointer, pasted back) → Read `/home/forwarder/.claude/projects/-home-forwarder-app/<uuid>.jsonl`, summarize where we left off, then continue.
 
 ### Environment files (full detail: docs/vps.md)
 

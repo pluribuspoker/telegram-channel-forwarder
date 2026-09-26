@@ -66,12 +66,9 @@ def main():
         log("no token")
         return
 
-    # Copy-paste-verbatim: line 1 is a note to the human, everything after reads
-    # as a direct instruction to the next Claude, so pasting the whole thing works.
-    msg = (
-        "▶️ Restarted. Copy this whole message back to me to resume:\n\n"
-        f"Read {prev} — summarize where we left off, then continue."
-    )
+    # Minimal by operator request (2026-09-26): pasting it back works because
+    # CLAUDE.md maps "resume <uuid>" to reading that transcript.
+    msg = f"▶️ resume {prev_id}"
     if os.environ.get("TG_RESUME_DRYRUN") == "1":
         print(f"[DRYRUN] chat={chat_id} prev={prev_id}\n{msg}")
         return

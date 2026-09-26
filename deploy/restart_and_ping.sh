@@ -80,7 +80,7 @@ sleep 5
 
 systemctl restart claude-channels.service
 
-# Wait for the full stack. The SessionStart "▶️ Restarted" hook message fires
+# Wait for the full stack. The SessionStart "▶️ resume" hook message fires
 # before the receive loop is ready, so it alone doesn't mean messages get
 # through; bun polling is the real signal. ~2 min budget.
 up=0
