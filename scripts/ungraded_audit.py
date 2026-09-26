@@ -100,14 +100,20 @@ DEFAULT_CLAUDE_BIN = (
 )
 GROUP_CAP = 4  # fan-out copies of one pick handled by a single agent
 
+DEFAULT_MAX_ANOMALIES = int(os.environ.get("UNGRADED_AUDIT_MAX_ANOMALIES") or 2)
+ANOMALY_GROUP_CAP = 8  # instances of one rule handed to a single agent
+
 OUTCOMES = (
     "graded",             # verdict now persisted + message/broadcast repaired
     "fixed_needs_verify", # code fixed; normal flow should grade it shortly
     "legit_ungraded",     # correctly ungraded (postponed, not a pick, ...)
     "needs_human",        # product decision / paid API / ambiguity — parked
     "no_issue",           # already resolved by the time the agent looked
+    "repaired",           # anomaly: class fixed in code + live artifacts repaired
+    "false_positive",     # anomaly: the rule fired on a correct pick
 )
-PARK_OUTCOMES = ("legit_ungraded", "needs_human", "no_issue")
+PARK_OUTCOMES = ("legit_ungraded", "needs_human", "no_issue",
+                 "repaired", "false_positive")
 
 
 # ─── scan ────────────────────────────────────────────────────────────────────
@@ -249,6 +255,197 @@ def scan(
     return out
 
 
+# ─── graded-pick anomaly scan ────────────────────────────────────────────────
+#
+# The ungraded scan only sees legs with NO verdict. A leg whose verdict is right
+# but whose label, parse shape, or price is wrong never reaches it ("Italy /
+# Belgium BTTS" graded ❌ correctly and broadcast as "Italy/Belgium O0.5" for a
+# week-old class of bug). These rules are deterministic invariants over the
+# cache — zero API cost; an agent runs only when one fires. Each rule was swept
+# over the live cache at build time (2026-09-26) and tightened until the only
+# hits were real bugs; widen one only after re-running that sweep.
+
+# (rule id, description regex, label regex): a description naming the market
+# must render a label naming it too. Period markets double as a parse check —
+# the label carries the parsed period, so "1st half" with period=game fires.
+LABEL_MARKETS = (
+    ("BTTS", r"\bBTTS\b|both\s+teams\s+to\s+score", r"\bBTTS\b"),
+    ("DNB", r"\bDNB\b|draw\s+no\s+bet", r"\bDNB\b"),
+    ("DC", r"\bdouble\s+chance\b", r"\bDC\b"),
+    ("advance", r"\bto\s+(?:advance|qualify)\b", r"\bto (?:Advance|Qualify)\b"),
+    ("3-way", r"\b3.?way\b|\bregulation\b|\b60.?min", r"\b3-way\b"),
+    ("F5", r"\bF5\b|\bfirst\s*5\b|\b1st\s*5\b", r"\bF5\b"),
+    ("1H", r"\b1H\b|\bfirst\s+half\b|\b1st\s+half\b", r"\b1H\b|\bF5\b"),
+    ("1Q", r"\b1Q\b|\bfirst\s+quarter\b|\b1st\s+quarter\b", r"\b1Q\b"),
+    ("NRFI", r"\b[NY]RFI\b|\b(?:1st|first)\s+inning\b", r"\b1st Inn\b"),
+)
+# A label with none of these carries no bet at all ("Angers", "Evan Engram").
+_BET_TOKEN_RE = re.compile(
+    r"\d|\b(?:ML|DC|DNB|BTTS|Advance|Qualify|Yes|No|KO|TKO|Sub|Dec|Draw)\b")
+# Main-line spreads/totals live near -110; past this the price is an alternate
+# or a wrong-market binding. Parlay legs are exempt (teaser legs price as
+# alternates by design) and so are live prices.
+PRICE_BAND = 400
+
+ANOMALY_TITLES = {
+    "fanout_split": "fan-out copies disagree",
+    "bare_label": "label names no bet",
+    "price_band": "price outside the main-line band",
+}
+
+
+def rendered_channels() -> set[int]:
+    """Dest channels whose result labels are rendered (broadcast feed or
+    Sheets) — the only places a label-only defect is visible."""
+    out = set()
+    try:
+        for m in json.loads(os.environ.get("MAPPINGS_CONFIG") or "[]"):
+            if m.get("broadcast_results_channel") or m.get("sheets_id"):
+                out.add(int(m["dest_channel"]))
+    except (ValueError, TypeError, KeyError):
+        pass
+    return out
+
+
+def _anomaly_hits(key: str, entry: dict, *, rendered: set[int],
+                  format_pick) -> list[dict[str, Any]]:
+    """Per-leg invariant violations on RESOLVED legs of one cache entry."""
+    picks = (entry.get("parsed") or {}).get("picks") or []
+    lv = entry.get("leg_verdicts") or {}
+    odds = entry.get("odds_by_pick") or {}
+    try:
+        channel = int(key.split(":")[0])
+    except ValueError:
+        channel = 0
+    hits = []
+    for i, pick in enumerate(picks):
+        verdict = (lv.get(str(i)) or {}).get("verdict")
+        if verdict not in RESOLVED:
+            continue
+        desc = pick.get("description") or ""
+        try:
+            label = format_pick(pick)
+        except Exception as exc:  # a crashing renderer is itself an anomaly
+            label = f"<render error: {exc}>"
+        base = {"key": key, "idx": i, "description": desc, "label": label,
+                "verdict": verdict, "bet_type": pick.get("bet_type") or "",
+                "period": pick.get("period") or ""}
+        for rule, desc_re, label_re in LABEL_MARKETS:
+            if (re.search(desc_re, desc, re.IGNORECASE)
+                    and not re.search(label_re, label)):
+                hits.append({**base, "rule": f"label:{rule}",
+                             "detail": f"description names {rule}, label "
+                                       f"{label!r} doesn't"})
+        if channel in rendered and not _BET_TOKEN_RE.search(label):
+            hits.append({**base, "rule": "bare_label",
+                         "detail": f"label {label!r} names no bet"})
+        o = odds.get(str(i)) or {}
+        price, mt = o.get("odds"), str(o.get("match_type") or "")
+        if (isinstance(price, int) and not pick.get("is_parlay_leg")
+                and pick.get("bet_type") in ("spread", "total", "team_total")
+                and abs(price) >= PRICE_BAND and "live" not in mt):
+            hits.append({**base, "rule": "price_band",
+                         "detail": f"{price:+d} ({mt or 'no match_type'})"})
+    return hits
+
+
+def scan_anomalies(
+    cache: dict,
+    state: dict,
+    *,
+    today_et: date,
+    days_back: int = DEFAULT_DAYS_BACK,
+    attempt_cap: int = DEFAULT_ATTEMPT_CAP,
+    rendered: set[int] | None = None,
+    format_pick=None,
+) -> list[dict[str, Any]]:
+    """Graded-pick invariant violations, ONE group per rule (one agent fixes
+    the class and repairs every listed instance), newest first. State is kept
+    per instance (`anomaly:<rule>:<key>:<leg>`), so a parked instance drops
+    out while new instances of the same rule still surface."""
+    if format_pick is None:
+        from audit import _format_pick as format_pick  # heavy import: lazy
+    if rendered is None:
+        rendered = rendered_channels()
+    floor = (today_et - timedelta(days=days_back)).isoformat()
+    hits: list[dict[str, Any]] = []
+    fanout: dict[tuple, list[tuple[str, int, str]]] = {}
+    for key, entry in cache.items():
+        if not isinstance(entry, dict) or "parsed" not in entry or entry.get("_dupe"):
+            continue
+        lv = entry.get("leg_verdicts") or {}
+        msg_date = str(entry.get("msg_date") or "")[:10]
+        ref = _stale_reference_date(lv, entry.get("odds_by_pick") or {}, msg_date)
+        if not ref or ref < floor:
+            continue
+        for h in _anomaly_hits(key, entry, rendered=rendered, format_pick=format_pick):
+            h["ref_date"] = ref
+            h["capper"] = str(entry.get("capper_name") or "")
+            hits.append(h)
+        # Fan-out copies grade independently; a split verdict on the same
+        # leg of the same game means one copy is wrong.
+        picks = (entry.get("parsed") or {}).get("picks") or []
+        for i, pick in enumerate(picks):
+            leg = lv.get(str(i)) or {}
+            if leg.get("verdict") not in RESOLVED or not leg.get("game_date"):
+                continue
+            fp = (str(entry.get("capper_name") or "").strip().lower(),
+                  re.sub(r"\s+", " ", (pick.get("description") or "").strip().lower()),
+                  leg["game_date"])
+            fanout.setdefault(fp, []).append((key, i, leg["verdict"]))
+    for (capper, desc, gd), copies in fanout.items():
+        if len({v for _, _, v in copies}) < 2:
+            continue
+        for key, i, verdict in copies:
+            entry = cache[key]
+            pick = entry["parsed"]["picks"][i]
+            hits.append({
+                "key": key, "idx": i, "rule": "fanout_split",
+                "description": pick.get("description") or "",
+                "label": "", "verdict": verdict,
+                "bet_type": pick.get("bet_type") or "",
+                "period": pick.get("period") or "",
+                "ref_date": gd, "capper": str(entry.get("capper_name") or ""),
+                "detail": "copies graded " + " / ".join(
+                    f"{k}={v}" for k, _, v in sorted(copies)),
+            })
+
+    groups: dict[str, dict[str, Any]] = {}
+    for h in sorted(hits, key=lambda h: (h["ref_date"], h["key"]), reverse=True):
+        sk = f"anomaly:{h['rule']}:{h['key']}:{h['idx']}"
+        st = state.get(sk) or {}
+        if st.get("parked") or (st.get("attempts") or 0) >= attempt_cap:
+            continue
+        g = groups.setdefault(h["rule"], {
+            "kind": "anomaly", "rule": h["rule"], "instances": [],
+            "state_keys": [], "attempts": 0,
+        })
+        if len(g["instances"]) >= ANOMALY_GROUP_CAP:
+            continue
+        g["instances"].append(h)
+        g["state_keys"].append(sk)
+        g["attempts"] = max(g["attempts"], st.get("attempts") or 0)
+    out = []
+    for g in groups.values():
+        first = g["instances"][0]
+        g["keys"] = list(dict.fromkeys(h["key"] for h in g["instances"]))
+        g["capper"] = first["capper"]
+        g["ref_date"] = first["ref_date"]
+        g["title"] = anomaly_title(g["rule"])
+        # Shape shared with ungraded groups (the run loop reads members/legs).
+        g["members"] = [{"key": first["key"], "legs": [
+            {"description": first["description"]}]}]
+        out.append(g)
+    out.sort(key=lambda g: (g["ref_date"], g["rule"]), reverse=True)
+    return out
+
+
+def anomaly_title(rule: str) -> str:
+    if rule.startswith("label:"):
+        return f"label drops {rule.split(':', 1)[1]}"
+    return ANOMALY_TITLES.get(rule, rule)
+
+
 # ─── prompt ──────────────────────────────────────────────────────────────────
 
 def _tme_link(key: str) -> str:
@@ -257,6 +454,50 @@ def _tme_link(key: str) -> str:
         return f"https://t.me/c/{ch.removeprefix('-100')}/{msg}"
     except ValueError:
         return ""
+
+
+def _constraint_lines() -> list[str]:
+    """Nightly-run overrides shared by the ungraded and anomaly prompts."""
+    lines: list[str] = []
+    lines.append("## Constraints — these OVERRIDE the standard /investigate workflow where they conflict")
+    lines.append(
+        "- You are a headless nightly agent on the VPS (as forwarder, in "
+        "/home/forwarder/app); no human is available. Work directly in this "
+        "repo — NO git worktree, NO SSH."
+    )
+    lines.append(
+        "- NEVER `git push` and NEVER restart/stop `telegram-forwarder`. The "
+        "audit runner pushes and restarts grade-daemon after all agents "
+        "finish. If you must edit parse_cache.json entries: `sudo -n "
+        "systemctl stop grade-daemon` first, `sudo -n systemctl start "
+        "grade-daemon` when done (the runner re-checks it at the end)."
+    )
+    lines.append(
+        "- Commit any code fix locally: stage ONLY the files you changed "
+        "(never `git add -A`; the tree may hold unrelated work-in-progress — "
+        "leave it untouched), commit message prefixed `nightly-audit:`."
+    )
+    lines.append(
+        "- A code fix must follow the repo's invariants (CLAUDE.md + the "
+        "subsystem's docs/*.md — read the doc first) and carry/extend the "
+        "pinned test where one exists. Don't fix grading with prompt text. "
+        "No new paid API calls; free sources only — if only a paid path "
+        "could grade it, report needs_human with the cost math."
+    )
+    lines.append(
+        "- Grade via the real pipeline where possible (targeted tracker run, "
+        "`python tracker.py --live --target=<channel>:<msg>`), and verify the "
+        "live message/emoji/broadcast state afterwards like the investigate "
+        "workflow requires. Do not message the operator; the runner sends "
+        "the summary."
+    )
+    lines.append(
+        "- Budget ~20 minutes; the runner kills you at 25. If the root cause "
+        "needs a human decision, stop early and report needs_human. Add an "
+        "/investigate lesson ONLY for a novel debugging technique, never for "
+        "a routine code fix."
+    )
+    return lines
 
 
 def build_prompt(group: dict[str, Any], *, today_et: date) -> str:
@@ -301,44 +542,7 @@ def build_prompt(group: dict[str, Any], *, today_et: date) -> str:
         for r in m["resolved"]:
             lines.append(f"    - resolved leg {r['idx']}: {r['description']!r} → {r['verdict']}")
     lines.append("")
-    lines.append("## Constraints — these OVERRIDE the standard /investigate workflow where they conflict")
-    lines.append(
-        "- You are a headless nightly agent on the VPS (as forwarder, in "
-        "/home/forwarder/app); no human is available. Work directly in this "
-        "repo — NO git worktree, NO SSH."
-    )
-    lines.append(
-        "- NEVER `git push` and NEVER restart/stop `telegram-forwarder`. The "
-        "audit runner pushes and restarts grade-daemon after all agents "
-        "finish. If you must edit parse_cache.json entries: `sudo -n "
-        "systemctl stop grade-daemon` first, `sudo -n systemctl start "
-        "grade-daemon` when done (the runner re-checks it at the end)."
-    )
-    lines.append(
-        "- Commit any code fix locally: stage ONLY the files you changed "
-        "(never `git add -A`; the tree may hold unrelated work-in-progress — "
-        "leave it untouched), commit message prefixed `nightly-audit:`."
-    )
-    lines.append(
-        "- A code fix must follow the repo's invariants (CLAUDE.md + the "
-        "subsystem's docs/*.md — read the doc first) and carry/extend the "
-        "pinned test where one exists. Don't fix grading with prompt text. "
-        "No new paid API calls; free sources only — if only a paid path "
-        "could grade it, report needs_human with the cost math."
-    )
-    lines.append(
-        "- Grade via the real pipeline where possible (targeted tracker run, "
-        "`python tracker.py --live --target=<channel>:<msg>`), and verify the "
-        "live message/emoji/broadcast state afterwards like the investigate "
-        "workflow requires. Do not message the operator; the runner sends "
-        "the summary."
-    )
-    lines.append(
-        "- Budget ~20 minutes; the runner kills you at 25. If the root cause "
-        "needs a human decision, stop early and report needs_human. Add an "
-        "/investigate lesson ONLY for a novel debugging technique, never for "
-        "a routine code fix."
-    )
+    lines.extend(_constraint_lines())
     lines.append("")
     lines.append("## Result contract")
     lines.append(
@@ -352,6 +556,67 @@ def build_prompt(group: dict[str, Any], *, today_et: date) -> str:
         'holds those>", "action": "<what changed, <=90 chars, or none>"}'
     )
     return "\n".join(lines)
+
+
+def build_anomaly_prompt(group: dict[str, Any], *, today_et: date) -> str:
+    """The -p prompt for one anomaly rule: every instance it fired on, the
+    mission (confirm, fix the CLASS, repair every live artifact — or call it a
+    false positive), the shared nightly constraints, and the result contract."""
+    rule = group["rule"]
+    lines = [
+        f"/investigate NIGHTLY ANOMALY AUDIT {today_et.isoformat()}: the "
+        f"deterministic invariant `{rule}` ({group['title']}) fired on "
+        f"{len(group['instances'])} already-GRADED leg(s). Their verdicts may "
+        "well be right — the suspect is the label, parse shape, price, or one "
+        "fan-out copy. Confirm whether each instance is a real defect; if yes, "
+        "fix the whole class in code and repair every live artifact; if the "
+        "rule misfired, change nothing and say why.",
+        "",
+        "## Instances (from parse_cache.json; label = audit._format_pick output)",
+    ]
+    for h in group["instances"]:
+        lines.append(
+            f"- `{h['key']}` leg {h['idx']} ({_tme_link(h['key'])}), capper "
+            f"{h['capper'] or '?'}, ref {h['ref_date']}: {h['description']!r} "
+            f"→ {h['verdict']}; bet_type={h['bet_type'] or '?'}, "
+            f"period={h['period'] or '?'}; {h['detail']}")
+    lines += [
+        "",
+        "## What \"repair every live artifact\" means here",
+        "- The renderer output feeds the results broadcast (the channel's "
+        "`broadcast_results_channel` in MAPPINGS_CONFIG) and Sheets: after a "
+        "renderer fix, find each instance's broadcast (Telethon search of the "
+        "results channel for the old label) and edit it IN PLACE via the Bot "
+        "API sender (`BOT_TOKEN`, HTML, matching a known-correct analog's "
+        "format), then re-seed the dedupe ledger "
+        "(`scripts/seed_broadcast_lines.py`) with grade-daemon stopped.",
+        "- A wrong parse field (period, bet_type, line) in the cache: fix the "
+        "parse code, then correct the cached parse of each instance (daemon "
+        "stopped) so the next reader sees the right shape.",
+        "- A wrong verdict (fan-out split, or a verdict the corrected parse "
+        "contradicts): fix grades row + leg_verdicts + message emoji + "
+        "broadcast, per the investigate lessons on sibling sweeps.",
+        "",
+    ]
+    lines.extend(_constraint_lines())
+    lines += [
+        "",
+        "## Result contract",
+        "End your FINAL message with exactly one line (single line, valid "
+        "JSON, no code fence):",
+        'AUDIT_RESULT: {"outcome": "repaired|fixed_needs_verify|'
+        'false_positive|needs_human", "issue": "<root cause, telegraph style, '
+        '<=90 chars — no commit hashes, dates, or test names>", "action": '
+        '"<what changed, <=90 chars, or none; for false_positive, how the '
+        'rule should be narrowed>"}',
+    ]
+    return "\n".join(lines)
+
+
+def _prompt_for(group: dict[str, Any], *, today_et: date) -> str:
+    if group.get("kind") == "anomaly":
+        return build_anomaly_prompt(group, today_et=today_et)
+    return build_prompt(group, today_et=today_et)
 
 
 # ─── headless agent ──────────────────────────────────────────────────────────
@@ -656,6 +921,8 @@ OUTCOME_BADGE = {  # (emoji, label) per AUDIT_RESULT outcome
     "legit_ungraded": ("⚪", "legit ungraded"),
     "needs_human": ("🙋", "NEEDS HUMAN"),
     "no_issue": ("👌", "already resolved"),
+    "repaired": ("🛠", "repaired"),
+    "false_positive": ("🙈", "rule misfired"),
     "unparsed": ("⚠️", "ran, report unparsed"),
     "error": ("❌", "agent failed"),
     "timeout": ("⏱", "agent timed out"),
@@ -670,11 +937,23 @@ def _card_id(run_date: str, primary_key: str) -> str:
     return hashlib.sha1(f"{run_date}|{primary_key}".encode()).hexdigest()[:10]
 
 
+def _card_key(r: dict) -> str:
+    """What a card is ABOUT: the primary cache key, or the rule for an anomaly
+    card (its instances can share a key with an ungraded card the same night)."""
+    if r.get("kind") == "anomaly":
+        return f"anomaly:{r.get('rule')}"
+    return (r.get("keys") or [""])[0]
+
+
+def _transcript_stem(r: dict) -> str:
+    return _card_key(r).replace(":", "_")
+
+
 def _follow_up_prompt(r: dict, *, run_date: str) -> str:
     """Short prompt the operator can paste at the Claude session to follow up
     on this pick's audit (copy_text buttons cap at 256 chars)."""
     primary = (r.get("keys") or [""])[0]
-    safe_key = primary.replace(":", "_")
+    safe_key = _transcript_stem(r)
     return (f"inv follow up nightly audit {run_date}: "
             f"{r.get('capper') or '?'} — {(r.get('desc') or 'pick')[:48]} | "
             f"key {primary} | outcome {r['outcome']} | transcript "
@@ -691,7 +970,7 @@ def compose_header(results: list[dict], notes: list[str], *,
         tally[r["outcome"]] = tally.get(r["outcome"], 0) + 1
     bits = " ".join(f"{OUTCOME_BADGE.get(o, ('❓', o))[0]}{n}"
                     for o, n in sorted(tally.items()))
-    lines = [f"pickbot: nightly ungraded audit {run_date} — "
+    lines = [f"pickbot: nightly audit {run_date} — "
              f"{len(results)} pick(s): {bits}".rstrip(": ")]
     lines.extend(esc(n) for n in notes)
     return "\n".join(lines)
@@ -712,6 +991,8 @@ def compose_card(r: dict, *, run_date: str) -> tuple[str, dict]:
     copies = f", ×{r['n_keys']}" if r.get("n_keys", 1) > 1 else ""
     emoji, label = OUTCOME_BADGE.get(r["outcome"], ("❓", r["outcome"]))
     title = f"{esc(r.get('capper') or '?')} — {esc(desc)}"
+    if r.get("kind") == "anomaly":
+        title = f"{esc(r.get('title') or r.get('rule') or 'anomaly')}: {title}"
     link = _tme_link(primary)
     if link:
         title = f'<a href="{link}">{title}</a>'
@@ -721,19 +1002,21 @@ def compose_card(r: dict, *, run_date: str) -> tuple[str, dict]:
     if r.get("parked"):
         line += " [parked]"
     lines = [line]
-    extra = [f'<a href="{_tme_link(k)}">copy {i}</a>'
+    extra = [f'<a href="{_tme_link(k)}">{"#" if r.get("kind") == "anomaly" else "copy "}{i}</a>'
              for i, k in enumerate(keys[1:], 2) if _tme_link(k)]
     if extra:
-        lines.append("fan-out: " + " · ".join(extra))
+        lines.append(("also: " if r.get("kind") == "anomaly" else "fan-out: ")
+                     + " · ".join(extra))
     detail = esc(r.get("issue") or "").strip()
     if r.get("action") and r["action"].lower() not in ("", "none"):
         detail += ("\n→ " if detail else "→ ") + esc(r["action"])
     if detail:
         lines.append(f"<blockquote expandable>{detail}</blockquote>")
 
-    cid = _card_id(run_date, primary)
+    cid = _card_id(run_date, _card_key(r))
     rows = []
-    if r["outcome"] not in SETTLED_OUTCOMES:
+    # Anomaly picks already carry a verdict — a verdict tap would be a no-op.
+    if r["outcome"] not in SETTLED_OUTCOMES and r.get("kind") != "anomaly":
         rows.append([
             {"text": "✅ Win", "callback_data": f"aud:{cid}:W"},
             {"text": "❌ Loss", "callback_data": f"aud:{cid}:L"},
@@ -824,26 +1107,38 @@ def run(args: argparse.Namespace) -> int:
     else:
         groups = scan(cache, state, today_et=today_et,
                       days_back=args.days_back, attempt_cap=args.attempt_cap)
+    anomalies: list[dict[str, Any]] = []
+    if not args.target and args.max_anomalies > 0:
+        anomalies = scan_anomalies(cache, state, today_et=today_et,
+                                   days_back=args.days_back,
+                                   attempt_cap=args.attempt_cap)
 
     append_runs_log(runs_log, {
         "logged_at_utc": datetime.now(timezone.utc).isoformat(),
         "kind": "scan", "run_date": run_date, "dry_run": args.dry_run,
         "groups": len(groups),
         "keys": [g["keys"] for g in groups],
+        "anomalies": [{"rule": g["rule"], "instances": g["state_keys"]}
+                      for g in anomalies],
     })
     print(f"scan: {len(groups)} candidate group(s) "
-          f"({sum(len(g['keys']) for g in groups)} cache keys)")
+          f"({sum(len(g['keys']) for g in groups)} cache keys), "
+          f"{len(anomalies)} anomaly rule(s) firing")
 
-    picked = groups[: args.max_picks]
+    # Ungraded picks first — anomaly agents only use what the budget leaves.
+    picked = groups[: args.max_picks] + anomalies[: args.max_anomalies]
     if args.dry_run:
-        for g in groups:
+        for g in groups + anomalies:
             marker = "RUN " if g in picked else "wait"
             desc = g["members"][0]["legs"][0]["description"][:60] if g["members"][0]["legs"] else ""
-            print(f"  [{marker}] {g['capper'] or '?'} — {desc!r} ref {g['ref_date']} "
+            what = f"[{g['rule']}] " if g.get("kind") == "anomaly" else ""
+            print(f"  [{marker}] {what}{g['capper'] or '?'} — {desc!r} ref {g['ref_date']} "
                   f"keys {g['keys']} attempts {g['attempts']}")
-        if picked:
-            print("\n--- prompt for first group ---")
-            print(build_prompt(picked[0], today_et=today_et))
+        for first in ([g for g in picked if g.get("kind") != "anomaly"][:1]
+                      + [g for g in picked if g.get("kind") == "anomaly"][:1]):
+            print("\n--- prompt for first group"
+                  + (" (anomaly)" if first.get("kind") == "anomaly" else "") + " ---")
+            print(_prompt_for(first, today_et=today_et))
         return 0
 
     if not picked:
@@ -872,9 +1167,13 @@ def run(args: argparse.Namespace) -> int:
             "keys": group["keys"], "capper": group["capper"],
             "ref_date": group["ref_date"], "desc": desc,
         }
-        safe_key = group["keys"][0].replace(":", "_")
+        if group.get("kind") == "anomaly":
+            record["kind"] = "anomaly_agent"
+            record["rule"] = group["rule"]
+            record["instances"] = group["state_keys"]
+        safe_key = _transcript_stem(group)
         transcript = TRANSCRIPT_ROOT / run_date / f"{safe_key}.stream.jsonl"
-        prompt = build_prompt(group, today_et=today_et)
+        prompt = _prompt_for(group, today_et=today_et)
         pre_head, pre_dirty = git_head(), git_dirty_paths()
         print(f"→ agent for {group['keys']} ({group['capper']!r}, ref {group['ref_date']})")
         started = time.monotonic()
@@ -917,7 +1216,8 @@ def run(args: argparse.Namespace) -> int:
             notes.append(f"⚠ {group['keys'][0]}: agent left uncommitted "
                          f"changes: {', '.join(sorted(leftover)[:5])}")
 
-        parked = record_attempt(state, group["keys"], audit["outcome"],
+        parked = record_attempt(state, group.get("state_keys") or group["keys"],
+                                audit["outcome"],
                                 attempt_cap=args.attempt_cap)
         save_state(state)
         record["parked"] = parked
@@ -929,6 +1229,8 @@ def run(args: argparse.Namespace) -> int:
             "outcome": audit["outcome"], "issue": audit["issue"],
             "action": audit["action"], "commits": record["commits"],
             "parked": parked,
+            "kind": group.get("kind") or "ungraded",
+            "rule": group.get("rule"), "title": group.get("title"),
         })
         print(f"  ← {audit['outcome']}: {audit['issue'][:120]}")
 
@@ -974,7 +1276,7 @@ def run(args: argparse.Namespace) -> int:
     cards = []
     for r in results:
         card_html, markup = compose_card(r, run_date=run_date)
-        cards.append({"card_id": _card_id(run_date, (r.get("keys") or [""])[0]),
+        cards.append({"card_id": _card_id(run_date, _card_key(r)),
                       "run_date": run_date, "html": card_html,
                       "markup": markup, "r": r})
     print("---\n" + header)
@@ -997,6 +1299,9 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--max-picks", type=int, default=DEFAULT_MAX_PICKS,
                         help="pick groups per night (default %(default)s)")
+    parser.add_argument("--max-anomalies", type=int, default=DEFAULT_MAX_ANOMALIES,
+                        help="graded-pick anomaly rules per night, after the "
+                             "ungraded picks (default %(default)s; 0 = off)")
     parser.add_argument("--days-back", type=int, default=DEFAULT_DAYS_BACK,
                         help="reference-date window (default %(default)s)")
     parser.add_argument("--attempt-cap", type=int, default=DEFAULT_ATTEMPT_CAP,

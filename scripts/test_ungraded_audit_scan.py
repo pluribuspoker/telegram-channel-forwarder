@@ -17,6 +17,7 @@ from scripts.ungraded_audit import (
     _follow_up_prompt,
     _stale_reference_date,
     _unresolved_indices,
+    build_anomaly_prompt,
     build_prompt,
     compose_card,
     compose_header,
@@ -24,6 +25,7 @@ from scripts.ungraded_audit import (
     record_attempt,
     register_cards,
     scan,
+    scan_anomalies,
 )
 
 TODAY = date(2026, 9, 8)
@@ -315,6 +317,148 @@ class InvokerIsolation(unittest.TestCase):
         cmd = HeadlessInvoker("claude", oauth_token="tok").command("/investigate x")
         self.assertIn("--strict-mcp-config", cmd)
         self.assertIn("--no-session-persistence", cmd)
+
+
+# ── graded-pick anomaly scan ─────────────────────────────────────────────────
+
+RENDERED = -1002486251914   # a channel with a broadcast feed
+UNRENDERED = -1004427337587
+
+
+def graded(desc, *, verdict="WIN", game_date="2026-09-06", odds=None, **kw):
+    """One-leg resolved entry."""
+    return entry(picks=[pick(desc, **kw)],
+                 leg_verdicts={"0": {"verdict": verdict, "game_date": game_date}},
+                 odds={"0": odds} if odds else None)
+
+
+def anomalies(cache, state=None):
+    from audit import _format_pick
+    return scan_anomalies(cache, state or {}, today_et=TODAY,
+                          rendered={RENDERED}, format_pick=_format_pick)
+
+
+class AnomalyScan(unittest.TestCase):
+    def test_label_dropping_the_market_fires(self):
+        # The incident shape, via a renderer that (like pre-2ac6204) ignores
+        # BTTS on a total: every copy lands in ONE group for the rule.
+        cache = {f"{ch}:1": graded("Italy vs Belgium - Both Teams to Score (BTTS)",
+                                   bet_type="total", line=0.5, direction="over",
+                                   teams=["Italy", "Belgium"])
+                 for ch in (RENDERED, UNRENDERED)}
+        groups = scan_anomalies(cache, {}, today_et=TODAY, rendered={RENDERED},
+                                format_pick=lambda p: "Italy/Belgium O0.5")
+        self.assertEqual([g["rule"] for g in groups], ["label:BTTS"])
+        self.assertEqual(len(groups[0]["state_keys"]), 2)
+
+    def test_period_named_but_parsed_full_game_fires(self):
+        cache = {f"{RENDERED}:1": graded("Arsenal first half over 1.5",
+                                         bet_type="total", line=1.5,
+                                         direction="over", period="game",
+                                         teams=["Arsenal", "Chelsea"])}
+        self.assertEqual([g["rule"] for g in anomalies(cache)], ["label:1H"])
+
+    def test_correct_labels_are_silent(self):
+        cache = {
+            f"{RENDERED}:1": graded("Italy vs Belgium BTTS", bet_type="prop",
+                                    prop_stat="BTTS", direction="over",
+                                    teams=["Italy", "Belgium"]),
+            f"{RENDERED}:2": graded("Arsenal 1st half over 1.5", bet_type="total",
+                                    line=1.5, direction="over", period="1h",
+                                    teams=["Arsenal"]),
+            f"{RENDERED}:3": graded("Yankees ML", teams=["New York Yankees"]),
+        }
+        self.assertEqual(anomalies(cache), [])
+
+    def test_bare_label_only_where_labels_render(self):
+        desc = "Evan Engram First Touchdown Scorer +2500"
+        cache = {f"{ch}:1": graded(desc, bet_type="prop", player="Evan Engram")
+                 for ch in (RENDERED, UNRENDERED)}
+        groups = anomalies(cache)
+        self.assertEqual([g["rule"] for g in groups], ["bare_label"])
+        self.assertEqual(groups[0]["keys"], [f"{RENDERED}:1"])
+
+    def test_fanout_split_needs_same_game_date(self):
+        same = {f"{ch}:1": graded("Cubs ML", verdict=v, teams=["Chicago Cubs"])
+                for ch, v in ((RENDERED, "WIN"), (UNRENDERED, "LOSS"))}
+        self.assertEqual([g["rule"] for g in anomalies(same)], ["fanout_split"])
+        days = {f"{RENDERED}:1": graded("Cubs ML", verdict="WIN",
+                                        game_date="2026-09-05", teams=["Chicago Cubs"]),
+                f"{RENDERED}:2": graded("Cubs ML", verdict="LOSS",
+                                        game_date="2026-09-06", teams=["Chicago Cubs"])}
+        self.assertEqual(anomalies(days), [])
+
+    def test_price_band_skips_parlay_legs_and_live(self):
+        def e(**kw):
+            return graded("Texans +8.5", bet_type="spread", line=8.5,
+                          teams=["Houston Texans"], **kw)
+        cache = {
+            f"{RENDERED}:1": e(odds={"odds": -461, "match_type": "exact"}),
+            f"{RENDERED}:2": e(odds={"odds": -461, "match_type": "exact"},
+                               is_parlay_leg=True),
+            f"{RENDERED}:3": e(odds={"odds": -461, "match_type": "live_exact"}),
+            f"{RENDERED}:4": e(odds={"odds": -115, "match_type": "exact"}),
+        }
+        groups = anomalies(cache)
+        self.assertEqual([g["rule"] for g in groups], ["price_band"])
+        self.assertEqual(groups[0]["keys"], [f"{RENDERED}:1"])
+
+    def test_unresolved_and_old_legs_ignored(self):
+        cache = {
+            f"{RENDERED}:1": entry(picks=[pick("Italy vs Belgium BTTS",
+                                               bet_type="total", line=0.5,
+                                               direction="over")]),
+            f"{RENDERED}:2": graded("Arsenal first half over 1.5", bet_type="total",
+                                    line=1.5, direction="over", period="game",
+                                    game_date="2026-08-01"),
+        }
+        cache[f"{RENDERED}:2"]["msg_date"] = "2026-08-01"
+        self.assertEqual(anomalies(cache), [])
+
+    def test_parked_instance_drops_new_instance_still_fires(self):
+        mk = lambda: graded("Arsenal first half over 1.5", bet_type="total",
+                            line=1.5, direction="over", period="game",
+                            teams=["Arsenal"])
+        cache = {f"{RENDERED}:1": mk(), f"{RENDERED}:2": mk()}
+        state = {f"anomaly:label:1H:{RENDERED}:1:0": {"parked": True}}
+        groups = anomalies(cache, state)
+        self.assertEqual(groups[0]["state_keys"], [f"anomaly:label:1H:{RENDERED}:2:0"])
+        # Anomaly state never parks the ungraded scan's key namespace.
+        self.assertNotIn(f"{RENDERED}:2", groups[0]["state_keys"])
+
+    def test_anomaly_prompt_and_card(self):
+        cache = {f"{RENDERED}:7": graded("Arsenal first half over 1.5",
+                                         bet_type="total", line=1.5,
+                                         direction="over", period="game",
+                                         teams=["Arsenal"])}
+        g = anomalies(cache)[0]
+        prompt = build_anomaly_prompt(g, today_et=TODAY)
+        self.assertIn("NIGHTLY ANOMALY AUDIT", prompt)
+        self.assertIn(f"`{RENDERED}:7` leg 0", prompt)
+        self.assertIn("false_positive", prompt)
+        self.assertIn("NEVER `git push`", prompt)  # shared constraints
+        r = {"kind": "anomaly", "rule": g["rule"], "title": g["title"],
+             "capper": "Cap", "desc": "Arsenal first half over 1.5",
+             "ref_date": g["ref_date"], "keys": g["keys"], "n_keys": 1,
+             "outcome": "fixed_needs_verify", "issue": "i", "action": "a"}
+        html_, markup = compose_card(r, run_date="2026-09-08")
+        self.assertIn("label drops 1H", html_)
+        texts = [b["text"] for row in markup["inline_keyboard"] for b in row]
+        self.assertNotIn("✅ Win", texts)  # verdict already exists
+        self.assertIn("anomaly_label_1H.stream.jsonl",
+                      _follow_up_prompt(r, run_date="2026-09-08"))
+        self.assertNotEqual(_card_id("2026-09-08", f"anomaly:{g['rule']}"),
+                            _card_id("2026-09-08", g["keys"][0]))
+
+    def test_terminal_anomaly_outcomes_park(self):
+        state = {}
+        self.assertTrue(record_attempt(state, ["anomaly:x:k:0"], "false_positive",
+                                       attempt_cap=2))
+        self.assertTrue(record_attempt(state, ["anomaly:y:k:0"], "repaired",
+                                       attempt_cap=2))
+        self.assertEqual(parse_audit_result(
+            'AUDIT_RESULT: {"outcome": "repaired", "issue": "i", "action": "a"}'
+        )["outcome"], "repaired")
 
 
 if __name__ == "__main__":

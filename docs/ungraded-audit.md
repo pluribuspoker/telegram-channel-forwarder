@@ -28,6 +28,49 @@ Scan of `parse_cache.json` (read-only — the runner never writes the cache):
 form ONE group handled by ONE agent, which is told to fix every copy —
 the multi-dest rule. Parking/attempts apply to every key in the group.
 
+## Graded-pick anomalies (2026-09-26)
+
+The ungraded scan is blind to a leg whose verdict is RIGHT but whose label,
+parse shape, price, or one fan-out copy is wrong — "Italy / Belgium BTTS"
+graded ❌ correctly and broadcast as "Italy/Belgium O0.5", and the same bug
+had hit Inter/Roma a week earlier unnoticed. `scan_anomalies` runs
+deterministic invariants over RESOLVED legs in the same `--days-back`
+window (zero API cost; an agent runs only when a rule fires):
+
+- `label:<market>` — the description names a market (BTTS, DNB, DC, to
+  advance, 3-way, F5, 1H, 1Q, NRFI) but `audit._format_pick`'s label
+  doesn't (`LABEL_MARKETS`). Period markets double as a parse check: the
+  label carries the parsed period, so "first half" parsed `period=game`
+  fires. Fires in every channel (a wrong parse shape also misroutes odds
+  and grading).
+- `bare_label` — the label carries no bet token at all ("Evan Engram");
+  only in channels whose labels render (broadcast feed or `sheets_id` in
+  MAPPINGS_CONFIG) — elsewhere the label is never shown.
+- `fanout_split` — fan-out copies (same capper + description + game date)
+  graded differently.
+- `price_band` — a straight (non-parlay, non-live) spread/total priced at
+  |odds| ≥ 400: an alternate or wrong-market binding.
+
+ONE group per rule (up to `ANOMALY_GROUP_CAP` = 8 instances) → one agent
+that confirms, fixes the class, and repairs every live artifact (broadcast
+edited in place + `seed_broadcast_lines.py`, cached parse, grades row) —
+or reports `false_positive` with how to narrow the rule. Outcomes add
+`repaired` and `false_positive` (both park). State is per instance,
+`anomaly:<rule>:<key>:<leg>`, so a parked instance drops out while new
+instances of the same rule still surface, and anomaly state never touches
+the ungraded scan's keys. Anomaly cards have no verdict buttons (the leg
+already has one); card id and transcript stem are `anomaly:<rule>`.
+
+Scheduling: ungraded picks run first; up to `--max-anomalies`
+(`UNGRADED_AUDIT_MAX_ANOMALIES`, default 2; 0 = off) anomaly agents follow
+inside the same 90-min budget (agents have taken 8–15 min, so a normal
+night fits). **Every rule was swept over the live cache at build time and
+tightened until it fired only on real bugs** (first cut: 14 noise hits —
+teaser legs priced as alternates, same-capper Cubs ML on different days,
+first-TD labels in a channel that never renders them); re-run that sweep
+before widening a rule, and count the first night's blast radius
+(`--dry-run` lists every firing rule and instance).
+
 ## The nightly run
 
 Strictly sequential, `--max-picks` groups per night (default 3), flock'd
@@ -146,7 +189,7 @@ untracked leftovers are reported, not deleted.
 - Kill switch: `UNGRADED_AUDIT_DISABLED=1` (via `scripts/set_env_local.py`)
   makes every run exit 0 immediately; or `sudo -n systemctl disable --now
   ungraded-audit.timer`.
-- Env knobs: `UNGRADED_AUDIT_MAX_PICKS`, `_DAYS_BACK`, `_ATTEMPT_CAP`,
+- Env knobs: `UNGRADED_AUDIT_MAX_PICKS`, `_MAX_ANOMALIES`, `_DAYS_BACK`, `_ATTEMPT_CAP`,
   `_AGENT_TIMEOUT`, `_BUDGET_MIN`, `_MAX_TURNS`, `_MODEL`, `_CLAUDE_BIN`,
   `_RUNS_LOG`, `_HEALTHCHECK_URL`, `_DISABLED`.
 
@@ -167,4 +210,4 @@ untracked leftovers are reported, not deleted.
   `usage` fields). Zero marginal API dollars.
 - Tests: `~/venv/bin/python -m unittest scripts.test_ungraded_audit_scan`
   (offline; pins scanner predicate, grouping, parking, AUDIT_RESULT
-  parsing).
+  parsing, and every anomaly rule incl. its must-stay-silent shapes).
