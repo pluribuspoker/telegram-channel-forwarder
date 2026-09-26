@@ -13,7 +13,7 @@ from datetime import date as _date, timedelta
 
 import anthropic
 
-from common import is_regulation_ml
+from common import is_btts_as_total, is_regulation_ml
 from scores import (
     ESPN_LEAGUES,
     fetch_espn,
@@ -486,6 +486,23 @@ def _fix_bare_game_total(parsed: dict, text: str) -> None:
               f"{floor:g} → game total")
 
 
+def _fix_btts_total_shape(parsed: dict) -> None:
+    """Converge a BTTS pick parsed as a game total onto the prop shape.
+
+    "Italy / Belgium BTTS" parsed as total over 0.5 (and "Angers vs Rennes
+    BTTS" as a line-less total): the broadcast read "Italy/Belgium O0.5", and
+    odds would route to a game-total O0.5 market — a bet a 2-0 result wins
+    while BTTS loses. The canonical shape (bet_type=prop, prop_stat=BTTS, no
+    line; direction over = Yes, under = No) is what every consumer already
+    handles. Combos with a real total line ("BTTS & Over 2.5") are untouched.
+    """
+    for pick in parsed.get("picks") or []:
+        if not is_btts_as_total(pick):
+            continue
+        pick["bet_type"], pick["prop_stat"], pick["line"] = "prop", "BTTS", None
+        print("    [parse] BTTS parsed as a game total → prop BTTS")
+
+
 # A stated teaser line: a signed spread-sized number ("+0.5", "-8"), not the
 # trailing half of a record ("29-12") or a price ("-110" — abs >= 60 is never a
 # tease), or a pick'em token. PK requires the word boundary so "PKC" etc. pass.
@@ -794,6 +811,7 @@ async def claude_parse(
         _mark_slash_parlay_legs(parsed, text)   # before teaser fix: it needs the flags
         _fix_teaser_stated_lines(parsed, text)
         _fix_bare_game_total(parsed, text)
+        _fix_btts_total_shape(parsed)
 
     return parsed
 

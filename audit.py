@@ -24,13 +24,8 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from common import VERDICT_EMOJI, is_regulation_ml, parlay_combined_odds
+from common import VERDICT_EMOJI, is_btts_as_total, is_regulation_ml, parlay_combined_odds
 from tracker_grading import _overall_verdict
-
-
-# BTTS in any phrasing ("BTTS", "Both Teams To Score") — used to catch the
-# line-less-total parse shape in _format_pick_body.
-_BTTS_RE = re.compile(r'\bBTTS\b|\bboth\s+teams\s+to\s+score\b', re.IGNORECASE)
 
 
 def _clean_desc(desc: str) -> str:
@@ -191,12 +186,12 @@ def _format_pick_body(pick: dict) -> str:
     player    = pick.get("player") or ""
     prop_stat = pick.get("prop_stat") or ""
 
-    # BTTS sometimes parses as a line-less total instead of a team-level prop
-    # ("Angers vs Rennes BTTS" → bet_type=total, line=null, prop_stat=null).
-    # Recover the stat so both shapes render through the team-prop branch —
-    # the description fallback would leave a bare team name.
-    if (bet_type == "total" and line is None and not prop_stat and not player
-            and _BTTS_RE.search(pick.get("description", ""))):
+    # BTTS sometimes parses as a game total instead of a team-level prop
+    # (line=null → the description fallback left a bare team name; line=0.5 →
+    # "Italy/Belgium O0.5"). Recover the stat so every shape renders through
+    # the team-prop branch. New parses are normalized in ai.py; this covers
+    # entries cached before that.
+    if is_btts_as_total(pick):
         bet_type, prop_stat = "prop", "BTTS"
 
     period_tag = _period_tag(pick)

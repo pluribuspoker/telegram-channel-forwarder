@@ -141,6 +141,25 @@ def is_regulation_ml(description: str) -> bool:
     return bool(_REGULATION_ML_RE.search(description or ""))
 
 
+# BTTS in any phrasing ("BTTS", "Both Teams To Score").
+BTTS_RE = re.compile(r'\bBTTS\b|\bboth\s+teams\s+to\s+score\b', re.IGNORECASE)
+
+
+def is_btts_as_total(pick: dict) -> bool:
+    """True when a BTTS pick came back from the parse shaped as a game total.
+
+    The canonical shape is bet_type=prop + prop_stat=BTTS, but the model also
+    samples bet_type=total with line=null ("Angers vs Rennes BTTS") or with
+    line=0.5 ("Italy / Belgium BTTS" → over 0.5 — a game-total bet that a 2-0
+    result WINS while BTTS loses). A total with any other line is a real
+    combo ("BTTS & Over 2.5") and is left alone.
+    """
+    return (pick.get("bet_type") == "total"
+            and not pick.get("prop_stat") and not pick.get("player")
+            and pick.get("line") in (None, 0.5)
+            and bool(BTTS_RE.search(pick.get("description") or "")))
+
+
 def _anthropic():
     from ai import claude
     return claude()

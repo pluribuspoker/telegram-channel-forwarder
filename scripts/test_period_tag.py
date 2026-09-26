@@ -144,6 +144,19 @@ CASES = [
        period="game", sport="Soccer",
        description="Angers vs Rennes BTTS No"),
      "Angers vs Rennes BTTS No"),
+    # Third shape: total over 0.5 (reported 2026-09-26: broadcast read
+    # "Italy/Belgium O0.5"; Inter/Roma 2026-09-19 too).
+    ("btts as total o0.5 (reported)",
+     P(bet_type="total", teams=["Italy", "Belgium"], line=0.5, direction="over",
+       period="game", sport="Soccer",
+       description="Italy vs Belgium - Both Teams to Score (BTTS)"),
+     "Italy vs Belgium BTTS Yes"),
+    # A real combo keeps its total line — never collapsed to plain BTTS.
+    ("btts & over 2.5 combo untouched",
+     P(bet_type="total", teams=["Italy", "Belgium"], line=2.5, direction="over",
+       period="game", sport="Soccer",
+       description="Italy vs Belgium BTTS & Over 2.5"),
+     "Italy/Belgium O2.5"),
     # The vs-stripper must still trim a trailing opponent when the bet content
     # sits before the "vs" (its original purpose, spread-shaped fallbacks).
     ("fallback spread keeps vs-strip",
