@@ -13,4 +13,4 @@ WorkingDirectory=/home/forwarder/app
 EnvironmentFile=/home/forwarder/app/.env
 EnvironmentFile=-/home/forwarder/app/.env.local
 ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/deploy/hc_heartbeat.py
-TimeoutStartSec=120
+TimeoutStartSec=240

@@ -16,6 +16,12 @@ check's URL is actually set, so an unset key never silently drops coverage.
 Each pass pings success, or /fail with the failing units as the body. If the
 VPS (or this timer) dies, both checks miss their pings and alert on their own.
 
+A unit caught mid-transition (a restart is ~1 s of deactivating/activating)
+is re-polled for SETTLE_SECONDS and fails only if it never comes back — one
+sample landing inside an operator restart paged "DOWN" then "UP" 5 min later
+(2026-09-26). So the grace can't hide a crash loop, a service whose systemd
+NRestarts grew by FLAP_RESTARTS+ since the last pass fails as flapping.
+
 healthchecks.io alerts only on a status CHANGE, so a second unit failing while
 a group is already down would be masked — that one case is DMed through the
 watchdog bot ("also failing now"). A first failure is the check's alert only.
@@ -27,6 +33,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -48,6 +55,10 @@ COVERED = {
     "trent-monitor.timer": "TRENT_HEALTHCHECK_URL",
     "hc-heartbeat.timer": "HEARTBEAT_JOBS_HEALTHCHECK_URL",  # its own ping IS the check
 }
+
+SETTLE_SECONDS = 60   # restarts finish in seconds; a real outage outlasts this
+SETTLE_POLL = 5
+FLAP_RESTARTS = 3     # automatic restarts between two passes (5 min) = crash loop
 
 GROUPS = {
     "services": ("HEARTBEAT_SERVICES_HEALTHCHECK_URL", "VPS services"),
@@ -87,22 +98,47 @@ def covered(unit: str) -> bool:
     return bool(key and os.environ.get(key))
 
 
-def check_services() -> tuple[list[str], int]:
-    failing, n = [], 0
+def settle(units: list[str]) -> set[str]:
+    """Re-poll not-active units; return those still not active after SETTLE_SECONDS."""
+    pending = set(units)
+    deadline = time.monotonic() + SETTLE_SECONDS
+    while pending and time.monotonic() < deadline:
+        time.sleep(SETTLE_POLL)
+        pending = {u for u in pending if show(u, "ActiveState").get("ActiveState") != "active"}
+    return pending
+
+
+def check_services(restarts: dict[str, int]) -> tuple[list[str], int]:
+    """`restarts` (unit -> NRestarts at the last pass) is updated in place."""
+    down, flapping, n = [], [], 0
     for unit in enabled_units("service"):
-        p = show(unit, "FragmentPath", "Type", "ActiveState", "SubState")
+        p = show(unit, "FragmentPath", "Type", "ActiveState", "NRestarts")
         if not p.get("FragmentPath", "").startswith(UNIT_DIR):
             continue
         if p.get("Type") == "oneshot" or covered(unit):
             continue
         n += 1
         if p.get("ActiveState") != "active":
-            failing.append(f"{unit}: {p.get('ActiveState')}/{p.get('SubState')}")
-    return failing, n
+            down.append(unit)
+        try:
+            cur = int(p.get("NRestarts", "0"))
+        except ValueError:
+            cur = 0
+        prev = restarts.get(unit)
+        restarts[unit] = cur
+        # NRestarts resets on a manual start, so a drop is never a flap
+        if prev is not None and cur - prev >= FLAP_RESTARTS:
+            flapping.append(f"{unit}: flapping ({cur - prev} automatic restarts in 5 min)")
+    still_down = settle(down)
+    failing = []
+    for unit in sorted(still_down):
+        p = show(unit, "ActiveState", "SubState")
+        failing.append(f"{unit}: {p.get('ActiveState')}/{p.get('SubState')}")
+    return failing + [f for f in flapping if f.split(":")[0] not in still_down], n
 
 
 def check_jobs() -> tuple[list[str], int]:
-    failing, n = [], 0
+    failing, down, n = [], [], 0
     for kind in ("timer", "path"):
         for unit in enabled_units(kind):
             p = show(unit, "FragmentPath", "ActiveState", "Unit")
@@ -110,7 +146,7 @@ def check_jobs() -> tuple[list[str], int]:
                 continue
             n += 1
             if p.get("ActiveState") != "active":
-                failing.append(f"{unit}: {p.get('ActiveState')} (not scheduled)")
+                down.append(unit)
                 continue
             if kind == "path":
                 continue
@@ -118,6 +154,8 @@ def check_jobs() -> tuple[list[str], int]:
             if svc.get("Result", "success") != "success":
                 failing.append(f"{p.get('Unit')}: last run {svc.get('Result')} "
                                f"(status {svc.get('ExecMainStatus')})")
+    for unit in sorted(settle(down)):
+        failing.append(f"{unit}: {show(unit, 'ActiveState').get('ActiveState')} (not scheduled)")
     return failing, n
 
 
@@ -156,7 +194,8 @@ def main(argv: list[str]) -> int:
         state = json.loads(STATE.read_text())
     except (OSError, ValueError):
         state = {}
-    results = {"services": check_services(), "jobs": check_jobs()}
+    restarts = state.get("restarts", {})
+    results = {"services": check_services(restarts), "jobs": check_jobs()}
     for group, (failing, n) in results.items():
         key, label = GROUPS[group]
         print(f"{label}: {n} checked, {len(failing)} failing"
@@ -177,6 +216,7 @@ def main(argv: list[str]) -> int:
             print(f"{key} not set — no ping", file=sys.stderr)
         state[group] = failing
     if not dry:
+        state["restarts"] = restarts
         STATE.parent.mkdir(parents=True, exist_ok=True)
         STATE.write_text(json.dumps(state, indent=1))
     return 0
