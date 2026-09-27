@@ -1,0 +1,26 @@
+[Unit]
+Description=Claude custom-emoji reaction helper (operator session seed -> bot copy -> unseed)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/deploy/react_helper.py serve
+# Socket for the Telegram plugin's react tool: /run/claude-react/react.sock
+RuntimeDirectory=claude-react
+RuntimeDirectoryMode=0700
+# Latency: an idle helper must never be paged out (the box runs deep in swap).
+MemorySwapMax=0
+MemoryMax=150M
+# Slow restarts: the operator's session must not reconnect in a tight loop.
+Restart=always
+RestartSec=30
+SyslogIdentifier=react-helper
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
