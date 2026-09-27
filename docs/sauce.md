@@ -28,6 +28,6 @@ New bets reach the channel within ~20–25 min instead of at the next 6 AM run, 
 - **Cost:** a no-change tick is $0 Claude (one GET, one SQLite read). A new-pick tick costs the same Haiku parse as the daily run (<1¢) — spend scales with how often Kyle posts, not with poll frequency.
 - **Concurrency:** `run_sauce_watch.sh` and `run_sauce_daily.sh` share `flock` on `/tmp/sauce_daily.lock` (watch skips its tick after 300s waiting, exit 0; daily fails after 600s) so a tick and the 6 AM cron can't interleave DB writes or double-send.
 - **Known failure mode (accepted):** a new-pick tick dying after upsert (step 3) but before the send skips the ping for those picks — the rows are now "known", so the next new pick or the 6 AM image covers them. Don't "fix" this by moving upsert after send; grading needs the rows in the DB first.
-- Log: `/tmp/sauce_watch_last_run.log` (journal has the same lines). Healthcheck env: `SAUCE_WATCH_HEALTHCHECK_URL` (unset = silent no-op, same as trent).
+- Log: `/tmp/sauce_watch_last_run.log` (journal has the same lines). Healthcheck env: `SAUCE_WATCH_HEALTHCHECK_URL` (set in the server `.env.local` since 2026-09-26).
 - Disable: `sudo systemctl disable --now sauce-watch.timer`. The 6 AM cron is unchanged (unconditional send, no caption) and stays as the daily anchor/grading recap.
 

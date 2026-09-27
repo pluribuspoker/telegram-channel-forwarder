@@ -40,8 +40,9 @@ interactive session and the god judge). A failed call is logged and reported,
 never retried in the same night; a pick gets at most ``--attempt-cap`` nights
 (default 2) before it is parked as needs-human. ``--dry-run`` scans and
 prints the plan, calls nothing, writes nothing. Exit status is 0 when there
-was nothing to do or every failure was a logged agent call, 1 only on an
-unexpected exception.
+was nothing to do or every failure was a logged agent call, 1 on an
+unexpected exception or when any report DM failed to send (so the runner's
+healthcheck /fail ping covers a report that never arrived).
 
 Full detail and recovery levers: docs/ungraded-audit.md.
 """
@@ -1287,10 +1288,16 @@ def run(args: argparse.Namespace) -> int:
             print("(DM suppressed by --no-dm)")
         else:
             register_cards(cards)
-            send_watchdog_dm(header, as_html=True)
+            sent = [send_watchdog_dm(header, as_html=True)]
             for c in cards:
-                send_watchdog_dm(c["html"], as_html=True,
-                                 reply_markup=c["markup"])
+                sent.append(send_watchdog_dm(c["html"], as_html=True,
+                                             reply_markup=c["markup"]))
+            if not all(sent):
+                # Agents ran but the operator didn't get the report — fail the
+                # run so the runner's /fail ping alerts instead of a silent 0.
+                print(f"{sent.count(False)} of {len(sent)} DM(s) failed to send",
+                      file=sys.stderr)
+                return 1
     return 0
 
 

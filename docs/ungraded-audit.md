@@ -155,8 +155,8 @@ untracked leftovers are reported, not deleted.
   back to a tag-stripped plain send (`send_watchdog_dm(as_html=True)`), so
   a markup slip can't lose the report. **Silent when the scan found
   nothing** (watchdog convention) — the nightly `kind: "scan"` ledger line
-  is still written, and `UNGRADED_AUDIT_HEALTHCHECK_URL` (unset today =
-  silent no-op) is the liveness net.
+  is still written, and `UNGRADED_AUDIT_HEALTHCHECK_URL` (set, alerts
+  Gmail + Telegram) is the liveness net.
 - **Actionable cards** (2026-09-09): every card carries a 📋 follow-up
   button — a Bot API `copy_text` button (client-side, ≤256 chars) that
   copies an `inv …` prompt naming the pick, its cache key, outcome, and

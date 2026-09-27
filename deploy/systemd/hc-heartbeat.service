@@ -1,0 +1,16 @@
+# VPS heartbeat: pings the "VPS services" / "VPS jobs" healthchecks.io checks
+# from systemd state — every enabled custom service/timer/path without a
+# dedicated check is discovered automatically (deploy/hc_heartbeat.py).
+[Unit]
+Description=VPS heartbeat (healthchecks.io baseline for services + timers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/deploy/hc_heartbeat.py
+TimeoutStartSec=120
