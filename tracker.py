@@ -33,6 +33,7 @@ from scores import (
     fetch_espn, odds_requests_used, try_early_grade_math, build_early_context,
     fetch_cfl_scoreboard, espn_current_odds,
     validate_sport, resolve_nickname_collision, verify_picks_on_schedule,
+    dropped_typed_words,
     espn_bind, binding_record, bound_matches, kickoff_passed, bindable,
     bound_scoreboard, try_soccer_grade_math, _LIVE_GRACE_H,
 )
@@ -712,7 +713,19 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
                     new_sport, new_teams = await validate_sport(
                         sport, teams, bet_desc, date_str, scoreboard_cache,
+                        typed_text=text,
                     )
+                    # Backstop for every correction layer: never drop a word
+                    # the capper typed that named the team (LSU → Detroit).
+                    lost = dropped_typed_words(teams, new_teams, text) if new_teams != teams else []
+                    if lost:
+                        print(f"  ⚠ sport/team correction refused — would drop typed {lost}: "
+                              f"{sport} {teams} -> {new_sport} {new_teams}")
+                        await audit.warn(
+                            f"⚠️ <b>correction refused</b>: {sport} {_html.escape(str(teams))} → "
+                            f"{new_sport} {_html.escape(str(new_teams))} would drop typed "
+                            f"{_html.escape(', '.join(lost))} — kept the parse\n{capper}")
+                        new_sport, new_teams = sport, teams
                     if new_sport != sport:
                         print(f"  ESPN sport override: {sport} -> {new_sport}")
                         sport = new_sport
@@ -735,7 +748,12 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             pd = pick.get("description", "")
                             new_ps, new_pt = await validate_sport(
                                 ps, pt, pd, date_str, scoreboard_cache,
+                                typed_text=text,
                             )
+                            if new_pt != pt and dropped_typed_words(pt, new_pt, text):
+                                print(f"  ⚠ pick correction refused — would drop typed "
+                                      f"{dropped_typed_words(pt, new_pt, text)}: {ps} {pt} -> {new_ps} {new_pt}")
+                                new_ps, new_pt = ps, pt
                             if new_ps != ps:
                                 print(f"  ESPN pick sport override: {ps} -> {new_ps}")
                                 pick["sport"] = new_ps
@@ -754,7 +772,14 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         day_hint=day_hint,
                     ):
                         pick = picks[res["index"]]
-                        if res["status"] == "corrected":
+                        if res["status"] == "corrected" and dropped_typed_words(
+                                pick.get("teams") or [], res["teams"], text):
+                            print(f"  ⚠ schedule repair refused — would drop typed "
+                                  f"{dropped_typed_words(pick.get('teams') or [], res['teams'], text)}: {res['note']}")
+                            await audit.warn(
+                                f"⚠️ <b>schedule repair refused</b> (would drop a typed word): "
+                                f"{_html.escape(res['note'])}\n{capper}")
+                        elif res["status"] == "corrected":
                             print(f"  schedule repair: {res['note']}")
                             # description is load-bearing (grading, odds routing,
                             # tag placement) — it moves with the team or the

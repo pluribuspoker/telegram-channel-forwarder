@@ -3057,18 +3057,30 @@ async def resolve_nickname_collision(
     return sport, teams, description, warn
 
 
+# Days around the post date a parsed team may play and still confirm its sport
+# (the bind-once window): picks post the night before, and NFL/college picks
+# days ahead. "Does it play TODAY?" treated every lookahead pick as wrong-sport.
+VALIDATE_WINDOW = (1, 3)   # days before, days after
+
+
 async def validate_sport(
     sport: str,
     teams: list[str],
     bet_text: str,
     date_str: str,
     scoreboard_cache: dict[tuple[str, str], dict | None],
+    typed_text: str = "",
 ) -> tuple[str, list[str]]:
     """Verify a sport classification against ESPN schedules.
 
-    Checks that the team actually has a game in the classified sport on the
-    given date.  If not, tries alternative sports (especially for ambiguous
-    names like Rangers, Cardinals, Giants).
+    Confirms the parsed sport when the team has a game in it anywhere in the
+    VALIDATE_WINDOW around `date_str` — not just on the post date: both wrong
+    overrides on record were lookahead picks ("49ers vs Rams" a week out →
+    MLB Angels, 2026-08-30; "LSU ML (Saturday)" posted Friday → MLB Detroit
+    Tigers, 2026-09-18). Only a team with no game in its own sport all window
+    is re-checked against the same sport's fuzzy match, then other sports; a
+    cross-sport flip must not drop a word the capper typed (`typed_text`, the
+    raw message) — see `dropped_typed_words`.
 
     Returns (corrected_sport, corrected_teams).  If no correction needed,
     returns the originals unchanged.
@@ -3095,6 +3107,24 @@ async def validate_sport(
 
     if sb and find_event_ids(sb.get("events", []), teams):
         return sport, teams  # confirmed (exact match)
+
+    # Confirmed on another day of the window (a lookahead / night-before pick).
+    # Runs BEFORE the fuzzy rescue below, which would otherwise rebind a
+    # Saturday "LSU Tigers" to whichever other "Tigers" play on Friday.
+    if sport != "CFL":
+        try:
+            window = _window(date_str, *VALIDATE_WINDOW)
+        except ValueError:
+            window = []
+        for wd in window:
+            if wd == date_str:
+                continue
+            wk = (sport, wd)
+            if wk not in scoreboard_cache:
+                scoreboard_cache[wk] = await fetch_espn(sport, wd)
+            wsb = scoreboard_cache[wk]
+            if wsb and find_event_ids(wsb.get("events", []), teams):
+                return sport, teams
 
     # Fuzzy match: team name fragments (e.g. "Tigers") against the SAME sport
     # before trying alternatives — catches cases like "KIA Tigers" → "Detroit Tigers"
@@ -3147,9 +3177,41 @@ async def validate_sport(
             # geography alone proves nothing — keep checking other sports.
             corrected = _nickname_evidence(alt_events, matched_ids, raw_terms)
             if corrected is not None:
+                # A shared nickname is not evidence ("Tigers": LSU, Detroit,
+                # Clemson, Mizzou…) — the flip must keep every word the capper
+                # typed that named the parsed team ("LSU" ∉ "Detroit Tigers").
+                if typed_text and dropped_typed_words(teams, corrected, typed_text):
+                    continue
                 return alt_sport, corrected
 
     return sport, teams
+
+
+_TYPED_STOPWORDS = frozenset({
+    "the", "and", "of", "fc", "sc", "cf", "ac", "st", "state", "university", "city",
+    "ml", "vs", "at", "over", "under", "moneyline", "spread", "total",
+})
+
+
+def dropped_typed_words(orig_teams: list[str], new_teams: list[str], typed_text: str) -> list[str]:
+    """Words the capper TYPED that named the parsed team and a correction dropped.
+
+    A correction layer (sport override, schedule repair, collision resolver)
+    may swap a guessed name for the right one, but it must never discard what
+    the capper actually wrote: "LSU ML -150 (Saturday)" parsed as "LSU Tigers"
+    and was rewritten to "Detroit Tigers" — "LSU" is in the message and in no
+    corrected team. Words the parse invented (city/mascot the capper never
+    typed) carry no evidence and are free to change. Returns them sorted
+    (empty = the correction keeps everything typed).
+    """
+    def words(s: str) -> set[str]:
+        return {w for w in re.findall(r"[a-z0-9]+", _strip_accents((s or "").lower()))
+                if len(w) >= 2 and w not in _TYPED_STOPWORDS}
+
+    typed = words(typed_text)
+    kept = set().union(*(words(t) for t in (new_teams or []))) if new_teams else set()
+    orig = set().union(*(words(t) for t in (orig_teams or []))) if orig_teams else set()
+    return sorted(w for w in orig & typed if w not in kept)
 
 
 def _nickname_evidence(
