@@ -59,6 +59,10 @@ echo "claude-channels: starting model=$MODEL effort=$EFFORT (from ${STATE_FILE})
 pkill -f "bun server.ts" 2>/dev/null || true
 sleep 1
 
+# Re-apply the local custom-emoji reaction patch to the Telegram plugin (a
+# plugin update restores stock server.ts). Idempotent, fails open.
+python3 "$(dirname "$0")/patch_telegram_plugin.py" >&2 || true
+
 # Start claude in a detached tmux session
 tmux new-session -d -s "$SESSION" "cd ~/app && $CLAUDE_CMD"
 
