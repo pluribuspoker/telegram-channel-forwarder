@@ -18,15 +18,26 @@ ping_hc() {
     fi
 }
 
+# Flap damping (deploy/hc_flap.py): a job that fails on and off stays DOWN
+# until an hour passes with no new failure, instead of paging every run.
+flap() { python3 "$APP_DIR/deploy/hc_flap.py" "$1" pikkit-opinions; }
+
 cd "$APP_DIR"
+flap start
 ping_hc "/start"
 
 $PYTHON scripts/pikkit_opinion_runner.py 2>&1 | tee "$LOGFILE"
 STATUS=$?
 
 if [ "$STATUS" -eq 0 ]; then
-    ping_hc "" "$(tail -20 "$LOGFILE")"
+    HELD=$(flap ok)
+    if [ -n "$HELD" ]; then
+        ping_hc "/log" "$HELD"$'\n\n'"$(tail -20 "$LOGFILE")"
+    else
+        ping_hc "" "$(tail -20 "$LOGFILE")"
+    fi
 else
+    flap fail
     ping_hc "/fail" "$(tail -50 "$LOGFILE")"
 fi
 exit "$STATUS"

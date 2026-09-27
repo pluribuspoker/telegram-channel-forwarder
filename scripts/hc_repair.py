@@ -147,6 +147,15 @@ def failing_units(body: str) -> list[str]:
     return units
 
 
+def latest_fail(pings: list[dict]) -> dict | None:
+    """The newest status-deciding ping, when it is a /fail. `start`, `log` and
+    `ign` pings decide nothing — a flap-held good run pings /log
+    (deploy/hc_flap.py) — so the failure that holds a check DOWN still
+    reaches the agent through a re-run in progress or a held success."""
+    decided = next((p for p in pings if p.get("type") not in ("start", "log", "ign")), None)
+    return decided if decided and decided.get("type") == "fail" else None
+
+
 def env_key_for(check: dict, env: dict[str, str]) -> str:
     uuid = check.get("uuid") or ""
     for key, value in sorted(env.items()):
@@ -349,6 +358,11 @@ def build_prompt(targets: list[dict], *, now_et: str, head: str,
         "POST " + API + "/checks/<uuid>) with the run-time evidence — outcome "
         "false_alarm. A heartbeat false positive is a bug in "
         "deploy/hc_heartbeat.py — fix it there.",
+        "- A job that fails on and off is flap-damped (deploy/hc_flap.py): a "
+        "\"flapping — … held DOWN until HH:MM\" line or a `log` ping means its "
+        "last run passed but it failed 2+ times in 3h. A pass since is not a "
+        "fix — find why it keeps failing (often an upstream: grep the "
+        "journal for the failed runs, not the last one).",
         "- Never hand-edit .env/.env.local (scripts/set_env_local.py is the only "
         "writer). Secrets you can't obtain (dead cookies/tokens, Turnstile "
         "logins) → needs_human with exactly what the operator must do.",
@@ -418,8 +432,8 @@ def fetch_details(check: dict) -> dict:
     try:
         pings = api_get(f"/checks/{uuid}/pings/").get("pings", [])
         out["pings"] = [{"type": p.get("type"), "date": p.get("date")} for p in pings[:10]]
-        fail = next((p for p in pings if p.get("type") == "fail"), None)
-        if fail and pings and pings[0].get("n") == fail.get("n"):
+        fail = latest_fail(pings)
+        if fail:
             out["body"] = api_get(f"/checks/{uuid}/pings/{fail['n']}/body", raw=True)
     except Exception as exc:
         print(f"pings {check.get('name')}: {exc}", file=sys.stderr)

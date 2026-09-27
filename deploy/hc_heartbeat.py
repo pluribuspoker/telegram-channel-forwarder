@@ -22,6 +22,14 @@ sample landing inside an operator restart paged "DOWN" then "UP" 5 min later
 (2026-09-26). So the grace can't hide a crash loop, a service whose systemd
 NRestarts grew by FLAP_RESTARTS+ since the last pass fails as flapping.
 
+A job that fails on and off would page DOWN/UP with every run, so jobs are
+flap-damped (deploy/hc_flap.py): once a timer's unit has failed twice within
+3 h, a good run keeps it listed ("flapping — …held DOWN until HH:MM") until an
+hour passes with no new failure. Failures are keyed by the failed run's
+InactiveEnterTimestamp, so the four passes that see one failed run count it
+once — and a job stays failing while its next run is still in progress (a
+start resets Result to success; that alone used to flip the check UP).
+
 healthchecks.io alerts only on a status CHANGE, so a second unit failing while
 a group is already down would be masked — that one case is DMed through the
 watchdog bot ("also failing now"). A first failure is the check's alert only.
@@ -37,6 +45,9 @@ import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # hc_repair loads us by path
+import hc_flap  # noqa: E402
 
 APP = Path(__file__).resolve().parent.parent
 UNIT_DIR = "/etc/systemd/system/"
@@ -59,6 +70,7 @@ COVERED = {
 SETTLE_SECONDS = 60   # restarts finish in seconds; a real outage outlasts this
 SETTLE_POLL = 5
 FLAP_RESTARTS = 3     # automatic restarts between two passes (5 min) = crash loop
+KEEP_LAST_FAIL = 7 * 86400  # s a job's newest failure is remembered (weekly jobs)
 
 GROUPS = {
     "services": ("HEARTBEAT_SERVICES_HEALTHCHECK_URL", "VPS services"),
@@ -87,10 +99,18 @@ def enabled_units(kind: str) -> list[str]:
 
 
 def show(unit: str, *props: str) -> dict[str, str]:
+    # unix timestamps ("@1790507358") so the job failure times parse exactly
     out = subprocess.run(
-        ["systemctl", "show", unit, *(f"-p{p}" for p in props)],
+        ["systemctl", "show", "--timestamp=unix", unit, *(f"-p{p}" for p in props)],
         capture_output=True, text=True).stdout
     return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+
+
+def _unix(value: str) -> float | None:
+    try:
+        return float(value.lstrip("@")) if value.startswith("@") else None
+    except ValueError:
+        return None
 
 
 def covered(unit: str) -> bool:
@@ -137,8 +157,10 @@ def check_services(restarts: dict[str, int]) -> tuple[list[str], int]:
     return failing + [f for f in flapping if f.split(":")[0] not in still_down], n
 
 
-def check_jobs() -> tuple[list[str], int]:
-    failing, down, n = [], [], 0
+def check_jobs(job_fails: dict[str, list[float]]) -> tuple[list[str], int]:
+    """`job_fails` (service -> recent failed-run times) is updated in place."""
+    failing, held, down, n = [], [], [], 0
+    now = time.time()
     for kind in ("timer", "path"):
         for unit in enabled_units(kind):
             p = show(unit, "FragmentPath", "ActiveState", "Unit")
@@ -150,13 +172,37 @@ def check_jobs() -> tuple[list[str], int]:
                 continue
             if kind == "path":
                 continue
-            svc = show(p.get("Unit", ""), "Result", "ExecMainStatus")
+            job = p.get("Unit", "")
+            svc = show(job, "Result", "ExecMainStatus", "ActiveState",
+                       "InactiveEnterTimestamp")
+            # the failed run's end time: failure identity AND, while the next
+            # run is in progress, proof that the last finished run failed
+            ended = _unix(svc.get("InactiveEnterTimestamp", ""))
+            fails = job_fails.get(job, [])
             if svc.get("Result", "success") != "success":
-                failing.append(f"{p.get('Unit')}: last run {svc.get('Result')} "
+                at = ended or now
+                if at not in fails:
+                    fails.append(at)
+                failing.append(f"{job}: last run {svc.get('Result')} "
                                f"(status {svc.get('ExecMainStatus')})")
+            elif svc.get("ActiveState") not in ("inactive", "failed") and ended in fails:
+                # a new run resets Result to success at START — that used to
+                # read as recovered and flip the check UP before the run ended
+                failing.append(f"{job}: last run failed at {hc_flap.clock(ended)}, re-running")
+            elif reason := hc_flap.hold_reason(fails, now):
+                held.append(f"{job}: last run ok, {reason}")
+            job_fails[job] = fails
+    for job in list(job_fails):
+        fails = sorted(job_fails[job])
+        # past the flap window keep only the newest failure (a daily job's
+        # next run must still read as re-running it), for a week at most
+        job_fails[job] = hc_flap.recent(fails, now) or [
+            t for t in fails[-1:] if now - t < KEEP_LAST_FAIL]
+        if not job_fails[job]:
+            del job_fails[job]
     for unit in sorted(settle(down)):
         failing.append(f"{unit}: {show(unit, 'ActiveState').get('ActiveState')} (not scheduled)")
-    return failing, n
+    return failing + held, n
 
 
 def ping(url: str, failing: list[str], n: int) -> None:
@@ -195,7 +241,8 @@ def main(argv: list[str]) -> int:
     except (OSError, ValueError):
         state = {}
     restarts = state.get("restarts", {})
-    results = {"services": check_services(restarts), "jobs": check_jobs()}
+    job_fails = state.get("job_fails", {})
+    results = {"services": check_services(restarts), "jobs": check_jobs(job_fails)}
     for group, (failing, n) in results.items():
         key, label = GROUPS[group]
         print(f"{label}: {n} checked, {len(failing)} failing"
@@ -217,6 +264,7 @@ def main(argv: list[str]) -> int:
         state[group] = failing
     if not dry:
         state["restarts"] = restarts
+        state["job_fails"] = job_fails
         STATE.parent.mkdir(parents=True, exist_ok=True)
         STATE.write_text(json.dumps(state, indent=1))
     return 0
