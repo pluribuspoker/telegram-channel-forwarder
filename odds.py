@@ -40,7 +40,8 @@ import httpx
 from dotenv import load_dotenv
 
 from common import is_regulation_ml
-from scores import _team_matches, fetch_espn, espn_bookmakers_for_teams, espn_event_for_teams, ESPN_LEAGUES
+from scores import (_team_matches, fetch_espn, espn_bookmakers_for_teams, espn_event_for_teams, ESPN_LEAGUES,
+                    extract_espn_bookmaker, soccer_bind)
 
 ROOT = Path(__file__).resolve().parent
 DB_PATH = str(ROOT / "picks.db")
@@ -184,6 +185,16 @@ MARKETS_BY_TYPE: dict[str, str] = {
 }
 
 MAX_LINE_GAP = 5
+
+# Sports where a line gap can't be priced by the linear half-point model.
+# Soccer goals are few and discrete: o1.5 → o2.5 moves the price ~25 points of
+# probability, but HALF_POINT_COST adjusts ~4 — a whole-goal gap showed -164 on
+# a ~+120 bet. Soccer prices only an exact line (alt_line_gap_* otherwise).
+_MAX_LINE_GAP_BY_SPORT: dict[str, float] = {"Soccer": 0.0}
+
+
+def _max_line_gap(sport: str) -> float:
+    return _MAX_LINE_GAP_BY_SPORT.get(sport, MAX_LINE_GAP)
 
 # How long after kickoff an event still counts as "current" when picking which
 # event a pick refers to (see _find_event_id). Longer than any single event we
@@ -891,7 +902,7 @@ def _lookup_spread(sport: str, bookmakers: list[dict], team: str, pick_line: flo
     best_pt, best_price, best_bk = max(at_closest, key=lambda x: x[1])
     gap = abs(best_pt - pick_line)
 
-    if gap > MAX_LINE_GAP:
+    if gap > _max_line_gap(sport):
         return {"match_type": f"alt_line_gap_{gap:.1f}pts", "pick_line": pick_line,
                 "api_line": best_pt, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
@@ -931,7 +942,7 @@ def _lookup_total(sport: str, bookmakers: list[dict], direction: str, pick_line:
     best_pt, best_price, best_bk = max(at_closest, key=lambda x: x[1])
     gap = abs(best_pt - pick_line)
 
-    if gap > MAX_LINE_GAP:
+    if gap > _max_line_gap(sport):
         return {"match_type": f"alt_line_gap_{gap:.1f}pts", "pick_line": pick_line,
                 "api_line": best_pt, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
@@ -1003,7 +1014,7 @@ def _lookup_team_total(sport: str, bookmakers: list[dict], team: str, direction:
     best_pt, best_price, best_bk = max(at_closest, key=lambda x: x[1])
     gap = abs(best_pt - pick_line)
 
-    if gap > MAX_LINE_GAP:
+    if gap > _max_line_gap(sport):
         return {"match_type": f"alt_line_gap_{gap:.1f}pts", "pick_line": pick_line,
                 "api_line": best_pt, "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
@@ -1455,6 +1466,46 @@ async def _try_pregame(
     )
 
 
+async def _soccer_espn_odds(pick: dict, teams: list[str],
+                            today: str | None = None) -> OddsResult | None:
+    """Club + international soccer prices from ESPN's all-competitions feed (free).
+
+    The Odds API key covers the World Cup only and Bovada has no soccer path,
+    so every club pick ended no_game. ESPN lists DraftKings moneyline (3-way
+    side prices), handicap and total on its soccer events; the event is bound
+    with the grading binder (`soccer_bind`: strict, ambiguous never guessed).
+    None = ESPN has no single game for the pick → the caller's old path runs.
+    A started game prices from ESPN's close as the pregame line (there is no
+    free live soccer source).
+    """
+    today = today or datetime.now(_ET).date().isoformat()
+    event, status, _ = await soccer_bind(teams, today, pick.get("description", ""),
+                                         ref=datetime.now(timezone.utc))
+    if not event or status not in ("bound", "partial"):
+        return None
+    comp = (event.get("competitions") or [{}])[0]
+    commence = event.get("date") or None
+    gd = _utc_to_eastern_date(commence) if commence else None
+    bk = extract_espn_bookmaker(comp)
+    r = lookup_pick_odds("Soccer", pick, [bk]) if bk else None
+    state = ((event.get("status") or {}).get("type") or {}).get("state", "")
+    if state != "pre":
+        if r and r.get("adjusted_odds") is not None:
+            return OddsResult(match_type=f"pregame_espn_{r['match_type']}", odds=r["adjusted_odds"],
+                              bookmaker=r["bookmaker"], api_line=r["api_line"],
+                              pick_line=r["pick_line"], game_date=gd, commence_time=commence)
+        return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"),
+                          game_date=gd, commence_time=commence)
+    if not r:
+        # Game listed, no lines yet — retryable (no_game) until kickoff.
+        return OddsResult(match_type="no_game", pick_line=pick.get("line"),
+                          game_date=gd, commence_time=commence)
+    return OddsResult(
+        match_type=r["match_type"], odds=r["adjusted_odds"], bookmaker=r["bookmaker"],
+        api_line=r["api_line"], pick_line=r["pick_line"], game_date=gd, commence_time=commence,
+    )
+
+
 async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH,
                              *, free_only: bool = False) -> OddsResult:
     """
@@ -1572,6 +1623,13 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH,
 
         # ── All other bet types ───────────────────────────────────────────────
         bookmakers: list[dict] = []
+
+        # Soccer: ESPN's all-competitions feed first (free, every league). Only
+        # when it has no game for the pick does the old path (World Cup key) run.
+        if sport == "Soccer":
+            soccer = await _soccer_espn_odds(pick, teams)
+            if soccer is not None:
+                return soccer
 
         # Event binding via the API /events endpoint stays FIRST even though the
         # API prices last: /events is free (x-requests-last: 0) and its match

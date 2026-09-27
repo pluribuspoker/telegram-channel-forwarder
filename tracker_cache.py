@@ -77,9 +77,11 @@ def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict
         entry["has_media"] = existing["has_media"]
     if existing.get("reply_to_id") is not None:
         entry["reply_to_id"] = existing["reply_to_id"]
-    # Soccer event bindings (tracker._bind_soccer_leg) — made once, graded by id.
-    if existing.get("soccer_events"):
-        entry["soccer_events"] = existing["soccer_events"]
+    # ESPN event bindings (tracker._bind_leg) — made once, graded by id.
+    # "soccer_events" is the soccer-only era's key (2026-09-26), still read.
+    for k in ("espn_events", "soccer_events"):
+        if existing.get(k):
+            entry[k] = existing[k]
     return entry
 
 
@@ -240,8 +242,8 @@ def _merge_broadcasted_flags(cache: dict, disk: dict) -> None:
                 mv["broadcasted"] = True
 
 
-def _merge_soccer_events(cache: dict, disk: dict) -> None:
-    """Keep soccer bindings another writer stored since we loaded.
+def _merge_leg_bindings(cache: dict, disk: dict) -> None:
+    """Keep ESPN event bindings another writer stored since we loaded.
 
     Same whole-key conflict as `_merge_broadcasted_flags`: the daemon rewrites
     an entry to record a verdict and its stale copy would drop a binding the
@@ -253,18 +255,19 @@ def _merge_soccer_events(cache: dict, disk: dict) -> None:
         disk_entry = disk.get(key)
         if not isinstance(entry, dict) or not isinstance(disk_entry, dict):
             continue
-        disk_se = disk_entry.get("soccer_events")
-        if not isinstance(disk_se, dict) or not disk_se:
-            continue
-        mem_se = entry.setdefault("soccer_events", {})
-        if not isinstance(mem_se, dict):
-            continue
-        for leg, rec in disk_se.items():
-            if leg not in mem_se:
-                mem_se[leg] = rec
-            elif isinstance(rec, dict) and isinstance(mem_se[leg], dict) \
-                    and rec.get("stuck_warned"):
-                mem_se[leg]["stuck_warned"] = True
+        for field in ("espn_events", "soccer_events"):
+            disk_se = disk_entry.get(field)
+            if not isinstance(disk_se, dict) or not disk_se:
+                continue
+            mem_se = entry.setdefault(field, {})
+            if not isinstance(mem_se, dict):
+                continue
+            for leg, rec in disk_se.items():
+                if leg not in mem_se:
+                    mem_se[leg] = rec
+                elif isinstance(rec, dict) and isinstance(mem_se[leg], dict) \
+                        and rec.get("stuck_warned"):
+                    mem_se[leg]["stuck_warned"] = True
 
 
 def _save_pending_cache(cache: dict) -> None:
@@ -276,7 +279,7 @@ def _save_pending_cache(cache: dict) -> None:
         disk = _read_raw()
         merged = _merge_onto_disk(cache, disk, snapshot)
         _merge_broadcasted_flags(merged, disk)
-        _merge_soccer_events(merged, disk)
+        _merge_leg_bindings(merged, disk)
         # Per-process temp name: a shared "parse_cache.json.tmp" lets two concurrent writers
         # collide, one renaming it away while the other is still using it — which raises
         # FileNotFoundError out of os.replace() and kills that run mid-write. The lock already

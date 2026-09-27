@@ -881,12 +881,16 @@ async def build_context(
     odds_game_date: str | None = None,
     msg_date: str | None = None,
     soccer_bound: dict | None = None,
+    bound_event: bool = False,
 ) -> tuple[str, str]:
     """Return (context_str, game_date) for grading this pick.
     game_date is the actual date the game is/was played (may differ from pick date).
     msg_date is the original message date (before odds/day-hint overrides).
     soccer_bound is the tracker's stored event binding for a soccer leg
-    (entry["soccer_events"][i]) — grade that event, don't re-match names."""
+    (entry["espn_events"][i]) — grade that event, don't re-match names.
+    bound_event: `scoreboard` is a one-event slate of the leg's BOUND game
+    (scores.bound_scoreboard) — grade it or wait for it; never fall back to
+    another day's game of the same teams (the series trap)."""
     bet_type = pick.get("bet_type", "")
     period = pick.get("period", "game")
     player = pick.get("player") or ""
@@ -953,6 +957,10 @@ async def build_context(
     # Other unknown sports → skip
     if sport not in ESPN_LEAGUES:
         return CONTEXT_SKIP, date
+
+    if bound_event and scoreboard and scoreboard.get("events"):
+        if not _completed_events(scoreboard):
+            return CONTEXT_PENDING, date
 
     # Props and period bets need game summaries.
     # NHL regulation/3-way moneylines also need line scores to detect OT periods.

@@ -44,6 +44,9 @@ from scores import (
     fetch_soccer_scoreboard,
     bind_soccer_event,
     try_soccer_grade_math,
+    bound_scoreboard,
+    bound_matches,
+    event_by_id,
     try_early_grade_math,
     fetch_cfl_scoreboard,
     build_early_context,
@@ -467,7 +470,10 @@ async def _resolve_game_keys(pending: list[dict], espn_cache: _ESPNCache) -> Non
             sport, game_date, _ = leg["key"]
             try:
                 sb = await espn_cache.get(sport, game_date, include_soccer=True)
-                if sport == "Soccer":
+                if leg.get("event_id") and event_by_id(sb, leg["event_id"]):
+                    # The leg's stored binding — the exact game it graded.
+                    event = event_by_id(sb, leg["event_id"])
+                elif sport == "Soccer":
                     # Same strict binder as grading: the merged all-competitions
                     # slate holds name-alikes (New England ⊃ England, WSL clubs).
                     ev, st = (bind_soccer_event(sb.get("events", []), leg["matchup"])
@@ -525,6 +531,7 @@ def _queue_broadcast(
     capper: str, reply_to_id: int | None, bc_results: list, sheets_results: list,
     leg_indices: list[int], mark_all_resolved: bool, html_text: str | None,
     msg_date: str, sport: str, picks: list, leg_verdicts: dict, odds_by_pick: dict,
+    bindings: dict | None = None,
 ) -> None:
     """Queue one message's result for the end-of-cycle flush.
 
@@ -553,7 +560,10 @@ def _queue_broadcast(
             if key is None:
                 leg_games = []       # one unkeyable leg = never group the message
                 break
-            leg_games.append({"key": key, "matchup": matchup, "event": None})
+            rec = (bindings or {}).get(str(i))
+            leg_games.append({"key": key, "matchup": matchup, "event": None,
+                              "event_id": rec.get("id") if bound_matches(rec, pick.get("teams") or [])
+                              and rec.get("status") in ("bound", "partial") else None})
 
     pending.append({
         "cache_key": cache_key, "channel_id": channel_id, "message_id": message_id,
@@ -859,6 +869,7 @@ async def _grade_cycle(
                 leg_indices=list(unbroadcast), mark_all_resolved=False,
                 html_text=html_text, msg_date=msg_date, sport=sport,
                 picks=picks, leg_verdicts=leg_verdicts, odds_by_pick=odds_by_pick,
+                bindings=entry.get("espn_events") or entry.get("soccer_events"),
             )
             entry["leg_verdicts"] = leg_verdicts
             dirty = True
@@ -889,7 +900,15 @@ async def _grade_cycle(
             eff_date = effective_grade_date(odds_gd, msg_date)
 
             sb = await espn_cache.get(pick_sport, eff_date)
-            soccer_bound = (entry.get("soccer_events") or {}).get(str(i))
+            leg_bound = (entry.get("espn_events") or entry.get("soccer_events") or {}).get(str(i))
+            soccer_bound = leg_bound if pick_sport == "Soccer" else None
+            # A bound team-sports leg (tracker._bind_leg) grades ITS game on its
+            # own date — and costs nothing before kickoff.
+            bmode, bsb, bdate = await bound_scoreboard(pick_sport, pick, leg_bound, espn_cache.get)
+            if bmode == "pregame":
+                continue
+            if bmode == "ok":
+                sb, eff_date = bsb, bdate
 
             # Totals are arithmetic: settled outright at final (incl. PUSH), or
             # mid-game once the score has passed the line. CFL is not on the
@@ -915,6 +934,7 @@ async def _grade_cycle(
                         odds_game_date=odds_gd,
                         msg_date=msg_date,
                         soccer_bound=soccer_bound,
+                        bound_event=bmode == "ok",
                     )
 
                 if context in (CONTEXT_ESPN_ERROR, CONTEXT_PENDING):
@@ -1087,6 +1107,7 @@ async def _grade_cycle(
                 mark_all_resolved=ticket_settled,
                 html_text=html_text, msg_date=msg_date, sport=sport,
                 picks=picks, leg_verdicts=leg_verdicts, odds_by_pick=odds_by_pick,
+                bindings=entry.get("espn_events") or entry.get("soccer_events"),
             )
 
         # ── Audit DB ─────────────────────────────────────────────────────

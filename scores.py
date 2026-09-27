@@ -901,6 +901,15 @@ def clear_soccer_cache() -> None:
     _SOCCER_SB_CACHE.clear()
 
 
+def _strip_links(x):
+    """Drop sportsbook deep links / tracking blobs — the bulk of an odds object."""
+    if isinstance(x, dict):
+        return {k: _strip_links(v) for k, v in x.items() if k not in ("link", "links", "tracking")}
+    if isinstance(x, list):
+        return [_strip_links(v) for v in x]
+    return x
+
+
 def _slim_soccer_event(e: dict) -> dict:
     """Keep only what binding, grading and the score header read.
 
@@ -917,6 +926,9 @@ def _slim_soccer_event(e: dict) -> dict:
                 "team": {k: (c.get("team") or {})[k] for k in _TEAM_KEYS if k in (c.get("team") or {})},
             } for c in comp.get("competitors", [])],
             "details": [d for d in comp.get("details", []) if d.get("scoringPlay")],
+            # DraftKings lines (ML incl. draw, handicap, total) — the free
+            # price source for club soccer (odds.py _soccer_espn_odds).
+            "odds": _strip_links(comp.get("odds") or []),
         }],
     }
 
@@ -991,9 +1003,9 @@ def _soccer_norm(s: str) -> str:
     return _strip_accents((s or "").lower().translate(_SOCCER_TRANSLIT)).strip()
 
 
-def _soccer_term_quality(term: str, competitor: dict) -> int:
+def _term_quality(term: str, competitor: dict) -> int:
     """2 = exact team name, 1 = word match (`_team_matches`), 0 = no match."""
-    team = competitor.get("team") or {}
+    team = competitor.get("team") or competitor.get("athlete") or {}
     t = _soccer_norm(term)
     if not t:
         return 0
@@ -1006,19 +1018,37 @@ def _soccer_term_quality(term: str, competitor: dict) -> int:
     return 0
 
 
-def _soccer_event_quality(event: dict, terms: list[str]) -> int:
-    """Best total match quality with every term on a DIFFERENT competitor, else 0."""
+_soccer_term_quality = _term_quality
+
+
+def _event_match(event: dict, terms: list[str]) -> tuple[int, tuple]:
+    """(quality, identity) — every term on a DIFFERENT competitor, else (0, ()).
+
+    identity = the matched competitors' team ids: two candidate games with the
+    same identity are the same team(s) on different days (a series, a
+    doubleheader) and time decides; different identities are different teams
+    and a tie between them is ambiguous.
+    """
     comps = ((event.get("competitions") or [{}])[0].get("competitors") or [])[:2]
     if not terms or len(comps) < 2:
-        return 0
+        return 0, ()
+
+    def tid(c):
+        return str((c.get("team") or c.get("athlete") or {}).get("id") or c.get("id") or "")
+
     if len(terms) == 1:
-        return max(_soccer_term_quality(terms[0], c) for c in comps)
-    best = 0
+        q, c = max(((_term_quality(terms[0], c), c) for c in comps), key=lambda x: x[0])
+        return (q, (tid(c),)) if q else (0, ())
+    best = (0, ())
     for a, b in ((comps[0], comps[1]), (comps[1], comps[0])):
-        qa, qb = _soccer_term_quality(terms[0], a), _soccer_term_quality(terms[1], b)
-        if qa and qb:
-            best = max(best, qa + qb)
+        qa, qb = _term_quality(terms[0], a), _term_quality(terms[1], b)
+        if qa and qb and qa + qb > best[0]:
+            best = (qa + qb, tuple(sorted((tid(a), tid(b)))))
     return best
+
+
+def _soccer_event_quality(event: dict, terms: list[str]) -> int:
+    return _event_match(event, terms)[0]
 
 
 def _soccer_league_tier(event: dict, womens_pick: bool) -> int:
@@ -1029,45 +1059,108 @@ def _soccer_league_tier(event: dict, womens_pick: bool) -> int:
     return 0 if lid in _SOCCER_BETTING_LEAGUE_IDS else 1
 
 
+def _parse_ts(s) -> _datetime | None:
+    if not s:
+        return None
+    if isinstance(s, _datetime):
+        t = s
+    else:
+        try:
+            t = _datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+# How long after kickoff a game still counts as "the one the pick is on" when
+# the pick was posted after it started (a live bet) — about a typical game's
+# length per sport: a pick posted after game 1 of a series ENDED is on game 2.
+_LIVE_GRACE_H: dict[str, float] = {
+    "Soccer": 2.0, "MLB": 3.0, "NFL": 3.25, "NCAAF": 3.5, "UFL": 3.0, "NBA": 2.5,
+    "WNBA": 2.0, "NCAAB": 2.0, "NHL": 2.5, "Lacrosse": 2.5,
+}
+
+
+def rank_bind(
+    cands: list[tuple[dict, str]], teams: list[str], description: str = "",
+    sport: str = "Soccer", ref=None, anchor=None, date: str | None = None,
+) -> tuple[dict | None, str, str]:
+    """Pick ONE event for a pick out of (event, scoreboard_date) candidates.
+
+    → (event, status, scoreboard_date); status "bound" | "partial" |
+    "ambiguous" | "none". Ranking: every named team matched (else a partial —
+    one of two), exact names over word matches, then (soccer) the leagues we
+    bet over the long tail. Among what's left, different teams tying is
+    AMBIGUOUS (never guessed); the same team(s) on several days (a series, a
+    doubleheader, a pick posted the night before) is decided by time:
+    `anchor` (the odds match's commence_time) → nearest kickoff; else `ref`
+    (when the pick was posted) → the first game not yet over at post time;
+    else the game on `date`, then the nearest date.
+    """
+    terms = [t for t in (teams or []) if t][:2]
+    if not terms or not cands:
+        return None, "none", date or ""
+    womens = bool(_WOMENS_PICK_RE.search(description or ""))
+    tier = (lambda e: _soccer_league_tier(e, womens)) if sport == "Soccer" else (lambda e: 0)
+
+    def pool_for(tt):
+        out, seen = [], set()
+        for e, d in cands:
+            if str(e.get("id")) in seen:
+                continue
+            q, ident = _event_match(e, tt)
+            if q:
+                seen.add(str(e.get("id")))
+                out.append(((-q, tier(e)), ident, e, d))
+        return out
+
+    status = "bound"
+    pool = pool_for(terms)
+    if not pool and len(terms) == 2:
+        status = "partial"
+        pool = pool_for([terms[0]]) + pool_for([terms[1]])
+    if not pool:
+        return None, "none", date or ""
+    best_key = min(p[0] for p in pool)
+    pool = [p for p in pool if p[0] == best_key]
+    if len({p[1] for p in pool}) > 1:
+        return pool[0][2], "ambiguous", pool[0][3]
+
+    anchor_t, ref_t = _parse_ts(anchor), _parse_ts(ref)
+    grace = timedelta(hours=_LIVE_GRACE_H.get(sport, 4.0))
+
+    def when(p):
+        ko = _parse_ts(p[2].get("date"))
+        if ko is None:
+            return (9, 0.0)
+        if anchor_t is not None:
+            return (0, abs((ko - anchor_t).total_seconds()))
+        if ref_t is not None:
+            if ko >= ref_t - grace:
+                return (0, (ko - ref_t).total_seconds())      # upcoming / live at post
+            return (1, (ref_t - ko).total_seconds())          # already over: most recent
+        if date:
+            try:
+                return (0, abs((_date.fromisoformat(p[3]) - _date.fromisoformat(date)).days),
+                        ko.timestamp())
+            except ValueError:
+                pass
+        return (0, ko.timestamp())
+
+    pick = min(pool, key=when)
+    return pick[2], status, pick[3]
+
+
 def bind_soccer_event(
     events: list[dict], teams: list[str], description: str = "",
 ) -> tuple[dict | None, str]:
-    """Bind a pick to ONE event of a date's soccer slate → (event, status).
-
-    status: "bound" (every named team matched), "partial" (two teams named,
-    one matched — the caller accepts it only if unique across its date
-    window), "ambiguous" (two events tie on match quality and league tier —
-    never guessed), "none".
-    """
-    terms = [t for t in (teams or []) if t][:2]
-    if not terms:
-        return None, "none"
-    womens = bool(_WOMENS_PICK_RE.search(description or ""))
-
-    def rank(pool):
-        scored = sorted(((-q, _soccer_league_tier(e, womens)), i, e) for i, (q, e) in enumerate(pool))
-        if not scored:
-            return None, "none"
-        if len(scored) > 1 and scored[0][0] == scored[1][0] and \
-                scored[0][2].get("id") != scored[1][2].get("id"):
-            return scored[0][2], "ambiguous"
-        return scored[0][2], "bound"
-
-    full = [(q, e) for e in events if (q := _soccer_event_quality(e, terms))]
-    ev, status = rank(full)
-    if status != "none" or len(terms) < 2:
-        return ev, status
-    part = []
-    for e in events:
-        q = max(_soccer_event_quality(e, [terms[0]]), _soccer_event_quality(e, [terms[1]]))
-        if q:
-            part.append((q, e))
-    ev, status = rank(part)
-    return ev, ("partial" if status == "bound" else status)
+    """One slate's binding (the score-header lookup) → (event, status)."""
+    ev, status, _ = rank_bind([(e, "") for e in events], teams, description)
+    return ev, status
 
 
 def binding_record(event: dict, date: str, status: str, teams: list[str]) -> dict:
-    """What the tracker stores per leg in entry["soccer_events"].
+    """What the tracker stores per leg in entry["espn_events"].
 
     `teams` pins the record to the parse it was made from: a repaired parse
     (edited teams) invalidates it instead of grading the old game forever.
@@ -1082,15 +1175,39 @@ def bound_matches(bound: dict | None, teams: list[str]) -> bool:
     return bool(bound) and list(bound.get("teams") or []) == list(teams or [])
 
 
+def _window(date: str, before: int = 1, after: int = 1) -> list[str]:
+    d = _date.fromisoformat(date)
+    return [(d + timedelta(days=k)).isoformat() for k in range(-before, after + 1)]
+
+
+async def _bind_from_slates(fetch, teams, date, description, sport, ref, anchor, after=1):
+    cands, errored = [], False
+    # Closest dates first: an event listed on two slates (week-scoped college
+    # scoreboards, a late kickoff crossing midnight) keeps its nearest date.
+    d0 = _date.fromisoformat(date)
+    for sd in sorted(_window(date, 1, after), key=lambda x: abs((_date.fromisoformat(x) - d0).days)):
+        sb = await fetch(sd)
+        if sb is None:
+            errored = True
+            continue
+        cands.extend((e, sd) for e in sb.get("events", []))
+    ev, status, sd = rank_bind(cands, teams, description, sport, ref, anchor, date)
+    if status == "none" and errored:
+        return None, "error", date
+    return ev, status, sd
+
+
 async def soccer_bind(
     teams: list[str], date: str, description: str = "", bound: dict | None = None,
+    ref=None, anchor=None,
 ) -> tuple[dict | None, str, str]:
     """Resolve a soccer pick to its event → (event, status, scoreboard_date).
 
     A stored binding is authoritative: that event id on that date, nothing
-    else. Otherwise the date, the day before and the day after are searched;
-    the first date with a full (or ambiguous) match decides, and a partial
-    match is used only when it is the single one across all three dates.
+    else. Otherwise every candidate from the day before through the day after
+    is ranked together (`rank_bind`) — never first-date-wins: "Andorra +0.5"
+    posted the night before bound "FC Andorra at Granada" (a word match, that
+    day) over "Andorra at Gibraltar" (exact, the next day).
     """
     if not bound_matches(bound, teams):
         bound = None
@@ -1105,37 +1222,96 @@ async def soccer_bind(
             if str(e.get("id")) == bound["id"]:
                 return e, bound.get("status") or "bound", bdate
         # The id left that date's listing (rescheduled): rebind below.
-    d = _date.fromisoformat(date)
-    partials: list[tuple[dict, str]] = []
-    errored = False
-    for search_date in (date, (d - timedelta(days=1)).isoformat(),
-                        (d + timedelta(days=1)).isoformat()):
-        sb = await fetch_soccer_scoreboard(search_date)
+    return await _bind_from_slates(fetch_soccer_scoreboard, teams, date, description,
+                                   "Soccer", ref, anchor)
+
+
+# Team sports whose picks bind to an ESPN event id (bind-once, grade by id).
+# UFC (one event = a card of bouts), Tennis/Boxing and the scraped leagues
+# (KBO, CFL) keep their own paths.
+BINDABLE_SPORTS = frozenset({
+    "Soccer", "NFL", "NCAAF", "UFL", "NBA", "WNBA", "NCAAB", "MLB", "NHL", "Lacrosse",
+})
+# Bet types graded off the game's scoreline — the ones a binding serves. Props
+# keep their own box-score search (a stale-roster player rescue needs the slate).
+BINDABLE_BET_TYPES = frozenset({
+    "moneyline", "spread", "total", "team_total", "double_chance", "draw_no_bet",
+})
+
+
+def bindable(sport: str, pick: dict) -> bool:
+    if sport not in BINDABLE_SPORTS or not (pick.get("teams") or []):
+        return False
+    return sport == "Soccer" or pick.get("bet_type") in BINDABLE_BET_TYPES
+
+
+async def espn_bind(
+    sport: str, teams: list[str], date: str, description: str = "",
+    bound: dict | None = None, ref=None, anchor=None,
+) -> tuple[dict | None, str, str]:
+    """`soccer_bind` for the ESPN team sports: same ranking over fetch_espn slates.
+
+    The window runs the day before through three days after `date` — NFL
+    picks are posted days ahead, and a stored/odds `date` is usually exact.
+    """
+    if sport == "Soccer":
+        return await soccer_bind(teams, date, description, bound, ref, anchor)
+    if not bound_matches(bound, teams):
+        bound = None
+    if bound and bound.get("status") == "ambiguous":
+        return None, "ambiguous", bound.get("date") or date
+    if bound and bound.get("id"):
+        bdate = bound.get("date") or date
+        sb = await fetch_espn(sport, bdate)
         if sb is None:
-            errored = True
-            continue
-        ev, status = bind_soccer_event(sb.get("events", []), teams, description)
-        if status in ("bound", "ambiguous"):
-            return ev, status, search_date
-        if status == "partial":
-            partials.append((ev, search_date))
-    if len({str(e.get("id")) for e, _ in partials}) == 1:
-        return partials[0][0], "partial", partials[0][1]
-    if len(partials) > 1:
-        return partials[0][0], "ambiguous", partials[0][1]
-    return None, ("error" if errored else "none"), date
+            return None, "error", bdate
+        for e in sb.get("events", []):
+            if str(e.get("id")) == bound["id"]:
+                return e, bound.get("status") or "bound", bdate
+    return await _bind_from_slates(lambda d: fetch_espn(sport, d), teams, date,
+                                   description, sport, ref, anchor, after=3)
 
 
-def soccer_kickoff_passed(bound: dict | None, minutes: int, now: _datetime | None = None) -> bool:
+def kickoff_passed(bound: dict | None, minutes: float, now: _datetime | None = None) -> bool:
     """False while a stored binding's kickoff + `minutes` is still ahead (no fetch needed)."""
-    ko = (bound or {}).get("kickoff") or ""
-    try:
-        t = _datetime.fromisoformat(ko.replace("Z", "+00:00"))
-    except ValueError:
+    t = _parse_ts((bound or {}).get("kickoff"))
+    if t is None:
         return True  # unknown kickoff → don't gate
-    if t.tzinfo is None:
-        t = t.replace(tzinfo=timezone.utc)
     return (now or _datetime.now(timezone.utc)) >= t + timedelta(minutes=minutes)
+
+
+soccer_kickoff_passed = kickoff_passed
+
+
+def event_by_id(sb: dict | None, event_id: str) -> dict | None:
+    for e in (sb or {}).get("events", []):
+        if str(e.get("id")) == str(event_id):
+            return e
+    return None
+
+
+async def bound_scoreboard(sport: str, pick: dict, bound: dict | None, get_sb):
+    """Grading input for a leg with a stored ESPN binding (non-soccer team sports).
+
+    → ("pregame", None, date)    kickoff still ahead — PENDING, zero fetches
+      ("ok", {"events": [ev]}, date)  a one-event scoreboard of THAT game on its
+                                   own date: math, period context and
+                                   build_context(bound_event=True) grade it and
+                                   nothing else (no series/prev-day fallbacks)
+      ("none", None, None)        no usable binding — the old path runs
+    `get_sb(sport, date)` is the caller's cached scoreboard fetch.
+    """
+    if sport == "Soccer" or not bindable(sport, pick) or not bound_matches(bound, pick.get("teams") or []):
+        return "none", None, None
+    if bound.get("status") not in ("bound", "partial") or not bound.get("id"):
+        return "none", None, None
+    if not kickoff_passed(bound, 0):
+        return "pregame", None, bound.get("date")
+    sb = await get_sb(sport, bound.get("date"))
+    ev = event_by_id(sb, bound["id"])
+    if ev is None:
+        return "none", None, None
+    return "ok", {"events": [ev]}, bound.get("date")
 
 
 # ESPN soccer terminal states. FT/FINAL = decided in 90'. AET/PEN carry extra
@@ -2349,8 +2525,9 @@ def extract_espn_bookmaker(competition: dict) -> dict | None:
     Only covers main spread, total, and moneyline — no alternate lines.
     """
     import re as _re
-    odds_list = competition.get("odds", [])
-    if not odds_list:
+    odds_list = competition.get("odds") or []
+    # ESPN sometimes lists an empty slot ([None]) for a game with no lines yet.
+    if not odds_list or not isinstance(odds_list[0], dict):
         return None
     o = odds_list[0]
 
@@ -2384,7 +2561,7 @@ def extract_espn_bookmaker(competition: dict) -> dict | None:
     ps = o.get("pointSpread", {})
     home_line = ps.get("home", {}).get("close", {}).get("line") or ps.get("home", {}).get("open", {}).get("line")
     home_odds = ps.get("home", {}).get("close", {}).get("odds") or ps.get("home", {}).get("open", {}).get("odds")
-    away_line = ps.get("away", {}).get("close", {}).get("line") or ps.get("away", {}).get("open", {}).get("odds")
+    away_line = ps.get("away", {}).get("close", {}).get("line") or ps.get("away", {}).get("open", {}).get("line")
     away_odds = ps.get("away", {}).get("close", {}).get("odds") or ps.get("away", {}).get("open", {}).get("odds")
     # Also try top-level spread field (abs value) + details string for sign
     if not home_line:
@@ -2447,7 +2624,19 @@ def espn_event_for_teams(espn_data: dict, teams: list[str]) -> tuple[dict | None
     """
     if not espn_data or not teams:
         return None, None
-    for event in espn_data.get("events", []):
+    events = espn_data.get("events", [])
+    if events and all(len(e.get("competitions") or []) == 1 for e in events):
+        # One game per event (every team sport): the ranked binder, not the
+        # first event where ANY named team word-matches — exact names win, a
+        # doubleheader picks the game not yet played, and two different teams
+        # tying (an ambiguous "Los Angeles") prices nothing rather than a guess.
+        ev, status, _ = rank_bind([(e, "") for e in events], teams, sport="",
+                                  ref=_datetime.now(timezone.utc))
+        if ev is None or status not in ("bound", "partial"):
+            return None, None
+        return ev, ev["competitions"][0]
+    # Multi-competition events (a UFC card = one event, many bouts): the bout.
+    for event in events:
         for comp in event.get("competitions", []):
             comp_names = [
                 c.get("team", {}).get("displayName", "").lower()

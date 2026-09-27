@@ -289,48 +289,50 @@ def main() -> int:
         print("E. tracker")
         reset({"2026-09-26": slate26})
         audit, se = _Audit(), {}
-        r1 = run(tracker._bind_soccer_leg(BTTS, "2026-09-26", se, 0, audit, "James Bets", "k:1"))
+        r1 = run(tracker._bind_leg(BTTS, "Soccer", "2026-09-26", se, 0, audit, "James Bets", "k:1"))
         check("binds once and stores id/kickoff/teams", r1 and r1["id"] == eng_spa["id"]
               and se["0"]["teams"] == BTTS["teams"] and r1["kickoff"], str(r1))
         n = len(_Stub.calls)
-        run(tracker._bind_soccer_leg(BTTS, "2026-09-26", se, 0, audit, "James Bets", "k:1"))
+        run(tracker._bind_leg(BTTS, "Soccer", "2026-09-26", se, 0, audit, "James Bets", "k:1"))
         check("second pass reuses the binding (no fetch)", len(_Stub.calls) == n)
         reset({"2026-09-27": SLATES["2026-09-27_liverpool"]})
         audit, se = _Audit(), {}
         lfc = {"description": "Liverpool ML", "bet_type": "moneyline", "teams": ["Liverpool"]}
-        run(tracker._bind_soccer_leg(lfc, "2026-09-27", se, 0, audit, "X", "k:2"))
-        run(tracker._bind_soccer_leg(lfc, "2026-09-27", se, 0, audit, "X", "k:2"))
+        run(tracker._bind_leg(lfc, "Soccer", "2026-09-27", se, 0, audit, "X", "k:2"))
+        run(tracker._bind_leg(lfc, "Soccer", "2026-09-27", se, 0, audit, "X", "k:2"))
         check("ambiguous → stored + exactly one audit flag",
               se["0"]["status"] == "ambiguous" and len(audit.sent) == 1, str(audit.sent))
         reset({"2026-09-26": slate26})
         audit = _Audit()
         early = {**rec, "kickoff": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")}
-        run(tracker._soccer_stuck_tripwire(early, BTTS, audit, "J", "k:1", 0))
+        run(tracker._stuck_tripwire(early, BTTS, "Soccer", audit, "J", "k:1", 0))
         check("tripwire quiet before kickoff + 2h45m", not audit.sent)
         stuck = dict(rec)  # kickoff 2026-09-26T18:45Z, final
-        run(tracker._soccer_stuck_tripwire(stuck, BTTS, audit, "J", "k:1", 0))
-        run(tracker._soccer_stuck_tripwire(stuck, BTTS, audit, "J", "k:1", 0))
+        run(tracker._stuck_tripwire(stuck, BTTS, "Soccer", audit, "J", "k:1", 0))
+        run(tracker._stuck_tripwire(stuck, BTTS, "Soccer", audit, "J", "k:1", 0))
         check("tripwire fires once for a final game with an ungraded pick",
               len(audit.sent) == 1 and stuck.get("stuck_warned"), str(audit.sent))
         audit = _Audit()
         reset({"2026-09-26": [ne]})
-        run(tracker._soccer_stuck_tripwire(
+        run(tracker._stuck_tripwire(
             scores.binding_record(ne, "2026-09-26", "bound", ["New England Revolution"]),
-            {"teams": ["New England Revolution"], "description": "NE ML"}, audit, "J", "k:3", 0))
+            {"teams": ["New England Revolution"], "description": "NE ML"}, "Soccer", audit, "J", "k:3", 0))
         check("tripwire quiet while the game isn't final", not audit.sent)
 
         print("F. cache")
-        existing = {"soccer_events": {"0": rec}, "parsed": {}}
+        existing = {"espn_events": {"0": rec}, "soccer_events": {"0": rec}, "parsed": {}}
         entry = tracker_cache._pending_entry("J", {}, {}, existing)
-        check("_pending_entry keeps soccer_events", entry.get("soccer_events") == {"0": rec})
+        check("_pending_entry keeps espn_events (+ the legacy soccer_events)",
+              entry.get("espn_events") == {"0": rec} and entry.get("soccer_events") == {"0": rec})
+        check("tracker reads the legacy key", tracker._leg_bindings({"soccer_events": {"0": rec}}) == {"0": rec})
         mem = {"k": {"leg_verdicts": {}}}
-        disk = {"k": {"soccer_events": {"0": {**rec, "stuck_warned": True}}}}
-        tracker_cache._merge_soccer_events(mem, disk)
+        disk = {"k": {"espn_events": {"0": {**rec, "stuck_warned": True}}}}
+        tracker_cache._merge_leg_bindings(mem, disk)
         check("save merge restores a binding our stale copy lacked",
-              mem["k"].get("soccer_events", {}).get("0", {}).get("id") == eng_spa["id"])
-        mem = {"k": {"soccer_events": {"0": dict(rec)}}}
-        tracker_cache._merge_soccer_events(mem, disk)
-        check("save merge ORs the one-shot stuck flag", mem["k"]["soccer_events"]["0"].get("stuck_warned"))
+              mem["k"].get("espn_events", {}).get("0", {}).get("id") == eng_spa["id"])
+        mem = {"k": {"espn_events": {"0": dict(rec)}}}
+        tracker_cache._merge_leg_bindings(mem, disk)
+        check("save merge ORs the one-shot stuck flag", mem["k"]["espn_events"]["0"].get("stuck_warned"))
     finally:
         httpx.AsyncClient = real
         scores.clear_soccer_cache()
