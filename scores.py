@@ -878,6 +878,15 @@ async def fetch_soccer_context(
         except Exception:
             return None, category, league
 
+    # Pick the best match across EVERY league before deciding: a partial match
+    # in an earlier league must not answer for the real game in a later one.
+    # "England" alone matches "New England Revolution" (MLS precedes the
+    # Nations League in SOCCER_LEAGUES), so an unstarted MLS game held an
+    # England/Spain BTTS at PENDING hours after its FT — and had the MLS game
+    # finished first, it would have graded the wrong match. Rank: more of the
+    # pick's teams matched, then completed, then league order. A date whose
+    # best is only a partial match yields to a full match on a later date.
+    fallback: tuple[str, str] | None = None
     async with httpx.AsyncClient(timeout=10) as http:
         d = _date.fromisoformat(date)
         for search_date in [date, (d - timedelta(days=1)).isoformat(), (d + timedelta(days=1)).isoformat()]:
@@ -885,29 +894,42 @@ async def fetch_soccer_context(
             results = await asyncio.gather(
                 *(_fetch(http, cat, lg, date_nodash) for cat, lg in SOCCER_LEAGUES)
             )
-            for sb, category, league in results:
+            best = None  # (sort key, event, category, league)
+            for order, (sb, category, league) in enumerate(results):
                 if sb is None:
                     continue
-                completed = _completed_events(sb)
-                matched = find_event_ids(completed, teams)
-                if matched:
-                    display = {"events": [e for e in completed if e.get("id") in set(matched)]}
-                    ctx = scoreboard_text(display, "Soccer")
-                    if include_stats or include_linescores:
-                        summary = await _fetch_soccer_summary(http, category, league, matched[0])
-                        if summary:
-                            if include_linescores:
-                                ls = line_scores_text(summary, "Soccer")
-                                if ls != "No line score data available":
-                                    ctx += "\n" + ls
-                            if include_stats:
-                                stats = _soccer_stats_text(summary)
-                                if stats:
-                                    ctx += "\n" + stats
-                    return ctx, search_date
-                if find_event_ids(sb.get("events", []), teams):
-                    return "PENDING", search_date
-    return "", date
+                for ev in sb.get("events", []):
+                    hits = _event_term_hits(ev, teams)
+                    if not hits:
+                        continue
+                    done = ev.get("status", {}).get("type", {}).get("completed", False)
+                    key = (-hits, not done, order)
+                    if best is None or key < best[0]:
+                        best = (key, ev, category, league)
+            if best is None:
+                continue
+            (neg_hits, not_done, _), ev, category, league = best
+            if not_done:
+                result = ("PENDING", search_date)
+            else:
+                ctx = scoreboard_text({"events": [ev]}, "Soccer")
+                if include_stats or include_linescores:
+                    summary = await _fetch_soccer_summary(http, category, league, ev.get("id"))
+                    if summary:
+                        if include_linescores:
+                            ls = line_scores_text(summary, "Soccer")
+                            if ls != "No line score data available":
+                                ctx += "\n" + ls
+                        if include_stats:
+                            stats = _soccer_stats_text(summary)
+                            if stats:
+                                ctx += "\n" + stats
+                result = (ctx, search_date)
+            if -neg_hits >= len([t for t in teams if t]):
+                return result
+            if fallback is None:
+                fallback = result
+    return fallback or ("", date)
 
 
 async def fetch_soccer_scoreboard(date: str) -> dict | None:
@@ -1519,33 +1541,42 @@ def _team_matches(term: str, team_name: str) -> bool:
     return n in t or sorted(t_words) == sorted(n_words)
 
 
+def _event_term_hits(event: dict, teams: list[str], player: str = "") -> int:
+    """How many of the pick's team/player terms match a competitor of `event`."""
+    search_terms = [t.lower() for t in teams if t] + ([player.lower()] if player else [])
+    # Check ALL competitions — UFC events have many bouts, each a separate competition
+    event_names = []
+    for comp in event.get("competitions", [{}]):
+        for c in comp.get("competitors", []):
+            n = (
+                c.get("team", {}).get("displayName", "")
+                or c.get("athlete", {}).get("displayName", "")
+            ).lower()
+            event_names.append(n)
+    return sum(
+        1 for term in search_terms
+        if any(_team_matches(term, en) for en in event_names)
+    )
+
+
 def find_event_ids(events: list[dict], teams: list[str], player: str = "") -> list[str]:
-    """Find event IDs that match the given team names or player."""
-    matched = []
+    """Find event IDs that match the given team names or player.
+
+    Ranked by how many of the terms each event matches (stable otherwise), so
+    callers taking ids[0] get the game naming BOTH teams ahead of a partial
+    hit ("England" inside "New England Revolution").
+    """
     search_terms = [t.lower() for t in teams if t] + ([player.lower()] if player else [])
     if not search_terms:
         return [e.get("id") for e in events if e.get("id")]
 
+    scored = []
     for event in events:
-        # Check ALL competitions — UFC events have many bouts, each a separate competition
-        all_comps = event.get("competitions", [{}])
-        event_names = []
-        for comp in all_comps:
-            for c in comp.get("competitors", []):
-                n = (
-                    c.get("team", {}).get("displayName", "")
-                    or c.get("athlete", {}).get("displayName", "")
-                ).lower()
-                event_names.append(n)
-
-        if any(
-            any(_team_matches(term, en) for en in event_names)
-            for term in search_terms
-        ):
-            if event.get("id"):
-                matched.append(event["id"])
-
-    return matched
+        hits = _event_term_hits(event, teams, player)
+        if hits and event.get("id"):
+            scored.append((hits, event["id"]))
+    scored.sort(key=lambda h: -h[0])  # stable: ties keep scoreboard order
+    return [eid for _, eid in scored]
 
 
 def _completed_events(data: dict) -> list[dict]:
