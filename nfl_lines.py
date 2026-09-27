@@ -783,16 +783,23 @@ def scheduled_poll_plan(
 # for 429 and the opinion-store spool for 5xx) so this never double-fires an
 # append. ``raise_on_status=False`` lets a still-429 response surface as the
 # usual gspread ``APIError`` after retries are exhausted, preserving callers'
-# error handling.
+# error handling. 404 is retried too: during a Google incident (2026-09-27
+# 01:37 ET) Sheets answered "Requested entity was not found" for the live
+# sheet on metadata AND values GETs — a real missing sheet just fails ~6 min
+# later. Read timeouts on GETs are retried by the same budget.
 _SHEETS_READ_RETRY = Retry(
     total=6,
     backoff_factor=8,
     backoff_max=120,
-    status_forcelist=(429, 500, 502, 503, 504),
+    status_forcelist=(404, 429, 500, 502, 503, 504),
     allowed_methods=frozenset({"GET"}),
     respect_retry_after_header=True,
     raise_on_status=False,
 )
+
+
+# (connect, read) seconds; the read timeout is per socket read, not total.
+_SHEETS_TIMEOUT = (10, 60)
 
 
 def _install_sheets_retry(session: Any) -> None:
@@ -814,6 +821,11 @@ def get_gspread_client(credentials_b64: str) -> gspread.Client:
         ],
     )
     client = gspread.authorize(credentials)
+    # gspread's default timeout is None: in the same incident Sheets left
+    # sockets open with no reply, hanging every job until systemd killed it
+    # (snapshots 600s, the judge up to 9000s). A stalled read now raises, and
+    # the GET retry below re-issues it; writes surface the error to callers.
+    client.set_timeout(_SHEETS_TIMEOUT)
     # gspread 6.x: the AuthorizedSession lives at client.http_client.session.
     try:
         _install_sheets_retry(client.http_client.session)

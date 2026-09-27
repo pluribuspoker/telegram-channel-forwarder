@@ -545,7 +545,8 @@ class SheetsRetryTest(unittest.TestCase):
     def test_retry_config_targets_read_quota(self):
         r = _SHEETS_READ_RETRY
         self.assertIn(429, r.status_forcelist)
-        for code in (500, 502, 503, 504):
+        # 404: Google's transient "entity not found" on a live sheet (2026-09-27).
+        for code in (404, 500, 502, 503, 504):
             self.assertIn(code, r.status_forcelist)
         # Only idempotent reads are retried; writes keep app-layer handling.
         self.assertIn("GET", r.allowed_methods)
@@ -580,6 +581,10 @@ class SheetsRetryTest(unittest.TestCase):
         class _Client:
             def __init__(self):
                 self.http_client = _HTTPClient()
+                self.timeout = None
+
+            def set_timeout(self, timeout):
+                self.timeout = timeout
 
         captured = _Client()
         original = nfl_lines.gspread.authorize
@@ -602,6 +607,9 @@ class SheetsRetryTest(unittest.TestCase):
         mounted = captured.http_client.session.mounted
         self.assertIn("https://", mounted)
         self.assertIn(429, mounted["https://"].max_retries.status_forcelist)
+        # A silent Sheets socket must raise, never hang the job (2026-09-27).
+        connect, read = captured.timeout
+        self.assertTrue(0 < connect and 0 < read <= 120)
 
 
 if __name__ == "__main__":
