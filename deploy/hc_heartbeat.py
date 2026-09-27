@@ -25,7 +25,8 @@ NRestarts grew by FLAP_RESTARTS+ since the last pass fails as flapping.
 A job that fails on and off would page DOWN/UP with every run, so jobs are
 flap-damped (deploy/hc_flap.py): once a timer's unit has failed twice within
 3 h, a good run keeps it listed ("flapping — …held DOWN until HH:MM") until an
-hour passes with no new failure. Failures are keyed by the failed run's
+hour passes with no new failure (a hold only keeps a unit this heartbeat
+already listed — it never pages one). Failures are keyed by the failed run's
 InactiveEnterTimestamp, so the four passes that see one failed run count it
 once — and a job stays failing while its next run is still in progress (a
 start resets Result to success; that alone used to flip the check UP).
@@ -157,8 +158,10 @@ def check_services(restarts: dict[str, int]) -> tuple[list[str], int]:
     return failing + [f for f in flapping if f.split(":")[0] not in still_down], n
 
 
-def check_jobs(job_fails: dict[str, list[float]]) -> tuple[list[str], int]:
-    """`job_fails` (service -> recent failed-run times) is updated in place."""
+def check_jobs(job_fails: dict[str, list[float]],
+               listed: set[str] = frozenset()) -> tuple[list[str], int]:
+    """`job_fails` (service -> recent failed-run times) is updated in place;
+    `listed` = units the previous pass reported — a hold only keeps those."""
     failing, held, down, n = [], [], [], 0
     now = time.time()
     for kind in ("timer", "path"):
@@ -189,7 +192,7 @@ def check_jobs(job_fails: dict[str, list[float]]) -> tuple[list[str], int]:
                 # a new run resets Result to success at START — that used to
                 # read as recovered and flip the check UP before the run ended
                 failing.append(f"{job}: last run failed at {hc_flap.clock(ended)}, re-running")
-            elif reason := hc_flap.hold_reason(fails, now):
+            elif job in listed and (reason := hc_flap.hold_reason(fails, now)):
                 held.append(f"{job}: last run ok, {reason}")
             job_fails[job] = fails
     for job in list(job_fails):
@@ -242,7 +245,9 @@ def main(argv: list[str]) -> int:
         state = {}
     restarts = state.get("restarts", {})
     job_fails = state.get("job_fails", {})
-    results = {"services": check_services(restarts), "jobs": check_jobs(job_fails)}
+    listed = {f.split(":")[0] for f in state.get("jobs", [])}
+    results = {"services": check_services(restarts),
+               "jobs": check_jobs(job_fails, listed)}
     for group, (failing, n) in results.items():
         key, label = GROUPS[group]
         print(f"{label}: {n} checked, {len(failing)} failing"

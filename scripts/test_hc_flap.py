@@ -72,7 +72,12 @@ check("a run that never reported counts as a failure", len(st["fails"]) == 2 and
 st, out = hc_flap.step(st, "ok", t0 + 3660)
 check("second failure → next good run held DOWN", out.startswith("flapping"), out)
 st, out = hc_flap.step(st, "ok", t0 + 3600 + 3601)
-check("an hour clean → UP again", out == "", out)
+check("an hour clean → UP again", out == "" and st["down"] is False, out)
+seeded = {"fails": [t0 - 50 * M, t0 - 20 * M], "running_since": None, "down": False}
+st, out = hc_flap.step(seeded, "ok", t0)
+check("an UP check is never held (history alone can't page)", out == "" and not st["down"], out)
+st, out = hc_flap.step({"fails": [], "running_since": t0 - 2 * 86400}, "start", t0)
+check("an unreported run older than a day is not reported as killed", out == "" and not st["down"])
 
 # 3. CLI (temp state dir; bad names refused).
 with tempfile.TemporaryDirectory() as tmp:
@@ -133,9 +138,12 @@ def fake_env(now: float, runs=RUNS):
 real_time = hb.time.time
 
 
-def replay(runs, first: str, last: str, *, old_rule=False) -> tuple[list[str], dict]:
-    """Heartbeat passes every 5 min; returns the group's status per pass."""
-    job_fails: dict = {}
+def replay(runs, first: str, last: str, *, old_rule=False,
+           job_fails=None) -> tuple[list[str], dict]:
+    """Heartbeat passes every 5 min (state carried like main() does);
+    returns the group's status per pass."""
+    job_fails = {} if job_fails is None else job_fails
+    listed: set = set()
     statuses, bodies = [], {}
     t, end = ts(first), ts(last)
     while t <= end:
@@ -143,7 +151,8 @@ def replay(runs, first: str, last: str, *, old_rule=False) -> tuple[list[str], d
         if old_rule:  # the pre-damping check: last run Result only
             down = unit_at(t, runs)["Result"] != "success"
         else:
-            failing, _ = hb.check_jobs(job_fails)
+            failing, _ = hb.check_jobs(job_fails, listed)
+            listed = {f.split(":")[0] for f in failing}
             down = bool(failing)
             bodies[datetime.fromtimestamp(t).strftime("%H:%M")] = failing
         statuses.append("DOWN" if down else "UP")
@@ -176,6 +185,11 @@ try:
           and "held DOWN until 06:49" in bodies["06:15"][0], bodies["06:15"][0])
     check("first episode: a lone failure clears on the next good run (02:10)",
           bodies["02:10"] == [], str(bodies["02:10"]))
+    # seeding the history into an UP group must not page it
+    seeded = {UNIT: [ts("04:49:08"), ts("05:19:09"), ts("05:49:09"), ts("06:49:11")]}
+    up, _ = replay(RUNS, "07:10:00", "07:45:00", job_fails=seeded)
+    check("seeded history + good runs on an UP group → stays UP", set(up) == {"UP"}, str(up))
+    check("…and the seed is kept for the next failure", len(seeded.get(UNIT, [])) == 4, str(seeded))
     # one failed run seen by four passes counts once
     jf: dict = {}
     for hm in ("04:50:00", "04:55:00", "05:00:00", "05:05:00"):
@@ -259,8 +273,20 @@ for runner, (key, name) in RUNNERS.items():
         check(f"{runner}: second failure pings /fail", seq[3] == ["/start", "/fail"], str(seq[3]))
         check(f"{runner}: flapping good run → /log (stays DOWN)", seq[4] == ["/start", "/log"],
               str(seq[4]))
-        check(f"{runner}: state under logs/hc_flap/{name}.json",
-              (app / "logs" / "hc_flap" / f"{name}.json").exists())
+        state_file = app / "logs" / "hc_flap" / f"{name}.json"
+        check(f"{runner}: state under logs/hc_flap/{name}.json", state_file.exists())
+        import json as _json
+        import time as _time
+        now = _time.time()
+        state_file.write_text(_json.dumps({"fails": [now - 1800, now - 900], "down": False}))
+        check(f"{runner}: seeded history on an UP check → plain success", run(0) == ["/start", ""])
+        state_file.write_text(_json.dumps({"fails": [], "running_since": now - 600}))
+        check(f"{runner}: a killed previous run → /fail before /start",
+              run(0) == ["/fail", "/start", ""])
+        state_file.write_text(_json.dumps({**_json.loads(state_file.read_text()),
+                                           "running_since": now - 600}))
+        check(f"{runner}: a second kill → /fail, then the good run is held",
+              run(0) == ["/fail", "/start", "/log"])
         (app / "deploy" / "hc_flap.py").write_text("raise SystemExit(1)\n")
         check(f"{runner}: a broken helper fails open (plain success)", run(0) == ["/start", ""])
 

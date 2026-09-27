@@ -32,7 +32,8 @@ flap() { python3 "$APP_DIR/deploy/hc_flap.py" "$1" god-judge; }
 
 cd "$APP_DIR"
 
-flap start
+KILLED=$(flap start)
+[ -n "$KILLED" ] && ping_hc "/fail" "$KILLED"
 ping_hc "/start"
 log "Starting God Expert judge runner"
 

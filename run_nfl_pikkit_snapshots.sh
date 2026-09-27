@@ -23,7 +23,8 @@ ping_hc() {
 flap() { python3 "$APP_DIR/deploy/hc_flap.py" "$1" nfl-pikkit-snapshots; }
 
 cd "$APP_DIR"
-flap start
+KILLED=$(flap start)
+[ -n "$KILLED" ] && ping_hc "/fail" "$KILLED"
 ping_hc "/start"
 
 $PYTHON scripts/fetch_nfl_pikkit.py --write 2>&1 | tee "$LOGFILE"

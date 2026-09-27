@@ -13,10 +13,18 @@ of dedicated checks:
     keeps it DOWN until HOLD has passed with no new failure — one DOWN/UP
     pair per episode instead of one per run.
 
+A hold only ever keeps a DOWN check down, never pushes an UP one down: a
+runner's held run pings /log, and /log on an UP check starves it of success
+pings until healthchecks.io's period+grace pages "missed" (seeding the history
+into UP checks did exactly that, 2026-09-27) — so `ok` holds only while this
+runner's last status ping was a /fail, and the heartbeat only keeps listing a
+unit it listed on the previous pass.
+
 Runners call the CLI (state: logs/hc_flap/<name>.json):
-    hc_flap.py start <name>   before /start — a previous run that never
-                              reported (killed at TimeoutStartSec) counts as
-                              a failure
+    hc_flap.py start <name>   before /start; prints a notice when the previous
+                              run never reported (killed at TimeoutStartSec) —
+                              it counts as a failure, and the runner pings
+                              /fail with the notice
     hc_flap.py fail <name>    before /fail
     hc_flap.py ok <name>      prints why the check must stay DOWN (the runner
                               then pings /log, which leaves the status alone)
@@ -36,6 +44,7 @@ from pathlib import Path
 FLAP_FAILS = 2           # failures within FLAP_WINDOW that make a job "flapping"
 FLAP_WINDOW = 3 * 3600   # s
 HOLD = 3600              # s without a new failure before a flapping job reads UP
+KILLED_WINDOW = 86400    # s an unreported run still counts as killed at the next start
 
 STATE_DIR = Path(__file__).resolve().parent.parent / "logs" / "hc_flap"
 
@@ -77,21 +86,27 @@ def save(name: str, state: dict) -> None:
 
 
 def step(state: dict, action: str, now: float) -> tuple[dict, str]:
-    """Apply one runner event; returns (new state, text to print)."""
+    """Apply one runner event; returns (new state, text to print). `down` =
+    the last status ping this runner sent was a /fail."""
     fails = recent(state.get("fails", []), now)
+    down = bool(state.get("down"))
     out = ""
     if action == "start":
-        if state.get("running_since"):
+        began = state.get("running_since")
+        if began and now - began < KILLED_WINDOW:
             fails.append(now)
-            out = "hc_flap: the previous run never reported (killed?) — counted as a failure"
+            down = True
+            out = (f"the previous run (started {clock(began)}) never reported — "
+                   "killed at its TimeoutStartSec? Counted as a failed run.")
         running = now
     elif action == "fail":
         fails.append(now)
-        running = None
+        down, running = True, None
     else:  # ok
         running = None
-        out = hold_reason(fails, now)
-    return {"fails": fails, "running_since": running}, out
+        out = hold_reason(fails, now) if down else ""
+        down = bool(out)
+    return {"fails": fails, "running_since": running, "down": down}, out
 
 
 def main(argv: list[str]) -> int:
