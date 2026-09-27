@@ -1,5 +1,5 @@
 ---
-description: Debug and investigate issues with live data, logs, and Telegram messages
+description: Debug and investigate issues with live data, logs, Telegram messages, and failing services/jobs/health checks
 argument-hint: <issue description, Telegram link, or error message>
 ---
 
@@ -27,6 +27,16 @@ $ARGUMENTS
 8. **Deploy code fix first** (push + deploy) before touching live data
 9. **Fix live data** if needed (wrong emoji, DB entry, etc.). Use Bot API with `parse_mode: "HTML"` — check `msg.media`: use `editMessageCaption` for photo/video, `editMessageText` for plain text
 10. **Run tracker manually** scoped to the affected channel for instant verification
+
+### Service / job failures (health check down, unit failed, job silent)
+
+The pick workflow above assumes a message; for infra, start from the unit instead:
+
+1. **Map check → unit → runner**: the check's ping URL uuid is in a `*_HEALTHCHECK_URL` key; `COVERED` in `deploy/hc_heartbeat.py` maps keys to units; a heartbeat `/fail` body names the failing units. Cron jobs have no unit (`crontab -l`, `sudo -n crontab -l -u root`, `deploy/hc_run.sh` wrappers).
+2. **Is it still failing?** `systemctl status <unit>`, `systemctl show <unit> -p Result -p ExecMainStatus -p NRestarts`, and the last run's journal (`journalctl -u <svc> -n 100`, EDT). A healed blip needs no change — say so.
+3. **Read the traceback, then the runner** (`run_*.sh`: pipefail, retries, `TimeoutStartSec` vs. real run times) and the job's `docs/*.md`.
+4. **Check the check**: compare its grace/schedule (healthchecks API) against the job's actual run history before blaming the job — a check tighter than the job is a false alarm, fix the check.
+5. **Fix, then prove it through the real entry point** (`sudo -n systemctl start <svc>` only for side-effect-safe jobs; otherwise wait for the next real run). Unit/hook changes go through `deploy/` (CLAUDE.md Infra sync).
 
 ## VPS queries
 

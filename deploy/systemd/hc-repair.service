@@ -1,0 +1,28 @@
+# Health-check auto-repair: polls healthchecks.io and, for a check DOWN 10+
+# min, spawns ONE headless /investigate agent (Opus 5.5 high, subscription-
+# billed) that fixes it, then DMs a card via the watchdog bot
+# (scripts/hc_repair.py — every guard lives there: kill switch
+# HC_REPAIR_DISABLED=1, debounce, 6h cooldown per target, 2-attempt park,
+# daily cap, flock). Covered by the heartbeat's "VPS jobs" check.
+#
+# TimeoutStartSec=2100 = agent kill (1500s) + API/journal/git/push/DM overhead.
+# A timer tick while an agent runs is coalesced by systemd (oneshot still
+# activating), so passes never overlap.
+[Unit]
+Description=Health-check auto-repair (headless /investigate agent)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+EnvironmentFile=-/home/forwarder/.claude/auth.env
+Environment=PATH=/home/forwarder/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/forwarder
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/scripts/hc_repair.py
+TimeoutStartSec=2100
+SyslogIdentifier=hc-repair

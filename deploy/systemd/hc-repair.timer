@@ -1,0 +1,9 @@
+[Unit]
+Description=Poll healthchecks.io for down checks every 5 minutes (hc-repair)
+
+[Timer]
+OnCalendar=*:2/5
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
