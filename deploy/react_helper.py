@@ -31,7 +31,7 @@ the seed → unseed window, and that window is what this is tuned for:
     MemorySwapMax=0 so an idle helper is never paged out on this box.
 
 Measured 2026-09-27 on the operator's own messages (Telegram's clock): fast
-path median ~30 ms, 87 % in one attempt; safe path ~60-80 ms (was ~210-270 ms
+path median ~30 ms, ~82 % in one attempt; safe path ~60-80 ms (was ~210-270 ms
 through the Bot API, ~4 s with a per-call login). The lab behind the numbers:
 scripts/react_window_lab.py; the story: docs/vps.md. The operator granted
 standing use of their session (2026-09-26); the bot's MTProto session is
