@@ -112,7 +112,9 @@ def main() -> int:
     httpx.AsyncClient = _StubClient
     try:
         teams = PICK["teams"]
-        run = lambda t=teams: asyncio.run(scores.fetch_soccer_context(t, "2026-09-26"))
+        def run(t=teams):
+            scores.clear_soccer_cache()  # the stub's slate changes between checks
+            return asyncio.run(scores.fetch_soccer_context(t, "2026-09-26"))
 
         # Fixture sanity: the live state that caused the incident
         check("fixture: MLS partial hit is unstarted",
@@ -157,6 +159,7 @@ def main() -> int:
               ids1 == [MLS["events"][0]["id"], NATIONS["events"][0]["id"]], str(ids1))
 
         # 6. Through build_context with the real cached parse
+        scores.clear_soccer_cache()
         ctx6, _ = asyncio.run(build_context("Soccer", "2026-09-26", PICK, None, {}))
         check("build_context grades off the Nations League final",
               "Spain" in ctx6 and "England" in ctx6 and "Revolution" not in ctx6, ctx6)

@@ -42,6 +42,8 @@ from common import (
 from scores import (
     fetch_espn,
     fetch_soccer_scoreboard,
+    bind_soccer_event,
+    try_soccer_grade_math,
     try_early_grade_math,
     fetch_cfl_scoreboard,
     build_early_context,
@@ -238,8 +240,8 @@ class _ESPNCache:
         # soccer grading runs through fetch_soccer_context (build_context
         # ignores the scoreboard arg for Soccer), a non-None scoreboard
         # would wake build_early_context's dormant soccer-period mid-game
-        # path, and a pending soccer pick would otherwise fan out ~26
-        # league fetches every TTL all day pregame. The guard sits before
+        # path (soccer settles through try_soccer_grade_math, which fetches
+        # its own cached all-competitions slate). The guard sits before
         # the cache so the header path's cached merged scoreboard can
         # never leak into a grading call.
         if sport == "Soccer" and not include_soccer:
@@ -465,7 +467,14 @@ async def _resolve_game_keys(pending: list[dict], espn_cache: _ESPNCache) -> Non
             sport, game_date, _ = leg["key"]
             try:
                 sb = await espn_cache.get(sport, game_date, include_soccer=True)
-                event = _find_event_for_pick(sb, leg["matchup"]) if sb else None
+                if sport == "Soccer":
+                    # Same strict binder as grading: the merged all-competitions
+                    # slate holds name-alikes (New England ⊃ England, WSL clubs).
+                    ev, st = (bind_soccer_event(sb.get("events", []), leg["matchup"])
+                              if sb else (None, "none"))
+                    event = ev if st in ("bound", "partial") else None
+                else:
+                    event = _find_event_for_pick(sb, leg["matchup"]) if sb else None
             except Exception as exc:
                 print(f"  [group] event lookup failed ({sport} {game_date}): {exc}")
                 continue
@@ -880,16 +889,22 @@ async def _grade_cycle(
             eff_date = effective_grade_date(odds_gd, msg_date)
 
             sb = await espn_cache.get(pick_sport, eff_date)
+            soccer_bound = (entry.get("soccer_events") or {}).get(str(i))
 
             # Totals are arithmetic: settled outright at final (incl. PUSH), or
             # mid-game once the score has passed the line. CFL is not on the
             # ESPN scoreboard, so the math path needs its scraped card instead —
             # `sb` stays as-is, since validate_sport relies on it being empty.
-            math_sb = await fetch_cfl_scoreboard(eff_date) if pick_sport == "CFL" else sb
-            early = try_early_grade_math(pick_sport, pick, math_sb)
+            # Soccer has its own binder + 90-minute arithmetic.
+            if pick_sport == "Soccer":
+                s_early = await try_soccer_grade_math(pick, eff_date, soccer_bound)
+                early = s_early[:2] if s_early else None
+            else:
+                math_sb = await fetch_cfl_scoreboard(eff_date) if pick_sport == "CFL" else sb
+                early = try_early_grade_math(pick_sport, pick, math_sb)
             if early:
                 verdict, calc = early
-                game_date = eff_date
+                game_date = s_early[2] if pick_sport == "Soccer" else eff_date
             else:
                 early_ctx = build_early_context(pick_sport, pick, sb)
                 if early_ctx:
@@ -899,6 +914,7 @@ async def _grade_cycle(
                         pick_sport, eff_date, pick, sb, summary_cache,
                         odds_game_date=odds_gd,
                         msg_date=msg_date,
+                        soccer_bound=soccer_bound,
                     )
 
                 if context in (CONTEXT_ESPN_ERROR, CONTEXT_PENDING):

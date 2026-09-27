@@ -33,6 +33,8 @@ from scores import (
     fetch_espn, odds_requests_used, try_early_grade_math, build_early_context,
     fetch_cfl_scoreboard, espn_current_odds,
     validate_sport, resolve_nickname_collision, verify_picks_on_schedule,
+    soccer_bind, binding_record, bound_matches, soccer_kickoff_passed,
+    try_soccer_grade_math,
 )
 from odds import (fetch_odds, fetch_odds_current, quota_used as odds_quota_used,
                   quota_exhausted as odds_quota_exhausted, OddsResult,
@@ -241,6 +243,58 @@ async def _download_image_b64(client, msg) -> tuple[str, str] | None:
         return None
     import base64
     return base64.b64encode(data).decode(), "image/jpeg"
+
+
+async def _bind_soccer_leg(pick: dict, eff_date: str, soccer_events: dict, i: int,
+                          audit, capper: str, cache_key: str) -> dict | None:
+    """Bind a soccer leg to ONE ESPN event, once — stored in entry["soccer_events"].
+
+    Every later pass (tracker and daemon) grades that event id instead of
+    re-matching names. An ambiguous slate is stored too, so it's flagged to the
+    audit channel once and never guessed; "none"/ESPN errors retry next pass.
+    """
+    teams = pick.get("teams") or []
+    rec = soccer_events.get(str(i))
+    if bound_matches(rec, teams):
+        return rec
+    ev, status, sb_date = await soccer_bind(teams, eff_date, pick.get("description", ""))
+    if status not in ("bound", "partial", "ambiguous"):
+        return None
+    rec = binding_record(ev, sb_date, status, teams)
+    soccer_events[str(i)] = rec
+    desc = pick.get("description", "")
+    print(f"  [soccer] {status}: {desc[:50]} → {rec['name']} ({rec['id']}, {rec['kickoff']})")
+    if status == "ambiguous":
+        await audit.warn(
+            f"⚠️ <b>soccer: ambiguous game</b> — not grading until resolved\n"
+            f"{desc} · {capper}\n<code>{cache_key}</code> leg {i}: "
+            f"two games tie on the slate ({rec['name']} is one) — set "
+            f"<code>soccer_events[\"{i}\"]</code> to the right event id")
+    return rec
+
+
+async def _soccer_stuck_tripwire(rec: dict | None, pick: dict, audit, capper: str,
+                                 cache_key: str, i: int) -> None:
+    """One audit ping when a bound soccer game is final but its leg is still unresolved.
+
+    Fires at kickoff + 2h45m (≈ 30+ min after a 90' final) only if ESPN says
+    the game is completed — a stuck pick is visible the same night instead of
+    whenever someone notices. Once per leg (`stuck_warned`).
+    """
+    if not rec or rec.get("status") not in ("bound", "partial") or rec.get("stuck_warned"):
+        return
+    if not soccer_kickoff_passed(rec, 165):
+        return
+    ev, status, _ = await soccer_bind(pick.get("teams") or [], rec.get("date", ""),
+                                      pick.get("description", ""), rec)
+    if not ev or not ((ev.get("status") or {}).get("type") or {}).get("completed"):
+        return
+    rec["stuck_warned"] = True
+    print(f"  [soccer] ⚠ stuck: {cache_key} leg {i} — {rec.get('name')} final, pick unresolved")
+    await audit.warn(
+        f"⚠️ <b>soccer: game final, pick still ungraded</b>\n"
+        f"{pick.get('description', '')} · {capper}\n"
+        f"{rec.get('name')} (<code>{rec.get('id')}</code>) · <code>{cache_key}</code> leg {i}")
 
 
 async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = None,
@@ -905,6 +959,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
                 verdicts = []
                 has_espn_error = False
+                soccer_events = dict(cached_entry.get("soccer_events") or {})
                 for i, pick in enumerate(picks):
                     pick_sport = pick.get("sport") or sport
                     odds_gd = odds_by_pick.get(str(i), {}).get("game_date")
@@ -932,18 +987,27 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         if ps_key not in scoreboard_cache:
                             scoreboard_cache[ps_key] = await fetch_espn(pick_sport, eff_date)
                         sb = scoreboard_cache[ps_key]
+                        soccer_bound = None
+                        if pick_sport == "Soccer":
+                            soccer_bound = await _bind_soccer_leg(
+                                pick, eff_date, soccer_events, i, audit, capper, cache_key)
 
                         # Totals are arithmetic: settled outright at final (incl.
                         # PUSH), or mid-game once the score has passed the line.
                         # CFL is not on the ESPN scoreboard, so the math path
                         # needs its scraped card instead — `sb` stays as-is,
                         # since validate_sport relies on it being empty.
-                        math_sb = (await fetch_cfl_scoreboard(eff_date)
-                                   if pick_sport == "CFL" else sb)
-                        early = try_early_grade_math(pick_sport, pick, math_sb)
+                        # Soccer has its own binder + 90-minute arithmetic.
+                        if pick_sport == "Soccer":
+                            s_early = await try_soccer_grade_math(pick, eff_date, soccer_bound)
+                            early = s_early[:2] if s_early else None
+                        else:
+                            math_sb = (await fetch_cfl_scoreboard(eff_date)
+                                       if pick_sport == "CFL" else sb)
+                            early = try_early_grade_math(pick_sport, pick, math_sb)
                         if early:
                             verdict, calc = early
-                            game_date = eff_date
+                            game_date = s_early[2] if pick_sport == "Soccer" else eff_date
                         else:
                             # Early context: period bets where the period is complete
                             early_ctx = build_early_context(pick_sport, pick, sb)
@@ -954,6 +1018,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                     pick_sport, eff_date, pick, sb, summary_cache,
                                     odds_game_date=odds_gd,
                                     msg_date=date_str,
+                                    soccer_bound=soccer_bound,
                                 )
 
                             if context in (CONTEXT_ESPN_ERROR, CONTEXT_PENDING):
@@ -981,7 +1046,17 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                         if n >= UNKNOWN_MAX_ATTEMPTS:
                                             print(f"  ⏹ {msg.id} leg {i} ungradeable after {n} "
                                                   f"attempts — no longer grading")
+                        if pick_sport == "Soccer" and verdict not in ("WIN", "LOSS", "PUSH") \
+                                and not dry_run:
+                            await _soccer_stuck_tripwire(
+                                soccer_bound, pick, audit, capper, cache_key, i)
                     verdicts.append((pick, verdict, calc, pick_sport, game_date))
+                if soccer_events and not dry_run:
+                    # Persist bindings on the live cache entry: every save path
+                    # below rebuilds from it (_pending_entry keeps the key).
+                    cached_entry["soccer_events"] = soccer_events
+                    if isinstance(pending_cache.get(cache_key), dict):
+                        pending_cache[cache_key]["soccer_events"] = soccer_events
 
                 # Build edited text — odds then emoji inserted inline after each pick's line
                 html_text = _to_bot_html(text, msg.entities)
@@ -1266,7 +1341,11 @@ async def grade_one(text: str, date: str) -> None:
               f"  parlay_leg={pick.get('is_parlay_leg', False)}")
 
         # Try pure-math early grade first
-        early = try_early_grade_math(pick_sport, pick, scoreboard)
+        if pick_sport == "Soccer":
+            s_early = await try_soccer_grade_math(pick, eff_date)
+            early = s_early[:2] if s_early else None
+        else:
+            early = try_early_grade_math(pick_sport, pick, scoreboard)
         if early:
             grade, calc = early
             print()

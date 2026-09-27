@@ -77,6 +77,9 @@ def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict
         entry["has_media"] = existing["has_media"]
     if existing.get("reply_to_id") is not None:
         entry["reply_to_id"] = existing["reply_to_id"]
+    # Soccer event bindings (tracker._bind_soccer_leg) — made once, graded by id.
+    if existing.get("soccer_events"):
+        entry["soccer_events"] = existing["soccer_events"]
     return entry
 
 
@@ -237,6 +240,33 @@ def _merge_broadcasted_flags(cache: dict, disk: dict) -> None:
                 mv["broadcasted"] = True
 
 
+def _merge_soccer_events(cache: dict, disk: dict) -> None:
+    """Keep soccer bindings another writer stored since we loaded.
+
+    Same whole-key conflict as `_merge_broadcasted_flags`: the daemon rewrites
+    an entry to record a verdict and its stale copy would drop a binding the
+    tracker just made (a re-bind is deterministic, but the one-shot warned
+    flags would re-fire). A leg's binding is write-once and its flags only go
+    False→True, so fill in missing legs and OR the flags.
+    """
+    for key, entry in cache.items():
+        disk_entry = disk.get(key)
+        if not isinstance(entry, dict) or not isinstance(disk_entry, dict):
+            continue
+        disk_se = disk_entry.get("soccer_events")
+        if not isinstance(disk_se, dict) or not disk_se:
+            continue
+        mem_se = entry.setdefault("soccer_events", {})
+        if not isinstance(mem_se, dict):
+            continue
+        for leg, rec in disk_se.items():
+            if leg not in mem_se:
+                mem_se[leg] = rec
+            elif isinstance(rec, dict) and isinstance(mem_se[leg], dict) \
+                    and rec.get("stuck_warned"):
+                mem_se[leg]["stuck_warned"] = True
+
+
 def _save_pending_cache(cache: dict) -> None:
     # Evict first, on the caller's dict, so the deletions register as *ours* in the merge below
     # rather than looking like keys we simply never had.
@@ -246,6 +276,7 @@ def _save_pending_cache(cache: dict) -> None:
         disk = _read_raw()
         merged = _merge_onto_disk(cache, disk, snapshot)
         _merge_broadcasted_flags(merged, disk)
+        _merge_soccer_events(merged, disk)
         # Per-process temp name: a shared "parse_cache.json.tmp" lets two concurrent writers
         # collide, one renaming it away while the other is still using it — which raises
         # FileNotFoundError out of os.replace() and kills that run mid-write. The lock already

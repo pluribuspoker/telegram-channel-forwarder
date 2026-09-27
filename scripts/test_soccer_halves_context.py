@@ -13,7 +13,7 @@ until the ungradeable cap parked it. The half split lives only in the match
 summary endpoint. Now build_context requests the summary's line scores
 whenever the pick's period isn't "game":
 
-  1. include_linescores=True  -> context carries P1/P2 half scores
+  1. include_linescores=True  -> context carries 1H/2H half scores
   2. include_linescores=False -> byte-identical old context and NO summary
      fetch (the widened helper must not change old callers' contract or
      per-cycle fetch volume)
@@ -101,6 +101,7 @@ def main() -> int:
 
     real_client = httpx.AsyncClient
     httpx.AsyncClient = _StubClient
+    scores.clear_soccer_cache()
     try:
         teams = PICK_1H["teams"]
 
@@ -108,7 +109,7 @@ def main() -> int:
         _StubClient.summary_gets = 0
         ctx, game_date = asyncio.run(
             scores.fetch_soccer_context(teams, "2026-09-10", include_linescores=True))
-        check("1h context has P1/P2 halves", "P1=0" in ctx and "P2=5" in ctx, ctx)
+        check("1h context has 1H/2H halves", "1H=0 2H=5" in ctx, ctx)
         check("game_date preserved", game_date == "2026-09-10", game_date)
         check("summary fetched once", _StubClient.summary_gets == 1,
               str(_StubClient.summary_gets))
@@ -116,7 +117,7 @@ def main() -> int:
         # 2. Old contract: no flag -> no summary fetch, no halves
         _StubClient.summary_gets = 0
         ctx_plain, _ = asyncio.run(scores.fetch_soccer_context(teams, "2026-09-10"))
-        check("full-game context has no halves", "P1=" not in ctx_plain, ctx_plain)
+        check("full-game context has no halves", "1H=" not in ctx_plain, ctx_plain)
         check("no summary fetch without flag", _StubClient.summary_gets == 0,
               str(_StubClient.summary_gets))
         check("final score still present", "5" in ctx_plain and "Bayern" in ctx_plain,
@@ -125,13 +126,13 @@ def main() -> int:
         # 3. build_context plumbs the period through
         _StubClient.summary_gets = 0
         ctx3, _ = asyncio.run(build_context("Soccer", "2026-09-10", PICK_1H, None, {}))
-        check("build_context 1h pick sees halves", "P1=0" in ctx3, ctx3)
+        check("build_context 1h pick sees halves", "1H=0" in ctx3, ctx3)
 
         _StubClient.summary_gets = 0
         full_game = {**PICK_1H, "period": "game"}
         ctx4, _ = asyncio.run(build_context("Soccer", "2026-09-10", full_game, None, {}))
         check("build_context full-game pick skips summary",
-              _StubClient.summary_gets == 0 and "P1=" not in ctx4, ctx4)
+              _StubClient.summary_gets == 0 and "1H=" not in ctx4, ctx4)
 
         # 4. International windows are in the fan-out: the fixture answers only
         #    on the uefa.nations URL, so this fails if the league leaves

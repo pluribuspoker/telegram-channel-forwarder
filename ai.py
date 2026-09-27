@@ -880,10 +880,13 @@ async def build_context(
     summary_cache: dict,
     odds_game_date: str | None = None,
     msg_date: str | None = None,
+    soccer_bound: dict | None = None,
 ) -> tuple[str, str]:
     """Return (context_str, game_date) for grading this pick.
     game_date is the actual date the game is/was played (may differ from pick date).
-    msg_date is the original message date (before odds/day-hint overrides)."""
+    msg_date is the original message date (before odds/day-hint overrides).
+    soccer_bound is the tracker's stored event binding for a soccer leg
+    (entry["soccer_events"][i]) — grade that event, don't re-match names."""
     bet_type = pick.get("bet_type", "")
     period = pick.get("period", "game")
     player = pick.get("player") or ""
@@ -941,7 +944,8 @@ async def build_context(
         needs_halves = bool(period) and period != "game"
         ctx, game_date = await fetch_soccer_context(
             teams, date, include_stats=needs_stats,
-            include_linescores=needs_halves)
+            include_linescores=needs_halves,
+            description=pick.get("description", ""), bound=soccer_bound)
         if ctx == "PENDING":
             return CONTEXT_PENDING, game_date
         return (ctx if ctx else CONTEXT_SKIP), game_date

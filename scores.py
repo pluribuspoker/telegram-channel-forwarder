@@ -12,7 +12,7 @@ import httpx
 from datetime import date as _date, datetime as _datetime, timedelta, timezone
 
 # common.py imports nothing from here, so this stays one-directional.
-from common import is_regulation_ml
+from common import BTTS_RE, is_btts_as_total, is_regulation_ml
 
 
 # ─── ESPN ─────────────────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ SOCCER_LEAGUES: list[tuple[str, str]] = [
     ("soccer", "uefa.europa"),     # Europa League
     ("soccer", "uefa.champions_qual"),  # Champions League Qualifying
     ("soccer", "uefa.europa_qual"),     # Europa League Qualifying
-    ("soccer", "uefa.conf"),       # Conference League
+    ("soccer", "uefa.europa.conf"),  # Conference League ("uefa.conf" 404s)
     ("soccer", "fifa.world"),      # FIFA World Cup
     # International national-team windows beyond the World Cup — ESPN covers
     # both. Only fifa.world was listed, so a Nations League pick graded
@@ -851,126 +851,529 @@ def odds_api_context(fighter: str, events: list[dict]) -> str:
     return ""
 
 
-async def fetch_soccer_context(
-    teams: list[str], date: str, include_stats: bool = False,
-    include_linescores: bool = False,
-) -> tuple[str, str]:
-    """Search ESPN soccer leagues for score context.
+# ─── Soccer ──────────────────────────────────────────────────────────────────
+#
+# Soccer has no single league to query, so it runs its own pipeline end to end:
+#   1. ONE source — ESPN's `soccer/all` scoreboard lists every competition ESPN
+#      carries for a date (≈300 games on a Saturday, one ~160 KB gzip call). The
+#      SOCCER_LEAGUES allowlist is only the fallback when that call fails: every
+#      league missing from it used to mean UNKNOWN (Allsvenskan, the Nations
+#      League, the Conference League whose code was wrong all along).
+#   2. STRICT binding — a pick binds to exactly one event: every named team must
+#      match a different competitor, exact names outrank word matches, and the
+#      leagues we bet outrank the rest (the feed also carries women's leagues
+#      under identical club names). A tie is AMBIGUOUS — flagged, never guessed.
+#      The first-hit scan this replaces let "England" bind "New England
+#      Revolution" and held a Nations League BTTS at ⏳ for hours (2026-09-26).
+#      The tracker stores the binding (entry["soccer_events"]) and every later
+#      pass grades that event id.
+#   3. ARITHMETIC grading — soccer_grade_math settles the scoreline markets on
+#      the 90-minute score; Claude only sees what arithmetic refuses.
 
-    Returns (context_str, game_date).  context_str is "PENDING" if the game
-    exists but isn't finished yet, or "" if not found at all.
-    When include_stats is True, also fetches match summary for team stats
-    (corners, shots, etc.).
-    When include_linescores is True, appends the half-by-half line scores from
-    the match summary — the soccer scoreboard endpoints ship `linescores`
-    empty, so a period bet (1H total, ...) graded off the scoreboard alone
-    sees only the final and returns UNKNOWN every attempt.
+_SOCCER_SITE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+SOCCER_ALL_LIMIT = 1000     # a response this long may be truncated → fall back
+SOCCER_SB_TTL = 60.0        # seconds, for dates around today (results can still move)
+SOCCER_SB_TTL_PAST = 3600.0 # older slates are settled; ~160 KB a fetch adds up
+_SOCCER_SB_CACHE: dict[str, tuple[float, dict]] = {}
+
+# ESPN numeric league ids (event uid "~l:<id>~") of SOCCER_LEAGUES — the
+# competitions cappers actually bet. Binding prefers them over the long tail.
+_SOCCER_BETTING_LEAGUE_IDS = frozenset({
+    "720", "700", "740", "730", "710", "770", "775", "776", "19874", "19887",
+    "20296", "606", "2395", "3922", "3945", "3960", "3913", "5315", "725",
+    "715", "3901", "3946", "735", "3907", "3944", "3955", "630", "745", "760",
+    "750",
+})
+# Women's competitions seen on the feed (NWSL, WSL, friendlies, UWCL, Liga F,
+# Première Ligue). Their slugs don't reliably say "women", so ids it is.
+_SOCCER_WOMENS_LEAGUE_IDS = frozenset({"8301", "8097", "3923", "19483", "20956", "20955"})
+_WOMENS_PICK_RE = re.compile(r"\bwom[ae]n'?s?\b|\bN?WSL\b|\bUWCL\b|\(W\)", re.IGNORECASE)
+
+_SOCCER_TRANSLIT = str.maketrans({"ø": "o", "æ": "ae", "ß": "ss", "ł": "l", "đ": "d",
+                                  "ı": "i", "œ": "oe", "þ": "th", "ð": "d"})
+
+
+_SOCCER_SB_CACHE_MAX = 8     # dates held per process (≈1 MB each once slimmed)
+_TEAM_KEYS = ("id", "displayName", "shortDisplayName", "name", "location", "abbreviation")
+
+
+def clear_soccer_cache() -> None:
+    _SOCCER_SB_CACHE.clear()
+
+
+def _slim_soccer_event(e: dict) -> dict:
+    """Keep only what binding, grading and the score header read.
+
+    A full all-competitions slate is ~9 MB of Python objects (odds, venues,
+    broadcasts, every card and sub); the daemon holds a few dates at once.
     """
-    if not teams:
-        return "", date
-
-    async def _fetch(http: httpx.AsyncClient, category: str, league: str, date_nodash: str) -> tuple[dict | None, str, str]:
-        url = f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/scoreboard"
-        try:
-            r = await http.get(url, params={"dates": date_nodash, "limit": "200"})
-            r.raise_for_status()
-            return r.json(), category, league
-        except Exception:
-            return None, category, league
-
-    # Pick the best match across EVERY league before deciding: a partial match
-    # in an earlier league must not answer for the real game in a later one.
-    # "England" alone matches "New England Revolution" (MLS precedes the
-    # Nations League in SOCCER_LEAGUES), so an unstarted MLS game held an
-    # England/Spain BTTS at PENDING hours after its FT — and had the MLS game
-    # finished first, it would have graded the wrong match. Rank: more of the
-    # pick's teams matched, then completed, then league order. A date whose
-    # best is only a partial match yields to a full match on a later date.
-    fallback: tuple[str, str] | None = None
-    async with httpx.AsyncClient(timeout=10) as http:
-        d = _date.fromisoformat(date)
-        for search_date in [date, (d - timedelta(days=1)).isoformat(), (d + timedelta(days=1)).isoformat()]:
-            date_nodash = search_date.replace("-", "")
-            results = await asyncio.gather(
-                *(_fetch(http, cat, lg, date_nodash) for cat, lg in SOCCER_LEAGUES)
-            )
-            best = None  # (sort key, event, category, league)
-            for order, (sb, category, league) in enumerate(results):
-                if sb is None:
-                    continue
-                for ev in sb.get("events", []):
-                    hits = _event_term_hits(ev, teams)
-                    if not hits:
-                        continue
-                    done = ev.get("status", {}).get("type", {}).get("completed", False)
-                    key = (-hits, not done, order)
-                    if best is None or key < best[0]:
-                        best = (key, ev, category, league)
-            if best is None:
-                continue
-            (neg_hits, not_done, _), ev, category, league = best
-            if not_done:
-                result = ("PENDING", search_date)
-            else:
-                ctx = scoreboard_text({"events": [ev]}, "Soccer")
-                if include_stats or include_linescores:
-                    summary = await _fetch_soccer_summary(http, category, league, ev.get("id"))
-                    if summary:
-                        if include_linescores:
-                            ls = line_scores_text(summary, "Soccer")
-                            if ls != "No line score data available":
-                                ctx += "\n" + ls
-                        if include_stats:
-                            stats = _soccer_stats_text(summary)
-                            if stats:
-                                ctx += "\n" + stats
-                result = (ctx, search_date)
-            if -neg_hits >= len([t for t in teams if t]):
-                return result
-            if fallback is None:
-                fallback = result
-    return fallback or ("", date)
+    comp = (e.get("competitions") or [{}])[0]
+    return {
+        **{k: e[k] for k in ("id", "uid", "date", "name", "shortName", "season", "status") if k in e},
+        "competitions": [{
+            **{k: comp[k] for k in ("id", "date", "status", "notes") if k in comp},
+            "competitors": [{
+                **{k: c[k] for k in ("id", "homeAway", "score", "winner", "shootoutScore") if k in c},
+                "team": {k: (c.get("team") or {})[k] for k in _TEAM_KEYS if k in (c.get("team") or {})},
+            } for c in comp.get("competitors", [])],
+            "details": [d for d in comp.get("details", []) if d.get("scoringPlay")],
+        }],
+    }
 
 
 async def fetch_soccer_scoreboard(date: str) -> dict | None:
-    """Every SOCCER_LEAGUES event for one date, merged into one scoreboard dict.
+    """Every soccer event ESPN lists for one date, in the standard scoreboard shape.
 
-    Soccer has no single ESPN scoreboard, so `fetch_espn` can't serve it — grading
-    goes through `fetch_soccer_context` instead, which returns text. Consumers that
-    need soccer *events* in the standard scoreboard shape (the grade daemon's
-    score-header event lookup) get the leagues merged here; ESPN event ids are
-    global, so downstream `espn:<id>` keys stay unambiguous. Returns None only when
-    every league fetch failed (so "no events" and "ESPN down" stay distinguishable).
+    `soccer/all` first; the SOCCER_LEAGUES fan-out only when it errors, comes
+    back empty (never true of a real date) or may be truncated. Cached per
+    process (success only): SOCCER_SB_TTL around today, SOCCER_SB_TTL_PAST
+    for settled dates. Returns None only when
+    every source failed, so "no events" and "ESPN down" stay distinguishable.
     """
+    hit = _SOCCER_SB_CACHE.get(date)
+    try:
+        settled = _date.fromisoformat(date) < _datetime.now(timezone.utc).date() - timedelta(days=1)
+    except ValueError:
+        settled = False
+    ttl = SOCCER_SB_TTL_PAST if settled else SOCCER_SB_TTL
+    if hit and time.monotonic() - hit[0] < ttl:
+        return hit[1]
     date_nodash = date.replace("-", "")
 
-    async def _fetch(http: httpx.AsyncClient, category: str, league: str) -> dict | None:
-        url = f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/scoreboard"
+    async def _get(http: httpx.AsyncClient, league: str, limit: str) -> dict | None:
         try:
-            r = await http.get(url, params={"dates": date_nodash, "limit": "200"})
+            r = await http.get(f"{_SOCCER_SITE}/{league}/scoreboard",
+                               params={"dates": date_nodash, "limit": limit})
             r.raise_for_status()
             return r.json()
         except Exception:
             return None
 
-    async with httpx.AsyncClient(timeout=10) as http:
-        results = await asyncio.gather(
-            *(_fetch(http, cat, lg) for cat, lg in SOCCER_LEAGUES)
-        )
-    if all(sb is None for sb in results):
-        return None
-    return {"events": [e for sb in results if sb for e in sb.get("events", [])]}
+    data = None
+    async with httpx.AsyncClient(timeout=15) as http:
+        sb = await _get(http, "all", str(SOCCER_ALL_LIMIT))
+        n = len((sb or {}).get("events") or [])
+        if sb is not None and 0 < n < SOCCER_ALL_LIMIT:
+            data = {"events": sb["events"]}
+        else:
+            print(f"  [soccer] all-scoreboard {date}: "
+                  f"{'failed' if sb is None else f'{n} events'} — league fan-out")
+            results = await asyncio.gather(
+                *(_get(http, lg, "200") for _, lg in SOCCER_LEAGUES))
+            if not all(r is None for r in results):
+                seen, events = set(), []
+                for r in results:
+                    for e in (r or {}).get("events", []):
+                        if e.get("id") not in seen:
+                            seen.add(e.get("id"))
+                            events.append(e)
+                data = {"events": events}
+    if data is not None:
+        data = {"events": [_slim_soccer_event(e) for e in data["events"]]}
+        _SOCCER_SB_CACHE.pop(date, None)
+        _SOCCER_SB_CACHE[date] = (time.monotonic(), data)
+        while len(_SOCCER_SB_CACHE) > _SOCCER_SB_CACHE_MAX:
+            _SOCCER_SB_CACHE.pop(next(iter(_SOCCER_SB_CACHE)))
+    return data
 
 
-async def _fetch_soccer_summary(http: httpx.AsyncClient, category: str, league: str, event_id: str) -> dict | None:
-    """Fetch the ESPN match summary for a soccer event."""
-    url = f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/summary"
+async def _fetch_soccer_summary(http: httpx.AsyncClient, event_id: str) -> dict | None:
+    """Fetch the ESPN match summary for a soccer event (league-agnostic path)."""
     try:
-        r = await http.get(url, params={"event": event_id}, timeout=10)
+        r = await http.get(f"{_SOCCER_SITE}/all/summary", params={"event": event_id}, timeout=10)
         r.raise_for_status()
         return r.json()
     except Exception:
         return None
+
+
+def _soccer_norm(s: str) -> str:
+    return _strip_accents((s or "").lower().translate(_SOCCER_TRANSLIT)).strip()
+
+
+def _soccer_term_quality(term: str, competitor: dict) -> int:
+    """2 = exact team name, 1 = word match (`_team_matches`), 0 = no match."""
+    team = competitor.get("team") or {}
+    t = _soccer_norm(term)
+    if not t:
+        return 0
+    names = [_soccer_norm(team.get(k, "")) for k in
+             ("displayName", "shortDisplayName", "name", "location")]
+    if t in names or _TEAM_ALIASES.get(t) in names:
+        return 2
+    if any(n and _team_matches(t, n) for n in names[:2]):
+        return 1
+    return 0
+
+
+def _soccer_event_quality(event: dict, terms: list[str]) -> int:
+    """Best total match quality with every term on a DIFFERENT competitor, else 0."""
+    comps = ((event.get("competitions") or [{}])[0].get("competitors") or [])[:2]
+    if not terms or len(comps) < 2:
+        return 0
+    if len(terms) == 1:
+        return max(_soccer_term_quality(terms[0], c) for c in comps)
+    best = 0
+    for a, b in ((comps[0], comps[1]), (comps[1], comps[0])):
+        qa, qb = _soccer_term_quality(terms[0], a), _soccer_term_quality(terms[1], b)
+        if qa and qb:
+            best = max(best, qa + qb)
+    return best
+
+
+def _soccer_league_tier(event: dict, womens_pick: bool) -> int:
+    m = re.search(r"~l:(\d+)~", event.get("uid", ""))
+    lid = m.group(1) if m else ""
+    if womens_pick:
+        return 0 if lid in _SOCCER_WOMENS_LEAGUE_IDS else 1
+    return 0 if lid in _SOCCER_BETTING_LEAGUE_IDS else 1
+
+
+def bind_soccer_event(
+    events: list[dict], teams: list[str], description: str = "",
+) -> tuple[dict | None, str]:
+    """Bind a pick to ONE event of a date's soccer slate → (event, status).
+
+    status: "bound" (every named team matched), "partial" (two teams named,
+    one matched — the caller accepts it only if unique across its date
+    window), "ambiguous" (two events tie on match quality and league tier —
+    never guessed), "none".
+    """
+    terms = [t for t in (teams or []) if t][:2]
+    if not terms:
+        return None, "none"
+    womens = bool(_WOMENS_PICK_RE.search(description or ""))
+
+    def rank(pool):
+        scored = sorted(((-q, _soccer_league_tier(e, womens)), i, e) for i, (q, e) in enumerate(pool))
+        if not scored:
+            return None, "none"
+        if len(scored) > 1 and scored[0][0] == scored[1][0] and \
+                scored[0][2].get("id") != scored[1][2].get("id"):
+            return scored[0][2], "ambiguous"
+        return scored[0][2], "bound"
+
+    full = [(q, e) for e in events if (q := _soccer_event_quality(e, terms))]
+    ev, status = rank(full)
+    if status != "none" or len(terms) < 2:
+        return ev, status
+    part = []
+    for e in events:
+        q = max(_soccer_event_quality(e, [terms[0]]), _soccer_event_quality(e, [terms[1]]))
+        if q:
+            part.append((q, e))
+    ev, status = rank(part)
+    return ev, ("partial" if status == "bound" else status)
+
+
+def binding_record(event: dict, date: str, status: str, teams: list[str]) -> dict:
+    """What the tracker stores per leg in entry["soccer_events"].
+
+    `teams` pins the record to the parse it was made from: a repaired parse
+    (edited teams) invalidates it instead of grading the old game forever.
+    """
+    return {"id": str(event.get("id", "")) if event else "", "date": date,
+            "kickoff": (event or {}).get("date", ""), "name": (event or {}).get("name", ""),
+            "status": status, "teams": list(teams or [])}
+
+
+def bound_matches(bound: dict | None, teams: list[str]) -> bool:
+    """True when a stored binding belongs to this parse of the leg."""
+    return bool(bound) and list(bound.get("teams") or []) == list(teams or [])
+
+
+async def soccer_bind(
+    teams: list[str], date: str, description: str = "", bound: dict | None = None,
+) -> tuple[dict | None, str, str]:
+    """Resolve a soccer pick to its event → (event, status, scoreboard_date).
+
+    A stored binding is authoritative: that event id on that date, nothing
+    else. Otherwise the date, the day before and the day after are searched;
+    the first date with a full (or ambiguous) match decides, and a partial
+    match is used only when it is the single one across all three dates.
+    """
+    if not bound_matches(bound, teams):
+        bound = None
+    if bound and bound.get("status") == "ambiguous":
+        return None, "ambiguous", bound.get("date") or date
+    if bound and bound.get("id"):
+        bdate = bound.get("date") or date
+        sb = await fetch_soccer_scoreboard(bdate)
+        if sb is None:
+            return None, "error", bdate
+        for e in sb.get("events", []):
+            if str(e.get("id")) == bound["id"]:
+                return e, bound.get("status") or "bound", bdate
+        # The id left that date's listing (rescheduled): rebind below.
+    d = _date.fromisoformat(date)
+    partials: list[tuple[dict, str]] = []
+    errored = False
+    for search_date in (date, (d - timedelta(days=1)).isoformat(),
+                        (d + timedelta(days=1)).isoformat()):
+        sb = await fetch_soccer_scoreboard(search_date)
+        if sb is None:
+            errored = True
+            continue
+        ev, status = bind_soccer_event(sb.get("events", []), teams, description)
+        if status in ("bound", "ambiguous"):
+            return ev, status, search_date
+        if status == "partial":
+            partials.append((ev, search_date))
+    if len({str(e.get("id")) for e, _ in partials}) == 1:
+        return partials[0][0], "partial", partials[0][1]
+    if len(partials) > 1:
+        return partials[0][0], "ambiguous", partials[0][1]
+    return None, ("error" if errored else "none"), date
+
+
+def soccer_kickoff_passed(bound: dict | None, minutes: int, now: _datetime | None = None) -> bool:
+    """False while a stored binding's kickoff + `minutes` is still ahead (no fetch needed)."""
+    ko = (bound or {}).get("kickoff") or ""
+    try:
+        t = _datetime.fromisoformat(ko.replace("Z", "+00:00"))
+    except ValueError:
+        return True  # unknown kickoff → don't gate
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return (now or _datetime.now(timezone.utc)) >= t + timedelta(minutes=minutes)
+
+
+# ESPN soccer terminal states. FT/FINAL = decided in 90'. AET/PEN carry extra
+# time (and a shootout), which bets settled on 90' must not count.
+_SOCCER_FT = frozenset({"STATUS_FULL_TIME", "STATUS_FINAL"})
+_SOCCER_ET = frozenset({"STATUS_FINAL_AET", "STATUS_FINAL_PEN"})
+
+
+def _soccer_side_scores(summary: dict) -> dict | None:
+    """{"home"/"away": {"name", "p": [P1, P2, ET1, ET2]}} from summary linescores.
+
+    Shootout periods (5th+) are dropped. Validated: the counted periods must
+    add up to the competitor's score, else None (never grade from bad data).
+    """
+    try:
+        comp = summary["header"]["competitions"][0]
+    except (KeyError, IndexError, TypeError):
+        return None
+    out = {}
+    for c in comp.get("competitors", []):
+        side = c.get("homeAway")
+        try:
+            ls = [float(x.get("displayValue", x.get("value"))) for x in c.get("linescores", [])][:4]
+            score = float(c.get("score"))
+        except (TypeError, ValueError):
+            return None
+        if len(ls) < 2 or sum(ls) != score:
+            return None
+        out[side] = {"name": (c.get("team") or {}).get("displayName", ""), "p": ls}
+    return out if set(out) == {"home", "away"} else None
+
+
+_SOCCER_STAT_WORDS = re.compile(
+    r"\b(corners?|cards?|bookings?|shots?|fouls?|offsides?|throw[- ]?ins?|saves|"
+    r"tackles|possession|assists?|anytime|scorer|first goal|last goal|clean sheet|"
+    r"win to nil|both halves|either half|highest scoring half|exact|correct score|"
+    r"asian|3[- ]?way handicap|european|to advance|to qualify|to lift|to reach|"
+    r"advances?|qualif\w*|winner of|minute)\b", re.IGNORECASE)
+_BTTS_NO_RE = re.compile(r"\bBTTS\s*[:\-–]?\s*(no|n)\b|\bno\s+BTTS\b|\bnot\s+to\s+score\b|"
+                         r"\bboth\s+teams\s+to\s+score\s*[:\-–]?\s*no\b", re.IGNORECASE)
+_ODDS_IN_DESC_RE = re.compile(r"[(\[]?\s*[+-]\d{3,}\s*[)\]]?")
+_BTTS_COMBO_RE = re.compile(r"&|\+|\band\b|\bover\b|\bunder\b|\bwin\b|\bML\b|\bo\d|\bu\d",
+                            re.IGNORECASE)
+
+
+def soccer_grade_math(pick: dict, event: dict, summary: dict | None) -> tuple[str, str] | None:
+    """Settle a soccer scoreline bet by arithmetic → (verdict, calc) or None.
+
+    Markets: 3-way moneyline (draw = LOSS), draw no bet (draw = PUSH), double
+    chance ("X or draw"), BTTS yes/no, game totals, team totals and whole/
+    half-goal handicaps — full game (90'), 1H or 2H. Everything is on the
+    90-minute score: an AET/PEN final counts P1+P2 only. Refused (None → the
+    Claude path): quarter lines (split stakes), stat markets (corners, cards…),
+    "to advance/qualify", combos, draw bets, unknown periods, unvalidated data.
+    `summary` is required (half and regulation scores live only there).
+    """
+    stype = (event.get("status") or {}).get("type") or {}
+    name = stype.get("name", "")
+    period = pick.get("period") or "game"
+    if period not in ("game", "1h", "2h"):
+        return None
+    final = bool(stype.get("completed")) and name in (_SOCCER_FT | _SOCCER_ET)
+    first_half_done = final or (
+        stype.get("state") == "in"
+        and ((event.get("status") or {}).get("period", 0) >= 2 or name == "STATUS_HALFTIME"))
+    if not (final or (period == "1h" and first_half_done)):
+        return None
+    sides = _soccer_side_scores(summary) if summary else None
+    if not sides:
+        return None
+
+    desc = pick.get("description", "") or ""
+    if _SOCCER_STAT_WORDS.search(desc):
+        return None
+    bet_type = pick.get("bet_type", "")
+    line = pick.get("line")
+    direction = pick.get("direction")
+    teams = [t for t in (pick.get("teams") or []) if t]
+
+    def goals(side: str) -> float:
+        p = sides[side]["p"]
+        return p[0] if period == "1h" else p[1] if period == "2h" else p[0] + p[1]
+
+    h, a = goals("home"), goals("away")
+    hn, an = sides["home"]["name"], sides["away"]["name"]
+    tag = {"game": "", "1h": " 1H", "2h": " 2H"}[period]
+    when = "[final]" if final else "[1H complete]"
+    reg = " (90', ET excluded)" if name in _SOCCER_ET and period == "game" else ""
+    shown = f"{an} {a:g} at {hn} {h:g}{tag}{reg}"
+
+    def side_of(team: str) -> str | None:
+        comp = (event.get("competitions") or [{}])[0].get("competitors") or []
+        by = {c.get("homeAway"): c for c in comp}
+        qh = _soccer_term_quality(team, by.get("home", {}))
+        qa = _soccer_term_quality(team, by.get("away", {}))
+        if qh > qa:
+            return "home"
+        if qa > qh:
+            return "away"
+        return None
+
+    def quarter(x) -> bool:
+        return x is not None and (float(x) * 2) != int(float(x) * 2)
+
+    is_btts = (pick.get("prop_stat") or "").upper() == "BTTS" or is_btts_as_total(pick)
+    if is_btts:
+        # Prices ride in descriptions ("BTTS +100", "(-120)") — strip them so
+        # only a real "+"/"&" combo ("BTTS + Over 2.5") is refused.
+        if _BTTS_COMBO_RE.search(BTTS_RE.sub("", _ODDS_IN_DESC_RE.sub(" ", desc))):
+            return None
+        no = direction == "under" or bool(_BTTS_NO_RE.search(desc))
+        both = h > 0 and a > 0
+        hit = (not both) if no else both
+        return ("WIN" if hit else "LOSS",
+                f"{when} {shown} — BTTS {'No' if no else 'Yes'}: both scored={both}")
+
+    if BTTS_RE.search(desc):
+        return None  # BTTS combo shaped as a total/side — Claude's
+    if bet_type == "total":
+        if line is None or direction not in ("over", "under") or quarter(line):
+            return None
+        v = h + a
+        if v == float(line):
+            return ("PUSH", f"{when} {shown} = {v:g} vs {line} — exact, push")
+        hit = v > float(line) if direction == "over" else v < float(line)
+        return ("WIN" if hit else "LOSS", f"{when} {shown} = {v:g} vs {direction} {line}")
+
+    if not teams:
+        return None
+    side = side_of(teams[0])
+    if side is None:
+        return None
+    mine, theirs = (h, a) if side == "home" else (a, h)
+    me = hn if side == "home" else an
+
+    if bet_type == "team_total":
+        if line is None or direction not in ("over", "under") or quarter(line):
+            return None
+        if mine == float(line):
+            return ("PUSH", f"{when} {shown} — {me} {mine:g} vs {line}, push")
+        hit = mine > float(line) if direction == "over" else mine < float(line)
+        return ("WIN" if hit else "LOSS", f"{when} {shown} — {me} {mine:g} vs {direction} {line}")
+
+    if bet_type == "spread":
+        if line is None or quarter(line):
+            return None
+        margin = mine + float(line) - theirs
+        if margin == 0:
+            return ("PUSH", f"{when} {shown} — {me} {float(line):+g} exact, push")
+        return ("WIN" if margin > 0 else "LOSS",
+                f"{when} {shown} — {me} {float(line):+g} -> {margin:+g}")
+
+    if re.search(r"\bdraw\b", desc, re.IGNORECASE) and bet_type not in ("double_chance", "draw_no_bet"):
+        return None  # a draw bet / mis-shaped double chance
+    if bet_type == "moneyline":
+        v = "WIN" if mine > theirs else "LOSS"
+        why = "draw = loss (3-way)" if mine == theirs else ""
+        return (v, f"{when} {shown} — {me} ML {why}".rstrip())
+    if bet_type == "draw_no_bet":
+        if mine == theirs:
+            return ("PUSH", f"{when} {shown} — {me} DNB, draw = push")
+        return ("WIN" if mine > theirs else "LOSS", f"{when} {shown} — {me} DNB")
+    if bet_type == "double_chance":
+        # Only the standard "<team> or draw" shape; "X or Y" (no draw) is Claude's.
+        if not re.search(r"\bdraw\b|\bdouble\s+chance\b|\b1X\b|\bX2\b", desc, re.IGNORECASE):
+            return None
+        if re.search(r"\bor\b", desc, re.IGNORECASE) and not re.search(r"\bdraw\b", desc, re.IGNORECASE):
+            return None
+        return ("WIN" if mine >= theirs else "LOSS", f"{when} {shown} — {me} or draw")
+    return None
+
+
+async def try_soccer_grade_math(
+    pick: dict, date: str, bound: dict | None = None,
+) -> tuple[str, str, str] | None:
+    """Bind + arithmetic for a soccer pick → (verdict, calc, game_date) or None."""
+    if bound_matches(bound, pick.get("teams") or []) and bound.get("id") \
+            and not soccer_kickoff_passed(bound, 45):
+        return None
+    event, status, sb_date = await soccer_bind(
+        pick.get("teams") or [], date, pick.get("description", ""), bound)
+    if not event or status not in ("bound", "partial"):
+        return None
+    stype = (event.get("status") or {}).get("type") or {}
+    first_half_done = stype.get("state") == "in" and (
+        (event.get("status") or {}).get("period", 0) >= 2 or stype.get("name") == "STATUS_HALFTIME")
+    # Only fetch the summary when something could settle: a final, or a 1H
+    # bet once the half is over — never every cycle of a live game.
+    if not (stype.get("completed") or ((pick.get("period") == "1h") and first_half_done)):
+        return None
+    async with httpx.AsyncClient(timeout=10) as http:
+        summary = await _fetch_soccer_summary(http, str(event.get("id")))
+    res = soccer_grade_math(pick, event, summary)
+    if not res:
+        return None
+    return res[0], res[1], sb_date
+
+
+async def fetch_soccer_context(
+    teams: list[str], date: str, include_stats: bool = False,
+    include_linescores: bool = False, description: str = "",
+    bound: dict | None = None,
+) -> tuple[str, str]:
+    """Score context for a soccer pick → (context_str, game_date).
+
+    context_str is "PENDING" while the bound game isn't finished, "" when no
+    single game binds (none, or ambiguous — never guessed), else the final
+    plus, when asked (or the game went to extra time), the summary's half/
+    period line scores and team stats.
+    """
+    if not teams:
+        return "", date
+    if bound_matches(bound, teams) and bound.get("id") \
+            and not soccer_kickoff_passed(bound, 45):
+        return "PENDING", bound.get("date") or date
+    event, status, sb_date = await soccer_bind(teams, date, description, bound)
+    if status == "error":
+        return "PENDING", sb_date
+    if not event or status not in ("bound", "partial"):
+        return "", date
+    stype = (event.get("status") or {}).get("type") or {}
+    if not stype.get("completed"):
+        return "PENDING", sb_date
+    ctx = scoreboard_text({"events": [event]}, "Soccer")
+    extra_time = stype.get("name", "") in _SOCCER_ET
+    if include_stats or include_linescores or extra_time:
+        async with httpx.AsyncClient(timeout=10) as http:
+            summary = await _fetch_soccer_summary(http, str(event.get("id")))
+        if summary:
+            if include_linescores or extra_time:
+                ls = line_scores_text(summary, "Soccer")
+                if ls != "No line score data available":
+                    ctx += "\n" + ls
+            if include_stats:
+                stats = _soccer_stats_text(summary)
+                if stats:
+                    ctx += "\n" + stats
+    return ctx, sb_date
 
 
 def _soccer_stats_text(data: dict) -> str:
@@ -1232,7 +1635,18 @@ def scoreboard_text(data: dict, sport: str) -> str:
                     comp.get("status", {}).get("type", {}).get("name", "")
                     or event.get("status", {}).get("type", {}).get("name", "")
                 )
-                if "AET" in status_name or "PEN" in status_name:
+                # ESPN's goal `details` are incomplete for many competitions
+                # (118 of 280 finals on 2026-09-20), so the note is written only
+                # when they account for every goal — a partial list would state
+                # a wrong 90' score as fact. fetch_soccer_context appends the
+                # summary's period line scores for AET/PEN games regardless.
+                goal_plays = [d for d in comp.get("details", [])
+                              if d.get("scoringPlay") and not d.get("shootout")]
+                try:
+                    all_goals = int(float(home_score)) + int(float(away_score))
+                except (TypeError, ValueError):
+                    all_goals = -1
+                if ("AET" in status_name or "PEN" in status_name) and len(goal_plays) == all_goals:
                     home_id = home.get("id") or home.get("team", {}).get("id")
                     away_id = away.get("id") or away.get("team", {}).get("id")
                     reg_home = reg_away = 0
@@ -1273,7 +1687,21 @@ def line_scores_text(summary: dict, sport: str = "") -> str:
         ls = [x.get("displayValue", "?") for x in c.get("linescores", [])]
         final = c.get("score", "?")
 
-        if is_baseball and len(ls) >= 5:
+        if sport == "Soccer" and len(ls) >= 2:
+            # Halves, then extra time, then the shootout — never quarter labels:
+            # an AET game has 4 periods and the basketball branch below would
+            # call P3+P4 "H2", folding extra-time goals into the second half.
+            parts = [f"1H={ls[0]}", f"2H={ls[1]}"]
+            try:
+                parts.append(f"90'={int(float(ls[0])) + int(float(ls[1]))}")
+            except ValueError:
+                pass
+            if len(ls) >= 4:
+                parts.append(f"ET1={ls[2]} ET2={ls[3]}")
+            if len(ls) >= 5:
+                parts.append(f"PEN={ls[4]}")
+            lines.append(f"{team}: {' '.join(parts)} | Final={final}")
+        elif is_baseball and len(ls) >= 5:
             # Baseball: show each inning + H1 (innings 1-5) and H2 (innings 6-9)
             try:
                 h1 = str(sum(int(ls[i]) for i in range(5)))
