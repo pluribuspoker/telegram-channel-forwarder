@@ -1,36 +1,29 @@
 #!/usr/bin/env python3
-"""PreToolUse hook on the Telegram `reply` tool: enforce the agreed chat style.
+"""PostToolUse hook on the Telegram `reply` tool: an FYI about chat style, never a gate.
 
-The operator approved (2026-09-26) one live-edited status message per task plus
-a NEW message only at the end (edits don't ping the phone), and expressive emoji
-reactions. Memory alone didn't hold: on 2026-09-27 a long /investigate sent a
-dozen separate "on it" replies — one per "user hasn't heard from you" nudge —
-and zero reactions beyond the hook's 👀. The operator asked for a mechanism, not
-a promise. Two checks, each over the CURRENT turn (everything after the last
-inbound Telegram message):
+The operator approved (2026-09-26) one live-edited status message per long task,
+a NEW message at the end (edits don't ping), and expressive emoji reactions. On
+2026-09-27 a long /investigate drifted anyway: a dozen separate "on it" replies,
+one per "user hasn't heard from you" nudge, and no reactions. A first version of
+this hook DENIED such replies; the operator rejected that the next day — "I want
+you to have control and do what you think is best, not be held down by rigid
+rules" — so it only observes now. After a reply is sent, it may attach a short
+note the model sees next (hookSpecificOutput.additionalContext — verified live:
+PreToolUse/PostToolUse additionalContext both reach the model):
 
-1. No reaction yet → the FIRST reply is denied once: react to the inbound
-   message first.
-2. A reply already went out this turn → every further reply is denied once:
-   progress belongs in edit_message on that message.
+- first reply of the turn and no reaction on the operator's message yet;
+- the third-or-later NEW message this turn (the second is usually the final),
+  naming the status message an edit could go to.
 
-Deny-once, not deny-always: re-sending the identical call passes. That keeps
-the legitimate cases (the final result, a question that needs an answer, a
-message that genuinely wants no reaction) one deliberate retry away, while the
-habit — firing off a new message by reflex — always hits a wall first.
-
-Self-gating: only acts in turns answering a Telegram channel message. Never
-crashes the call: any internal error allows. python3 only (no bare `python`).
-Debug log: /tmp/tg_style_guard.log. State: /tmp/tg_style_guard.json.
+Facts plus "your call" — no instructions, no blocking. Self-gating (Telegram
+turns only); any error → silent. python3 only. Log: /tmp/tg_style_guard.log.
 """
-import hashlib
 import json
 import os
 import re
 import sys
 import time
 
-STATE = os.environ.get("TG_STYLE_STATE", "/tmp/tg_style_guard.json")
 LOG = "/tmp/tg_style_guard.log"
 TG = 'source="plugin:telegram:telegram"'
 
@@ -53,8 +46,8 @@ def _user_text(m):
     return ""
 
 
-def turn_state(transcript, current_id):
-    """(inbound message_id, prior reply ids, reacted?, turn key) for the current turn."""
+def turn_state(transcript):
+    """(inbound message_id, sent reply ids, reacted?) for the current Telegram turn."""
     msgs = []
     for line in open(transcript).read().splitlines():
         try:
@@ -73,31 +66,19 @@ def turn_state(transcript, current_id):
                 last, inbound = i, (mm.group(1) if mm else None)
     if last == -1:
         return None
-    # Only calls that actually went out count: a reply this guard denied (or
-    # that errored) has a tool_result without "sent (id: N)" — counting it made
-    # the guard report "already replied 2x" after one real send and one denial.
-    results = {}
+    sent, reacted = [], False
     for m in msgs[last + 1:]:
+        if m.get("role") == "assistant" and isinstance(m.get("content"), list):
+            if any(isinstance(b, dict) and b.get("type") == "tool_use"
+                   and (b.get("name") or "").endswith("__react") for b in m["content"]):
+                reacted = True
         if m.get("role") == "user" and isinstance(m.get("content"), list):
             for b in m["content"]:
                 if isinstance(b, dict) and b.get("type") == "tool_result":
-                    results[b.get("tool_use_id")] = json.dumps(b.get("content"))
-    replies, reacted = [], False
-    for m in msgs[last + 1:]:
-        if m.get("role") != "assistant" or not isinstance(m.get("content"), list):
-            continue
-        for b in m["content"]:
-            if not isinstance(b, dict) or b.get("type") != "tool_use" or b.get("id") == current_id:
-                continue
-            name, res = b.get("name", ""), results.get(b.get("id"), "")
-            if name.endswith("__reply") and "sent (id:" in res:
-                replies.append(re.search(r"sent \(id: (\d+)\)", res).group(1))
-            elif name.endswith("__react") and (not res or "reacted" in res):
-                # No result yet = in flight: a react issued in parallel with this
-                # reply (same assistant message) has no tool_result at PreToolUse
-                # time — requiring one blocked a correctly-reacted reply.
-                reacted = True
-    return inbound, replies, reacted, f"{transcript}:{last}:{inbound}"
+                    mo = re.search(r"sent \(id: (\d+)\)", json.dumps(b.get("content")))
+                    if mo:
+                        sent.append(mo.group(1))
+    return inbound, sent, reacted
 
 
 def main():
@@ -107,53 +88,24 @@ def main():
     transcript = inp.get("transcript_path") or ""
     if not os.path.exists(transcript):
         return None
-    st = turn_state(transcript, inp.get("tool_use_id"))
+    st = turn_state(transcript)
     if not st:
-        return None  # not a Telegram turn
-    inbound, replies, reacted, key = st
-    tool_input = inp.get("tool_input") or {}
-    digest = hashlib.sha256(json.dumps(tool_input, sort_keys=True).encode()).hexdigest()[:16]
-
-    try:
-        state = json.load(open(STATE))
-    except Exception:
-        state = {}
-    denied = state.get(key, [])
-    if digest in denied:
-        log("allow retry", key, digest)
-        return None  # deliberate re-send of a denied call
-
-    reason = None
-    if not replies and not reacted:
-        reason = (f"Style guard: no reaction yet on the operator's message {inbound}. "
-                  "React first (expressive — the operator enjoys them; never ⚡/👍 unless it's a "
-                  "restart request), then send this reply. If this message truly wants no "
-                  "reaction, re-send the identical reply call and it will pass.")
-    elif replies:
-        target = replies[0]  # the turn's first sent reply = its status message
-        reason = (f"Style guard: you already replied this turn ({len(replies)}x). Progress "
-                  f"updates go in edit_message on message {target} — edits don't ping, which is "
-                  "the point. A NEW reply is only for the final result or a question that needs "
-                  "an answer; if that's what this is, re-send the identical reply call and it "
-                  "will pass.")
-    if not reason:
         return None
-
-    denied.append(digest)
-    state[key] = denied[-20:]
-    if len(state) > 200:
-        state = dict(list(state.items())[-100:])
-    try:
-        tmp = STATE + ".tmp"
-        json.dump(state, open(tmp, "w"))
-        os.replace(tmp, STATE)
-    except Exception as e:
-        log("state write failed", e)
-        return None  # can't remember the denial → a retry would loop; allow instead
-    log("deny", key, digest, reason[:60])
-    return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                   "permissionDecision": "deny",
-                                   "permissionDecisionReason": reason}}
+    inbound, sent, reacted = st
+    mo = re.search(r"sent \(id: (\d+)\)", json.dumps(inp.get("tool_response")))
+    if mo and mo.group(1) not in sent:
+        sent.append(mo.group(1))  # this reply's own result may not be in the transcript yet
+    note = None
+    if len(sent) <= 1 and not reacted:
+        note = (f"FYI (style hook): no reaction on the operator's message {inbound} yet. "
+                "They enjoy reactions; add one if it fits. Your call.")
+    elif len(sent) >= 3:
+        note = (f"FYI (style hook): that's new message #{len(sent)} this turn; the first "
+                f"({sent[0]}) could take progress as edits, which don't ping. Your call.")
+    if not note:
+        return None
+    log("note", inbound, len(sent), reacted)
+    return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": note}}
 
 
 if __name__ == "__main__":
