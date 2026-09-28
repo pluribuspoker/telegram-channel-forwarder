@@ -90,7 +90,7 @@ TRANSCRIPT_RETENTION_DAYS = 90
 DEFAULT_MAX_PICKS = int(os.environ.get("UNGRADED_AUDIT_MAX_PICKS") or 3)
 DEFAULT_DAYS_BACK = int(os.environ.get("UNGRADED_AUDIT_DAYS_BACK") or 10)
 DEFAULT_ATTEMPT_CAP = int(os.environ.get("UNGRADED_AUDIT_ATTEMPT_CAP") or 2)
-AGENT_TIMEOUT = int(os.environ.get("UNGRADED_AUDIT_AGENT_TIMEOUT") or 1500)
+AGENT_TIMEOUT = int(os.environ.get("UNGRADED_AUDIT_AGENT_TIMEOUT") or 2400)
 BUDGET_MIN = int(os.environ.get("UNGRADED_AUDIT_BUDGET_MIN") or 90)
 MAX_TURNS = int(os.environ.get("UNGRADED_AUDIT_MAX_TURNS") or 150)
 MODEL = os.environ.get("UNGRADED_AUDIT_MODEL") or "claude-fable-5"
@@ -493,7 +493,10 @@ def _constraint_lines() -> list[str]:
         "the summary."
     )
     lines.append(
-        "- Budget ~20 minutes; the runner kills you at 25. If the root cause "
+        f"- Budget ~{AGENT_TIMEOUT // 60 - 10} minutes; the runner kills you at "
+        f"{AGENT_TIMEOUT // 60}. Commit the fix as soon as its test passes, "
+        "before any sweep — uncommitted edits are reverted on a timeout. "
+        "If the root cause "
         "needs a human decision, stop early and report needs_human. Add an "
         "/investigate lesson ONLY for a novel debugging technique, never for "
         "a routine code fix."

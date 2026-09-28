@@ -5,9 +5,9 @@
 # telegram-forwarder. DMs the operator a per-pick summary via the watchdog
 # bot; silent when the scan is clean.
 #
-# TimeoutStartSec=6600 = 3 pick groups (the runner's --max-picks default)
-# x the 1500 s per-agent timeout, plus scan/push/restart overhead; the
-# runner's own 90-min budget stops launching agents well before this.
+# TimeoutStartSec=6600 > the runner's 90-min budget: it launches an agent
+# only while a full 2400 s per-agent timeout still fits inside the budget,
+# so the last agent ends by ~90 min, plus scan/push/restart overhead.
 # 04:05 ET start + worst case still clears the 06:00 auto-reboot window.
 #
 # Environment: .env (watchdog DM config), .env.local (server-only values),

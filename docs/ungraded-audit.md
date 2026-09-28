@@ -81,7 +81,9 @@ run clears the 06:00 auto-reboot window. Each agent:
 - fresh `claude -p "/investigate …"` in `/home/forwarder/app` — full tools,
   `--dangerously-skip-permissions`, model `UNGRADED_AUDIT_MODEL` (default
   claude-fable-5) at max effort, `--max-turns 150`, killed at
-  `UNGRADED_AUDIT_AGENT_TIMEOUT` (default 1500 s; prompt says budget ~20 min);
+  `UNGRADED_AUDIT_AGENT_TIMEOUT` (default 2400 s since 2026-09-28 — a 1500 s kill
+  landed 10 s before a finished fix was committed; prompt says budget ~30 min
+  and to commit as soon as the fix's test passes);
 - environment built from scratch: `CLAUDE_CODE_OAUTH_TOKEN` only — **no
   `ANTHROPIC_API_KEY`** (it's in `.env`; inheriting it would bill the API
   instead of the subscription; the scripts the agent runs `load_dotenv()`
