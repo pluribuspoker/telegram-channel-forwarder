@@ -136,3 +136,28 @@ holds other machine config), but the relevant block is:
   }
 }
 ```
+
+## `telegram_style_guard.py`
+
+A **PreToolUse hook** on `mcp__plugin_telegram_telegram__reply` that enforces the
+chat style the operator approved (one live-edited status message, a new message
+only at the end, expressive reactions). Memory alone didn't hold: on 2026-09-27 a
+long /investigate sent a dozen separate "on it" replies, one per "user hasn't
+heard from you" nudge, and made no reactions. The operator asked for a mechanism.
+
+Within the current turn (everything after the last inbound Telegram message):
+- **no reaction yet** → the first reply is denied: react first;
+- **a reply already sent** → every further reply is denied: use `edit_message`
+  on the status message (the reason names its id).
+
+Both checks **deny once**: re-sending the identical call passes (hash kept in
+`/tmp/tg_style_guard.json`, per turn). The final result, a question that needs
+an answer, or a message that truly wants no reaction stays one deliberate retry
+away; a reflex send always hits a wall first. Self-gating (Telegram turns only),
+never crashes the call (errors allow), `python3` only. Log: `/tmp/tg_style_guard.log`.
+
+Registered in `~/.claude/settings.json` → `hooks.PreToolUse` with matcher
+`mcp__plugin_telegram_telegram__reply`. Hook config is read at session start:
+restart the channels session after installing.
+
+Sync: `cp deploy/hooks/telegram_style_guard.py ~/.claude/hooks/ && chmod +x ~/.claude/hooks/telegram_style_guard.py`
