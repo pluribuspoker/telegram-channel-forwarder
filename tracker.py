@@ -20,6 +20,7 @@ from datetime import date as _date, timedelta
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
+from telethon.helpers import add_surrogate, del_surrogate
 
 from common import (
     VERDICT_EMOJI,
@@ -94,9 +95,12 @@ _DAY_NAMES = {
 _DAY_RE = re.compile(
     r'\b(' + '|'.join(_DAY_NAMES) + r')\b', re.IGNORECASE,
 )
+# A weekday right after a W-L(-T) record token is capper flair ("22-13
+# Saturday"), never the bet's schedule.
+_RECORD_TAIL_RE = re.compile(r'\d+\s*-\s*\d+(?:\s*-\s*\d+)?\s*(?:on\s+)?$')
 
 
-def _day_hint_date(text: str, msg_date: _date) -> str | None:
+def _day_hint_date(text: str, msg_date: _date, entities=None) -> str | None:
     """Extract a day-of-week from message text and return the nearest future date.
 
     When a capper posts "SATURDAY BEST BET" on Friday evening, the message
@@ -105,17 +109,28 @@ def _day_hint_date(text: str, msg_date: _date) -> str | None:
     match a same-matchup game from a consecutive-day series that already
     completed on the message date.
 
+    Blockquotes are angle records, never the bet: a weekday inside one
+    ("22-13 Saturday" in a record block) must not reschedule the leg — it
+    bound a Sunday spread to NEXT week's game (the hint outranks the odds
+    game_date). Same for a weekday right after a bare W-L record.
+
     Returns YYYY-MM-DD if the hint day differs from msg_date, else None.
     """
-    m = _DAY_RE.search(text)
-    if not m:
-        return None
-    target_dow = _DAY_NAMES[m.group(1).lower()]
-    msg_dow = msg_date.weekday()
-    delta = (target_dow - msg_dow) % 7
-    if delta == 0:
-        return None  # same day — no override needed
-    return (msg_date + timedelta(days=delta)).isoformat()
+    bq = sorted(((e.offset, e.offset + e.length) for e in entities or []
+                 if type(e).__name__ == "MessageEntityBlockquote"), reverse=True)
+    if bq:
+        s = add_surrogate(text)  # entity offsets are UTF-16 code units
+        for start, end in bq:
+            s = s[:start] + "\n" + s[end:]
+        text = del_surrogate(s)
+    for m in _DAY_RE.finditer(text):
+        if _RECORD_TAIL_RE.search(text[:m.start()].rsplit("\n", 1)[-1]):
+            continue
+        delta = (_DAY_NAMES[m.group(1).lower()] - msg_date.weekday()) % 7
+        if delta == 0:
+            return None  # same day — no override needed
+        return (msg_date + timedelta(days=delta)).isoformat()
+    return None
 
 
 def _trunc(s: str, w: int) -> str:
@@ -619,7 +634,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 # sent Friday evening).  Invalidate any cached verdicts whose
                 # game_date no longer matches the hint so they get re-graded
                 # against the correct game.
-                day_hint = _day_hint_date(text, _date.fromisoformat(date_str))
+                day_hint = _day_hint_date(text, _date.fromisoformat(date_str), msg.entities)
                 if day_hint:
                     for k, v in cached_leg_verdicts.items():
                         if isinstance(v, dict) and v.get("game_date") and v["game_date"] != day_hint:
