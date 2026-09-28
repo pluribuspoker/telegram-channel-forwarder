@@ -92,7 +92,10 @@ def turn_state(transcript, current_id):
             name, res = b.get("name", ""), results.get(b.get("id"), "")
             if name.endswith("__reply") and "sent (id:" in res:
                 replies.append(re.search(r"sent \(id: (\d+)\)", res).group(1))
-            elif name.endswith("__react") and "reacted" in res:
+            elif name.endswith("__react") and (not res or "reacted" in res):
+                # No result yet = in flight: a react issued in parallel with this
+                # reply (same assistant message) has no tool_result at PreToolUse
+                # time — requiring one blocked a correctly-reacted reply.
                 reacted = True
     return inbound, replies, reacted, f"{transcript}:{last}:{inbound}"
 
