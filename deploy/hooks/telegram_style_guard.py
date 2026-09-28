@@ -73,6 +73,15 @@ def turn_state(transcript, current_id):
                 last, inbound = i, (mm.group(1) if mm else None)
     if last == -1:
         return None
+    # Only calls that actually went out count: a reply this guard denied (or
+    # that errored) has a tool_result without "sent (id: N)" — counting it made
+    # the guard report "already replied 2x" after one real send and one denial.
+    results = {}
+    for m in msgs[last + 1:]:
+        if m.get("role") == "user" and isinstance(m.get("content"), list):
+            for b in m["content"]:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    results[b.get("tool_use_id")] = json.dumps(b.get("content"))
     replies, reacted = [], False
     for m in msgs[last + 1:]:
         if m.get("role") != "assistant" or not isinstance(m.get("content"), list):
@@ -80,21 +89,12 @@ def turn_state(transcript, current_id):
         for b in m["content"]:
             if not isinstance(b, dict) or b.get("type") != "tool_use" or b.get("id") == current_id:
                 continue
-            name = b.get("name", "")
-            if name.endswith("__reply"):
-                replies.append(b.get("id"))
-            elif name.endswith("__react"):
+            name, res = b.get("name", ""), results.get(b.get("id"), "")
+            if name.endswith("__reply") and "sent (id:" in res:
+                replies.append(re.search(r"sent \(id: (\d+)\)", res).group(1))
+            elif name.endswith("__react") and "reacted" in res:
                 reacted = True
     return inbound, replies, reacted, f"{transcript}:{last}:{inbound}"
-
-
-def sent_ids(transcript):
-    """Telegram message ids of this turn's sent replies, from their tool results."""
-    ids = []
-    for line in open(transcript).read().splitlines():
-        for mo in re.finditer(r"sent \(id: (\d+)\)", line):
-            ids.append(mo.group(1))
-    return ids
 
 
 def main():
@@ -127,8 +127,7 @@ def main():
                   "restart request), then send this reply. If this message truly wants no "
                   "reaction, re-send the identical reply call and it will pass.")
     elif replies:
-        prev = sent_ids(transcript)
-        target = prev[-1] if prev else "your earlier status message"
+        target = replies[0]  # the turn's first sent reply = its status message
         reason = (f"Style guard: you already replied this turn ({len(replies)}x). Progress "
                   f"updates go in edit_message on message {target} — edits don't ping, which is "
                   "the point. A NEW reply is only for the final result or a question that needs "
