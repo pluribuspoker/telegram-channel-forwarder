@@ -100,7 +100,8 @@ def test_should_retry():
 class Stub:
     """Patches every network seam in fetch_odds_current and counts paid calls."""
 
-    def __init__(self, *, commence_dt, bovada_bk, bovada_gd, paid_bk=None):
+    def __init__(self, *, commence_dt, bovada_bk, bovada_gd, paid_bk=None, pinnacle=None):
+        self.pinnacle = pinnacle or ([], None, None)
         self.paid_calls = 0
         self.pregame_calls = 0
         self.commence = commence_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -121,6 +122,9 @@ class Stub:
         async def _espn(sport, date):
             return None
 
+        async def _pinnacle(sport, teams, *, now=None):
+            return self.pinnacle
+
         async def _paid(sport_key, event_id, markets, conn, *, live=False):
             self.paid_calls += 1
             return self.paid_bk
@@ -130,7 +134,9 @@ class Stub:
             return None
 
         self.saved = (odds._fetch_current_event_list_all, odds._fetch_bovada_bookmakers,
-                      odds.fetch_espn, odds._fetch_current_bookmakers, odds._try_pregame)
+                      odds.fetch_espn, odds._fetch_current_bookmakers, odds._try_pregame,
+                      odds._fetch_pinnacle_bookmakers)
+        odds._fetch_pinnacle_bookmakers = _pinnacle
         odds._fetch_current_event_list_all = _events
         odds._fetch_bovada_bookmakers = _bovada
         odds.fetch_espn = _espn
@@ -139,7 +145,8 @@ class Stub:
 
     def restore(self):
         (odds._fetch_current_event_list_all, odds._fetch_bovada_bookmakers,
-         odds.fetch_espn, odds._fetch_current_bookmakers, odds._try_pregame) = self.saved
+         odds.fetch_espn, odds._fetch_current_bookmakers, odds._try_pregame,
+         odds._fetch_pinnacle_bookmakers) = self.saved
 
 
 def run(pick, stub, **kw):

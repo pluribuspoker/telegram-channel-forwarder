@@ -41,7 +41,7 @@ from dotenv import load_dotenv
 
 from common import is_regulation_ml
 from scores import (_team_matches, fetch_espn, espn_bookmakers_for_teams, espn_event_for_teams, ESPN_LEAGUES,
-                    extract_espn_bookmaker, soccer_bind)
+                    extract_espn_bookmaker, soccer_bind, _QUALIFIERS, _strip_accents)
 
 ROOT = Path(__file__).resolve().parent
 DB_PATH = str(ROOT / "picks.db")
@@ -705,8 +705,9 @@ def _collect_outcomes(
     return results
 
 
-_BOOK_PRIORITY = ["betonlineag", "bovada", "mybookieag"]
-_BOOK_DISPLAY = {"betonlineag": "BetOnline", "bovada": "Bovada", "mybookieag": "MyBookie"}
+_BOOK_PRIORITY = ["betonlineag", "bovada", "mybookieag", "pinnacle"]
+_BOOK_DISPLAY = {"betonlineag": "BetOnline", "bovada": "Bovada", "mybookieag": "MyBookie",
+                 "pinnacle": "Pinnacle"}
 
 
 def _betonline_both_sides(
@@ -1511,7 +1512,8 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH,
     """
     Look up current (live pre-game) odds for a pick.
 
-    Source order: ESPN (free, its leagues) → Bovada (free) → Odds API (paid,
+    Source order: ESPN (free, its leagues) → Pinnacle → Bovada (free; also
+    asked when ESPN only estimated off a neighbouring line) → Odds API (paid,
     LAST resort — the subscription ended 2026-08-22, the key reverts to the
     free 500-credits/month tier, so every market call must earn its place; the
     /events match stays first because it costs nothing and anchors the Bovada
@@ -1700,18 +1702,31 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH,
                                 commence = ct
                                 gd = _utc_to_eastern_date(ct)
 
-        # Bovada second (free; pre-game only — _bovada_pick_event refuses a
+        # Pinnacle, then Bovada (free; pre-game only — both pickers refuse a
         # started game here, so a live price can't be recorded as a closing
-        # one). CFL has no ESPN odds; Bovada also carries period and alternate
-        # markets ESPN never lists.
-        if r.get("adjusted_odds") is None and sport in _BOVADA_PATHS:
+        # one). They carry the alternate ladders and period markets ESPN never
+        # lists, so they also run when ESPN only ESTIMATED the price off its
+        # one main line: a quoted price at the bet's own line beats the linear
+        # estimate, which is blind to key numbers (_better_free_result). CFL
+        # has no ESPN odds at all.
+        if _needs_free_source(r) and sport in _PINNACLE_LEAGUES:
+            pin_bk, pin_gd, pin_ct = await _fetch_pinnacle_bookmakers(sport, teams)
+            if pin_bk and _bovada_result_acceptable(gd, pin_gd):
+                r2 = lookup_pick_odds(sport, pick, pin_bk)
+                if _better_free_result(r, r2):
+                    r = r2
+                    bookmakers = pin_bk  # feeds the both-sides extraction below
+                    if gd is None:
+                        gd, commence = pin_gd, commence or pin_ct
+
+        if _needs_free_source(r) and sport in _BOVADA_PATHS:
             bov_bk, bov_gd = await _fetch_bovada_bookmakers(sport, teams)
             if bov_bk and _bovada_result_acceptable(gd, bov_gd):
                 r2 = lookup_pick_odds(sport, pick, bov_bk)
                 # A Bovada miss verdict is adopted too when nothing else had the
                 # game at all: "alt_line_gap_6.0pts" from a market Bovada
                 # actually served beats a blanket no_game.
-                if r2.get("adjusted_odds") is not None or r.get("match_type") == "no_game":
+                if _better_free_result(r, r2):
                     r = r2
                     bookmakers = bov_bk  # feeds the both-sides extraction below
                     if gd is None:
@@ -1880,9 +1895,16 @@ def _bovada_suffix(abbr: str | None, sport: str) -> str | None:
     return _BOVADA_PERIOD_TO_SUFFIX.get(abbr)
 
 
+# College poll rank Bovada appends to a name: "Alabama (#7)". Left on, a ranked
+# team matched no pick ("Alabama Crimson Tide" ⊅ "alabama (#7)") — every Top-25
+# NCAAF/NCAAB game was invisible to the Bovada fallback.
+_BOVADA_RANK_RE = re.compile(r"\s*\(#\d+\)$")
+
+
 def _bovada_team(name: str) -> str:
-    """Strip Bovada's ' - 1H' style outcome suffix and canonicalize the name."""
+    """Strip Bovada's ' - 1H' style outcome suffix and poll rank; canonicalize."""
     name = _BOVADA_PERIOD_TAG_RE.sub("", name or "").strip()
+    name = _BOVADA_RANK_RE.sub("", name).strip()
     return _BOVADA_TEAM_ALIASES.get(name, name)
 
 
@@ -2101,7 +2123,7 @@ async def _fetch_bovada_prop(
     """
     events = await _fetch_bovada_events(sport)
     if teams:
-        ev, gd = _bovada_pick_event(events, teams, allow_started=allow_started, now=now)
+        ev, gd = _bovada_pick_event(events, teams, allow_started=allow_started, now=now, sport=sport)
         return (_bovada_prop_markets(ev, phrases, player) if ev else []), gd
     now = now or datetime.now(timezone.utc)
     horizon = now + timedelta(days=_BOVADA_MAX_DAYS_AHEAD)
@@ -2119,7 +2141,7 @@ async def _fetch_bovada_prop(
 
 def _bovada_pick_event(
     events: list[dict], teams: list[str], *, allow_started: bool,
-    now: datetime | None = None,
+    now: datetime | None = None, sport: str = "",
 ) -> tuple[dict | None, str | None]:
     """Match the pick's teams against Bovada's coupon; (event, eastern date).
 
@@ -2128,7 +2150,8 @@ def _bovada_pick_event(
     pregame-looking match_type — a mislabel nothing downstream could detect.
     The started/live caller passes True.
     """
-    pairs = [(m, e) for e in events if (m := _bovada_minimal_event(e))]
+    pairs = [(m, e) for e in events if (m := _bovada_minimal_event(e))
+             and not _school_collision(m, teams, sport)]
     minimal = [m for m, _ in pairs]
     eid = _find_event_id(minimal, teams)
     if not eid:
@@ -2164,7 +2187,18 @@ async def _fetch_bovada_events(sport: str) -> list[dict]:
         ) as http:
             r = await http.get(f"{_BOVADA_BASE}/{path}", params={"lang": "en"})
             r.raise_for_status()
-            for blk in r.json():
+            data = r.json()
+            if not data and "/" in path:
+                # The league path sometimes answers 200 + {} while the parent
+                # sport feed still lists the league's games (football/nfl,
+                # 2026-09-27, 13 min before kickoff): read the parent and keep
+                # only this league's blocks.
+                r = await http.get(f"{_BOVADA_BASE}/{path.split('/', 1)[0]}", params={"lang": "en"})
+                r.raise_for_status()
+                data = [blk for blk in r.json() if isinstance(blk, dict)
+                        and ((blk.get("path") or [{}])[0].get("link") or "") == f"/{path}"]
+                print(f"[odds] bovada {path} empty — parent feed fallback: {len(data)} block(s)")
+            for blk in data if isinstance(data, list) else []:
                 events.extend(blk.get("events") or [])
     except Exception as exc:
         print(f"[odds] bovada fetch failed ({sport}): {exc}")
@@ -2178,7 +2212,7 @@ async def _fetch_bovada_bookmakers(
 ) -> tuple[list[dict], str | None]:
     """Shaped Bovada bookmakers for the pick's game, plus its eastern date."""
     events = await _fetch_bovada_events(sport)
-    ev, gd = _bovada_pick_event(events, teams, allow_started=allow_started)
+    ev, gd = _bovada_pick_event(events, teams, allow_started=allow_started, sport=sport)
     return (_bovada_bookmakers(ev, sport) if ev else []), gd
 
 
@@ -2211,6 +2245,226 @@ def _bovada_result_acceptable(
     cutoff = ((now or datetime.now(timezone.utc)).astimezone(ZoneInfo("America/New_York"))
               + timedelta(days=_BOVADA_MAX_DAYS_AHEAD)).strftime("%Y-%m-%d")
     return bov_gd <= cutoff
+
+
+# ── Pinnacle free source ──────────────────────────────────────────────────────
+# Pinnacle's public guest API (the key is the public one its own web app ships;
+# no account, no quota, works from the VPS) carries the sharpest prices in the
+# market AND the full alternate ladder for game spreads/totals. ESPN serves one
+# main line per market, so before this source an alternate-line pick (Broncos
+# +3.5 against a +1.5 main) got the linear _adjust_for_gap estimate: -173 where
+# Pinnacle had -190 and Bovada -200 (2026-09-27, the model is blind to key
+# numbers). Shaped like an Odds API bookmakers list (alternates fold into the
+# main key, as Bovada's do), so lookup_pick_odds reads it unchanged.
+
+_PINNACLE_BASE = "https://guest.api.arcadia.pinnacle.com/0.1"
+_PINNACLE_KEY = os.getenv("PINNACLE_GUEST_KEY", "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R")
+_PINNACLE_LEAGUES: dict[str, int] = {
+    "NFL": 889, "NCAAF": 880, "CFL": 876,
+    "NBA": 487, "WNBA": 578, "NCAAB": 493,
+    "MLB": 246, "NHL": 1456, "UFC": 1624,
+}
+_PINNACLE_TTL, _PINNACLE_FAIL_TTL = 60.0, 15.0
+_pinnacle_cache: dict[str, tuple[float, list[dict], list[dict]]] = {}
+
+# Pinnacle period number → Odds API market suffix, OBSERVED payloads only
+# (skip-don't-mislabel, same rule as _BOVADA_PERIOD_TO_SUFFIX). Football
+# 2026-09-27 (LAR @ DEN): 1 = 1st half (total 22.5), 3 = 1st quarter (total
+# 7.5, team totals 3.5). Hockey's period markets price 2-way moneylines on a
+# ~35%-draw period, i.e. a draw-refund market nothing here grades — skipped,
+# as is every other sport's period until a payload shows what it is.
+_PINNACLE_PERIOD_SUFFIX: dict[str, dict[int, str]] = {
+    "NFL": {0: "", 1: "_h1", 3: "_q1"},
+    "NCAAF": {0: "", 1: "_h1", 3: "_q1"},
+    "CFL": {0: "", 1: "_h1", 3: "_q1"},
+}
+
+
+def _pinnacle_sides(matchup: dict) -> dict[str, str]:
+    """alignment ('home'/'away') → participant name."""
+    return {p.get("alignment"): p.get("name") for p in matchup.get("participants") or []
+            if p.get("alignment") in ("home", "away") and p.get("name")}
+
+
+def _pinnacle_minimal_event(matchup: dict) -> dict | None:
+    """One Pinnacle matchup → the minimal Odds-API event shape _find_event_id reads."""
+    sides = _pinnacle_sides(matchup)
+    if not (sides.get("home") and sides.get("away") and matchup.get("startTime")):
+        return None
+    return {"id": str(matchup.get("id")), "home_team": sides["home"],
+            "away_team": sides["away"], "commence_time": matchup["startTime"]}
+
+
+def _names_other_school(term: str, name: str) -> bool:
+    """The book's side `name` sits inside the pick `term` as a DIFFERENT school.
+
+    Books name colleges bare ("Georgia", "Washington", "Alabama"), and
+    _team_matches accepts a book name that is a subset of the pick term, so a
+    live A/B (2026-09-27) bound "Georgia State" to the Georgia game (-2881 on
+    Pinnacle), "South Alabama" to Alabama's, and — already in production on
+    Bovada — "Washington State Cougars" to Washington @ USC. The name is a
+    different school when the term has words BEFORE it ("South Alabama") or a
+    school qualifier right AFTER it ("Georgia State", "Miami (OH)"); a
+    trailing nickname ("Georgia Bulldogs") is still the same school.
+    _team_matches refuses the forward direction ("Iowa" vs "Iowa State
+    Cyclones"); this is its mirror, applied where books name schools bare.
+    """
+    t = _strip_accents(term.lower()).replace("-", " ").split()
+    n = _strip_accents(name.lower()).replace("-", " ").split()
+    for i in range(len(t) - len(n) + 1):
+        if t[i:i + len(n)] != n or len(n) == len(t):
+            continue
+        after = t[i + len(n)] if i + len(n) < len(t) else ""
+        return i > 0 or after in _QUALIFIERS or after.startswith("(")
+    return False
+
+
+def _school_collision(event: dict, teams: list[str], sport: str) -> bool:
+    """True when a pick team reaches this event only as a different school.
+
+    Team sports only: a fighter named by surname on one side and in full on
+    the other is the same person, and the prefix rule would drop him.
+    """
+    if sport in ("UFC", "Boxing", "Tennis"):
+        return False
+    sides = (event.get("home_team") or "", event.get("away_team") or "")
+    return any(_names_other_school(t, s) for t in teams if t for s in sides)
+
+
+def _pinnacle_bookmakers(matchup: dict, markets: list[dict], sport: str) -> list[dict]:
+    """One Pinnacle matchup + the league's straight markets → bookmakers list.
+
+    Only open markets on mapped periods; a moneyline carrying a draw price is
+    a 3-way market and is skipped whole (its sides are not a 2-way h2h).
+    """
+    sides = _pinnacle_sides(matchup)
+    periods = _PINNACLE_PERIOD_SUFFIX.get(sport, {0: ""})
+    out: dict[str, list[dict]] = {}
+    for mk in markets:
+        if mk.get("matchupId") != matchup.get("id") or mk.get("status") != "open":
+            continue
+        sfx = periods.get(mk.get("period"))
+        if sfx is None:
+            continue
+        mtype, prices = mk.get("type"), mk.get("prices") or []
+        if mtype == "moneyline" and any(p.get("designation") not in ("home", "away") for p in prices):
+            continue
+        for p in prices:
+            des, price, pts = p.get("designation"), p.get("price"), p.get("points")
+            if price is None:
+                continue
+            if mtype == "moneyline":
+                key, o = "h2h" + sfx, {"name": sides.get(des)}
+            elif mtype == "spread" and pts is not None:
+                key, o = "spreads" + sfx, {"name": sides.get(des), "point": float(pts)}
+            elif mtype == "total" and des in ("over", "under") and pts is not None:
+                key, o = "totals" + sfx, {"name": des.title(), "point": float(pts)}
+            elif mtype == "team_total" and des in ("over", "under") and pts is not None:
+                key, o = "team_totals" + sfx, {"name": des.title(), "point": float(pts),
+                                               "description": sides.get(mk.get("side"))}
+            else:
+                continue
+            if not o["name"] or o.get("description", "x") is None:
+                continue
+            o["price"] = int(price)
+            out.setdefault(key, []).append(o)
+    if not out:
+        return []
+    return [{"key": "pinnacle", "title": "Pinnacle",
+             "markets": [{"key": k, "outcomes": v} for k, v in out.items()]}]
+
+
+async def _fetch_pinnacle_league(sport: str) -> tuple[list[dict], list[dict]]:
+    """(game matchups, straight markets) for a league, cached briefly. ([], []) on failure.
+
+    Only top-level Regular matchups are kept: children (parentId set) and
+    other units are specials — margin bands, player props, futures.
+    """
+    league = _PINNACLE_LEAGUES.get(sport)
+    if not league:
+        return [], []
+    now = time.time()
+    cached = _pinnacle_cache.get(sport)
+    if cached is not None:
+        ttl = _PINNACLE_TTL if cached[1] else _PINNACLE_FAIL_TTL
+        if now - cached[0] < ttl:
+            return cached[1], cached[2]
+    matchups: list[dict] = []
+    markets: list[dict] = []
+    try:
+        async with httpx.AsyncClient(
+            timeout=15, headers={"x-api-key": _PINNACLE_KEY, "User-Agent": _BOVADA_UA,
+                                 "Referer": "https://www.pinnacle.com/"},
+        ) as http:
+            rm = await http.get(f"{_PINNACLE_BASE}/leagues/{league}/matchups")
+            rm.raise_for_status()
+            rk = await http.get(f"{_PINNACLE_BASE}/leagues/{league}/markets/straight")
+            rk.raise_for_status()
+            matchups = [m for m in rm.json() if m.get("type") == "matchup"
+                        and not m.get("parentId") and m.get("units", "Regular") == "Regular"]
+            markets = [k for k in rk.json() if isinstance(k, dict)]
+    except Exception as exc:
+        print(f"[odds] pinnacle fetch failed ({sport}): {exc}")
+        matchups, markets = [], []
+    _pinnacle_cache[sport] = (now, matchups, markets)
+    return matchups, markets
+
+
+async def _fetch_pinnacle_bookmakers(
+    sport: str, teams: list[str], *, now: datetime | None = None,
+) -> tuple[list[dict], str | None, str | None]:
+    """Shaped Pinnacle bookmakers for the pick's game, its eastern date, and its start.
+
+    Pregame only: a started event is refused (its prices would be live), like
+    _bovada_pick_event(allow_started=False). The date still comes back so the
+    caller's same-game guard sees which game matched.
+    """
+    matchups, markets = await _fetch_pinnacle_league(sport)
+    pairs = [(m, e) for e in matchups if (m := _pinnacle_minimal_event(e))
+             and not _school_collision(m, teams, sport)]
+    eid = _find_event_id([m for m, _ in pairs], teams)
+    if not eid:
+        return [], None, None
+    minimal, matchup = next((m, e) for m, e in pairs if m["id"] == eid)
+    gd = _get_event_date([minimal], eid)
+    commence = datetime.fromisoformat(minimal["commence_time"].replace("Z", "+00:00"))
+    if commence <= (now or datetime.now(timezone.utc)) or matchup.get("isLive"):
+        return [], gd, minimal["commence_time"]
+    return _pinnacle_bookmakers(matchup, markets, sport), gd, minimal["commence_time"]
+
+
+def _is_estimate(r: dict) -> bool:
+    """A price derived from a neighbouring line (_adjust_for_gap), not quoted."""
+    return (r.get("match_type") or "").startswith("proximity_")
+
+
+def _line_gap(r: dict) -> float:
+    try:
+        return abs(float(r["api_line"]) - float(r["pick_line"]))
+    except (KeyError, TypeError, ValueError):
+        return float("inf")
+
+
+def _better_free_result(cur: dict, new: dict) -> bool:
+    """Should the next free source's result `new` replace `cur`?
+
+    A quoted price at the bet's own line beats an estimate off a neighbouring
+    line; between estimates the nearer line wins (a tie keeps the earlier
+    source); any price beats a miss; a miss verdict only replaces an
+    uninformative no_game.
+    """
+    if new.get("adjusted_odds") is None:
+        return cur.get("adjusted_odds") is None and cur.get("match_type") == "no_game"
+    if cur.get("adjusted_odds") is None:
+        return True
+    if not _is_estimate(cur):
+        return False
+    return not _is_estimate(new) or _line_gap(new) < _line_gap(cur)
+
+
+def _needs_free_source(r: dict) -> bool:
+    """Keep asking free sources while there's no price, or only an estimate."""
+    return r.get("adjusted_odds") is None or _is_estimate(r)
 
 
 def quota_used() -> int:
