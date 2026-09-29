@@ -136,6 +136,16 @@ def _build_broadcast_map() -> dict[int, int]:
     return result
 
 
+def _build_no_broadcast_ids() -> frozenset[str]:
+    """Mapping ids with "no_broadcast": true. Broadcast targets are keyed per
+    DEST channel, so a source sharing a dest with broadcasting mappings (DAGGER
+    → Fight Club Picks) opts out per message, via the entry's `mapping_id`."""
+    return frozenset(
+        m["id"] for m in json.loads(os.getenv("MAPPINGS_CONFIG", "[]"))
+        if m.get("no_broadcast") and m.get("id")
+    )
+
+
 def _build_sheets_map() -> dict[int, str]:
     """dest_channel → sheets_id from MAPPINGS_CONFIG."""
     result: dict[int, str] = {}
@@ -605,6 +615,7 @@ def _mark_broadcasted(cache: dict, item: dict) -> None:
 async def _flush_broadcasts(
     pending: list[dict], audit: AuditLog, cache: dict,
     sheets_map: dict[int, str], espn_cache: _ESPNCache,
+    no_broadcast_ids: frozenset[str] = frozenset(),
 ) -> None:
     """Send every result queued this cycle, merging the ones on the same game.
 
@@ -643,9 +654,16 @@ async def _flush_broadcasts(
     buckets: dict[tuple, list[dict]] = {}
     for idx, item in enumerate(pending):
         target = audit.broadcast_results_mappings.get(item["channel_id"])
+        entry = cache.get(item["cache_key"])
         # Group per target channel: one source fans out to several dest channels,
         # each with its own broadcast channel, and those must not be merged.
-        key = ("game", target, item["game_key"]) if (target and item["game_key"]) else ("solo", idx)
+        if isinstance(entry, dict) and entry.get("mapping_id") in no_broadcast_ids:
+            # Marked broadcasted like a sent result (terminal), just never posted.
+            key = ("mute", idx)
+        elif target and item["game_key"]:
+            key = ("game", target, item["game_key"])
+        else:
+            key = ("solo", idx)
         buckets.setdefault(key, []).append(item)
 
     for key, group in buckets.items():
@@ -667,7 +685,9 @@ async def _flush_broadcasts(
         has_final = (group_event is not None
                      and _final_score_text(group_event) is not None)
         single_with_score = len(group) == 1 and has_final
-        if key[0] == "game" and (len(group) >= GROUP_MIN or single_with_score):
+        if key[0] == "mute":
+            print(f"  ⊘ no_broadcast mapping — result not posted for {group[0]['cache_key']}")
+        elif key[0] == "game" and (len(group) >= GROUP_MIN or single_with_score):
             await audit.broadcast_group(
                 target_channel=key[1],
                 header=_group_header(group) if has_final else "",
@@ -718,6 +738,7 @@ async def _grade_cycle(
     broadcast_map: dict[int, int],
     sheets_map: dict[int, str],
     user_send_channels: set[int],
+    no_broadcast_ids: frozenset[str] = frozenset(),
 ) -> tuple[int, int]:
     """Run one grading cycle.  Returns (graded_count, pending_count)."""
     cache = _load_pending_cache()
@@ -1136,7 +1157,8 @@ async def _grade_cycle(
             odds_match_type=first_odds.get("match_type"),
         )
 
-    await _flush_broadcasts(pending_broadcasts, audit, cache, sheets_map, espn_cache)
+    await _flush_broadcasts(pending_broadcasts, audit, cache, sheets_map, espn_cache,
+                            no_broadcast_ids)
 
     if dirty:
         _save_pending_cache(cache)
@@ -1152,6 +1174,7 @@ async def run_daemon() -> None:
 
     broadcast_map = _build_broadcast_map()
     sheets_map = _build_sheets_map()
+    no_broadcast_ids = _build_no_broadcast_ids()
     user_send_channels = _build_user_send_channels()
     audit = AuditLog(broadcast_results_mappings=broadcast_map)
     espn_cache = _ESPNCache(ttl=ESPN_CACHE_TTL)
@@ -1184,7 +1207,7 @@ async def run_daemon() -> None:
             try:
                 graded, pending = await asyncio.wait_for(
                     _grade_cycle(bot_token, audit, espn_cache, broadcast_map, sheets_map,
-                                 user_send_channels),
+                                 user_send_channels, no_broadcast_ids),
                     timeout=CYCLE_TIMEOUT,
                 )
             except asyncio.TimeoutError:
