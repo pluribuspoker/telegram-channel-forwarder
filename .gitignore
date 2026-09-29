@@ -138,6 +138,7 @@ celerybeat.pid
 .env
 .env.local
 .env.guesser
+.env.pre-pull.*
 .envrc
 .venv
 env/

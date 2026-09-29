@@ -11,13 +11,21 @@ whole file — dropping BOT_SESSION / X_AUTH_TOKEN / X_CT0 / PIKKIT_TOKEN and
 corrupting TELEGRAM_SESSION into unparseable garbage — and silently took the
 pick grader down for 8 hours. Add keys with this, never by hand.
 
+It is also THE way to change the server's .env (VPS = source of truth,
+2026-09-28): env-backup.path reconciles every other write to .env back to the
+newest snapshot (deploy/env_backup.py), and this script records its result as
+that snapshot BEFORE replacing the file, so only its writes stick. `--unset`
+tombstones a key there, so a stale desktop push can't resurrect it.
+
 Usage:
     python3 scripts/set_env_local.py TELEGRAM_SESSION=1Abc...  AK_TELEGRAM_USER_ID=123
-    python3 scripts/set_env_local.py --file .env.local KEY=VALUE
+    python3 scripts/set_env_local.py --file .env KEY=VALUE --unset OLD_KEY
+    printf %s "$LONG_VALUE" | python3 scripts/set_env_local.py --file .env --stdin KEY
     python3 scripts/set_env_local.py --validate            # check the file, change nothing
 
 Guarantees:
-    * No key that was present before can be dropped (superset invariant).
+    * No key that was present before can be dropped (superset invariant),
+      except the ones named with --unset.
     * Any *_SESSION value is StringSession-parseable before it is written.
     * A value may not contain a newline (that is exactly how the session got
       mangled last time).
@@ -33,6 +41,28 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SESSION_SUFFIX = "_SESSION"
+sys.path.insert(0, str(ROOT / "deploy"))
+
+
+def backup_dir() -> Path | None:
+    """The VPS snapshot dir (env-backup.path's), or None where there is none
+    (the desktop) — there, writes are plain writes."""
+    d = Path(os.environ.get("ENV_BACKUP_DIR") or "/home/forwarder/env-backups")
+    return d if d.is_dir() else None
+
+
+def sanction(path: Path, text: str, unset: set, updates: dict) -> None:
+    """Record `text` as the newest snapshot before the file is replaced, so the
+    env-backup guard reads the write as sanctioned; keep tombstones in step."""
+    d = backup_dir()
+    if d is None:
+        return
+    import env_backup
+    env_backup.record_snapshot(path.name, text.encode(), d)
+    tomb = env_backup.load_tombstones(path.name, d)
+    new_tomb = (tomb | unset) - set(updates)
+    if new_tomb != tomb:
+        env_backup.save_tombstones(path.name, new_tomb, d)
 
 
 def parse_line(line: str):
@@ -72,12 +102,15 @@ def validate_session(key: str, value: str) -> None:
         )
 
 
-def apply_updates(lines, updates: dict):
-    """Return new list of lines with `updates` merged in (replace-in-place or append)."""
+def apply_updates(lines, updates: dict, unset: frozenset = frozenset()):
+    """Return new list of lines with `updates` merged in (replace-in-place or
+    append) and the `unset` keys removed."""
     out = []
     seen = set()
     for line in lines:
         kv = parse_line(line)
+        if kv and kv[0] in unset:
+            continue
         if kv and kv[0] in updates:
             out.append(f"{kv[0]}={updates[kv[0]]}\n")
             seen.add(kv[0])
@@ -90,7 +123,7 @@ def apply_updates(lines, updates: dict):
 
 
 def atomic_write(path: Path, text: str) -> None:
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".env.local.", suffix=".tmp")
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
             f.write(text)
@@ -126,9 +159,15 @@ def main() -> int:
                     help="target env file (default: .env.local at repo root)")
     ap.add_argument("--validate", action="store_true",
                     help="validate the existing file and exit; make no changes")
+    ap.add_argument("--unset", action="append", default=[], metavar="KEY",
+                    help="remove KEY (repeatable; tombstoned on the VPS .env)")
+    ap.add_argument("--stdin", metavar="KEY",
+                    help="read KEY's value from stdin (long JSON values)")
     ap.add_argument("pairs", nargs="*", metavar="KEY=VALUE",
                     help="keys to add or update")
     args = ap.parse_args()
+    if args.stdin:
+        args.pairs.append(f"{args.stdin}={sys.stdin.read().rstrip(chr(10))}")
 
     path = Path(args.file)
     lines = path.read_text().splitlines(keepends=True) if path.exists() else []
@@ -149,8 +188,8 @@ def main() -> int:
         print("VALID" if ok else "INVALID")
         return 0 if ok else 1
 
-    if not args.pairs:
-        ap.error("give at least one KEY=VALUE (or --validate)")
+    if not args.pairs and not args.unset:
+        ap.error("give at least one KEY=VALUE / --unset KEY (or --validate)")
 
     updates = {}
     for p in args.pairs:
@@ -168,16 +207,25 @@ def main() -> int:
             return 1
         updates[k] = v
 
-    new_lines = apply_updates(lines, updates)
+    unset = set(args.unset)
+    if unset & set(updates):
+        ap.error(f"both set and unset: {sorted(unset & set(updates))}")
+    missing = unset - before
+    if missing:
+        print(f"note: not present, nothing to unset: {sorted(missing)}", file=sys.stderr)
+    new_lines = apply_updates(lines, updates, frozenset(unset))
 
     after = existing_keys(new_lines)
-    dropped = before - after
+    dropped = before - after - unset
     if dropped:  # must never happen by construction — belt and suspenders
         print(f"ABORT: would drop keys {sorted(dropped)}", file=sys.stderr)
         return 1
 
-    atomic_write(path, "".join(new_lines))
-    print(f"updated {path} — set {sorted(updates)}")
+    text = "".join(new_lines)
+    sanction(path, text, unset, updates)
+    atomic_write(path, text)
+    print(f"updated {path} — set {sorted(updates)}"
+          + (f", unset {sorted(unset & before)}" if unset & before else ""))
     print(f"keys now: {summarize(new_lines)}")
     return 0
 
