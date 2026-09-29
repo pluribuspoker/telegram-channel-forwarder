@@ -72,6 +72,7 @@ from tracker_format import (
     _PICK_EMOJI,
 )
 from tracker_backtest import run_backtest
+from source_mirror import sync_source_mirrors
 
 
 load_dotenv()
@@ -850,7 +851,13 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             await _edit_msg(channel_id, msg.id, _odds_text, msg.media is not None and not isinstance(msg.media, MessageMediaWebPage))
                             await asyncio.sleep(0.5)
                     # Cache the dupe marker so we skip claude_parse on future runs
-                    pending_cache[cache_key] = {"_dupe": True, "primary_id": dup_id}
+                    dupe_marker = {"_dupe": True, "primary_id": dup_id}
+                    # Keep the forward's provenance: source_mirror follows a dupe
+                    # to its primary to mark a `grade_source` mapping's source post.
+                    for k in ("mapping_id", "_source_key"):
+                        if isinstance(cached, dict) and cached.get(k):
+                            dupe_marker[k] = cached[k]
+                    pending_cache[cache_key] = dupe_marker
                     continue  # primary row carries the +N dup annotation
 
                 # ── Fetch odds at first encounter ─────────────────────────────
@@ -1345,6 +1352,14 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
         print(f"  ─ edit:{edited} pend:{pending} fail:{failed} err:{errors}" +
               (f" odds:{odds_found}/{odds_total}" if odds_total else ""))
+
+        # `grade_source` mappings: copy odds tags + result emojis onto the
+        # source post too (userbot edit — needs this Telethon client).
+        if not dry_run:
+            try:
+                await sync_source_mirrors(client, pending_cache, forwarded_only_channels)
+            except Exception as exc:
+                print(f"  [source mirror] error: {exc}")
 
     if not dry_run:
         _save_pending_cache(pending_cache)

@@ -12,6 +12,7 @@ Usage:
     python3 scripts/env_mappings.py list
     python3 scripts/env_mappings.py add '{"id":"x-to-y","source_channel":-100…,"dest_channel":-100…}'
     python3 scripts/env_mappings.py remove dfav-to-df
+    python3 scripts/env_mappings.py set dagger-to-fc grade_source=true   # value is JSON; bare text = string
     python3 scripts/env_mappings.py --file .env list     # default file: .env at repo root
 """
 
@@ -50,6 +51,9 @@ def main() -> int:
     a.add_argument("mapping", help="one mapping as a JSON object (needs a unique id)")
     r = sub.add_parser("remove")
     r.add_argument("id")
+    st = sub.add_parser("set", help="set (or with KEY= alone, drop) one field of an existing mapping")
+    st.add_argument("id")
+    st.add_argument("field", help="KEY=VALUE, VALUE parsed as JSON (true, 3, \"x\"); KEY= removes the field")
     args = ap.parse_args()
 
     mappings = json.loads(dotenv_values(args.file)[KEY])
@@ -58,7 +62,8 @@ def main() -> int:
     if args.cmd == "list":
         for m in mappings:
             print(f"{m.get('id', '?'):<16} {m.get('source_channel')} → {m.get('dest_channel')}"
-                  + (" [no_broadcast]" if m.get("no_broadcast") else ""))
+                  + (" [no_broadcast]" if m.get("no_broadcast") else "")
+                  + (" [grade_source]" if m.get("grade_source") else ""))
         return 0
 
     if args.cmd == "add":
@@ -68,6 +73,27 @@ def main() -> int:
         if m["id"] in ids:
             ap.error(f"id {m['id']!r} already exists — remove it first")
         new = mappings + [m]
+    elif args.cmd == "set":
+        if args.id not in ids:
+            ap.error(f"no mapping with id {args.id!r} (have: {', '.join(map(str, ids))})")
+        field, eq, value = args.field.partition("=")
+        if not eq or not field or field in ("id", "source_channel", "dest_channel"):
+            ap.error("field must be KEY=VALUE (id/source_channel/dest_channel: remove + add instead)")
+        new = []
+        for m in mappings:
+            if m.get("id") == args.id:
+                m = dict(m)
+                if value == "":
+                    m.pop(field, None)
+                else:
+                    try:
+                        m[field] = json.loads(value)
+                    except ValueError:
+                        m[field] = value
+            new.append(m)
+        if new == mappings:
+            print("no change")
+            return 0
     else:
         if args.id not in ids:
             ap.error(f"no mapping with id {args.id!r} (have: {', '.join(map(str, ids))})")
@@ -83,7 +109,7 @@ def main() -> int:
     ).returncode
     if rc == 0:
         print(f"{args.cmd} ok — {len(new)} mappings. Restart telegram-forwarder to apply "
-              f"(grade-daemon too if broadcast/no_broadcast changed).")
+              f"(grade-daemon too if broadcast/no_broadcast changed; grade_source is read by each tracker run).")
     return rc
 
 
