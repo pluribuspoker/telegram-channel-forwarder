@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/env_guard_hint.py\" 2>/dev/null || python \"$CLAUDE_PROJECT_DIR/.claude/hooks/env_guard_hint.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

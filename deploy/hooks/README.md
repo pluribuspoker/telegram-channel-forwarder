@@ -160,3 +160,7 @@ Registered in `~/.claude/settings.json` → `hooks.PostToolUse`, matcher
 `mcp__plugin_telegram_telegram__reply`.
 
 Sync: `cp deploy/hooks/telegram_style_guard.py ~/.claude/hooks/ && chmod +x ~/.claude/hooks/telegram_style_guard.py`
+
+## Repo-level hooks (not synced — they run from the checkout)
+
+`.claude/hooks/env_guard_hint.py`, registered in the checked-in `.claude/settings.json` (PreToolUse on Bash|Edit|Write|MultiEdit), loads in every Claude Code session in any clone — VPS, desktop, AK's receptionist agents — unlike the `~/.claude` hooks above, which only reach the forwarder user. Advisory only: it notes that a `.env` push or unsanctioned server `.env` write will be reverted by the env guard and names `set_env_local.py` / `env_mappings.py` (docs/vps.md). Runs under `python3`, falling back to `python` (Windows). Test: `scripts/test_env_guard_hint.py`.

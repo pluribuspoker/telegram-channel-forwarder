@@ -239,22 +239,58 @@ def guard(target: Path, raw: bytes) -> bool:
           f"bad sessions {bad_sessions}")
     rejected = changed or dropped or resurrected or bad_sessions
     if rejected:
-        lines = [f"🛡️ {name} on the VPS was overwritten (syncenv?) — the VPS copy wins, restored."]
-        if added:
-            lines.append("Accepted (new keys): " + ", ".join(added))
-        if changed:
-            lines.append("Ignored — different value on the VPS: " + ", ".join(changed))
-        if dropped:
-            lines.append("Ignored — missing from the pushed copy: " + ", ".join(dropped))
-        if resurrected:
-            lines.append("Ignored — deliberately removed on the VPS: " + ", ".join(resurrected))
-        if bad_sessions:
-            lines.append("Ignored — session won't parse: " + ", ".join(bad_sessions))
-        lines.append("Change a server value with scripts/set_env_local.py --file .env "
-                     "(mappings: scripts/env_mappings.py); refresh the desktop copy "
-                     f"with scripts/pull_env.py. Pushed copy: env-backups/{name}.{ts}.pushed")
+        old_env, new_env = parse_env(base_raw.decode(errors="replace")), parse_env(pushed)
+        lines = [f"🛡️ {name} push reverted — VPS copy kept"]
+        for k in changed:
+            lines.append(f"~ {k}: {describe_change(k, old_env[k], new_env[k])} (rejected)")
+        for k in dropped:
+            lines.append(f"− {k}: missing from push (kept)")
+        for k in resurrected:
+            lines.append(f"− {k}: removed on purpose on the VPS (not re-added)")
+        for k in bad_sessions:
+            lines.append(f"+ {k}: session won't parse (rejected)")
+        for k in added:
+            lines.append(f"+ {k}={show(k, new_env[k])} (accepted)")
+        lines.append("To really change: set_env_local.py --file .env KEY=VALUE "
+                     "(mappings: env_mappings.py) on the VPS; desktop: pull_env.py. "
+                     f"Pushed copy: env-backups/{name}.{ts}.pushed")
         send("\n".join(lines))
     return bool(rejected)
+
+
+SECRET = re.compile(r"TOKEN|SESSION|KEY|SECRET|HASH|CT0|PASSWORD|AUTH", re.I)
+
+
+def show(key: str, value: str, width: int = 40) -> str:
+    """A value safe for a DM: secrets as their last 4 chars, the rest cut short."""
+    v = value.strip().strip("'\"")
+    if SECRET.search(key):
+        return f"…{v[-4:]}" if len(v) > 8 else "…"
+    return v if len(v) <= width else v[:width - 1] + "…"
+
+
+def _mappings(raw: str):
+    """MAPPINGS_CONFIG on disk → {id: mapping}, or None if it won't parse."""
+    try:
+        v = raw.strip()
+        if v[:1] == v[-1:] == "'":
+            v = v[1:-1].replace("\\\\", "\\")
+        return {str(m.get("id", i)): m for i, m in enumerate(json.loads(v))}
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def describe_change(key: str, old: str, new: str) -> str:
+    if key == "MAPPINGS_CONFIG":
+        a, b = _mappings(old), _mappings(new)
+        if a is not None and b is not None:
+            parts = [f"+ {i}" for i in b if i not in a] + [f"− {i}" for i in a if i not in b]
+            for i in a:
+                if i in b and a[i] != b[i]:
+                    fields = sorted(f for f in set(a[i]) | set(b[i]) if a[i].get(f) != b[i].get(f))
+                    parts.append(f"{i} ({', '.join(fields)})")
+            return ", ".join(parts) or "reformatted"
+    return f"{show(key, old)} → {show(key, new)}"
 
 
 def validate_session_value(key: str, value: str) -> bool:
