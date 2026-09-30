@@ -89,5 +89,8 @@ while true; do
         exit 1
     fi
 
-    systemd-notify WATCHDOG=1
+    # --no-block + || true: under a timer burst (:00/:10/:30, 1 CPU, swapping)
+    # PID1 can miss the 5s barrier, and set -e turned that into a restart
+    # (6x 09-27..09-30). A missed ping is harmless: WatchdogSec=60, we ping every 20s.
+    systemd-notify --no-block WATCHDOG=1 || true
 done
