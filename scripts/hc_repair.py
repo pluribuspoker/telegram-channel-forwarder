@@ -48,6 +48,8 @@ import os
 import re
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -421,6 +423,27 @@ def api_get(path: str, *, raw: bool = False):
     return data if raw else json.loads(data)
 
 
+def list_checks(*, tries: int = 3, sleep=time.sleep) -> list | None:
+    """The /checks/ listing, or None when healthchecks.io is unreachable.
+
+    A network blip (TLS handshake timeout, 2026-09-30) must not crash the run:
+    a failed unit pages "VPS jobs" and would itself become a repair target. If
+    the API stays unreachable, this pass can't see or fix anything and pings
+    fail too (the missed-ping alarm covers a real outage). An HTTP error
+    (revoked key → 401) is not transient and still raises.
+    """
+    for i in range(tries):
+        try:
+            return api_get("/checks/").get("checks", [])
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"healthchecks API unreachable (try {i + 1}/{tries}): {exc}", file=sys.stderr)
+            if i + 1 < tries:
+                sleep(10 * (i + 1))
+    return None
+
+
 def fetch_details(check: dict) -> dict:
     uuid = check["uuid"]
     out: dict = {"since": None, "body": "", "pings": []}
@@ -506,7 +529,10 @@ def main() -> int:
         print(f"re-armed {args.rearm}")
         return 0
 
-    checks = api_get("/checks/").get("checks", [])
+    checks = list_checks()
+    if checks is None:
+        print("skip: healthchecks API unreachable")
+        return 0
     details = {c["uuid"]: fetch_details(c) for c in checks
                if c.get("status") == "down" and c.get("name") not in EXCLUDE}
     targets = build_targets(checks, env=dict(os.environ), details=details,

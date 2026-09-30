@@ -166,5 +166,31 @@ check("invoker uses repair model/effort",
       and cmd[cmd.index("--effort") + 1] == hr.REPAIR_EFFORT)
 check("invoker keeps --strict-mcp-config", "--strict-mcp-config" in cmd)
 
+# 9. healthchecks API blip: retried, then skipped (None) — never a crash;
+#    an HTTP error (revoked key) still raises.
+import urllib.error  # noqa: E402
+_real_get = hr.api_get
+calls = []
+def _flaky(path, raw=False):
+    calls.append(path)
+    if len(calls) < 2:
+        raise urllib.error.URLError("_ssl.c:983: The handshake operation timed out")
+    return {"checks": [{"name": "x"}]}
+hr.api_get = _flaky
+check("blip then success returns checks", hr.list_checks(sleep=lambda s: None) == [{"name": "x"}])
+def _dead(path, raw=False):
+    raise TimeoutError("timed out")
+hr.api_get = _dead
+check("persistent unreachable returns None", hr.list_checks(sleep=lambda s: None) is None)
+def _401(path, raw=False):
+    raise urllib.error.HTTPError(hr.API + path, 401, "Unauthorized", {}, None)
+hr.api_get = _401
+try:
+    hr.list_checks(sleep=lambda s: None)
+    check("HTTP 401 raises", False)
+except urllib.error.HTTPError:
+    check("HTTP 401 raises", True)
+hr.api_get = _real_get
+
 print(f"\n{'ALL PASS' if not failures else f'{len(failures)} FAILED'}")
 sys.exit(1 if failures else 0)
