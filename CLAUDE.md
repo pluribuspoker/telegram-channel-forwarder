@@ -12,6 +12,7 @@ Rules here are terse on purpose. Each section points to a `docs/*.md` file holdi
 - Always pass `msg.entities` through via `formatting_entities=`; never rebuild text without them. `text_suffix` in `send_group` appends without dropping entities.
 - **Entities pair with `raw_text`, never `.text`** — `.text` is the markdown render (literal `**`), so pairing it with `formatting_entities=` shifts every entity and leaves stray delimiters. Whatever string goes beside `formatting_entities` must be `raw_text`. (`enrich_caption` keeps `.text` deliberately — that caption is markdown-parsed on send.)
 - All content matching (`filter_pattern`, `reply_chain_cappers`, …) must run on `.raw_text` — against `.text` an anchored `^Tony POD` sees `**Tony POD**` and the pick drops with no error.
+- Mapping `source_prefix` = bold header line above the forward (`prepend_header` shifts entities by UTF-16 length; it becomes the post's `capper_name`); `source_label` = `— X` suffix. Detail: docs/tracker.md.
 - Pinned by `scripts/test_forward_entities_regression.py`.
 - **Any edit rebuilt from HTML must use `to_bot_html`/`patch_expandable_blockquotes` (`tracker_format.py`)** — stock Telethon drops the blockquote `collapsed` flag both ways (unparse AND parse), so one bare-`<blockquote>` edit expands a collapsed quote unrecoverably (the flag survives only at the source). Bot API syntax: `<blockquote expandable>`. Pinned by `scripts/test_expandable_blockquote.py`.
 

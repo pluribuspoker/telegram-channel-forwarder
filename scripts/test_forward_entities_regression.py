@@ -118,6 +118,29 @@ async def main():
                           want_text=RAW + "\n\n— Kelly",
                           want_html=WANT_HTML + "\n\n— Kelly")
 
+    # text_prefix: a bold header ABOVE the text — every entity shifts by the header's
+    # UTF-16 length (a non-BMP emoji is 2 units), on every send path.
+    for header in ("Dagger", "🗡 Dagger"):
+        want_text = f"{header}\n\n{RAW}"
+        want_html = f"<strong>{header}</strong>\n\n{WANT_HTML}"
+        for label, msgs in (
+            ("text", [FakeMsg(RAW, ENTS)]),
+            ("photo", [FakeMsg(RAW, ENTS, media=MessageMediaPhoto())]),
+            ("album", [FakeMsg(RAW, ENTS, media=MessageMediaPhoto()),
+                       FakeMsg("", [], media=MessageMediaPhoto())]),
+        ):
+            s = FakeSender()
+            await send_group(FakeClient(), msgs, dest_entity=-100, sender=s, text_prefix=header)
+            failures += not check(f"text_prefix {header!r} ({label})", *s.calls[-1],
+                                  want_text=want_text, want_html=want_html)
+    # Entity-less source: the header is the only entity.
+    s = FakeSender()
+    await send_group(FakeClient(), [FakeMsg("Browns +3", None)], dest_entity=-100,
+                     sender=s, text_prefix="Dagger")
+    failures += not check("text_prefix, no entities", *s.calls[-1],
+                          want_text="Dagger\n\nBrowns +3",
+                          want_html="<strong>Dagger</strong>\n\nBrowns +3")
+
     print("FAILURES:", failures)
     return 1 if failures else 0
 

@@ -11,7 +11,7 @@ import sys
 
 from datetime import date, datetime, timedelta, timezone
 
-from telethon.tl.types import MessageEntityBlockquote, MessageMediaDocument, MessageMediaPhoto
+from telethon.tl.types import MessageEntityBlockquote, MessageEntityBold, MessageMediaDocument, MessageMediaPhoto
 
 
 # ── Ungradeable-leg cap ──────────────────────────────────────────────────────
@@ -338,7 +338,27 @@ def strip_collapsed_blockquotes(text, entities):
     return text, surviving
 
 
-async def send_group(client, group, dest_entity, sender=None, caption_override=None, text_only=False, reply_to=None, text_suffix=None):
+def _utf16_len(s):
+    return len(s.encode("utf-16-le")) // 2
+
+
+def prepend_header(text, entities, header):
+    """Put a bold `header` line above `text` (raw_text + its entities). Entity offsets
+    are UTF-16 code units, so every existing entity shifts by the header's UTF-16
+    length plus the blank-line separator — never by len()."""
+    if not text:
+        return header, [MessageEntityBold(offset=0, length=_utf16_len(header))]
+    sep = f"{header}\n\n"
+    shift = _utf16_len(sep)
+    shifted = []
+    for e in entities or []:
+        e = copy.copy(e)
+        e.offset += shift
+        shifted.append(e)
+    return sep + text, [MessageEntityBold(offset=0, length=_utf16_len(header))] + shifted
+
+
+async def send_group(client, group, dest_entity, sender=None, caption_override=None, text_only=False, reply_to=None, text_suffix=None, text_prefix=None):
     """Send a list of messages (album or single) to dest_entity, preserving formatting.
     Uses `sender` client for writing if provided, otherwise uses `client`.
     caption_override replaces the message text (e.g. after OCR enrichment).
@@ -353,8 +373,12 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
     delimiters stay as literal characters and every entity at or after the first
     one lands N characters early. Only `caption_override` may be `.text`, because
     it is sent with entities=None and is therefore markdown-parsed on the way out.
-    text_suffix is appended at the END, so it shifts no existing offset."""
+    text_suffix is appended at the END, so it shifts no existing offset.
+    text_prefix is a bold header line ABOVE the text (`prepend_header` shifts every
+    entity); a caption_override gets it as markdown, since that text is parsed."""
     sender = sender or client
+    if text_prefix and caption_override is not None:
+        caption_override = f"**{text_prefix}**\n\n{caption_override}" if caption_override else f"**{text_prefix}**"
     if text_only and caption_override:
         sent = await sender.send_message(dest_entity, caption_override, silent=False, reply_to=reply_to)
         return sent
@@ -377,6 +401,8 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
         if caption_override is not None:
             caption = caption_override
             caption_entities = None
+        elif text_prefix:
+            caption, caption_entities = prepend_header(caption, caption_entities, text_prefix)
         if text_suffix:
             caption = f"{caption}\n\n{text_suffix}" if caption else text_suffix
         # Telegram enforces a 1024-char limit for album captions (SendMultiMediaRequest).
@@ -390,6 +416,8 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
         msg = group[0]
         cap = caption_override if caption_override is not None else (msg.raw_text or "")
         ents = None if caption_override is not None else msg.entities
+        if text_prefix and caption_override is None:
+            cap, ents = prepend_header(cap, ents, text_prefix)
         if text_suffix:
             cap = f"{cap}\n\n{text_suffix}" if cap else text_suffix
         if isinstance(msg.media, MessageMediaPhoto):

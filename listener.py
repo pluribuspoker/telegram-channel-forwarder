@@ -396,6 +396,9 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
         caption, odds = await enrich_caption(group, mapping, client)
         source_label = mapping.get("source_label")
         text_suffix = f"— {source_label}" if source_label else None
+        # source_prefix: a bold header line naming the source (it becomes the post's
+        # first line, i.e. the capper_name the tracker/broadcasts read).
+        text_prefix = mapping.get("source_prefix") or None
         log_group(group, sent=True, ocr_odds=odds if mapping.get("ocr_odds") else None, catchup=catchup)
         # Reply-chain: reply to the most recent forwarded message from the same capper
         reply_to = None
@@ -411,11 +414,11 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
                 capper_key = chain_cappers[0].lower()
             reply_to = _reply_chain_get(dest_ch, capper_key)
         try:
-            sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds), reply_to=reply_to, text_suffix=text_suffix)
+            sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds), reply_to=reply_to, text_suffix=text_suffix, text_prefix=text_prefix)
         except Exception:
             if reply_to:
                 # Reply target may have been deleted — retry without reply
-                sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds), text_suffix=text_suffix)
+                sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds), text_suffix=text_suffix, text_prefix=text_prefix)
             else:
                 raise
         for m in group:
