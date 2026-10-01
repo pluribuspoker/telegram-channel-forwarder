@@ -10,6 +10,9 @@
   EnvironmentFile=/home/forwarder/app/.env
 EnvironmentFile=-/home/forwarder/app/.env.local
   ExecStart=/home/forwarder/venv/bin/python listener.py
+  # glibc caps arenas at 8x cores; freed memory pinned in per-thread arenas sat
+  # idle in swap (telegram-intake: ~690MB, 2026-09-30). 2 is plenty under the GIL.
+  Environment=MALLOC_ARENA_MAX=2
   # One journal line on every stop: systemd result, who requested it, memory per unit (deploy/stop_context.py).
   ExecStopPost=/usr/bin/python3 /home/forwarder/app/deploy/stop_context.py --stop telegram-forwarder.service
   Restart=on-failure

@@ -10,6 +10,9 @@ WorkingDirectory=/home/forwarder/app
 EnvironmentFile=/home/forwarder/app/.env
 EnvironmentFile=-/home/forwarder/app/.env.local
 ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/deploy/react_helper.py serve
+# glibc caps arenas at 8x cores; freed memory pinned in per-thread arenas sat
+# idle in swap (telegram-intake: ~690MB, 2026-09-30). 2 is plenty under the GIL.
+Environment=MALLOC_ARENA_MAX=2
 # Socket for the Telegram plugin's react tool: /run/claude-react/react.sock
 RuntimeDirectory=claude-react
 RuntimeDirectoryMode=0700
