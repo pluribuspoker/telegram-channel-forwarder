@@ -93,6 +93,7 @@ Claude Code runs on VPS in a tmux session with the official Telegram channels pl
 
 - **tmux session:** `tmux attach -t claude` (as forwarder user)
 - **Restart:** `sudo systemctl restart claude-channels` — the unit rebuilds the tmux session through `run_claude_channels.sh`, which picks up the currently selected model (see *The model is state* below). The conversation and its context are lost.
+- **Launcher watchdog ping (`WatchdogSec=60`, ping every 20s):** `systemd-notify --no-block --exec WATCHDOG=1 \; sleep 20` — the sender execs into the loop's sleep so it is still alive when PID1 reads the datagram. PID1 maps a ping to its unit by the SENDER's cgroup: a plain `--no-block` sender has usually exited by the time a loaded PID1 reads it, and the ping is silently dropped (`Cannot find unit for notify message`, debug log only) — 7 false `Watchdog timeout` restarts in 6h (2026-09-30/10-01). The blocking form instead fails its 5s barrier under timer bursts (6 restarts 09-27..09-30 under `set -e`). Any other bash-side notifier must keep the sender alive the same way.
 - **Logs:** `su - forwarder -c "tmux capture-pane -t claude -p -S -50"`
 - **Bot token:** `~/.claude/channels/telegram/.env` (forwarder home)
 - **Access config:** `~/.claude/channels/telegram/access.json`
