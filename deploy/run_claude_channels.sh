@@ -68,9 +68,8 @@ tmux new-session -d -s "$SESSION" "cd ~/app && $CLAUDE_CMD"
 
 # Watchdog loop: confirm the tmux session + claude process are alive.
 # Send WATCHDOG=1 to systemd each iteration so it knows we're healthy.
+sleep 20
 while true; do
-    sleep 20
-
     # Check tmux session exists
     if ! tmux has-session -t "$SESSION" 2>/dev/null; then
         echo "claude-channels: tmux session gone, exiting for restart" >&2
@@ -89,9 +88,13 @@ while true; do
         exit 1
     fi
 
-    # --no-block + || true: under a timer burst (:00/:10/:30, 1 CPU, swapping)
-    # PID1 can miss the 5s barrier, and set -e turned that into a restart
-    # (6x 09-27..09-30). A missed ping is harmless: WatchdogSec=60, we ping every 20s.
-    systemd-notify --no-block WATCHDOG=1 \
-        || echo "claude-channels: watchdog ping failed (systemd busy?), continuing" >&2
+    # Ping, then exec into the 20s sleep: the SENDER stays alive until PID1
+    # reads the datagram. PID1 maps a ping to this unit via the sender's
+    # cgroup, so a ping from an already-exited process is silently dropped
+    # ("Cannot find unit for notify message", debug level only). The blocking
+    # form waits on a 5s barrier that a timer burst (1 CPU, swapping) misses
+    # -> set -e restart (6x 09-27..09-30); plain --no-block exits at once and
+    # lost every ping in a 60s window 7x in 6h (09-30 22:45..10-01 03:10).
+    systemd-notify --no-block --exec WATCHDOG=1 \; sleep 20 \
+        || { echo "claude-channels: watchdog ping failed, continuing" >&2; sleep 20; }
 done
