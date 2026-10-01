@@ -17,6 +17,8 @@ EnvironmentFile=-/home/forwarder/.claude/auth.env
 ExecStartPre=-/usr/bin/tmux kill-session -t claude
 ExecStart=/home/forwarder/app/deploy/run_claude_channels.sh
 ExecStop=/usr/bin/tmux kill-session -t claude
+# One journal line on every stop: systemd result, who requested it, memory per unit (deploy/stop_context.py).
+ExecStopPost=/usr/bin/python3 /home/forwarder/app/deploy/stop_context.py --stop claude-channels.service
 # Kill all processes in the cgroup on stop (including orphan bun).
 KillMode=control-group
 TimeoutStopSec=15

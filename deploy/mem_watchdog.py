@@ -144,6 +144,14 @@ def main() -> None:
     mi = meminfo()
     last_alert = st.get("last_alert", {})
 
+    # Per-unit RAM+swap history in the journal (`journalctl -u mem-watchdog`),
+    # so an investigation can see WHICH service grew, not just that swap did.
+    try:
+        from stop_context import mem_line
+        print(mem_line(), flush=True)
+    except Exception as e:
+        print(f"mem line failed: {e!r}", file=sys.stderr)
+
     # ── OOM check (report each kernel OOM-kill once) ──
     since = st.get("last_oom_check", now)  # first run: baseline to now, no backfill
     killed = scan_oom(since)

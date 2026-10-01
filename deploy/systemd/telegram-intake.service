@@ -10,6 +10,11 @@ WorkingDirectory=/home/forwarder/app
 EnvironmentFile=/home/forwarder/app/.env
 EnvironmentFile=-/home/forwarder/app/.env.local
 ExecStart=/home/forwarder/app/run_intake_bot.sh
+# glibc gives each to_thread worker its own malloc arena (8 on 1 CPU); freed sheet
+# loads stayed reserved there, ~700MB idle in swap within a day (2026-09-30).
+Environment=MALLOC_ARENA_MAX=2
+# One journal line on every stop: systemd result, who requested it, memory per unit (deploy/stop_context.py).
+ExecStopPost=/usr/bin/python3 /home/forwarder/app/deploy/stop_context.py --stop telegram-intake.service
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

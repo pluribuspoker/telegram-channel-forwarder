@@ -9,6 +9,8 @@ WorkingDirectory=/home/forwarder/app
 EnvironmentFile=/home/forwarder/app/.env
 EnvironmentFile=-/home/forwarder/app/.env.local
 ExecStart=/home/forwarder/app/run_grade_daemon.sh
+# One journal line on every stop: systemd result, who requested it, memory per unit (deploy/stop_context.py).
+ExecStopPost=/usr/bin/python3 /home/forwarder/app/deploy/stop_context.py --stop grade-daemon.service
 Restart=on-failure
 RestartSec=5
 # Watchdog: the daemon sends WATCHDOG=1 every loop iteration (~10s). If it

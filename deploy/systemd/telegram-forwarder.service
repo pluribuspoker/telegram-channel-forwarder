@@ -10,6 +10,8 @@
   EnvironmentFile=/home/forwarder/app/.env
 EnvironmentFile=-/home/forwarder/app/.env.local
   ExecStart=/home/forwarder/venv/bin/python listener.py
+  # One journal line on every stop: systemd result, who requested it, memory per unit (deploy/stop_context.py).
+  ExecStopPost=/usr/bin/python3 /home/forwarder/app/deploy/stop_context.py --stop telegram-forwarder.service
   Restart=on-failure
   RestartSec=10
   SyslogIdentifier=listener
