@@ -48,6 +48,7 @@ Rules here are terse on purpose. Each section points to a `docs/*.md` file holdi
 - On VPS (hostname `pickbot`): run commands directly; `sudo -n systemctl ...` (bare aliases are interactive-SSH-only); git works from `~/app`.
 - **Chat style = judgment, with an FYI** — `telegram_style_guard.py` (PostToolUse on `reply`, advisory only) notes a first reply with no reaction yet and a 3rd+ new message in a turn. The operator rejected a blocking version (2026-09-28): never turn it back into a gate (deploy/hooks/README.md).
 - 👀 reaction = harness received the message (UserPromptSubmit hook). No 👀 after a few seconds = dropped, resend. The "▶️ resume" hook message does NOT prove the receive loop is up.
+- The resume ping adds one italic `↳ cause` line (`stop_context.py` ExecStopPost → `telegram_resume_notify.classify`), silent when the operator asked (watchdog bot, chat self-restart). Test: `scripts/test_resume_cause.py`.
 - **`resume <uuid>`** (the SessionStart hook's post-restart pointer, pasted back) → Read `/home/forwarder/.claude/projects/-home-forwarder-app/<uuid>.jsonl`, summarize where we left off, then continue.
 
 ### Environment files (full detail: docs/vps.md)
