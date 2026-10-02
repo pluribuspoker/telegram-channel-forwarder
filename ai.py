@@ -503,6 +503,44 @@ def _fix_btts_total_shape(parsed: dict) -> None:
         print("    [parse] BTTS parsed as a game total → prop BTTS")
 
 
+# Explicit combined-ticket wording: when any of it appears, a same-side
+# spread + ML pairing really was placed as one ticket and stays a parlay.
+_COMBINED_TICKET_RE = re.compile(
+    r"\bparlay|\bsgp\b|\bsame[\s-]*game\b|\bteaser|\b\d+[\s-]*(?:leg|man|pick)\b",
+    re.IGNORECASE,
+)
+
+
+def _split_same_side_spread_ml(parsed: dict, text: str) -> None:
+    """Re-read "TEAM -2.5 SPREAD & ML" as two straight bets, not a 2-leg parlay.
+
+    _PARSE_PROMPT calls any "X & Y" on one line a parlay, and Trent's "VIRGINIA
+    TECH (5U) / -2.5 SPREAD & ML" came back as a spread leg + ML leg on one
+    ticket. Its attached slip was a straight ML (1-pick, $2,900 to win $5,000).
+    _insert_odds then multiplied the legs as if independent, -105 x -130 =
+    [+245] — but a covered -2.5 IS a win, so the two legs are nearly the same
+    event and no book prices that pairing anywhere near the product. Cappers
+    writing "spread & ML" mean betting the side both ways.
+
+    Fires only on the unambiguous shape: the message's parlay legs are exactly
+    one spread and one moneyline, on the same team(s) and period, and the text
+    carries no combined-ticket wording (parlay/SGP/same game/teaser/N-leg).
+    """
+    legs = [p for p in parsed.get("picks") or [] if p.get("is_parlay_leg")]
+    if len(legs) != 2 or {p.get("bet_type") for p in legs} != {"spread", "moneyline"}:
+        return
+    teams = [sorted(t.lower() for t in (p.get("teams") or [])) for p in legs]
+    if not teams[0] or teams[0] != teams[1]:
+        return
+    if len({p.get("period") or "game" for p in legs}) != 1:
+        return
+    if _COMBINED_TICKET_RE.search(text):
+        return
+    for p in legs:
+        p["is_parlay_leg"] = False
+    print("    [parse] same-side spread & ML → two straight bets, not a parlay")
+
+
 # A stated teaser line: a signed spread-sized number ("+0.5", "-8"), not the
 # trailing half of a record ("29-12") or a price ("-110" — abs >= 60 is never a
 # tease), or a pick'em token. PK requires the word boundary so "PKC" etc. pass.
@@ -812,6 +850,7 @@ async def claude_parse(
         _fix_teaser_stated_lines(parsed, text)
         _fix_bare_game_total(parsed, text)
         _fix_btts_total_shape(parsed)
+        _split_same_side_spread_ml(parsed, text)
 
     return parsed
 

@@ -632,8 +632,10 @@ async def send_pick(tweet: dict, dest: int | str, dry_run: bool = False):
     url = tweet["url"]
     # Variant #2: hide the raw URL behind a "\ud83d\udd17 View on X" footer link.
     # Tweet text is plain (no Telegram entities to preserve), so escape it for HTML.
+    # rawContent arrives ALREADY entity-escaped by X ("&" → "&amp;"), so unescape
+    # first — escaping it again posted a literal "&amp;" ("-2.5 SPREAD &amp; ML").
     msg = (
-        f"\u25fc\ufe0f Trent\n\n{_html.escape(text)}\n\n"
+        f"\u25fc\ufe0f Trent\n\n{_html.escape(_html.unescape(text))}\n\n"
         f'<a href="{_html.escape(url, quote=True)}">\U0001f517 View on X</a>'
     )
     if dry_run:
