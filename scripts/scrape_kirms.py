@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import json
+import time
 from html.parser import HTMLParser
 
 import httpx
@@ -75,11 +76,21 @@ def fetch_tab(tab_name: str) -> list[list[str]]:
     url = (f"{BASE_URL}?gid={gid}&single=true&widget=false"
            f"&range=a1:f180&chrome=false&headers=false")
 
-    try:
-        resp = httpx.get(url, timeout=15, follow_redirects=True)
-        resp.raise_for_status()
-    except httpx.HTTPStatusError:
-        return []
+    # Google's pubhtml endpoint occasionally stalls a single read (one 15 s
+    # ReadTimeout paged the sauce-watch check, 2026-10-03) — retry transport
+    # errors so a blip never fails the run; a persistent outage still raises.
+    for attempt in range(3):
+        try:
+            resp = httpx.get(url, timeout=15, follow_redirects=True)
+            resp.raise_for_status()
+            break
+        except httpx.HTTPStatusError:
+            return []
+        except httpx.TransportError as e:
+            if attempt == 2:
+                raise
+            print(f"fetch_tab({tab_name}): {type(e).__name__}, retrying...")
+            time.sleep(5 * (attempt + 1))
 
     parser = TableParser()
     parser.feed(resp.text)
