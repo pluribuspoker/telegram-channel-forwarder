@@ -1545,6 +1545,10 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH,
             prop_stat   = (pick.get("prop_stat") or "").upper()
             prop_market = PROP_STAT_MARKETS.get(sport, {}).get(prop_stat)
             phrases     = _bovada_prop_phrases(sport, prop_stat)
+            if sport == "Soccer" and prop_stat == "BTTS":
+                btts = await _soccer_btts_odds(pick, teams)
+                if btts is not None:
+                    return btts
             if not prop_market and not phrases:
                 return OddsResult(match_type=f"prop_stat_unsupported({prop_stat})", pick_line=pick.get("line"))
             player    = pick.get("player") or ""
@@ -2431,6 +2435,116 @@ async def _fetch_pinnacle_bookmakers(
     if commence <= (now or datetime.now(timezone.utc)) or matchup.get("isLive"):
         return [], gd, minimal["commence_time"]
     return _pinnacle_bookmakers(matchup, markets, sport), gd, minimal["commence_time"]
+
+
+# Soccer BTTS (2026-10-03): no other free source lists it (ESPN's DraftKings
+# block is ML/handicap/total, Bovada has no soccer), but Pinnacle posts "Both
+# Teams To Score?" as a Yes/No special child of the game matchup in its league
+# feed. The pick binds to its ESPN event first (`soccer_bind`, the grading
+# binder); that event's uid league id ("l:2395") picks the Pinnacle league(s)
+# to read. Both ids observed live, unmapped league → no price (never a guess).
+_PINNACLE_SOCCER_LEAGUES: dict[str, tuple[int, ...]] = {
+    "700": (1980,), "3914": (1977,), "740": (2196,), "720": (1842,), "730": (2436,),
+    "710": (2036,), "725": (1928,), "715": (2386,), "735": (2421,), "770": (2663,),
+    "760": (2242,), "630": (1834,), "775": (2627,), "776": (2630,), "20296": (214101,),
+    "2395": (200719, 200721, 200726, 200727),   # Nations League A/B/C/D
+}
+_PINNACLE_BTTS_SPECIALS = {"game": "Both Teams To Score?", "1h": "Both Teams To Score? 1st Half"}
+_pinnacle_raw_cache: dict[int, tuple[float, list[dict], list[dict]]] = {}
+
+
+async def _fetch_pinnacle_league_raw(league: int) -> tuple[list[dict], list[dict]]:
+    """(every matchup incl. specials, straight markets) for a Pinnacle league id."""
+    now = time.time()
+    cached = _pinnacle_raw_cache.get(league)
+    if cached is not None:
+        ttl = _PINNACLE_TTL if cached[1] else _PINNACLE_FAIL_TTL
+        if now - cached[0] < ttl:
+            return cached[1], cached[2]
+    matchups: list[dict] = []
+    markets: list[dict] = []
+    try:
+        async with httpx.AsyncClient(
+            timeout=15, headers={"x-api-key": _PINNACLE_KEY, "User-Agent": _BOVADA_UA,
+                                 "Referer": "https://www.pinnacle.com/"},
+        ) as http:
+            rm = await http.get(f"{_PINNACLE_BASE}/leagues/{league}/matchups")
+            rm.raise_for_status()
+            rk = await http.get(f"{_PINNACLE_BASE}/leagues/{league}/markets/straight")
+            rk.raise_for_status()
+            matchups = [m for m in rm.json() if isinstance(m, dict)]
+            markets = [k for k in rk.json() if isinstance(k, dict)]
+    except Exception as exc:
+        print(f"[odds] pinnacle fetch failed (league {league}): {exc}")
+        matchups, markets = [], []
+    _pinnacle_raw_cache[league] = (now, matchups, markets)
+    return matchups, markets
+
+
+def _btts_wants_no(pick: dict) -> bool:
+    desc = (pick.get("description") or "").lower()
+    return pick.get("direction") in ("no", "under") or bool(re.search(r"\(no\)|\bbtts\s*[:-]?\s*no\b|\bno\s*btts\b", desc))
+
+
+def _pinnacle_btts_price(matchups: list[dict], markets: list[dict], teams: list[str],
+                         period: str, want_no: bool, now: datetime) -> tuple[int, str] | None:
+    """(price, commence) for the BTTS Yes/No special of the pick's game, pregame only."""
+    games = [(m, e) for e in matchups if e.get("type") == "matchup" and not e.get("parentId")
+             and e.get("units", "Regular") == "Regular" and (m := _pinnacle_minimal_event(e))]
+    eid = _find_event_id([m for m, _ in games], teams)
+    if not eid:
+        return None
+    minimal = next(m for m, _ in games if m["id"] == eid)
+    commence = datetime.fromisoformat(minimal["commence_time"].replace("Z", "+00:00"))
+    if commence <= now:
+        return None
+    want = _PINNACLE_BTTS_SPECIALS.get(period or "game")
+    if not want:
+        return None
+    for sp in matchups:
+        if (sp.get("type") != "special" or str(sp.get("parentId")) != eid
+                or (sp.get("special") or {}).get("description") != want or sp.get("isLive")):
+            continue
+        pid = {(p.get("name") or "").lower(): p.get("id") for p in sp.get("participants") or []}
+        target = pid.get("no" if want_no else "yes")
+        for mk in markets:
+            if (mk.get("matchupId") != sp.get("id") or mk.get("type") != "moneyline"
+                    or mk.get("period") != (1 if period == "1h" else 0)):
+                continue
+            for pr in mk.get("prices") or []:
+                if pr.get("participantId") == target and pr.get("price") is not None:
+                    return int(pr["price"]), minimal["commence_time"]
+    return None
+
+
+async def _soccer_btts_odds(pick: dict, teams: list[str], today: str | None = None,
+                            now: datetime | None = None) -> OddsResult | None:
+    """Soccer BTTS Yes/No from Pinnacle's free league feed. None = no free price."""
+    now = now or datetime.now(timezone.utc)
+    today = today or datetime.now(_ET).date().isoformat()
+    event, status, _ = await soccer_bind(teams, today, pick.get("description", ""), ref=now)
+    if not event or status not in ("bound", "partial"):
+        return None
+    commence = event.get("date") or None
+    gd = _utc_to_eastern_date(commence) if commence else None
+    m = re.search(r"~l:(\d+)~", event.get("uid") or "")
+    leagues = _PINNACLE_SOCCER_LEAGUES.get(m.group(1) if m else "", ())
+    if not leagues:
+        return None
+    state = ((event.get("status") or {}).get("type") or {}).get("state", "")
+    if state != "pre":
+        return OddsResult(match_type="game_in_progress", pick_line=pick.get("line"),
+                          game_date=gd, commence_time=commence)
+    want_no = _btts_wants_no(pick)
+    for league in leagues:
+        matchups, markets = await _fetch_pinnacle_league_raw(league)
+        hit = _pinnacle_btts_price(matchups, markets, teams, pick.get("period") or "game", want_no, now)
+        if hit:
+            return OddsResult(match_type="pinnacle_btts", odds=hit[0], bookmaker="pinnacle",
+                              pick_line=pick.get("line"), game_date=gd, commence_time=commence)
+    # Mapped league, not listed yet — retryable (free) until kickoff.
+    return OddsResult(match_type="no_game", pick_line=pick.get("line"),
+                      game_date=gd, commence_time=commence)
 
 
 def _is_estimate(r: dict) -> bool:
