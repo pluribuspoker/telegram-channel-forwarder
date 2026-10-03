@@ -40,7 +40,7 @@ from telethon.sessions import StringSession
 
 from scripts.scrape_kirms import fetch_tab, parse_picks
 from ai import (
-    build_context, claude, claude_grade, fmt_cost, usage_cost,
+    build_context, _claude_create_with_retry, claude_grade, fmt_cost, usage_cost,
     CONTEXT_PENDING, CONTEXT_SKIP, CONTEXT_ESPN_ERROR,
 )
 from scores import ESPN_LEAGUES, fetch_espn, find_event_ids, validate_sport
@@ -131,8 +131,8 @@ async def classify_and_parse(picks: list[dict]) -> list[dict]:
         "Bets:\n" + "\n".join(lines)
     )
 
-    resp = await claude().messages.create(
-        model="claude-haiku-4-5-20251001",
+    resp = await _claude_create_with_retry(
+        model="claude-sonnet-4-6",  # Haiku thinks for ~20 s via the subscription CLI
         max_tokens=_PARSE_MAX_TOKENS,
         messages=[{"role": "user", "content": prompt}],
     )

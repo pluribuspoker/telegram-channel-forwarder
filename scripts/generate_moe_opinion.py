@@ -201,6 +201,11 @@ async def main() -> None:
         parser.error("--expected-input-sha256 requires --agent-response")
     if args.generation_backend and not args.agent_response:
         parser.error("--generation-backend requires --agent-response")
+    if args.api and os.environ.get("MOE_ALLOW_API") != "1":
+        parser.error("--api bills the Anthropic API, and every Claude call is "
+                     "subscription-only (operator rule 2026-10-03) — use the "
+                     "agent path (generate-nfl-moe-opinion skill); MOE_ALLOW_API=1 "
+                     "overrides only on the operator's say-so")
     if args.input_file and args.api:
         parser.error("--input-file is not valid with --api")
 

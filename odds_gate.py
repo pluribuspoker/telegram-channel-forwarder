@@ -6,9 +6,9 @@ reviewers, both judging the tags we are ABOUT to post:
 
 1. the free deterministic checks (odds_checks.scan_entry — alt-line band,
    same-game parlay legs, teaser price, wrong-game kickoff, …);
-2. ONE Claude review of the whole message (Opus 5.5, SUBSCRIPTION-billed:
-   headless `claude -p --safe-mode --tools ""` on CLAUDE_CODE_OAUTH_TOKEN —
-   never ANTHROPIC_API_KEY, operator rule 2026-10-03), which catches what
+2. ONE Claude review of the whole message (Opus 5.5 via claude_sub —
+   SUBSCRIPTION-billed headless `claude -p`, never ANTHROPIC_API_KEY,
+   operator rule 2026-10-03), which catches what
    looks normal but prices a different bet (an F5 bet at the full-game ML,
    a team total for a game total, the wrong side).
 
@@ -30,7 +30,6 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,8 +40,6 @@ import odds_checks as oc
 ROOT = Path(__file__).resolve().parent
 REVIEW_CACHE = ROOT / "logs" / "odds_review_cache.json"
 REVIEW_LOG = ROOT / "logs" / "odds_review.jsonl"
-CLAUDE_BIN = os.environ.get("ODDS_REVIEW_CLAUDE_BIN") or "/home/forwarder/.npm-global/bin/claude"
-AUTH_ENV = Path(os.environ.get("HOME", "/home/forwarder")) / ".claude" / "auth.env"
 REVIEW_MODEL = os.environ.get("ODDS_REVIEW_MODEL") or "claude-opus-5-5"
 REVIEW_EFFORT = os.environ.get("ODDS_REVIEW_EFFORT") or "medium"
 REVIEW_TIMEOUT = float(os.environ.get("ODDS_REVIEW_TIMEOUT") or 150)
@@ -83,19 +80,6 @@ Use {"suspect": []} when every tag looks right."""
 
 
 # ─── Claude review (subscription) ─────────────────────────────────────────────
-
-def _oauth_token() -> str:
-    tok = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
-    if tok:
-        return tok
-    try:
-        for line in AUTH_ENV.read_text().splitlines():
-            if line.startswith("CLAUDE_CODE_OAUTH_TOKEN="):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
-    except OSError:
-        pass
-    return ""
-
 
 def review_payload(picks: list[dict], odds_by_pick: dict, raw_text: str,
                    entry: dict) -> str:
@@ -145,46 +129,24 @@ def parse_review(text: str) -> list[dict] | None:
 
 
 def claude_review(user_message: str) -> tuple[list[dict] | None, dict]:
-    """One subscription-billed headless call. Returns (suspects or None on
-    any failure, call metadata)."""
+    """One subscription-billed call (claude_sub — the app's only Claude path).
+    Runs in the tracker's worker thread, so it owns a fresh event loop.
+    Returns (suspects or None on any failure, call metadata)."""
+    import asyncio
+    import claude_sub
     meta: dict[str, Any] = {"model": REVIEW_MODEL, "effort": REVIEW_EFFORT}
-    token = _oauth_token()
-    if not token:
-        meta["error"] = "no CLAUDE_CODE_OAUTH_TOKEN"
-        return None, meta
-    cmd = [CLAUDE_BIN, "-p", "--safe-mode", "--model", REVIEW_MODEL,
-           "--effort", REVIEW_EFFORT, "--tools", "", "--strict-mcp-config",
-           "--no-session-persistence", "--output-format", "json",
-           "--system-prompt", SYSTEM_PROMPT]
-    env = {"PATH": os.environ.get("PATH", "/home/forwarder/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"),
-           "HOME": os.environ.get("HOME", "/home/forwarder"), "TERM": "dumb",
-           "LANG": "C.UTF-8", "CLAUDE_CODE_OAUTH_TOKEN": token,
-           "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "NIGHTLY_AUDIT": "1"}
     started = time.monotonic()
     try:
-        with tempfile.TemporaryDirectory(prefix="odds_review_") as cwd:
-            done = subprocess.run(cmd, input=user_message, cwd=cwd, env=env,
-                                  capture_output=True, text=True, encoding="utf-8",
-                                  errors="replace", timeout=REVIEW_TIMEOUT, check=False)
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        meta.update(error=f"{type(exc).__name__}", wall_ms=int((time.monotonic() - started) * 1000))
+        msg = asyncio.run(claude_sub.create(
+            model=REVIEW_MODEL, effort=REVIEW_EFFORT, system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+            timeout=REVIEW_TIMEOUT))
+    except Exception as exc:  # noqa: BLE001 — the gate fails open
+        meta.update(error=str(exc)[:300], wall_ms=int((time.monotonic() - started) * 1000))
         return None, meta
-    meta["wall_ms"] = int((time.monotonic() - started) * 1000)
-    if done.returncode != 0:
-        meta["error"] = f"exit {done.returncode}: {done.stderr.strip()[-300:]}"
-        return None, meta
-    try:
-        env_obj = json.loads(done.stdout)
-    except json.JSONDecodeError:
-        meta["error"] = "no JSON envelope"
-        return None, meta
-    for f in ("duration_ms", "num_turns", "usage", "total_cost_usd"):
-        if f in env_obj:
-            meta[f] = env_obj[f]
-    if env_obj.get("is_error"):
-        meta["error"] = str(env_obj.get("result") or env_obj.get("subtype"))[:300]
-        return None, meta
-    suspects = parse_review(str(env_obj.get("result") or ""))
+    meta.update(wall_ms=int((time.monotonic() - started) * 1000),
+                usage={"in": msg.usage.input_tokens, "out": msg.usage.output_tokens})
+    suspects = parse_review(msg.content[0].text)
     if suspects is None:
         meta["error"] = "unparseable answer"
     return suspects, meta

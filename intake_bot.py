@@ -17,6 +17,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import anthropic
+from claude_sub import ClaudeCallError
 from dotenv import load_dotenv
 from gspread.exceptions import APIError, WorksheetNotFound
 from telethon import Button, TelegramClient, events
@@ -3068,7 +3069,7 @@ async def main() -> None:
                         parsed=parsed,
                         raw_text=raw_lean_text,
                     )
-            except (anthropic.APIError, TimeoutError):
+            except (anthropic.APIError, ClaudeCallError, TimeoutError):
                 log.exception(
                     "Celebrity free-form parser failed user=%s message=%s",
                     event.sender_id,

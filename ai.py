@@ -11,7 +11,6 @@ import time
 
 from datetime import date as _date, timedelta
 
-import anthropic
 
 from common import is_btts_as_total, is_regulation_ml
 from scores import (
@@ -34,19 +33,12 @@ from scores import (
 )
 
 
-_claude: anthropic.AsyncAnthropic | None = None
-
-
-def claude() -> anthropic.AsyncAnthropic:
-    global _claude
-    if _claude is None:
-        # Explicit per-request timeout so a stalled request can never wedge a
-        # caller indefinitely (the SDK default is 600s). The grade daemon runs
-        # a persistent loop; without this a single hung request froze it for
-        # ~35 min while systemd still reported it "active". 120s is ample for
-        # grade/parse calls, which normally complete in a few seconds.
-        _claude = anthropic.AsyncAnthropic(timeout=120.0)
-    return _claude
+def claude():
+    """Removed 2026-10-03: the app no longer holds an API client — every Claude
+    call bills the subscription through claude_sub.create (operator rule).
+    Call _claude_create_with_retry(model=..., messages=...) instead."""
+    raise RuntimeError("API client removed — use ai._claude_create_with_retry "
+                       "(subscription via claude_sub)")
 
 
 # Sentinels returned by build_context to signal "no game data" vs "game not yet played"
@@ -291,23 +283,17 @@ def _record_spend(usd: float) -> None:
 
 
 async def _claude_create_with_retry(**kwargs) -> object:
-    """Call claude().messages.create with up to 4 retries on transient errors (500, 529).
-    Accumulates token usage and prints the per-call cost."""
-    for attempt in range(4):
-        try:
-            resp = await claude().messages.create(**kwargs)
-            before = usage_cost()
-            _accum(resp.usage)
-            delta = usage_cost() - before
-            if delta > 0:
-                print(f"    [Claude] {fmt_cost(delta)}")
-                _record_spend(delta)
-            return resp
-        except (anthropic.InternalServerError, anthropic.APIStatusError) as exc:
-            status = getattr(exc, "status_code", None)
-            if status not in (500, 529) or attempt == 3:
-                raise
-            await asyncio.sleep(2 ** attempt)
+    """messages.create billed to the SUBSCRIPTION (claude_sub: headless
+    `claude -p` on the OAuth token, never ANTHROPIC_API_KEY — operator rule
+    2026-10-03). Same kwargs and response shape as the SDK call it replaced;
+    retries/backoff live in claude_sub. Tokens still accumulate for the run
+    summary, but the dollar cost is 0 and nothing goes to the API-spend
+    ledger (logs/claude_sub_calls.jsonl records each call instead)."""
+    import claude_sub
+    resp = await claude_sub.create(**kwargs)
+    _usage["sub_input_tokens"] = _usage.get("sub_input_tokens", 0) + resp.usage.input_tokens
+    _usage["sub_output_tokens"] = _usage.get("sub_output_tokens", 0) + resp.usage.output_tokens
+    return resp
 
 
 def _salvage_truncated(raw: str) -> dict | None:

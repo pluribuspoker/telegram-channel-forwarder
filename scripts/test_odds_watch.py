@@ -303,24 +303,20 @@ check("review parser takes ticket + leg suspects, rejects garbage",
       og.parse_review('ok {"suspect": [{"leg": "ticket", "reason": "r"}, {"leg": 2, "reason": "s"}]}')
       == [{"leg": "ticket", "reason": "r"}, {"leg": 2, "reason": "s"}]
       and og.parse_review("no json") is None and og.parse_review('{"suspect": "x"}') is None)
+import claude_sub  # noqa: E402
 seen = {}
-class _Done:
-    returncode, stderr = 0, ""
-    stdout = '{"result": "{\\"suspect\\": []}", "is_error": false}'
-def _fake_run(cmd, **kw):
-    seen.update(cmd=cmd, env=kw["env"], input=kw["input"])
-    return _Done()
-_real_run = og.subprocess.run
-og.subprocess.run = _fake_run
-import os as _os
-_os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = "tok"
-_os.environ["ANTHROPIC_API_KEY"] = "sk-should-never-be-passed"
+async def _fake_create(**kw):
+    seen.update(kw)
+    return __import__("types").SimpleNamespace(
+        content=[__import__("types").SimpleNamespace(text='{"suspect": []}')],
+        usage=__import__("types").SimpleNamespace(input_tokens=1, output_tokens=1))
+_real_create = claude_sub.create
+claude_sub.create = _fake_create
 sus, meta = og.claude_review("msg")
-og.subprocess.run = _real_run
-check("review call is subscription-only: headless claude -p, OAuth env, no API key",
-      sus == [] and seen["cmd"][:2] == [og.CLAUDE_BIN, "-p"] and "--safe-mode" in seen["cmd"]
-      and seen["env"].get("CLAUDE_CODE_OAUTH_TOKEN") == "tok"
-      and not any("ANTHROPIC" in k for k in seen["env"]), seen)
+claude_sub.create = _real_create
+check("the review goes through claude_sub (the subscription path) with its model/effort/system",
+      sus == [] and seen["model"] == og.REVIEW_MODEL and seen["effort"] == og.REVIEW_EFFORT
+      and seen["system"] == og.SYSTEM_PROMPT, seen)
 
 print(f"\n{'ALL PASS' if not failures else f'{len(failures)} FAILED'}")
 sys.exit(1 if failures else 0)

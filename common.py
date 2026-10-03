@@ -160,9 +160,10 @@ def is_btts_as_total(pick: dict) -> bool:
             and bool(BTTS_RE.search(pick.get("description") or "")))
 
 
-def _anthropic():
-    from ai import claude
-    return claude()
+def _claude_create(**kwargs):
+    # Subscription-billed (claude_sub via ai) — never an API client.
+    from ai import _claude_create_with_retry
+    return _claude_create_with_retry(**kwargs)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -237,11 +238,13 @@ def passes_filter(group, mapping):
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def extract_odds(image_bytes):
-    """Ask Claude Haiku to read the American odds from a bet slip image.
+    """Ask Claude Haiku (subscription) to read the American odds from a bet slip image.
     Returns a string like '-146' or '+220', or '' if not found."""
     b64 = base64.standard_b64encode(image_bytes).decode()
-    resp = await _anthropic().messages.create(
-        model="claude-haiku-4-5-20251001",
+    resp = await _claude_create(
+        # Sonnet, not Haiku: through the subscription CLI Haiku thinks for
+        # ~20 s on a slip; Sonnet 4.6 answers in ~2 s (2026-10-03).
+        model="claude-sonnet-4-6",
         max_tokens=16,
         messages=[{
             "role": "user",
@@ -263,8 +266,10 @@ async def extract_odds(image_bytes):
             ],
         }],
     )
-    result = resp.content[0].text.strip()
-    return result if re.match(r"^[+-]\d+$", result) else ""
+    # The CLI has no max_tokens cap (the API's 16 cut a list to its first
+    # number), so take the first whole-integer price line it gives.
+    m = re.search(r"^\s*([+-]\d+)\s*$", resp.content[0].text, re.MULTILINE)
+    return m.group(1) if m else ""
 
 
 async def enrich_caption(group, mapping, client):
