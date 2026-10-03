@@ -16,6 +16,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import odds_watch as ow  # noqa: E402
+import odds_checks as oc  # noqa: E402
+import odds_gate as og  # noqa: E402
+from tracker_format import _insert_odds  # noqa: E402
 
 failures = []
 
@@ -37,7 +40,7 @@ def o(price, mt="exact", **kw):
 
 
 def rules(entry, key="-100:1"):
-    return sorted({h["rule"] for h in ow.scan_entry(key, entry)})
+    return sorted({h["rule"] for h in oc.scan_entry(key, entry)})
 
 
 # ── recall: the hand-reported classes ────────────────────────────────────────
@@ -49,7 +52,7 @@ VT = {  # 2026-10-02 Trent 133: same-side spread & ML parsed as a 2-leg parlay
     "odds_by_pick": {"0": o(-105), "1": o(-130)},
 }
 check("VT spread&ML parlay → parlay_same_game", rules(VT) == ["parlay_same_game"], rules(VT))
-vt_hit = ow.scan_entry("-100:1", VT)[0]
+vt_hit = oc.scan_entry("-100:1", VT)[0]
 check("same-game hit carries the multiplied price", vt_hit["price"] == 245, vt_hit)
 
 TT = {  # bare "Chiefs over 42.5" misread as a team total → deep alternate
@@ -130,37 +133,37 @@ def fan(price):
             "parsed": {"picks": [pick("Bills -3", "spread", teams=["Buffalo Bills"], line=-3)]},
             "odds_by_pick": {"0": o(price, game_date="2026-10-04")}}
 cache = {"-100:1": fan(-110), "-200:1": fan(-180)}
-fh = ow.scan_fanout(cache, list(cache))
+fh = oc.scan_fanout(cache, list(cache))
 check("fan-out copies -110 vs -180 → fanout_price on both",
       sorted(h["key"] for h in fh) == ["-100:1", "-200:1"], fh)
 cache = {"-100:1": fan(-110), "-200:1": fan(-112)}
-check("fan-out drift of 2 cents is quiet", ow.scan_fanout(cache, list(cache)) == [])
+check("fan-out drift of 2 cents is quiet", oc.scan_fanout(cache, list(cache)) == [])
 one = {"capper_name": "T", "html_text": "x",
        "parsed": {"picks": [pick("Same", "spread", line=1), pick("Same", "spread", line=1)]},
        "odds_by_pick": {"0": o(-110, game_date="d"), "1": o(150, game_date="d")}}
 check("two legs of ONE message are never a fan-out split",
-      ow.scan_fanout({"-1:1": one}, ["-1:1"]) == [])
+      oc.scan_fanout({"-1:1": one}, ["-1:1"]) == [])
 
 # ── gate / state ────────────────────────────────────────────────────────────
 NOW_T = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
 h = {"key": "-100:1", "idx": 0, "rule": "band", "price": 3500, "detail": ""}
 state: dict = {}
-check("fresh flag runs", ow.gate(state, h)[0] == "run")
+check("fresh flag runs", ow.gate(state, h, NOW_T)[0] == "run")
 ow.record_spawn(state, [h], NOW_T)
-ow.settle(state, h, "legit")
-check("judged legit → quiet at the same price", ow.gate(state, h)[0] == "skip")
-check("…but a CHANGED price is a new question", ow.gate(state, {**h, "price": 3000})[0] == "run")
+ow.settle(state, h, "legit", NOW_T)
+check("judged legit → quiet at the same price", ow.gate(state, h, NOW_T)[0] == "skip")
+check("…but a CHANGED price is a new question", ow.gate(state, {**h, "price": 3000}, NOW_T)[0] == "run")
 ow.record_spawn(state, [{**h, "price": 3000}], NOW_T)
 check("a re-priced instance restarts its attempt count",
       state[ow.instance_key(h)]["attempts"] == 1, state)
 state = {}
 for _ in range(ow.ATTEMPT_CAP):
     ow.record_spawn(state, [h], NOW_T)
-    ow.settle(state, h, "unparsed")
-check("attempt cap parks a repeatedly unparsed flag", ow.gate(state, h)[0] == "skip", state)
+    ow.settle(state, h, "unparsed", NOW_T)
+check("attempt cap parks a repeatedly unparsed flag", ow.gate(state, h, NOW_T)[0] == "skip", state)
 state = {}
 ow.record_spawn(state, [h], NOW_T)
-ow.settle(state, h, "needs_human")
+ow.settle(state, h, "needs_human", NOW_T)
 check("needs_human parks", state[ow.instance_key(h)].get("parked") is True)
 state = {"_spawns": [NOW_T.isoformat()] * 3 + ["2026-10-01T00:00:00+00:00"]}
 check("daily cap counts the rolling 24h only", ow.daily_spawns(state, NOW_T) == 3)
@@ -192,6 +195,132 @@ check("prompt: judge first, legit is normal, never push, result contract",
 cmd = ow.WatchInvoker("claude", oauth_token="t").command("p")
 check("invoker runs the watch model/effort",
       cmd[cmd.index("--model") + 1] == ow.MODEL and cmd[cmd.index("--effort") + 1] == ow.EFFORT)
+
+
+# ── misses ──────────────────────────────────────────────────────────────────
+def miss_entry(mt, **o_extra):
+    return {"html_text": "x", "parsed": {"picks": [pick("Italy vs Belgium BTTS", "prop")]},
+            "odds_by_pick": {"0": {"odds": None, "match_type": mt, **o_extra}}}
+mh = oc.scan_entry("-1:1", miss_entry("prop_stat_unsupported(BTTS)"), now=NOW_T)
+check("unsupported market miss → miss with a class",
+      [h["rule"] for h in mh] == ["miss"] and mh[0]["miss_class"] == "prop_stat_unsupported(BTTS)", mh)
+far = miss_entry("no_spread_data", commence_time="2026-10-04T00:00Z", _retry_n=1)
+check("retryable miss with kickoff far away waits for the tracker's retries",
+      oc.scan_entry("-1:1", far, now=NOW_T) == [])
+near = miss_entry("no_spread_data", commence_time="2026-10-03T14:00Z")
+nh = oc.scan_entry("-1:1", near, now=NOW_T)
+check("retryable miss inside 3h of kickoff → per-game miss (no class)",
+      [h["rule"] for h in nh] == ["miss"] and nh[0]["miss_class"] is None, nh)
+check("no_game with no kickoff waits for two failed retries",
+      oc.scan_entry("-1:1", miss_entry("no_game", _retry_n=1), now=NOW_T) == []
+      and len(oc.scan_entry("-1:1", miss_entry("no_game", _retry_n=2), now=NOW_T)) == 1)
+check("game_in_progress misses are never flagged",
+      oc.scan_entry("-1:1", miss_entry("game_in_progress"), now=NOW_T) == [])
+state = {}
+ow.record_spawn(state, mh, NOW_T)
+ow.settle(state, mh[0], "no_free_source", NOW_T)
+other = {**mh[0], "key": "-2:9"}
+check("no_free_source parks the whole miss CLASS (another pick of it skips)",
+      ow.gate(state, other, NOW_T)[0] == "skip", state)
+check("…for CLASS_PARK_DAYS only",
+      ow.gate(state, other, NOW_T + ow.timedelta(days=ow.CLASS_PARK_DAYS + 1))[0] == "run")
+check("--rearm-style class removal: a per-game miss never parks a class",
+      ow.class_key({**nh[0]}) is None)
+
+# ── holds ───────────────────────────────────────────────────────────────────
+HELD = {"html_text": "Chiefs over 42.5", "parsed": TT["parsed"],
+        "odds_by_pick": {"0": {**o(3500), "hold": {"why": ["band: +3500"], "at": "2026-10-03T11:30:00+00:00"}}}}
+hh = oc.scan_entry("-1:1", HELD, now=NOW_T)
+check("a held leg is ONE hold flag carrying the gate's reasons (no double band)",
+      [h["rule"] for h in hh] == ["hold"] and "band: +3500" in hh[0]["detail"], hh)
+check("_insert_odds shows no tag for a held leg",
+      "[+3500]" not in _insert_odds("Chiefs over 42.5", TT["parsed"]["picks"], HELD["odds_by_pick"]))
+check("…and the tag returns once released",
+      "[+3500]" in _insert_odds("Chiefs over 42.5", TT["parsed"]["picks"], {"0": o(3500)}))
+vt_held = {"0": o(-105), "1": {**o(-130), "hold": {"why": ["x"], "at": "t"}}}
+check("one held parlay leg hides the combined ticket tag",
+      "[+245]" not in _insert_odds("VT\n-2.5 SPREAD & ML parlay:", VT["parsed"]["picks"], vt_held))
+h0 = {**hh[0], "hold_at": "2026-10-03T11:55:00+00:00"}
+check("a fresh hold the agent is about to judge is not released",
+      ow.release_due([h0], {}, NOW_T, agent_keys={ow.instance_key(h0)}) == [])
+check("a fresh hold outside this batch waits (not stale yet)",
+      ow.release_due([h0], {}, NOW_T, agent_keys=set()) == [])
+stale = {**h0, "hold_at": "2026-10-03T09:00:00+00:00"}
+check("a hold past HOLD_MAX_MINUTES with no agent is released (fail open)",
+      ow.release_due([stale], {}, NOW_T, agent_keys=set()) == [stale])
+st_parked = {ow.instance_key(h0): {"parked": True, "parked_reason": "attempt cap (2)"}}
+check("a hold no agent will ever judge (parked) is released at once",
+      ow.release_due([h0], st_parked, NOW_T, agent_keys=set()) == [h0])
+st_nh = {ow.instance_key(stale): {"parked": True, "parked_reason": "needs_human"}}
+check("a needs_human hold stays hidden even when stale",
+      ow.release_due([stale], st_nh, NOW_T, agent_keys=set()) == [])
+grp = ow.group_by_message(hh + oc.scan_entry("-3:1", TT, now=NOW_T),
+                          {"-1:1": {"msg_date": "2026-10-02"}, "-3:1": {"msg_date": "2026-10-03"}})
+check("held messages go to the agent first", grp[0]["source"] == "-1:1", [g["source"] for g in grp])
+
+# ── the pre-publish gate ────────────────────────────────────────────────────
+og.REVIEW_CACHE = Path(__import__("tempfile").mkdtemp()) / "rc.json"
+og.REVIEW_LOG = og.REVIEW_CACHE.with_name("log.jsonl")
+calls = []
+def fake_reviewer(answer):
+    def _r(msg):
+        calls.append(msg)
+        return answer, {"fake": True}
+    return _r
+def gate_on(entry, fresh, answer, key="-5:1", **kw):
+    odds = {k: dict(v) for k, v in entry["odds_by_pick"].items()}
+    picks = entry["parsed"]["picks"]
+    tagged = _insert_odds(entry["html_text"], picks, odds)
+    r = og.gate(key, entry, picks, odds, raw_text=entry["html_text"], tagged_html=tagged,
+                fresh=fresh, now=NOW_T, reviewer=fake_reviewer(answer), **kw)
+    return r, odds
+r, odds = gate_on(VT, {0, 1}, [])
+check("gate: free check alone holds both same-game parlay legs + triggers",
+      sorted(r["held"]) == [0, 1] and r["trigger"] and odds["0"].get("hold"), r["held"])
+F5 = {"html_text": "Yankees F5 ML", "parsed": {"picks": [pick("Yankees F5 ML", "moneyline",
+       teams=["New York Yankees"], period="1h")]}, "odds_by_pick": {"0": o(-150)}}
+r, odds = gate_on(F5, {0}, [{"leg": 0, "reason": "priced like the full-game ML"}], key="-6:1")
+check("gate: a Claude-only suspicion holds the leg (normal-looking price)",
+      list(r["held"]) == [0] and "review: priced like the full-game ML" in odds["0"]["hold"]["why"], r)
+n = len(calls)
+r2, _ = gate_on(F5, {0}, [], key="-6:1")
+check("gate: a fan-out copy at the same prices reuses the source's verdict (one call)",
+      len(calls) == n and list(r2["held"]) == [0], (len(calls), n, r2["held"]))
+r, odds = gate_on(MAIN, {0}, [])
+check("gate: a clean price holds nothing and triggers nothing",
+      r["held"] == {} and not r["trigger"] and "hold" not in odds["0"])
+r, odds = gate_on(F5, {0}, None, key="-7:1")
+check("gate: a failed review fails OPEN (nothing held)", r["held"] == {} and not r["trigger"], r)
+r, odds = gate_on(TT, set(), [{"leg": 0, "reason": "x"}], key="-8:1")
+check("gate: legs not priced this pass are never re-held (no review call either)",
+      r["held"] == {} and not r["review"]["ran"])
+r, _ = gate_on(miss_entry("prop_stat_unsupported(BTTS)"), {0}, [], key="-9:1")
+check("gate: a fresh unpriced leg triggers the agent (find a free source)",
+      r["trigger"] and r["held"] == {}, r)
+r, _ = gate_on(F5, {0}, [{"leg": 0, "reason": "x"}], key="-10:1", review_enabled=False)
+check("gate: ODDS_REVIEW_DISABLED skips the Claude review", not r["review"]["ran"] and r["held"] == {})
+check("review parser takes ticket + leg suspects, rejects garbage",
+      og.parse_review('ok {"suspect": [{"leg": "ticket", "reason": "r"}, {"leg": 2, "reason": "s"}]}')
+      == [{"leg": "ticket", "reason": "r"}, {"leg": 2, "reason": "s"}]
+      and og.parse_review("no json") is None and og.parse_review('{"suspect": "x"}') is None)
+seen = {}
+class _Done:
+    returncode, stderr = 0, ""
+    stdout = '{"result": "{\\"suspect\\": []}", "is_error": false}'
+def _fake_run(cmd, **kw):
+    seen.update(cmd=cmd, env=kw["env"], input=kw["input"])
+    return _Done()
+_real_run = og.subprocess.run
+og.subprocess.run = _fake_run
+import os as _os
+_os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = "tok"
+_os.environ["ANTHROPIC_API_KEY"] = "sk-should-never-be-passed"
+sus, meta = og.claude_review("msg")
+og.subprocess.run = _real_run
+check("review call is subscription-only: headless claude -p, OAuth env, no API key",
+      sus == [] and seen["cmd"][:2] == [og.CLAUDE_BIN, "-p"] and "--safe-mode" in seen["cmd"]
+      and seen["env"].get("CLAUDE_CODE_OAUTH_TOKEN") == "tok"
+      and not any("ANTHROPIC" in k for k in seen["env"]), seen)
 
 print(f"\n{'ALL PASS' if not failures else f'{len(failures)} FAILED'}")
 sys.exit(1 if failures else 0)

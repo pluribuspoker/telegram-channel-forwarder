@@ -1,5 +1,5 @@
 [Unit]
-Description=Scan freshly priced picks for wrong odds every 15 minutes (odds-watch)
+Description=Odds watch backstop: rescan priced picks every 15 min (the tracker gate triggers it on demand)
 
 [Timer]
 OnCalendar=*:7/15

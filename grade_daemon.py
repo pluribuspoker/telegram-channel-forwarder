@@ -64,6 +64,7 @@ from ai import (
 from tracker_cache import _load_pending_cache, _save_pending_cache
 from tracker_grading import _overall_verdict
 from tracker_format import (
+    _held_odds,
     _insert_emojis,
     _bot_edit_message,
     _bot_edit_message_status,
@@ -294,7 +295,7 @@ def _parlay_broadcast_legs(picks, leg_verdicts, odds_by_pick, default_sport):
         lv = leg_verdicts.get(str(i)) or {}
         if not pick.get("sport"):
             pick["sport"] = lv.get("sport", default_sport)
-        out.append((pick, lv.get("verdict", "PENDING"), odds_by_pick.get(str(i), {}).get("odds")))
+        out.append((pick, lv.get("verdict", "PENDING"), _held_odds(odds_by_pick.get(str(i), {}))))
     return out
 
 
@@ -867,7 +868,7 @@ async def _grade_cycle(
                 lv = leg_verdicts[str(i)]
                 if not pick.get("sport"):
                     pick["sport"] = lv.get("sport", sport)
-                nr_pick_results.append((pick, lv["verdict"], odds_by_pick.get(str(i), {}).get("odds")))
+                nr_pick_results.append((pick, lv["verdict"], _held_odds(odds_by_pick.get(str(i), {}))))
             # Standalone legs broadcast as their own lines; the parlay ticket
             # (all its legs + combined price) joins only when one of its legs
             # is among the newly-broadcast AND the ticket is settled — a leg
@@ -1105,7 +1106,7 @@ async def _grade_cycle(
             for i, pick, verdict, calc, ps, gd in newly_resolved:
                 if not pick.get("sport"):
                     pick["sport"] = ps
-                nr_pick_results.append((pick, verdict, odds_by_pick.get(str(i), {}).get("odds")))
+                nr_pick_results.append((pick, verdict, _held_odds(odds_by_pick.get(str(i), {}))))
 
             # Standalone legs broadcast as their own lines; the settled parlay
             # ticket (all its legs + combined price) joins only when one of its

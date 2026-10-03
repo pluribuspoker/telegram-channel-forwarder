@@ -532,6 +532,15 @@ def _fmt_odds_audit(pick: dict, sport: str, capper: str, result) -> str:
     return "\n".join(lines)
 
 
+def _held_odds(entry: dict) -> int | None:
+    """The displayable price of one odds_by_pick entry: None while the
+    pre-publish review holds it (odds_gate.py — the price stays recorded for
+    the judging agent, it just doesn't post until released)."""
+    if not isinstance(entry, dict) or entry.get("hold"):
+        return None
+    return entry.get("odds")
+
+
 def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     """
     Insert odds tags directly after each pick line, e.g. 'Duke -4.5 (-153)'.
@@ -554,7 +563,10 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     bq_lines = _blockquote_lines(lines)
 
     if parlay_idxs:
-        _leg_odds = [odds_by_pick.get(str(i), {}).get("odds") for i in parlay_idxs]
+        # A held leg (odds_gate: the pre-publish review found it suspicious,
+        # an agent is judging it) has no displayable price, so neither does
+        # the ticket — _held_odds reads as missing and the combine bails.
+        _leg_odds = [_held_odds(odds_by_pick.get(str(i), {})) for i in parlay_idxs]
         _comb = parlay_combined_odds(_leg_odds)
         if _comb is not None:
             combined_tag = f" [{'+' if _comb > 0 else ''}{_comb}]"
@@ -620,7 +632,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
 
     def _odds_tag(idx: int) -> str | None:
         entry = odds_by_pick.get(str(idx), {})
-        odds_val = entry.get("odds")
+        odds_val = _held_odds(entry)
         if odds_val is None:
             return None
         match_type = entry.get("match_type", "")

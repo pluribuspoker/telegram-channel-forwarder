@@ -73,6 +73,7 @@ from tracker_format import (
 )
 from tracker_backtest import run_backtest
 from source_mirror import sync_source_mirrors
+import odds_gate
 
 
 load_dotenv()
@@ -877,11 +878,13 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     print(f"  [odds] fetching fresh (no cache) for {cache_key}")
                 elif retry_keys:
                     print(f"  [odds] retrying misses (free sources) for {cache_key}: picks {sorted(retry_keys)}")
+                fresh_legs: set[int] = set()
                 if odds_refreshed:
                     for i, pick in enumerate(picks):
                         is_retry = str(i) in retry_keys
                         if not odds_were_empty and not is_retry:
                             continue  # priced or final — keep the stored result
+                        fresh_legs.add(i)
                         pick_sport = pick.get("sport") or sport
                         result = await fetch_odds_current(pick_sport, pick, free_only=is_retry)
                         # If the current-endpoint matched a game far from
@@ -955,6 +958,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             "game_date":          result.game_date or (prev_stored or {}).get("game_date"),
                             "betonline_sides":    result.betonline_sides,
                             "commence_time":      result.commence_time or (prev_stored or {}).get("commence_time"),
+                            # The line the book actually quoted — what a proximity
+                            # estimate slid from; read by the odds review/agent.
+                            "api_line":           result.api_line,
                         }
                         if display_odds is None:
                             odds_by_pick[str(i)]["_retry_n"] = (prev_stored or {}).get("_retry_n", 0) + (1 if is_retry else 0)
@@ -962,6 +968,26 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         odds_total += 1
                         if display_odds is not None:
                             odds_found += 1
+
+                # Pre-publish review (odds_gate.py): free checks + one
+                # subscription Claude review of the tags we're about to post. A
+                # suspicious leg gets `hold` (no tag until odds-watch's agent
+                # judges it); a hold or a due miss starts odds-watch now. Fails
+                # open — an error here must never cost the post its prices.
+                if fresh_legs and not dry_run and not skip_odds:
+                    try:
+                        _gate = await asyncio.to_thread(
+                            odds_gate.gate, cache_key, cached_entry, picks, odds_by_pick,
+                            raw_text=text,
+                            tagged_html=_insert_odds(_to_bot_html(text, msg.entities), picks, odds_by_pick),
+                            fresh=fresh_legs)
+                        if _gate["held"]:
+                            print(f"  [odds-gate] HOLD legs {sorted(_gate['held'])}: "
+                                  + " | ".join("; ".join(w) for w in _gate["held"].values())[:300])
+                        if _gate["trigger"]:
+                            odds_gate.trigger_watch()
+                    except Exception as e:  # noqa: BLE001
+                        print(f"  [odds-gate] error (fail open): {e}")
 
                 # Edit odds into the message so they appear while PENDING.
                 # Idempotent — _insert_odds won't re-add if tag already present.

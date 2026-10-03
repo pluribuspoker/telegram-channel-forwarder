@@ -21,7 +21,7 @@ import json
 import os
 from datetime import date as _date, timedelta
 
-from tracker_format import _insert_emojis, _insert_odds, _user_edit_message, to_bot_html
+from tracker_format import _held_odds, _insert_emojis, _insert_odds, _user_edit_message, to_bot_html
 
 STATE_PATH = os.path.join(os.path.dirname(__file__), "logs", "source_mirror_state.json")
 MIRROR_DAYS = 7          # stop looking at posts older than this
@@ -53,8 +53,10 @@ def _save_state(state: dict) -> None:
 
 
 def _signature(entry: dict, skip_odds: bool) -> str:
-    odds = {} if skip_odds else {k: v["odds"] for k, v in entry.get("odds_by_pick", {}).items()
-                                 if isinstance(v, dict) and v.get("odds") is not None}
+    # Displayable prices only: a hold release must change the signature, or
+    # the source post never gets the tag the dest just received.
+    odds = {} if skip_odds else {k: _held_odds(v) for k, v in entry.get("odds_by_pick", {}).items()
+                                 if _held_odds(v) is not None}
     verdicts = {k: (v or {}).get("verdict") for k, v in entry.get("leg_verdicts", {}).items()
                 if isinstance(v, dict) and v.get("verdict") in _RESOLVED}
     return json.dumps([odds, verdicts], sort_keys=True)
