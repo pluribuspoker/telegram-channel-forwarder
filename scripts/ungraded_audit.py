@@ -283,15 +283,13 @@ LABEL_MARKETS = (
 # A label with none of these carries no bet at all ("Angers", "Evan Engram").
 _BET_TOKEN_RE = re.compile(
     r"\d|\b(?:ML|DC|DNB|BTTS|Advance|Qualify|Yes|No|KO|TKO|Sub|Dec|Draw)\b")
-# Main-line spreads/totals live near -110; past this the price is an alternate
-# or a wrong-market binding. Parlay legs are exempt (teaser legs price as
-# alternates by design) and so are live prices.
-PRICE_BAND = 400
+# Wrong PRICES are not a nightly rule: scripts/odds_watch.py (every 15 min,
+# pregame where repair is cheapest) owns them, and a price it judged legit
+# must not get a second agent here.
 
 ANOMALY_TITLES = {
     "fanout_split": "fan-out copies disagree",
     "bare_label": "label names no bet",
-    "price_band": "price outside the main-line band",
 }
 
 
@@ -313,7 +311,6 @@ def _anomaly_hits(key: str, entry: dict, *, rendered: set[int],
     """Per-leg invariant violations on RESOLVED legs of one cache entry."""
     picks = (entry.get("parsed") or {}).get("picks") or []
     lv = entry.get("leg_verdicts") or {}
-    odds = entry.get("odds_by_pick") or {}
     try:
         channel = int(key.split(":")[0])
     except ValueError:
@@ -340,13 +337,6 @@ def _anomaly_hits(key: str, entry: dict, *, rendered: set[int],
         if channel in rendered and not _BET_TOKEN_RE.search(label):
             hits.append({**base, "rule": "bare_label",
                          "detail": f"label {label!r} names no bet"})
-        o = odds.get(str(i)) or {}
-        price, mt = o.get("odds"), str(o.get("match_type") or "")
-        if (isinstance(price, int) and not pick.get("is_parlay_leg")
-                and pick.get("bet_type") in ("spread", "total", "team_total")
-                and abs(price) >= PRICE_BAND and "live" not in mt):
-            hits.append({**base, "rule": "price_band",
-                         "detail": f"{price:+d} ({mt or 'no match_type'})"})
     return hits
 
 

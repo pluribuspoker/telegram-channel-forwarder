@@ -1,0 +1,31 @@
+# Odds watch: free deterministic checks over recently priced picks; anything
+# flagged goes to ONE headless /investigate agent (Opus 5.5 high,
+# subscription-billed) that judges it (long prices are often right) and, for
+# a real error, repairs the live post + cache and fixes the class in code,
+# then DMs a card via the watchdog bot — silent when every flag was legit
+# (scripts/odds_watch.py — every guard lives there: kill switch
+# ODDS_WATCH_DISABLED=1, legit-at-this-price memory, 2-attempt park, daily
+# cap, flock, stands down while the nightly audit runs). Covered by the
+# heartbeat's "VPS jobs" check.
+#
+# TimeoutStartSec=2100 = agent kill (1500s) + scan/git/push/restart/DM
+# overhead. A tick while an agent runs is coalesced by systemd (oneshot still
+# activating), so passes never overlap.
+[Unit]
+Description=Odds watch (flag wrong prices, headless /investigate repair)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+EnvironmentFile=-/home/forwarder/.claude/auth.env
+Environment=PATH=/home/forwarder/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/forwarder
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/scripts/odds_watch.py
+TimeoutStartSec=2100
+SyslogIdentifier=odds-watch

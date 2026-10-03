@@ -388,20 +388,12 @@ class AnomalyScan(unittest.TestCase):
                                         game_date="2026-09-06", teams=["Chicago Cubs"])}
         self.assertEqual(anomalies(days), [])
 
-    def test_price_band_skips_parlay_legs_and_live(self):
-        def e(**kw):
-            return graded("Texans +8.5", bet_type="spread", line=8.5,
-                          teams=["Houston Texans"], **kw)
-        cache = {
-            f"{RENDERED}:1": e(odds={"odds": -461, "match_type": "exact"}),
-            f"{RENDERED}:2": e(odds={"odds": -461, "match_type": "exact"},
-                               is_parlay_leg=True),
-            f"{RENDERED}:3": e(odds={"odds": -461, "match_type": "live_exact"}),
-            f"{RENDERED}:4": e(odds={"odds": -115, "match_type": "exact"}),
-        }
-        groups = anomalies(cache)
-        self.assertEqual([g["rule"] for g in groups], ["price_band"])
-        self.assertEqual(groups[0]["keys"], [f"{RENDERED}:1"])
+    def test_prices_are_not_a_nightly_rule(self):
+        # scripts/odds_watch.py owns wrong prices (test_odds_watch.py).
+        cache = {f"{RENDERED}:1": graded(
+            "Texans +8.5", bet_type="spread", line=8.5, teams=["Houston Texans"],
+            odds={"odds": -461, "match_type": "exact"})}
+        self.assertEqual(anomalies(cache), [])
 
     def test_unresolved_and_old_legs_ignored(self):
         cache = {

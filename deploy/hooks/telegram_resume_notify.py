@@ -107,6 +107,7 @@ _REQUESTERS = [
     ("hc_repair", "restarted by the hc-repair agent"),
     ("ungraded_audit", "restarted by the nightly audit agent"),
     ("trent_repair", "restarted by the trent-repair agent"),
+    ("odds_watch", "restarted by the odds-watch agent"),
     ("receptionist", "restarted by AK's receptionist"),
     ("claude ", "restarted by a Claude session"),
     ("sshd", "manual restart over SSH"),

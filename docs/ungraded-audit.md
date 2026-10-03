@@ -48,8 +48,8 @@ window (zero API cost; an agent runs only when a rule fires):
   MAPPINGS_CONFIG) — elsewhere the label is never shown.
 - `fanout_split` — fan-out copies (same capper + description + game date)
   graded differently.
-- `price_band` — a straight (non-parlay, non-live) spread/total priced at
-  |odds| ≥ 400: an alternate or wrong-market binding.
+- (`price_band` was retired 2026-10-03: wrong prices belong to the odds
+  watch, `scripts/odds_watch.py`, every 15 min — docs/odds.md.)
 
 ONE group per rule (up to `ANOMALY_GROUP_CAP` = 8 instances) → one agent
 that confirms, fixes the class, and repairs every live artifact (broadcast
