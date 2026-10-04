@@ -198,8 +198,28 @@ def test_flow():
     check("F5: exactly one paid call", stub.paid_calls, 1)
 
 
+NFL_PTD_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "bovada_nfl_ptd_20261004.json"
+
+
+def test_nfl_passing_td_aliases():
+    """Dagger "Lamar Jackson O1.5 PTD -115" (2026-10-04): prop_stat is the
+    capper's spelling verbatim, so "PTD" missed the PASSING_TDS key. Fixture:
+    the real Bovada TEN@BAL event captured 16:52Z, 8 min pregame, trimmed to
+    its "Passing Props" group (Total
+    Passing Touchdowns - Lamar Jackson (BAL) 1.5, Over -130 / Under EVEN)."""
+    want = ("Total Passing Touchdowns",)
+    for spelling in ("PTD", "ptds", "pass td", "Passing TD", "passing TDs",
+                     "Passing Touchdowns", "PASS_TOUCHDOWNS"):
+        check(f"NFL {spelling!r} → passing TDs", _bovada_prop_phrases("NFL", spelling), want)
+    ev = json.load(open(NFL_PTD_FIXTURE))
+    bk = _bovada_prop_markets(ev, _bovada_prop_phrases("NFL", "PTD"), "Lamar Jackson")
+    r = _lookup_prop(bk, "Lamar Jackson", _BOVADA_PROP_KEY, "over", 1.5)
+    check("Lamar O1.5 PTD prices exact", (r.get("match_type"), r.get("adjusted_odds")), ("exact", -130))
+
+
 def main():
     test_phrase_map()
+    test_nfl_passing_td_aliases()
     test_shaper()
     test_flow()
     print()

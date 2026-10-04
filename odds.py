@@ -2051,6 +2051,14 @@ _FOOTBALL_PROP_PHRASES: dict[str, tuple[str, ...]] = {
     "REC_YDS":       ("Total Receiving Yards",),
     "PASSING_TDS":   ("Total Passing Touchdowns",),
     "PASS_TDS":      ("Total Passing Touchdowns",),
+    # Capper shorthand the parse passes through verbatim ("O1.5 PTD", Dagger
+    # 2026-10-04) — prop_stat is free text, so every spelling needs a key.
+    "PTD":                 ("Total Passing Touchdowns",),
+    "PTDS":                ("Total Passing Touchdowns",),
+    "PASS_TD":             ("Total Passing Touchdowns",),
+    "PASSING_TD":          ("Total Passing Touchdowns",),
+    "PASS_TOUCHDOWNS":     ("Total Passing Touchdowns",),
+    "PASSING_TOUCHDOWNS":  ("Total Passing Touchdowns",),
 }
 
 _BOVADA_PROP_PHRASES: dict[str, dict[str, tuple[str, ...]]] = {
