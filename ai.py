@@ -173,6 +173,7 @@ Classification rules:
 - "Snakes" is ambiguous and must NOT be resolved by nickname alone: it is standard US betting slang for the Arizona Diamondbacks (MLB), and it is also shorthand for the Maryland Whipsnakes (PLL lacrosse). Default "Snakes" to the Arizona Diamondbacks. Resolve "Snakes" to the Maryland Whipsnakes ONLY when the message carries lacrosse context — the words "PLL"/"lacrosse"/"@PremierLacrosse", the full "Whipsnakes", or another PLL club named as the OPPONENT (Outlaws, Chaos, Waterdogs, Archers, Cannons, Redwoods, Atlas). When that happens "Snakes" is still the side being bet: put "Maryland Whipsnakes" in "teams", never the opponent. "Snakes" is never a KBO team.
 - If a single surname with a moneyline has no clear sport context and is not a known boxer or MMA fighter, default to UFC.
 - For parlays: list each leg as a separate pick with its REAL bet_type (moneyline, spread, etc.) and set is_parlay_leg=true on each. Do NOT use bet_type="parlay". When players/teams are slash-separated (e.g. "FAA/Shapovalov MLP" or "SPURS/GARCIA MLP"), split them into ONE pick per player/team — do not put two teams in one pick's teams field. IMPORTANT: when multiple bets are combined on a single line with "+" or "&" (e.g. "Egypt Double Chance + Under 2.5 Goals"), that is a parlay — split into separate picks and set is_parlay_leg=true on each leg.
+- A card of plays listed one per line ("MEGAS:", "TODAY'S CARD", "5-0 CARD") is SEPARATE straight bets (is_parlay_leg=false on each). Several picks in one message are a parlay ONLY when the message says so (parlay, SGP, same game, teaser, N-leg/N-team, ticket) or combines them on one line, or shows one combined price for all of them.
 - Teasers ("6 pt teaser", "7pt teaser: X / Y"): a teaser is a parlay whose legs are listed at their ALREADY-TEASED lines — the stated number IS the bet. Parse each leg as its own pick at exactly the stated line with is_parlay_leg=true; NEVER add or subtract the teaser points ("7pt teaser: Rams +0.5" = Rams +0.5, NOT +7.5). A stated "PK"/"pick'em" teaser leg = spread with line 0 (the team just has to win; a tie pushes).
 - Cross-sport parlays: if legs belong to different sports (e.g. one NBA team + one UFC fighter), set the pick-level "sport" field to override the top-level sport for that leg. Leave pick "sport" as null when it matches the top-level sport.
 - Double chance: "X or Draw", "Draw or X", "X or Y" bets that cover two of three outcomes. Use bet_type="double_chance". Put the first-named team in "teams". line and direction should be null.
@@ -576,6 +577,63 @@ def _split_same_side_spread_ml(parsed: dict, text: str) -> None:
     print("    [parse] same-side spread & ML → two straight bets, not a parlay")
 
 
+# Wording that says the listed selections ride ONE ticket. Broader than
+# _COMBINED_TICKET_RE on purpose: demoting a real parlay is the costly
+# direction, so any hint of a combined ticket leaves the model's reading alone.
+_CARD_TICKET_RE = re.compile(
+    r"\bparlay|\bsgp\b|\bsame[\s-]*game\b|\bteaser|\blegs?\b|\bticket|"
+    r"\bcombo|round[\s-]*robin|\brr\b|\bmlp\b|\bacca|\baccumulator|"
+    r"\b\d+[\s-]*(?:leg|man|pick|team|way)\b",
+    re.IGNORECASE,
+)
+# A bet token on a line: a signed number not glued to a word/digit (so the
+# "-7" of a "4-7" record never counts), ML, a pick'em, or an over/under.
+_CARD_BET_TOKEN_RE = re.compile(
+    r"(?<![\w.])[+-]\d|\bml\b|\bpk\b|\b[ou]\s?\d|\bover\b|\bunder\b",
+    re.IGNORECASE,
+)
+
+
+def _demote_unworded_card_parlay(parsed: dict, text: str, has_image: bool) -> None:
+    """Re-read a one-pick-per-line card with no ticket wording as straight bets.
+
+    Trent's "CFB MORTAL MEGAS:" listed five sides one per line ("BAMA -5.5",
+    "MICHIGAN -5.5", … "NO DOGS NEEDED. 5-0 CARD.") and came back as five
+    parlay legs (-1004394797084:136, 2026-10-03): _insert_odds stamped a
+    combined [+2309], Michigan's loss settled the "ticket", and the other four
+    legs were voided as moot instead of graded. Nothing in the text says the
+    sides ride together — a card of plays is several straight bets, the same
+    reading trent_watcher's parlay veto already gave the post.
+
+    Fires only on the unambiguous shape: EVERY pick is a parlay leg, there is
+    no attached image (a slip is the ground truth for ticket shape), the text
+    carries no combined-ticket wording, and the message has exactly one bet
+    line per leg with one bet token each — so a leg list followed by its own
+    combined price ("+264" on a line of its own) counts one line too many and
+    stays a parlay, as does any line combining two selections.
+    """
+    picks = parsed.get("picks") or []
+    if len(picks) < 2 or has_image:
+        return
+    if not all(p.get("is_parlay_leg") for p in picks):
+        return
+    if _CARD_TICKET_RE.search(text):
+        return
+    bet_lines = []
+    for line in text.split("\n"):
+        if line.lstrip().startswith(">") or "http" in line.lower():
+            continue  # angle records and links are never a bet line
+        # Our own [odds] tags ride along when a live post is re-parsed.
+        tokens = _CARD_BET_TOKEN_RE.findall(re.sub(r"\[[^\]]*\]", "", line))
+        if tokens:
+            bet_lines.append(len(tokens))
+    if len(bet_lines) != len(picks) or any(n != 1 for n in bet_lines):
+        return
+    for p in picks:
+        p["is_parlay_leg"] = False
+    print(f"    [parse] {len(picks)}-line card with no ticket wording → straight bets, not a parlay")
+
+
 # A stated teaser line: a signed spread-sized number ("+0.5", "-8"), not the
 # trailing half of a record ("29-12") or a price ("-110" — abs >= 60 is never a
 # tease), or a pick'em token. PK requires the word boundary so "PKC" etc. pass.
@@ -888,6 +946,7 @@ async def claude_parse(
         _fix_bare_game_total(parsed, text)
         _fix_btts_total_shape(parsed)
         _split_same_side_spread_ml(parsed, text)
+        _demote_unworded_card_parlay(parsed, text, bool(image_b64))
 
     return parsed
 
