@@ -189,5 +189,39 @@ _nfl_sb_pre = {"events": [dict(_denkc_event, status={"type": {"completed": False
 ctx5, _ = asyncio.run(ai.build_context("NFL", "2026-09-14", _engram, _nfl_sb_pre, {}))
 check("incomplete slate defers player prop", ctx5 == ai.CONTEXT_PENDING, repr(ctx5)[:100])
 
+# ── game on a DIFFERENT date than the search date ────────────────────────────
+# A prop whose odds never anchored game_date (unsupported stat, no free
+# source) grades against the msg date while its game is days later. The
+# generic prev/future-day scans returned bare scoreboard text — no box — so
+# the leg answered UNKNOWN until the attempt cap froze it (Warren rush+rec
+# posted Wed 9/30, TNF 10/1, capped ungradeable with 126 yards final).
+# build_context must re-enter on the found date and grade from the box.
+_sb_by_date = {"2026-09-14": _nfl_sb}
+
+
+async def _fake_fetch_espn(sport, d):
+    return _sb_by_date.get(d, {"events": []})
+
+
+ai.fetch_espn = _fake_fetch_espn
+
+ctx6, gd6 = asyncio.run(ai.build_context(
+    "NFL", "2026-09-12", _engram_ok, {"events": []}, {}, msg_date="2026-09-12"))
+check("future-day prop grades from the box", "receivingTouchdowns=1" in ctx6, ctx6[:300])
+check("future-day prop returns the game's date", gd6 == "2026-09-14", gd6)
+
+# Scheduled-but-unplayed future game still defers, never burns the cap.
+_sb_by_date["2026-09-14"] = {"events": [dict(_denkc_event, status={"type": {"completed": False}})]}
+ctx7, _ = asyncio.run(ai.build_context(
+    "NFL", "2026-09-12", _engram_ok, {"events": []}, {}, msg_date="2026-09-12"))
+check("unplayed future game stays pending", ctx7 == ai.CONTEXT_PENDING, repr(ctx7)[:100])
+
+# Sent-late: message dated the day AFTER the game — prev-day scan, same grain.
+_sb_by_date["2026-09-14"] = _nfl_sb
+ctx8, gd8 = asyncio.run(ai.build_context(
+    "NFL", "2026-09-15", _engram_ok, {"events": []}, {}, msg_date="2026-09-15"))
+check("prev-day prop grades from the box", "receivingTouchdowns=1" in ctx8, ctx8[:300])
+check("prev-day prop returns the game's date", gd8 == "2026-09-14", gd8)
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

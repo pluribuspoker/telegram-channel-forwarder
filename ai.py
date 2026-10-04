@@ -1128,6 +1128,17 @@ async def build_context(
                 prev_ids = find_event_ids(prev_events, teams, player)
                 prev_ufc_done = sport == "UFC" and not prev_ids and _ufc_bout_completed(prev_sb, teams, player)
                 if prev_ids or prev_ufc_done:
+                    if prev_ids and needs_summary and sport != "UFC":
+                        # Summary-grain bet (prop/period/reg-ML) found on another
+                        # day: scoreboard text has no box/line scores, so grading
+                        # from it answers UNKNOWN until the attempt cap freezes
+                        # the leg. Re-enter on the found date — its scoreboard
+                        # carries the completed game, so the summary path above
+                        # resolves it. (UFC exempt: cards have no player boxes;
+                        # scoreboard grain is the right one there.)
+                        return await build_context(
+                            sport, prev_date, pick, prev_sb, summary_cache,
+                            msg_date=msg_date)
                     display = prev_sb if sport == "UFC" else {"events": [e for e in prev_events if e.get("id") in set(prev_ids)]}
                     return scoreboard_text(display, sport), prev_date
                 if find_event_ids(prev_sb.get("events", []), teams, player):
@@ -1143,6 +1154,15 @@ async def build_context(
                 future_completed = _completed_events(future_sb)
                 future_ids = find_event_ids(future_completed, teams, player)
                 if future_ids:
+                    if needs_summary and sport != "UFC":
+                        # Same grain trap as the prev-day path above, forward:
+                        # a prop whose odds never anchored game_date (unsupported
+                        # stat, no free source) searches msg_date while its game
+                        # is days later — Warren rush+rec graded against a bare
+                        # final score 6x and capped. Re-enter on the found date.
+                        return await build_context(
+                            sport, future_date, pick, future_sb, summary_cache,
+                            msg_date=msg_date)
                     display = future_sb if sport == "UFC" else {"events": [e for e in future_completed if e.get("id") in set(future_ids)]}
                     return scoreboard_text(display, sport), future_date
                 # UFC: a bout may be completed even while the event card is still in progress
