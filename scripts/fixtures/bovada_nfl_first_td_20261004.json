@@ -1,0 +1,4613 @@
+{
+"id": "25556108",
+"description": "Indianapolis Colts @ Washington Commanders",
+"type": "GAMEEVENT",
+"link": "/football/nfl/indianapolis-colts-washington-commanders-202610040930",
+"status": "U",
+"sport": "FOOT",
+"startTime": 1791120600000,
+"live": false,
+"awayTeamFirst": true,
+"denySameGame": "NO",
+"teaserAllowed": true,
+"competitionId": "241",
+"notes": "",
+"numMarkets": 235,
+"lastModified": 1791116412706,
+"competitors": [
+{
+"id": "25556108-16421961",
+"name": "Washington Commanders",
+"home": true,
+"shortName": "Commanders"
+},
+{
+"id": "25556108-11904232",
+"name": "Indianapolis Colts",
+"home": false,
+"shortName": "Colts"
+}
+],
+"displayGroups": [
+{
+"id": "100-41",
+"description": "Game Lines",
+"defaultType": true,
+"alternateType": false,
+"markets": [
+{
+"id": "496010554",
+"descriptionKey": "Head To Head",
+"description": "Moneyline",
+"key": "2W-12",
+"marketTypeId": "11",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "119",
+"description": "Game",
+"abbreviation": "G",
+"live": false,
+"main": true
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2290511669",
+"description": "Indianapolis Colts",
+"status": "O",
+"type": "A",
+"competitorId": "25556108-11904232",
+"price": {
+"id": "39614664430",
+"american": "-220",
+"decimal": "1.454545",
+"fractional": "5/11"
+}
+},
+{
+"id": "2290511670",
+"description": "Washington Commanders",
+"status": "O",
+"type": "H",
+"competitorId": "25556108-16421961",
+"price": {
+"id": "39614664429",
+"american": "+180",
+"decimal": "2.800",
+"fractional": "9/5"
+}
+}
+]
+},
+{
+"id": "496010565",
+"descriptionKey": "Main Dynamic Asian Handicap",
+"description": "Point Spread",
+"key": "2W-HCAP",
+"marketTypeId": "120718",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "119",
+"description": "Game",
+"abbreviation": "G",
+"live": false,
+"main": true
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2290510722",
+"description": "Indianapolis Colts",
+"status": "O",
+"type": "A",
+"competitorId": "25556108-11904232",
+"price": {
+"id": "39614664458",
+"handicap": "-5.0",
+"american": "-110",
+"decimal": "1.909091",
+"fractional": "10/11"
+}
+},
+{
+"id": "2290511088",
+"description": "Washington Commanders",
+"status": "O",
+"type": "H",
+"competitorId": "25556108-16421961",
+"price": {
+"id": "39614664457",
+"handicap": "5.0",
+"american": "-110",
+"decimal": "1.909091",
+"fractional": "10/11"
+}
+}
+]
+},
+{
+"id": "496010556",
+"descriptionKey": "Main Dynamic Over/Under",
+"description": "Total",
+"key": "2W-OU",
+"marketTypeId": "120717",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "119",
+"description": "Game",
+"abbreviation": "G",
+"live": false,
+"main": true
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2290511675",
+"description": "Over",
+"status": "O",
+"type": "O",
+"price": {
+"id": "39608756919",
+"handicap": "46.5",
+"american": "-110",
+"decimal": "1.909091",
+"fractional": "10/11"
+}
+},
+{
+"id": "2290511085",
+"description": "Under",
+"status": "O",
+"type": "U",
+"price": {
+"id": "39608756920",
+"handicap": "46.5",
+"american": "-110",
+"decimal": "1.909091",
+"fractional": "10/11"
+}
+}
+]
+},
+{
+"id": "496010557",
+"descriptionKey": "Head To Head",
+"description": "Moneyline",
+"key": "2W-12",
+"marketTypeId": "11",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "122",
+"description": "First Half",
+"abbreviation": "1H",
+"live": false,
+"main": false
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2290511671",
+"description": "Indianapolis Colts - 1H",
+"status": "O",
+"type": "A",
+"competitorId": "25556108-11904232",
+"price": {
+"id": "39614067682",
+"american": "-185",
+"decimal": "1.540541",
+"fractional": "20/37"
+}
+},
+{
+"id": "2290511672",
+"description": "Washington Commanders - 1H",
+"status": "O",
+"type": "H",
+"competitorId": "25556108-16421961",
+"price": {
+"id": "39614067681",
+"american": "+160",
+"decimal": "2.600",
+"fractional": "8/5"
+}
+}
+]
+},
+{
+"id": "496010560",
+"descriptionKey": "Main Dynamic Asian Handicap",
+"description": "Point Spread",
+"key": "2W-HCAP",
+"marketTypeId": "120718",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "122",
+"description": "First Half",
+"abbreviation": "1H",
+"live": false,
+"main": false
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2290510723",
+"description": "Indianapolis Colts - 1H",
+"status": "O",
+"type": "A",
+"competitorId": "25556108-11904232",
+"price": {
+"id": "39614051929",
+"handicap": "-3.0",
+"american": "-115",
+"decimal": "1.870",
+"fractional": "20/23"
+}
+},
+{
+"id": "2290510724",
+"description": "Washington Commanders - 1H",
+"status": "O",
+"type": "H",
+"competitorId": "25556108-16421961",
+"price": {
+"id": "39614051930",
+"handicap": "3.0",
+"american": "-105",
+"decimal": "1.952381",
+"fractional": "20/21"
+}
+}
+]
+},
+{
+"id": "496010562",
+"descriptionKey": "Main Dynamic Over/Under",
+"description": "Total",
+"key": "2W-OU",
+"marketTypeId": "120717",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "122",
+"description": "First Half",
+"abbreviation": "1H",
+"live": false,
+"main": false
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2290510720",
+"description": "Over - 1H",
+"status": "O",
+"type": "O",
+"price": {
+"id": "39595345649",
+"handicap": "23.5",
+"american": "-110",
+"decimal": "1.909091",
+"fractional": "10/11"
+}
+},
+{
+"id": "2290511086",
+"description": "Under - 1H",
+"status": "O",
+"type": "U",
+"price": {
+"id": "39595345650",
+"handicap": "23.5",
+"american": "-110",
+"decimal": "1.909091",
+"fractional": "10/11"
+}
+}
+]
+},
+{
+"id": "531255807",
+"descriptionKey": "Head To Head",
+"description": "Moneyline",
+"key": "2W-12",
+"marketTypeId": "11",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "124",
+"description": "1st Quarter",
+"abbreviation": "Q1",
+"live": false,
+"main": false
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2425924717",
+"description": "Indianapolis Colts - 1Q",
+"status": "O",
+"type": "A",
+"competitorId": "25556108-11904232",
+"price": {
+"id": "39608433768",
+"american": "-200",
+"decimal": "1.500",
+"fractional": "1/2"
+}
+},
+{
+"id": "2425924316",
+"description": "Washington Commanders - 1Q",
+"status": "O",
+"type": "H",
+"competitorId": "25556108-16421961",
+"price": {
+"id": "39608433767",
+"american": "+155",
+"decimal": "2.550",
+"fractional": "31/20"
+}
+}
+]
+},
+{
+"id": "531255797",
+"descriptionKey": "Main Dynamic Asian Handicap",
+"description": "Point Spread",
+"key": "2W-HCAP",
+"marketTypeId": "120718",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "124",
+"description": "1st Quarter",
+"abbreviation": "Q1",
+"live": false,
+"main": false
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2425924297",
+"description": "Indianapolis Colts - 1Q",
+"status": "O",
+"type": "A",
+"competitorId": "25556108-11904232",
+"price": {
+"id": "39614084736",
+"handicap": "-1.5",
+"american": "-115",
+"decimal": "1.870",
+"fractional": "20/23"
+}
+},
+{
+"id": "2425924296",
+"description": "Washington Commanders - 1Q",
+"status": "O",
+"type": "H",
+"competitorId": "25556108-16421961",
+"price": {
+"id": "39614084737",
+"handicap": "1.5",
+"american": "-115",
+"decimal": "1.870",
+"fractional": "20/23"
+}
+}
+]
+},
+{
+"id": "531255787",
+"descriptionKey": "Main Dynamic Over/Under",
+"description": "Total",
+"key": "2W-OU",
+"marketTypeId": "120717",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "124",
+"description": "1st Quarter",
+"abbreviation": "Q1",
+"live": false,
+"main": false
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2425924277",
+"description": "Over - 1Q",
+"status": "O",
+"type": "O",
+"price": {
+"id": "39613581532",
+"handicap": "9.5",
+"american": "-115",
+"decimal": "1.870",
+"fractional": "20/23"
+}
+},
+{
+"id": "2425924276",
+"description": "Under - 1Q",
+"status": "O",
+"type": "U",
+"price": {
+"id": "39613581533",
+"handicap": "9.5",
+"american": "-115",
+"decimal": "1.870",
+"fractional": "20/23"
+}
+}
+]
+},
+{
+"id": "531562774",
+"descriptionKey": "Head To Head",
+"description": "Moneyline",
+"key": "2W-12",
+"marketTypeId": "11",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "125",
+"description": "2nd Quarter",
+"abbreviation": "Q2",
+"live": false,
+"main": false
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2427161993",
+"description": "Indianapolis Colts - 2Q",
+"status": "O",
+"type": "A",
+"competitorId": "25556108-11904232",
+"price": {
+"id": "39612873980",
+"american": "-145",
+"decimal": "1.690",
+"fractional": "20/29"
+}
+},
+{
+"id": "2427161994",
+"description": "Washington Commanders - 2Q",
+"status": "O",
+"type": "H",
+"competitorId": "25556108-16421961",
+"price": {
+"id": "39612873981",
+"american": "+115",
+"decimal": "2.150",
+"fractional": "23/20"
+}
+}
+]
+},
+{
+"id": "531562379",
+"descriptionKey": "Main Dynamic Asian Handicap",
+"description": "Point Spread",
+"key": "2W-HCAP",
+"marketTypeId": "120718",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "125",
+"description": "2nd Quarter",
+"abbreviation": "Q2",
+"live": false,
+"main": false
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2427159669",
+"description": "Indianapolis Colts - 2Q",
+"status": "O",
+"type": "A",
+"competitorId": "25556108-11904232",
+"price": {
+"id": "39612892120",
+"handicap": "-0.5",
+"american": "-110",
+"decimal": "1.909091",
+"fractional": "10/11"
+}
+},
+{
+"id": "2427159668",
+"description": "Washington Commanders - 2Q",
+"status": "O",
+"type": "H",
+"competitorId": "25556108-16421961",
+"price": {
+"id": "39612892119",
+"handicap": "0.5",
+"american": "-120",
+"decimal": "1.833333",
+"fractional": "5/6"
+}
+}
+]
+},
+{
+"id": "531563199",
+"descriptionKey": "Main Dynamic Over/Under",
+"description": "Total",
+"key": "2W-OU",
+"marketTypeId": "120717",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "125",
+"description": "2nd Quarter",
+"abbreviation": "Q2",
+"live": false,
+"main": false
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2427161514",
+"description": "Over - 2Q",
+"status": "O",
+"type": "O",
+"price": {
+"id": "39574099425",
+"handicap": "13.5",
+"american": "-115",
+"decimal": "1.870",
+"fractional": "20/23"
+}
+},
+{
+"id": "2427161515",
+"description": "Under - 2Q",
+"status": "O",
+"type": "U",
+"price": {
+"id": "39574099426",
+"handicap": "13.5",
+"american": "-115",
+"decimal": "1.870",
+"fractional": "20/23"
+}
+}
+]
+},
+{
+"id": "531562380",
+"descriptionKey": "Head To Head",
+"description": "Moneyline",
+"key": "2W-12",
+"marketTypeId": "11",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "126",
+"description": "3rd Quarter",
+"abbreviation": "Q3",
+"live": false,
+"main": false
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2427159671",
+"description": "Indianapolis Colts - 3Q",
+"status": "O",
+"type": "A",
+"competitorId": "25556108-11904232",
+"price": {
+"id": "39609561671",
+"american": "-160",
+"decimal": "1.625",
+"fractional": "5/8"
+}
+},
+{
+"id": "2427159670",
+"description": "Washington Commanders - 3Q",
+"status": "O",
+"type": "H",
+"competitorId": "25556108-16421961",
+"price": {
+"id": "39609561670",
+"american": "+125",
+"decimal": "2.250",
+"fractional": "5/4"
+}
+}
+]
+},
+{
+"id": "531562376",
+"descriptionKey": "Main Dynamic Asian Handicap",
+"description": "Point Spread",
+"key": "2W-HCAP",
+"marketTypeId": "120718",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "126",
+"description": "3rd Quarter",
+"abbreviation": "Q3",
+"live": false,
+"main": false
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2427159663",
+"description": "Indianapolis Colts - 3Q",
+"status": "O",
+"type": "A",
+"competitorId": "25556108-11904232",
+"price": {
+"id": "39609561823",
+"handicap": "-0.5",
+"american": "-105",
+"decimal": "1.952381",
+"fractional": "20/21"
+}
+},
+{
+"id": "2427159662",
+"description": "Washington Commanders - 3Q",
+"status": "O",
+"type": "H",
+"competitorId": "25556108-16421961",
+"price": {
+"id": "39609561822",
+"handicap": "0.5",
+"american": "-125",
+"decimal": "1.800",
+"fractional": "4/5"
+}
+}
+]
+},
+{
+"id": "531563198",
+"descriptionKey": "Main Dynamic Over/Under",
+"description": "Total",
+"key": "2W-OU",
+"marketTypeId": "120717",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "126",
+"description": "3rd Quarter",
+"abbreviation": "Q3",
+"live": false,
+"main": false
+},
+"availableSGP": true,
+"outcomes": [
+{
+"id": "2427161512",
+"description": "Over - 3Q",
+"status": "O",
+"type": "O",
+"price": {
+"id": "39605010291",
+"handicap": "9.5",
+"american": "-125",
+"decimal": "1.800",
+"fractional": "4/5"
+}
+},
+{
+"id": "2427161513",
+"description": "Under - 3Q",
+"status": "O",
+"type": "U",
+"price": {
+"id": "39605010292",
+"handicap": "9.5",
+"american": "-105",
+"decimal": "1.952381",
+"fractional": "20/21"
+}
+}
+]
+}
+],
+"order": 1
+},
+{
+"id": "100-1870",
+"description": "TD Scorer Props",
+"defaultType": false,
+"alternateType": true,
+"markets": [
+{
+"id": "531343835",
+"descriptionKey": "Anytime Touchdown Scorer",
+"description": "Anytime Touchdown Scorer",
+"key": "GAME-PROP",
+"marketTypeId": "149",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "119",
+"description": "Game",
+"abbreviation": "G",
+"live": false,
+"main": true
+},
+"availableSGP": true,
+"sortType": "PRICE",
+"outcomes": [
+{
+"id": "2428861204",
+"description": "Ashton Dulin (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614877102",
+"american": "+1000",
+"decimal": "11.00",
+"fractional": "10/1"
+}
+},
+{
+"id": "2432180513",
+"description": "Austin Ekeler (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693248",
+"american": "+700",
+"decimal": "8.00",
+"fractional": "7/1"
+}
+},
+{
+"id": "2426302981",
+"description": "Stefon Diggs (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693251",
+"american": "+195",
+"decimal": "2.950",
+"fractional": "39/20"
+}
+},
+{
+"id": "2426302984",
+"description": "Jacory Croskey-Merritt (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693265",
+"american": "-110",
+"decimal": "1.909091",
+"fractional": "10/11"
+}
+},
+{
+"id": "2431685690",
+"description": "Craig Reynolds (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693258",
+"american": "+725",
+"decimal": "8.250",
+"fractional": "29/4"
+}
+},
+{
+"id": "2426307413",
+"description": "Jonathan Taylor (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614877101",
+"american": "-335",
+"decimal": "1.298507",
+"fractional": "20/67"
+}
+},
+{
+"id": "2426307415",
+"description": "Josh Downs (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693256",
+"american": "+155",
+"decimal": "2.550",
+"fractional": "31/20"
+}
+},
+{
+"id": "2426307416",
+"description": "Tyler Warren (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693259",
+"american": "+155",
+"decimal": "2.550",
+"fractional": "31/20"
+}
+},
+{
+"id": "2426944823",
+"description": "Chig Okonkwo (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693239",
+"american": "+370",
+"decimal": "4.700",
+"fractional": "37/10"
+}
+},
+{
+"id": "2426944824",
+"description": "Treylon Burks (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39595206254",
+"american": "+600",
+"decimal": "7.00",
+"fractional": "6/1"
+}
+},
+{
+"id": "2426944825",
+"description": "Jaylin Lane (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39609561870",
+"american": "+1100",
+"decimal": "12.00",
+"fractional": "11/1"
+}
+},
+{
+"id": "2426944829",
+"description": "Antonio Williams (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309762",
+"american": "+460",
+"decimal": "5.60",
+"fractional": "23/5"
+}
+},
+{
+"id": "2426946054",
+"description": "Ben Sinnott (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309757",
+"american": "+1400",
+"decimal": "15.00",
+"fractional": "14/1"
+}
+},
+{
+"id": "2426946055",
+"description": "Dyami Brown (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309758",
+"american": "+725",
+"decimal": "8.250",
+"fractional": "29/4"
+}
+},
+{
+"id": "2426946056",
+"description": "Kaytron Allen (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614214471",
+"american": "+420",
+"decimal": "5.200",
+"fractional": "21/5"
+}
+},
+{
+"id": "2426945472",
+"description": "Indianapolis Colts Def/ST (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39571167305",
+"american": "+500",
+"decimal": "6.00",
+"fractional": "5/1"
+}
+},
+{
+"id": "2426945473",
+"description": "Washington Def/ST (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693253",
+"american": "+600",
+"decimal": "7.00",
+"fractional": "6/1"
+}
+},
+{
+"id": "2426947235",
+"description": "Mo Alie-Cox (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693246",
+"american": "+800",
+"decimal": "9.00",
+"fractional": "8/1"
+}
+},
+{
+"id": "2426947236",
+"description": "Seth McGowan (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39612886559",
+"american": "+1000",
+"decimal": "11.00",
+"fractional": "10/1"
+}
+},
+{
+"id": "2426947237",
+"description": "Anthony Gould (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693255",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2426947239",
+"description": "Laquon Treadwell (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614877103",
+"american": "+370",
+"decimal": "4.700",
+"fractional": "37/10"
+}
+},
+{
+"id": "2431575724",
+"description": "Nick Westbrook-Ikhine (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39609471868",
+"american": "+900",
+"decimal": "10.00",
+"fractional": "9/1"
+}
+},
+{
+"id": "2426805430",
+"description": "Marcus Mariota (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39611899861",
+"american": "+400",
+"decimal": "5.00",
+"fractional": "4/1"
+}
+},
+{
+"id": "2426805431",
+"description": "Daniel Jones (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693263",
+"american": "+420",
+"decimal": "5.200",
+"fractional": "21/5"
+}
+},
+{
+"id": "2427484610",
+"description": "John Bates (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614214475",
+"american": "+1400",
+"decimal": "15.00",
+"fractional": "14/1"
+}
+},
+{
+"id": "2428836543",
+"description": "Deion Burks (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693242",
+"american": "+1300",
+"decimal": "14.00",
+"fractional": "13/1"
+}
+},
+{
+"id": "2428836544",
+"description": "Drew Ogletree (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693262",
+"american": "+1900",
+"decimal": "20.00",
+"fractional": "19/1"
+}
+},
+{
+"id": "2428847605",
+"description": "Colson Yankoff (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309760",
+"american": "+2800",
+"decimal": "29.00",
+"fractional": "28/1"
+}
+}
+]
+},
+{
+"id": "532064449",
+"descriptionKey": "Anytime Touchdown Scorer",
+"description": "Anytime Touchdown Scorer",
+"key": "GAME-PROP",
+"marketTypeId": "149",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "122",
+"description": "First Half",
+"abbreviation": "1H",
+"live": false,
+"main": false
+},
+"availableSGP": false,
+"sortType": "PRICE",
+"outcomes": [
+{
+"id": "2431789849",
+"description": "Nick Westbrook-Ikhine (IND) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615055172",
+"american": "+1700",
+"decimal": "18.00",
+"fractional": "17/1"
+}
+},
+{
+"id": "2432180512",
+"description": "Austin Ekeler (WAS) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615055186",
+"american": "+1500",
+"decimal": "16.00",
+"fractional": "15/1"
+}
+},
+{
+"id": "2429096371",
+"description": "Dyami Brown (WAS) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615055161",
+"american": "+1400",
+"decimal": "15.00",
+"fractional": "14/1"
+}
+},
+{
+"id": "2429096373",
+"description": "Seth McGowan (IND) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39609561920",
+"american": "+1900",
+"decimal": "20.00",
+"fractional": "19/1"
+}
+},
+{
+"id": "2429096375",
+"description": "Laquon Treadwell (IND) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615055163",
+"american": "+700",
+"decimal": "8.00",
+"fractional": "7/1"
+}
+},
+{
+"id": "2429096376",
+"description": "Stefon Diggs (WAS) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309483",
+"american": "+420",
+"decimal": "5.200",
+"fractional": "21/5"
+}
+},
+{
+"id": "2429096377",
+"description": "Jaylin Lane (WAS) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309484",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2429096378",
+"description": "Ashton Dulin (IND) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39603304565",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2429096379",
+"description": "Jacory Croskey-Merritt (WAS) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615055167",
+"american": "+225",
+"decimal": "3.250",
+"fractional": "9/4"
+}
+},
+{
+"id": "2429096380",
+"description": "Jonathan Taylor (IND) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615055168",
+"american": "-114",
+"decimal": "1.877193",
+"fractional": "50/57"
+}
+},
+{
+"id": "2429096381",
+"description": "Antonio Williams (WAS) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309485",
+"american": "+900",
+"decimal": "10.00",
+"fractional": "9/1"
+}
+},
+{
+"id": "2429096382",
+"description": "Mo Alie-Cox (IND) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615055170",
+"american": "+1500",
+"decimal": "16.00",
+"fractional": "15/1"
+}
+},
+{
+"id": "2429096383",
+"description": "Washington Def/ST (WAS) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39530236199",
+"american": "+1100",
+"decimal": "12.00",
+"fractional": "11/1"
+}
+},
+{
+"id": "2429096385",
+"description": "Daniel Jones (IND) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39600158232",
+"american": "+800",
+"decimal": "9.00",
+"fractional": "8/1"
+}
+},
+{
+"id": "2429096386",
+"description": "Marcus Mariota (WAS) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39586652889",
+"american": "+800",
+"decimal": "9.00",
+"fractional": "8/1"
+}
+},
+{
+"id": "2429096387",
+"description": "Deion Burks (IND) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615055175",
+"american": "+2500",
+"decimal": "26.00",
+"fractional": "25/1"
+}
+},
+{
+"id": "2429096388",
+"description": "Anthony Gould (IND) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615055176",
+"american": "+3300",
+"decimal": "34.00",
+"fractional": "33/1"
+}
+},
+{
+"id": "2429096389",
+"description": "Colson Yankoff (WAS) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615055177",
+"american": "+6000",
+"decimal": "61.00",
+"fractional": "60/1"
+}
+},
+{
+"id": "2429096390",
+"description": "Drew Ogletree (IND) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39609561928",
+"american": "+3300",
+"decimal": "34.00",
+"fractional": "33/1"
+}
+},
+{
+"id": "2429096391",
+"description": "Chig Okonkwo (WAS) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309488",
+"american": "+725",
+"decimal": "8.250",
+"fractional": "29/4"
+}
+},
+{
+"id": "2429096392",
+"description": "Kaytron Allen (WAS) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614214460",
+"american": "+825",
+"decimal": "9.250",
+"fractional": "33/4"
+}
+},
+{
+"id": "2429096393",
+"description": "Ben Sinnott (WAS) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309489",
+"american": "+2500",
+"decimal": "26.00",
+"fractional": "25/1"
+}
+},
+{
+"id": "2429096395",
+"description": "Treylon Burks (WAS) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615055182",
+"american": "+1100",
+"decimal": "12.00",
+"fractional": "11/1"
+}
+},
+{
+"id": "2429096396",
+"description": "John Bates (WAS) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614032360",
+"american": "+2500",
+"decimal": "26.00",
+"fractional": "25/1"
+}
+},
+{
+"id": "2429096397",
+"description": "Josh Downs (IND) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615055184",
+"american": "+340",
+"decimal": "4.400",
+"fractional": "17/5"
+}
+},
+{
+"id": "2429096398",
+"description": "Tyler Warren (IND) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615055185",
+"american": "+330",
+"decimal": "4.300",
+"fractional": "33/10"
+}
+},
+{
+"id": "2429096400",
+"description": "Indianapolis Colts Def/ST (IND) - 1H",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39612892063",
+"american": "+1000",
+"decimal": "11.00",
+"fractional": "10/1"
+}
+}
+]
+},
+{
+"id": "532064451",
+"descriptionKey": "Anytime Touchdown Scorer",
+"description": "Anytime Touchdown Scorer",
+"key": "GAME-PROP",
+"marketTypeId": "149",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "124",
+"description": "1st Quarter",
+"abbreviation": "Q1",
+"live": false,
+"main": false
+},
+"availableSGP": false,
+"sortType": "PRICE",
+"outcomes": [
+{
+"id": "2431792826",
+"description": "Nick Westbrook-Ikhine (IND) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39605047660",
+"american": "+3300",
+"decimal": "34.00",
+"fractional": "33/1"
+}
+},
+{
+"id": "2432180514",
+"description": "Austin Ekeler (WAS) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39606381044",
+"american": "+2800",
+"decimal": "29.00",
+"fractional": "28/1"
+}
+},
+{
+"id": "2429096418",
+"description": "John Bates (WAS) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39595203131",
+"american": "+5000",
+"decimal": "51.00",
+"fractional": "50/1"
+}
+},
+{
+"id": "2429096419",
+"description": "Marcus Mariota (WAS) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39609565196",
+"american": "+1800",
+"decimal": "19.00",
+"fractional": "18/1"
+}
+},
+{
+"id": "2429096420",
+"description": "Josh Downs (IND) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39605010144",
+"american": "+800",
+"decimal": "9.00",
+"fractional": "8/1"
+}
+},
+{
+"id": "2429096421",
+"description": "Seth McGowan (IND) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137787",
+"american": "+3300",
+"decimal": "34.00",
+"fractional": "33/1"
+}
+},
+{
+"id": "2429096422",
+"description": "Mo Alie-Cox (IND) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39612886585",
+"american": "+2800",
+"decimal": "29.00",
+"fractional": "28/1"
+}
+},
+{
+"id": "2429096423",
+"description": "Jonathan Taylor (IND) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137789",
+"american": "+240",
+"decimal": "3.400",
+"fractional": "12/5"
+}
+},
+{
+"id": "2429096425",
+"description": "Indianapolis Colts Def/ST (IND) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137790",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2429096426",
+"description": "Drew Ogletree (IND) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39609565199",
+"american": "+6000",
+"decimal": "61.00",
+"fractional": "60/1"
+}
+},
+{
+"id": "2429096428",
+"description": "Kaytron Allen (WAS) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614214499",
+"american": "+1900",
+"decimal": "20.00",
+"fractional": "19/1"
+}
+},
+{
+"id": "2429096429",
+"description": "Dyami Brown (WAS) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309769",
+"american": "+2800",
+"decimal": "29.00",
+"fractional": "28/1"
+}
+},
+{
+"id": "2429096430",
+"description": "Antonio Williams (WAS) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309770",
+"american": "+2200",
+"decimal": "23.00",
+"fractional": "22/1"
+}
+},
+{
+"id": "2429096433",
+"description": "Ben Sinnott (WAS) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309771",
+"american": "+5000",
+"decimal": "51.00",
+"fractional": "50/1"
+}
+},
+{
+"id": "2429096434",
+"description": "Jaylin Lane (WAS) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39605047657",
+"american": "+4000",
+"decimal": "41.00",
+"fractional": "40/1"
+}
+},
+{
+"id": "2429096435",
+"description": "Tyler Warren (IND) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39611457969",
+"american": "+800",
+"decimal": "9.00",
+"fractional": "8/1"
+}
+},
+{
+"id": "2429096438",
+"description": "Jacory Croskey-Merritt (WAS) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39605119682",
+"american": "+600",
+"decimal": "7.00",
+"fractional": "6/1"
+}
+},
+{
+"id": "2429096439",
+"description": "Washington Def/ST (WAS) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614032353",
+"american": "+2200",
+"decimal": "23.00",
+"fractional": "22/1"
+}
+},
+{
+"id": "2429096440",
+"description": "Treylon Burks (WAS) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39606230146",
+"american": "+2800",
+"decimal": "29.00",
+"fractional": "28/1"
+}
+},
+{
+"id": "2429096441",
+"description": "Colson Yankoff (WAS) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39606381045",
+"american": "+10000",
+"decimal": "101.00",
+"fractional": "100/1"
+}
+},
+{
+"id": "2429096442",
+"description": "Stefon Diggs (WAS) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39606230148",
+"american": "+1100",
+"decimal": "12.00",
+"fractional": "11/1"
+}
+},
+{
+"id": "2429096444",
+"description": "Chig Okonkwo (WAS) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309772",
+"american": "+1800",
+"decimal": "19.00",
+"fractional": "18/1"
+}
+},
+{
+"id": "2429096445",
+"description": "Ashton Dulin (IND) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137805",
+"american": "+3300",
+"decimal": "34.00",
+"fractional": "33/1"
+}
+},
+{
+"id": "2429096446",
+"description": "Laquon Treadwell (IND) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137806",
+"american": "+1500",
+"decimal": "16.00",
+"fractional": "15/1"
+}
+},
+{
+"id": "2429096447",
+"description": "Daniel Jones (IND) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137807",
+"american": "+1700",
+"decimal": "18.00",
+"fractional": "17/1"
+}
+},
+{
+"id": "2429096448",
+"description": "Deion Burks (IND) - 1Q",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39600222167",
+"american": "+5000",
+"decimal": "51.00",
+"fractional": "50/1"
+}
+}
+]
+},
+{
+"id": "531508538",
+"descriptionKey": "First Touchdown Scorer",
+"description": "First Touchdown Scorer",
+"key": "GAME-PROP",
+"marketTypeId": "148",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "119",
+"description": "Game",
+"abbreviation": "G",
+"live": false,
+"main": true
+},
+"availableSGP": true,
+"sortType": "PRICE",
+"outcomes": [
+{
+"id": "2428862761",
+"description": "Ashton Dulin (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137832",
+"american": "+4000",
+"decimal": "41.00",
+"fractional": "40/1"
+}
+},
+{
+"id": "2431792818",
+"description": "Nick Westbrook-Ikhine (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39605060431",
+"american": "+4000",
+"decimal": "41.00",
+"fractional": "40/1"
+}
+},
+{
+"id": "2432181322",
+"description": "Austin Ekeler (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614013564",
+"american": "+3300",
+"decimal": "34.00",
+"fractional": "33/1"
+}
+},
+{
+"id": "2431685685",
+"description": "Craig Reynolds (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39606381040",
+"american": "+4000",
+"decimal": "41.00",
+"fractional": "40/1"
+}
+},
+{
+"id": "2426944813",
+"description": "Antonio Williams (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309752",
+"american": "+2500",
+"decimal": "26.00",
+"fractional": "25/1"
+}
+},
+{
+"id": "2426944814",
+"description": "Jaylin Lane (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39605060428",
+"american": "+5000",
+"decimal": "51.00",
+"fractional": "50/1"
+}
+},
+{
+"id": "2426944815",
+"description": "Treylon Burks (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39593342723",
+"american": "+3300",
+"decimal": "34.00",
+"fractional": "33/1"
+}
+},
+{
+"id": "2426944816",
+"description": "Stefon Diggs (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137835",
+"american": "+1300",
+"decimal": "14.00",
+"fractional": "13/1"
+}
+},
+{
+"id": "2426944817",
+"description": "Jacory Croskey-Merritt (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39574084056",
+"american": "+625",
+"decimal": "7.250",
+"fractional": "25/4"
+}
+},
+{
+"id": "2426944819",
+"description": "No Touchdown Scorer",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39595203290",
+"american": "+10000",
+"decimal": "101.00",
+"fractional": "100/1"
+}
+},
+{
+"id": "2426944820",
+"description": "Chig Okonkwo (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137844",
+"american": "+2200",
+"decimal": "23.00",
+"fractional": "22/1"
+}
+},
+{
+"id": "2426944821",
+"description": "Marcus Mariota (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39605060434",
+"american": "+2200",
+"decimal": "23.00",
+"fractional": "22/1"
+}
+},
+{
+"id": "2426945459",
+"description": "Ben Sinnott (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309753",
+"american": "+6000",
+"decimal": "61.00",
+"fractional": "60/1"
+}
+},
+{
+"id": "2426945460",
+"description": "Kaytron Allen (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614214520",
+"american": "+2200",
+"decimal": "23.00",
+"fractional": "22/1"
+}
+},
+{
+"id": "2426945461",
+"description": "Dyami Brown (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39609561897",
+"american": "+4000",
+"decimal": "41.00",
+"fractional": "40/1"
+}
+},
+{
+"id": "2426945470",
+"description": "Washington Def/ST (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39530236048",
+"american": "+2800",
+"decimal": "29.00",
+"fractional": "28/1"
+}
+},
+{
+"id": "2426945471",
+"description": "Indianapolis Colts Def/ST (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39585679582",
+"american": "+2800",
+"decimal": "29.00",
+"fractional": "28/1"
+}
+},
+{
+"id": "2426947219",
+"description": "Josh Downs (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39595279214",
+"american": "+900",
+"decimal": "10.00",
+"fractional": "9/1"
+}
+},
+{
+"id": "2426947220",
+"description": "Jonathan Taylor (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137821",
+"american": "+245",
+"decimal": "3.450",
+"fractional": "49/20"
+}
+},
+{
+"id": "2426947221",
+"description": "Tyler Warren (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137823",
+"american": "+800",
+"decimal": "9.00",
+"fractional": "8/1"
+}
+},
+{
+"id": "2426947222",
+"description": "Laquon Treadwell (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137828",
+"american": "+1800",
+"decimal": "19.00",
+"fractional": "18/1"
+}
+},
+{
+"id": "2426947223",
+"description": "Mo Alie-Cox (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614013563",
+"american": "+3300",
+"decimal": "34.00",
+"fractional": "33/1"
+}
+},
+{
+"id": "2426947225",
+"description": "Seth McGowan (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39572600715",
+"american": "+4000",
+"decimal": "41.00",
+"fractional": "40/1"
+}
+},
+{
+"id": "2426947226",
+"description": "Anthony Gould (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39595279220",
+"american": "+7000",
+"decimal": "71.00",
+"fractional": "70/1"
+}
+},
+{
+"id": "2428657282",
+"description": "Daniel Jones (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137831",
+"american": "+1900",
+"decimal": "20.00",
+"fractional": "19/1"
+}
+},
+{
+"id": "2427484921",
+"description": "John Bates (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39609561900",
+"american": "+6000",
+"decimal": "61.00",
+"fractional": "60/1"
+}
+},
+{
+"id": "2428836493",
+"description": "Deion Burks (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39595279215",
+"american": "+6000",
+"decimal": "61.00",
+"fractional": "60/1"
+}
+},
+{
+"id": "2428836494",
+"description": "Drew Ogletree (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39609561899",
+"american": "+7000",
+"decimal": "71.00",
+"fractional": "70/1"
+}
+},
+{
+"id": "2428847603",
+"description": "Colson Yankoff (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137834",
+"american": "+10000",
+"decimal": "101.00",
+"fractional": "100/1"
+}
+}
+]
+},
+{
+"id": "532064448",
+"descriptionKey": "First Touchdown Scorer - Indianapolis Colts",
+"description": "First Touchdown Scorer - Indianapolis Colts",
+"key": "GAME-PROP",
+"marketTypeId": "121365",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "119",
+"description": "Game",
+"abbreviation": "G",
+"live": false,
+"main": true
+},
+"availableSGP": true,
+"sortType": "PRICE",
+"outcomes": [
+{
+"id": "2429113980",
+"description": "Indianapolis Colts Def/ST (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39612892083",
+"american": "+2500",
+"decimal": "26.00",
+"fractional": "25/1"
+}
+},
+{
+"id": "2431792817",
+"description": "Nick Westbrook-Ikhine (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615176209",
+"american": "+2500",
+"decimal": "26.00",
+"fractional": "25/1"
+}
+},
+{
+"id": "2429096357",
+"description": "Daniel Jones (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615176197",
+"american": "+1200",
+"decimal": "13.00",
+"fractional": "12/1"
+}
+},
+{
+"id": "2429096358",
+"description": "Tyler Warren (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39600215936",
+"american": "+500",
+"decimal": "6.00",
+"fractional": "5/1"
+}
+},
+{
+"id": "2429096359",
+"description": "Anthony Gould (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615176199",
+"american": "+5000",
+"decimal": "51.00",
+"fractional": "50/1"
+}
+},
+{
+"id": "2429096360",
+"description": "Mo Alie-Cox (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615176200",
+"american": "+2200",
+"decimal": "23.00",
+"fractional": "22/1"
+}
+},
+{
+"id": "2429096361",
+"description": "Laquon Treadwell (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615176201",
+"american": "+1100",
+"decimal": "12.00",
+"fractional": "11/1"
+}
+},
+{
+"id": "2429096362",
+"description": "Drew Ogletree (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39605060522",
+"american": "+5500",
+"decimal": "56.00",
+"fractional": "55/1"
+}
+},
+{
+"id": "2429096363",
+"description": "Ashton Dulin (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615176203",
+"american": "+2800",
+"decimal": "29.00",
+"fractional": "28/1"
+}
+},
+{
+"id": "2429096364",
+"description": "Josh Downs (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39609561937",
+"american": "+500",
+"decimal": "6.00",
+"fractional": "5/1"
+}
+},
+{
+"id": "2429096366",
+"description": "Deion Burks (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39612892080",
+"american": "+4000",
+"decimal": "41.00",
+"fractional": "40/1"
+}
+},
+{
+"id": "2429096367",
+"description": "Seth McGowan (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39612892081",
+"american": "+2800",
+"decimal": "29.00",
+"fractional": "28/1"
+}
+},
+{
+"id": "2429096370",
+"description": "Jonathan Taylor (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615176207",
+"american": "+120",
+"decimal": "2.200",
+"fractional": "6/5"
+}
+}
+]
+},
+{
+"id": "532064450",
+"descriptionKey": "First Touchdown Scorer - Washington Commanders",
+"description": "First Touchdown Scorer - Washington Commanders",
+"key": "GAME-PROP",
+"marketTypeId": "121364",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "119",
+"description": "Game",
+"abbreviation": "G",
+"live": false,
+"main": true
+},
+"availableSGP": true,
+"sortType": "PRICE",
+"outcomes": [
+{
+"id": "2432181318",
+"description": "Austin Ekeler (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693228",
+"american": "+1800",
+"decimal": "19.00",
+"fractional": "18/1"
+}
+},
+{
+"id": "2431685682",
+"description": "Craig Reynolds (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39612892088",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2429096403",
+"description": "Treylon Burks (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615140901",
+"american": "+1500",
+"decimal": "16.00",
+"fractional": "15/1"
+}
+},
+{
+"id": "2429096404",
+"description": "Colson Yankoff (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615140902",
+"american": "+7500",
+"decimal": "76.00",
+"fractional": "75/1"
+}
+},
+{
+"id": "2429096405",
+"description": "John Bates (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693224",
+"american": "+3500",
+"decimal": "36.00",
+"fractional": "35/1"
+}
+},
+{
+"id": "2429096406",
+"description": "Stefon Diggs (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693225",
+"american": "+475",
+"decimal": "5.750",
+"fractional": "19/4"
+}
+},
+{
+"id": "2429096407",
+"description": "Dyami Brown (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309496",
+"american": "+1800",
+"decimal": "19.00",
+"fractional": "18/1"
+}
+},
+{
+"id": "2429096408",
+"description": "Antonio Williams (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309497",
+"american": "+1100",
+"decimal": "12.00",
+"fractional": "11/1"
+}
+},
+{
+"id": "2429096409",
+"description": "Ben Sinnott (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309498",
+"american": "+3000",
+"decimal": "31.00",
+"fractional": "30/1"
+}
+},
+{
+"id": "2429096411",
+"description": "Kaytron Allen (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693226",
+"american": "+1000",
+"decimal": "11.00",
+"fractional": "10/1"
+}
+},
+{
+"id": "2429096412",
+"description": "Chig Okonkwo (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309499",
+"american": "+900",
+"decimal": "10.00",
+"fractional": "9/1"
+}
+},
+{
+"id": "2429096413",
+"description": "Jacory Croskey-Merritt (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614693227",
+"american": "+255",
+"decimal": "3.550",
+"fractional": "51/20"
+}
+},
+{
+"id": "2429096414",
+"description": "Marcus Mariota (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39574026536",
+"american": "+1000",
+"decimal": "11.00",
+"fractional": "10/1"
+}
+},
+{
+"id": "2429096416",
+"description": "Jaylin Lane (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39609471747",
+"american": "+2500",
+"decimal": "26.00",
+"fractional": "25/1"
+}
+}
+]
+},
+{
+"id": "531508537",
+"descriptionKey": "Who will Score 2 or more Touchdowns?",
+"description": "Player to Score 2 or More Touchdowns",
+"key": "GAME-PROP",
+"marketTypeId": "121163",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "119",
+"description": "Game",
+"abbreviation": "G",
+"live": false,
+"main": true
+},
+"availableSGP": false,
+"sortType": "PRICE",
+"outcomes": [
+{
+"id": "2428862902",
+"description": "Ashton Dulin (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137767",
+"american": "+10000",
+"decimal": "101.00",
+"fractional": "100/1"
+}
+},
+{
+"id": "2431792815",
+"description": "Nick Westbrook-Ikhine (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614023068",
+"american": "+10000",
+"decimal": "101.00",
+"fractional": "100/1"
+}
+},
+{
+"id": "2432181317",
+"description": "Austin Ekeler (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137762",
+"american": "+8000",
+"decimal": "81.00",
+"fractional": "80/1"
+}
+},
+{
+"id": "2431685687",
+"description": "Craig Reynolds (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137763",
+"american": "+10000",
+"decimal": "101.00",
+"fractional": "100/1"
+}
+},
+{
+"id": "2426944804",
+"description": "Stefon Diggs (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137746",
+"american": "+1700",
+"decimal": "18.00",
+"fractional": "17/1"
+}
+},
+{
+"id": "2426944805",
+"description": "Chig Okonkwo (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614259329",
+"american": "+3500",
+"decimal": "36.00",
+"fractional": "35/1"
+}
+},
+{
+"id": "2426944806",
+"description": "Marcus Mariota (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137749",
+"american": "+4500",
+"decimal": "46.00",
+"fractional": "45/1"
+}
+},
+{
+"id": "2426944807",
+"description": "Antonio Williams (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137753",
+"american": "+5500",
+"decimal": "56.00",
+"fractional": "55/1"
+}
+},
+{
+"id": "2426944809",
+"description": "Jacory Croskey-Merritt (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137758",
+"american": "+600",
+"decimal": "7.00",
+"fractional": "6/1"
+}
+},
+{
+"id": "2426944810",
+"description": "Jaylin Lane (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137759",
+"american": "+12500",
+"decimal": "126.00",
+"fractional": "125/1"
+}
+},
+{
+"id": "2426944812",
+"description": "Treylon Burks (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137772",
+"american": "+6500",
+"decimal": "66.00",
+"fractional": "65/1"
+}
+},
+{
+"id": "2426946048",
+"description": "Ben Sinnott (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614043744",
+"american": "+17500",
+"decimal": "176.00",
+"fractional": "175/1"
+}
+},
+{
+"id": "2426946051",
+"description": "Kaytron Allen (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614214467",
+"american": "+4500",
+"decimal": "46.00",
+"fractional": "45/1"
+}
+},
+{
+"id": "2426946052",
+"description": "Dyami Brown (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137766",
+"american": "+10000",
+"decimal": "101.00",
+"fractional": "100/1"
+}
+},
+{
+"id": "2426946058",
+"description": "Washington Def/ST (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137757",
+"american": "+6000",
+"decimal": "61.00",
+"fractional": "60/1"
+}
+},
+{
+"id": "2426947227",
+"description": "Anthony Gould (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137751",
+"american": "+17500",
+"decimal": "176.00",
+"fractional": "175/1"
+}
+},
+{
+"id": "2426947228",
+"description": "Tyler Warren (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137752",
+"american": "+1100",
+"decimal": "12.00",
+"fractional": "11/1"
+}
+},
+{
+"id": "2426947229",
+"description": "Josh Downs (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137754",
+"american": "+1200",
+"decimal": "13.00",
+"fractional": "12/1"
+}
+},
+{
+"id": "2426947230",
+"description": "Seth McGowan (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137760",
+"american": "+10000",
+"decimal": "101.00",
+"fractional": "100/1"
+}
+},
+{
+"id": "2426947232",
+"description": "Jonathan Taylor (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137765",
+"american": "+155",
+"decimal": "2.550",
+"fractional": "31/20"
+}
+},
+{
+"id": "2426947233",
+"description": "Laquon Treadwell (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137769",
+"american": "+3500",
+"decimal": "36.00",
+"fractional": "35/1"
+}
+},
+{
+"id": "2426947234",
+"description": "Mo Alie-Cox (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39600215952",
+"american": "+10000",
+"decimal": "101.00",
+"fractional": "100/1"
+}
+},
+{
+"id": "2428658242",
+"description": "Daniel Jones (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137771",
+"american": "+4500",
+"decimal": "46.00",
+"fractional": "45/1"
+}
+},
+{
+"id": "2427484923",
+"description": "John Bates (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137750",
+"american": "+15000",
+"decimal": "151.00",
+"fractional": "150/1"
+}
+},
+{
+"id": "2428836540",
+"description": "Drew Ogletree (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137747",
+"american": "+17500",
+"decimal": "176.00",
+"fractional": "175/1"
+}
+},
+{
+"id": "2428836542",
+"description": "Deion Burks (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39612873841",
+"american": "+15000",
+"decimal": "151.00",
+"fractional": "150/1"
+}
+},
+{
+"id": "2428847601",
+"description": "Colson Yankoff (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615137755",
+"american": "+25000",
+"decimal": "251.00",
+"fractional": "250/1"
+}
+}
+]
+},
+{
+"id": "532065002",
+"descriptionKey": "Player to Score 3 or More Touchdowns",
+"description": "Player to Score 3 or More Touchdowns",
+"key": "GAME-PROP",
+"marketTypeId": "121496",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "119",
+"description": "Game",
+"abbreviation": "G",
+"live": false,
+"main": true
+},
+"availableSGP": false,
+"sortType": "PRICE",
+"outcomes": [
+{
+"id": "2430553462",
+"description": "Jaylin Lane (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39574099436",
+"american": "+25000",
+"decimal": "251.00",
+"fractional": "250/1"
+}
+},
+{
+"id": "2431792825",
+"description": "Nick Westbrook-Ikhine (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39581409327",
+"american": "+25000",
+"decimal": "251.00",
+"fractional": "250/1"
+}
+},
+{
+"id": "2429381441",
+"description": "Mo Alie-Cox (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39468282790",
+"american": "+25000",
+"decimal": "251.00",
+"fractional": "250/1"
+}
+},
+{
+"id": "2431687054",
+"description": "Craig Reynolds (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39585679629",
+"american": "+25000",
+"decimal": "251.00",
+"fractional": "250/1"
+}
+},
+{
+"id": "2430373238",
+"description": "Drew Ogletree (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39509620169",
+"american": "+25000",
+"decimal": "251.00",
+"fractional": "250/1"
+}
+},
+{
+"id": "2429096552",
+"description": "Josh Downs (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615140981",
+"american": "+6500",
+"decimal": "66.00",
+"fractional": "65/1"
+}
+},
+{
+"id": "2429096553",
+"description": "Laquon Treadwell (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615140982",
+"american": "+15000",
+"decimal": "151.00",
+"fractional": "150/1"
+}
+},
+{
+"id": "2429096555",
+"description": "Washington Def/ST (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39612881184",
+"american": "+20000",
+"decimal": "201.00",
+"fractional": "200/1"
+}
+},
+{
+"id": "2429096556",
+"description": "Tyler Warren (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615140985",
+"american": "+6000",
+"decimal": "61.00",
+"fractional": "60/1"
+}
+},
+{
+"id": "2429096557",
+"description": "Jacory Croskey-Merritt (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615140986",
+"american": "+2800",
+"decimal": "29.00",
+"fractional": "28/1"
+}
+},
+{
+"id": "2429096559",
+"description": "Dyami Brown (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39588904493",
+"american": "+25000",
+"decimal": "251.00",
+"fractional": "250/1"
+}
+},
+{
+"id": "2429096560",
+"description": "Jonathan Taylor (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615140989",
+"american": "+550",
+"decimal": "6.500",
+"fractional": "11/2"
+}
+},
+{
+"id": "2429096563",
+"description": "Daniel Jones (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39609561811",
+"american": "+20000",
+"decimal": "201.00",
+"fractional": "200/1"
+}
+},
+{
+"id": "2429096564",
+"description": "Chig Okonkwo (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309749",
+"american": "+15000",
+"decimal": "151.00",
+"fractional": "150/1"
+}
+},
+{
+"id": "2429096565",
+"description": "Antonio Williams (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39614309750",
+"american": "+20000",
+"decimal": "201.00",
+"fractional": "200/1"
+}
+},
+{
+"id": "2429096567",
+"description": "Indianapolis Colts Def/ST (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39612881190",
+"american": "+15000",
+"decimal": "151.00",
+"fractional": "150/1"
+}
+},
+{
+"id": "2429096569",
+"description": "Marcus Mariota (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615140996",
+"american": "+17500",
+"decimal": "176.00",
+"fractional": "175/1"
+}
+},
+{
+"id": "2429096570",
+"description": "Seth McGowan (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39586683248",
+"american": "+25000",
+"decimal": "251.00",
+"fractional": "250/1"
+}
+},
+{
+"id": "2429096572",
+"description": "Stefon Diggs (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39612881192",
+"american": "+10000",
+"decimal": "101.00",
+"fractional": "100/1"
+}
+},
+{
+"id": "2429096573",
+"description": "Kaytron Allen (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615140999",
+"american": "+15000",
+"decimal": "151.00",
+"fractional": "150/1"
+}
+},
+{
+"id": "2429110007",
+"description": "Treylon Burks (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39615140991",
+"american": "+25000",
+"decimal": "251.00",
+"fractional": "250/1"
+}
+}
+]
+},
+{
+"id": "532091676",
+"descriptionKey": "Anytime 2nd Half TD Scorer",
+"description": "Anytime 2nd Half TD Scorer",
+"key": "GAME-PROP",
+"marketTypeId": "-12580",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "119",
+"description": "Game",
+"abbreviation": "G",
+"live": false,
+"main": true
+},
+"availableSGP": false,
+"outcomes": [
+{
+"id": "2430514419",
+"description": "Colson Yankoff (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404460",
+"american": "+3000",
+"decimal": "31.00",
+"fractional": "30/1"
+}
+},
+{
+"id": "2430516559",
+"description": "Luke McCaffrey (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384448",
+"american": "+3000",
+"decimal": "31.00",
+"fractional": "30/1"
+}
+},
+{
+"id": "2430516558",
+"description": "DJ Giddens (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389458",
+"american": "+2700",
+"decimal": "28.00",
+"fractional": "27/1"
+}
+},
+{
+"id": "2430517747",
+"description": "Anthony Gould (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404459",
+"american": "+2700",
+"decimal": "28.00",
+"fractional": "27/1"
+}
+},
+{
+"id": "2430516557",
+"description": "Deion Burks (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384447",
+"american": "+2200",
+"decimal": "23.00",
+"fractional": "22/1"
+}
+},
+{
+"id": "2430514418",
+"description": "Ashton Dulin (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384446",
+"american": "+2200",
+"decimal": "23.00",
+"fractional": "22/1"
+}
+},
+{
+"id": "2430514417",
+"description": "Treylon Burks (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515684428",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2430521528",
+"description": "Jaylin Lane (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515684427",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2430514411",
+"description": "Marcus Mariota (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515414426",
+"american": "+700",
+"decimal": "8.00",
+"fractional": "7/1"
+}
+},
+{
+"id": "2430514410",
+"description": "Kaytron Allen (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389450",
+"american": "+650",
+"decimal": "7.500",
+"fractional": "13/2"
+}
+},
+{
+"id": "2430514551",
+"description": "Stefon Diggs (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404457",
+"american": "+500",
+"decimal": "6.00",
+"fractional": "5/1"
+}
+},
+{
+"id": "2430517746",
+"description": "Drew Ogletree (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515484434",
+"american": "+1600",
+"decimal": "17.00",
+"fractional": "16/1"
+}
+},
+{
+"id": "2430514552",
+"description": "Washington Def/ST (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389454",
+"american": "+1200",
+"decimal": "13.00",
+"fractional": "12/1"
+}
+},
+{
+"id": "2430514414",
+"description": "Darius Slayton (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515684423",
+"american": "+1100",
+"decimal": "12.00",
+"fractional": "11/1"
+}
+},
+{
+"id": "2430514413",
+"description": "IND Colts D/ST",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515684422",
+"american": "+1100",
+"decimal": "12.00",
+"fractional": "11/1"
+}
+},
+{
+"id": "2430521527",
+"description": "Mo Alie-Cox (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389457",
+"american": "+1600",
+"decimal": "17.00",
+"fractional": "16/1"
+}
+},
+{
+"id": "2430514553",
+"description": "Seth McGowan (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515684426",
+"american": "+1300",
+"decimal": "14.00",
+"fractional": "13/1"
+}
+},
+{
+"id": "2430521526",
+"description": "Ben Sinnott (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389456",
+"american": "+1300",
+"decimal": "14.00",
+"fractional": "13/1"
+}
+},
+{
+"id": "2430514416",
+"description": "John Bates (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389455",
+"american": "+1300",
+"decimal": "14.00",
+"fractional": "13/1"
+}
+},
+{
+"id": "2430521525",
+"description": "Austin Ekeler (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515684425",
+"american": "+1200",
+"decimal": "13.00",
+"fractional": "12/1"
+}
+},
+{
+"id": "2430514415",
+"description": "Dyami Brown (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515684424",
+"american": "+1200",
+"decimal": "13.00",
+"fractional": "12/1"
+}
+},
+{
+"id": "2430514408",
+"description": "Josh Downs (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389448",
+"american": "+440",
+"decimal": "5.400",
+"fractional": "22/5"
+}
+},
+{
+"id": "2430514407",
+"description": "Tyler Warren (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384445",
+"american": "+380",
+"decimal": "4.800",
+"fractional": "19/5"
+}
+},
+{
+"id": "2430514406",
+"description": "Jacory Croskey-Merritt (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384444",
+"american": "+250",
+"decimal": "3.500",
+"fractional": "5/2"
+}
+},
+{
+"id": "2430514412",
+"description": "Laquon Treadwell (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389453",
+"american": "+950",
+"decimal": "10.500",
+"fractional": "19/2"
+}
+},
+{
+"id": "2430521524",
+"description": "Antonio Williams (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389452",
+"american": "+950",
+"decimal": "10.500",
+"fractional": "19/2"
+}
+},
+{
+"id": "2430521523",
+"description": "Daniel Jones (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389451",
+"american": "+750",
+"decimal": "8.500",
+"fractional": "15/2"
+}
+},
+{
+"id": "2430521522",
+"description": "Chigoziem Okonkwo (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515414427",
+"american": "+700",
+"decimal": "8.00",
+"fractional": "7/1"
+}
+},
+{
+"id": "2430514405",
+"description": "Jonathan Taylor (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384443",
+"american": "+105",
+"decimal": "2.050",
+"fractional": "21/20"
+}
+}
+]
+},
+{
+"id": "532091670",
+"descriptionKey": "Anytime 2nd Quarter TD Scorer",
+"description": "Anytime 2nd Quarter TD Scorer",
+"key": "GAME-PROP",
+"marketTypeId": "-12581",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "119",
+"description": "Game",
+"abbreviation": "G",
+"live": false,
+"main": true
+},
+"availableSGP": false,
+"outcomes": [
+{
+"id": "2430514522",
+"description": "Colson Yankoff (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515414425",
+"american": "+6500",
+"decimal": "66.00",
+"fractional": "65/1"
+}
+},
+{
+"id": "2430514328",
+"description": "Luke McCaffrey (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389428",
+"american": "+5500",
+"decimal": "56.00",
+"fractional": "55/1"
+}
+},
+{
+"id": "2430516522",
+"description": "DJ Giddens (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404432",
+"american": "+5000",
+"decimal": "51.00",
+"fractional": "50/1"
+}
+},
+{
+"id": "2430514325",
+"description": "Dyami Brown (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404429",
+"american": "+2200",
+"decimal": "23.00",
+"fractional": "22/1"
+}
+},
+{
+"id": "2430516520",
+"description": "John Bates (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389424",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2430516519",
+"description": "Ben Sinnott (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384425",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2430516518",
+"description": "IND Colts D/ST",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404428",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2430514324",
+"description": "Washington Def/ST (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404427",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2430514519",
+"description": "Darius Slayton (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384424",
+"american": "+1700",
+"decimal": "18.00",
+"fractional": "17/1"
+}
+},
+{
+"id": "2430514323",
+"description": "Antonio Williams (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404426",
+"american": "+1600",
+"decimal": "17.00",
+"fractional": "16/1"
+}
+},
+{
+"id": "2430516517",
+"description": "Laquon Treadwell (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404425",
+"american": "+1400",
+"decimal": "15.00",
+"fractional": "14/1"
+}
+},
+{
+"id": "2430514918",
+"description": "Kaytron Allen (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389423",
+"american": "+1300",
+"decimal": "14.00",
+"fractional": "13/1"
+}
+},
+{
+"id": "2430514321",
+"description": "Daniel Jones (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404424",
+"american": "+1200",
+"decimal": "13.00",
+"fractional": "12/1"
+}
+},
+{
+"id": "2430514518",
+"description": "Marcus Mariota (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515414422",
+"american": "+1100",
+"decimal": "12.00",
+"fractional": "11/1"
+}
+},
+{
+"id": "2430515117",
+"description": "Stefon Diggs (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515409423",
+"american": "+850",
+"decimal": "9.500",
+"fractional": "17/2"
+}
+},
+{
+"id": "2430514917",
+"description": "Josh Downs (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404422",
+"american": "+650",
+"decimal": "7.500",
+"fractional": "13/2"
+}
+},
+{
+"id": "2430514318",
+"description": "Tyler Warren (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384423",
+"american": "+550",
+"decimal": "6.500",
+"fractional": "11/2"
+}
+},
+{
+"id": "2430514521",
+"description": "Anthony Gould (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404431",
+"american": "+5000",
+"decimal": "51.00",
+"fractional": "50/1"
+}
+},
+{
+"id": "2430516521",
+"description": "Treylon Burks (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389427",
+"american": "+4000",
+"decimal": "41.00",
+"fractional": "40/1"
+}
+},
+{
+"id": "2430514517",
+"description": "Jacory Croskey-Merritt (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389422",
+"american": "+420",
+"decimal": "5.200",
+"fractional": "21/5"
+}
+},
+{
+"id": "2430514317",
+"description": "Jonathan Taylor (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384422",
+"american": "+185",
+"decimal": "2.850",
+"fractional": "37/20"
+}
+},
+{
+"id": "2430514327",
+"description": "Ashton Dulin (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515409425",
+"american": "+3500",
+"decimal": "36.00",
+"fractional": "35/1"
+}
+},
+{
+"id": "2430514520",
+"description": "Deion Burks (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389426",
+"american": "+3500",
+"decimal": "36.00",
+"fractional": "35/1"
+}
+},
+{
+"id": "2430514326",
+"description": "Drew Ogletree (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515414424",
+"american": "+2700",
+"decimal": "28.00",
+"fractional": "27/1"
+}
+},
+{
+"id": "2430515118",
+"description": "Mo Alie-Cox (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389425",
+"american": "+2700",
+"decimal": "28.00",
+"fractional": "27/1"
+}
+},
+{
+"id": "2430514920",
+"description": "Seth McGowan (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515409424",
+"american": "+2500",
+"decimal": "26.00",
+"fractional": "25/1"
+}
+},
+{
+"id": "2430514322",
+"description": "Chigoziem Okonkwo (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515414423",
+"american": "+1200",
+"decimal": "13.00",
+"fractional": "12/1"
+}
+},
+{
+"id": "2430514921",
+"description": "Jaylin Lane (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404430",
+"american": "+4000",
+"decimal": "41.00",
+"fractional": "40/1"
+}
+},
+{
+"id": "2430514919",
+"description": "Austin Ekeler (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384426",
+"american": "+2200",
+"decimal": "23.00",
+"fractional": "22/1"
+}
+}
+]
+},
+{
+"id": "532091669",
+"descriptionKey": "Anytime 3rd Quarter TD Scorer",
+"description": "Anytime 3rd Quarter TD Scorer",
+"key": "GAME-PROP",
+"marketTypeId": "-12543",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "119",
+"description": "Game",
+"abbreviation": "G",
+"live": false,
+"main": true
+},
+"availableSGP": false,
+"outcomes": [
+{
+"id": "2430515120",
+"description": "DJ Giddens (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515409430",
+"american": "+7500",
+"decimal": "76.00",
+"fractional": "75/1"
+}
+},
+{
+"id": "2430517719",
+"description": "Anthony Gould (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515409429",
+"american": "+7500",
+"decimal": "76.00",
+"fractional": "75/1"
+}
+},
+{
+"id": "2430514339",
+"description": "Ashton Dulin (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515484423",
+"american": "+6000",
+"decimal": "61.00",
+"fractional": "60/1"
+}
+},
+{
+"id": "2430517718",
+"description": "Deion Burks (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384434",
+"american": "+6000",
+"decimal": "61.00",
+"fractional": "60/1"
+}
+},
+{
+"id": "2430516528",
+"description": "Darius Slayton (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389430",
+"american": "+2200",
+"decimal": "23.00",
+"fractional": "22/1"
+}
+},
+{
+"id": "2430516527",
+"description": "Antonio Williams (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384432",
+"american": "+2200",
+"decimal": "23.00",
+"fractional": "22/1"
+}
+},
+{
+"id": "2430514332",
+"description": "IND Colts D/ST",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515484422",
+"american": "+2200",
+"decimal": "23.00",
+"fractional": "22/1"
+}
+},
+{
+"id": "2430514524",
+"description": "Laquon Treadwell (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384431",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2430514331",
+"description": "Chigoziem Okonkwo (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404437",
+"american": "+1700",
+"decimal": "18.00",
+"fractional": "17/1"
+}
+},
+{
+"id": "2430514923",
+"description": "Daniel Jones (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384430",
+"american": "+1700",
+"decimal": "18.00",
+"fractional": "17/1"
+}
+},
+{
+"id": "2430514523",
+"description": "Kaytron Allen (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384429",
+"american": "+1500",
+"decimal": "16.00",
+"fractional": "15/1"
+}
+},
+{
+"id": "2430514922",
+"description": "Marcus Mariota (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384428",
+"american": "+1500",
+"decimal": "16.00",
+"fractional": "15/1"
+}
+},
+{
+"id": "2430516525",
+"description": "Stefon Diggs (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384427",
+"american": "+1200",
+"decimal": "13.00",
+"fractional": "12/1"
+}
+},
+{
+"id": "2430516524",
+"description": "Josh Downs (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389429",
+"american": "+950",
+"decimal": "10.500",
+"fractional": "19/2"
+}
+},
+{
+"id": "2430514329",
+"description": "Tyler Warren (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404434",
+"american": "+850",
+"decimal": "9.500",
+"fractional": "17/2"
+}
+},
+{
+"id": "2430515119",
+"description": "Jacory Croskey-Merritt (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404433",
+"american": "+550",
+"decimal": "6.500",
+"fractional": "11/2"
+}
+},
+{
+"id": "2430516523",
+"description": "Jonathan Taylor (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515409426",
+"american": "+310",
+"decimal": "4.100",
+"fractional": "31/10"
+}
+},
+{
+"id": "2430514338",
+"description": "Treylon Burks (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384433",
+"american": "+5500",
+"decimal": "56.00",
+"fractional": "55/1"
+}
+},
+{
+"id": "2430514337",
+"description": "Jaylin Lane (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404442",
+"american": "+5000",
+"decimal": "51.00",
+"fractional": "50/1"
+}
+},
+{
+"id": "2430514336",
+"description": "Drew Ogletree (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404441",
+"american": "+4000",
+"decimal": "41.00",
+"fractional": "40/1"
+}
+},
+{
+"id": "2430514526",
+"description": "Mo Alie-Cox (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404440",
+"american": "+4000",
+"decimal": "41.00",
+"fractional": "40/1"
+}
+},
+{
+"id": "2430514335",
+"description": "Seth McGowan (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404439",
+"american": "+3500",
+"decimal": "36.00",
+"fractional": "35/1"
+}
+},
+{
+"id": "2430516529",
+"description": "Ben Sinnott (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404438",
+"american": "+3300",
+"decimal": "34.00",
+"fractional": "33/1"
+}
+},
+{
+"id": "2430514334",
+"description": "John Bates (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515409428",
+"american": "+3300",
+"decimal": "34.00",
+"fractional": "33/1"
+}
+},
+{
+"id": "2430514525",
+"description": "Dyami Brown (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515409427",
+"american": "+3000",
+"decimal": "31.00",
+"fractional": "30/1"
+}
+},
+{
+"id": "2430517717",
+"description": "Austin Ekeler (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389432",
+"american": "+2700",
+"decimal": "28.00",
+"fractional": "27/1"
+}
+},
+{
+"id": "2430514341",
+"description": "Luke McCaffrey (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389433",
+"american": "+8000",
+"decimal": "81.00",
+"fractional": "80/1"
+}
+},
+{
+"id": "2430514340",
+"description": "Colson Yankoff (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515484424",
+"american": "+8000",
+"decimal": "81.00",
+"fractional": "80/1"
+}
+},
+{
+"id": "2430514333",
+"description": "Washington Def/ST (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389431",
+"american": "+2500",
+"decimal": "26.00",
+"fractional": "25/1"
+}
+}
+]
+},
+{
+"id": "532091674",
+"descriptionKey": "Anytime 4th Quarter TD Scorer",
+"description": "Anytime 4th Quarter TD Scorer",
+"key": "GAME-PROP",
+"marketTypeId": "-12582",
+"status": "O",
+"singleOnly": false,
+"notes": "",
+"period": {
+"id": "119",
+"description": "Game",
+"abbreviation": "G",
+"live": false,
+"main": true
+},
+"availableSGP": false,
+"outcomes": [
+{
+"id": "2430515125",
+"description": "Colson Yankoff (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389444",
+"american": "+4500",
+"decimal": "46.00",
+"fractional": "45/1"
+}
+},
+{
+"id": "2430515124",
+"description": "Luke McCaffrey (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389443",
+"american": "+4500",
+"decimal": "46.00",
+"fractional": "45/1"
+}
+},
+{
+"id": "2430514353",
+"description": "DJ Giddens (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389442",
+"american": "+4000",
+"decimal": "41.00",
+"fractional": "40/1"
+}
+},
+{
+"id": "2430514352",
+"description": "Anthony Gould (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404451",
+"american": "+4000",
+"decimal": "41.00",
+"fractional": "40/1"
+}
+},
+{
+"id": "2430514351",
+"description": "Deion Burks (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404450",
+"american": "+3500",
+"decimal": "36.00",
+"fractional": "35/1"
+}
+},
+{
+"id": "2430517724",
+"description": "Ashton Dulin (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384438",
+"american": "+3500",
+"decimal": "36.00",
+"fractional": "35/1"
+}
+},
+{
+"id": "2430514530",
+"description": "Jaylin Lane (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404449",
+"american": "+3300",
+"decimal": "34.00",
+"fractional": "33/1"
+}
+},
+{
+"id": "2430514350",
+"description": "Treylon Burks (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515484429",
+"american": "+3300",
+"decimal": "34.00",
+"fractional": "33/1"
+}
+},
+{
+"id": "2430514529",
+"description": "Mo Alie-Cox (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404447",
+"american": "+2500",
+"decimal": "26.00",
+"fractional": "25/1"
+}
+},
+{
+"id": "2430514348",
+"description": "Washington Def/ST (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384437",
+"american": "+2200",
+"decimal": "23.00",
+"fractional": "22/1"
+}
+},
+{
+"id": "2430514349",
+"description": "Drew Ogletree (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404448",
+"american": "+2500",
+"decimal": "26.00",
+"fractional": "25/1"
+}
+},
+{
+"id": "2430514347",
+"description": "Ben Sinnott (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404446",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2430514528",
+"description": "Seth McGowan (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515484428",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2430517723",
+"description": "John Bates (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389441",
+"american": "+2000",
+"decimal": "21.00",
+"fractional": "20/1"
+}
+},
+{
+"id": "2430517722",
+"description": "Austin Ekeler (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404445",
+"american": "+1900",
+"decimal": "20.00",
+"fractional": "19/1"
+}
+},
+{
+"id": "2430514527",
+"description": "Dyami Brown (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515404444",
+"american": "+1900",
+"decimal": "20.00",
+"fractional": "19/1"
+}
+},
+{
+"id": "2430514346",
+"description": "Darius Slayton (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389440",
+"american": "+1900",
+"decimal": "20.00",
+"fractional": "19/1"
+}
+},
+{
+"id": "2430515123",
+"description": "IND Colts D/ST",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389439",
+"american": "+1900",
+"decimal": "20.00",
+"fractional": "19/1"
+}
+},
+{
+"id": "2430514345",
+"description": "Laquon Treadwell (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515409432",
+"american": "+1600",
+"decimal": "17.00",
+"fractional": "16/1"
+}
+},
+{
+"id": "2430515122",
+"description": "Antonio Williams (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515409431",
+"american": "+1500",
+"decimal": "16.00",
+"fractional": "15/1"
+}
+},
+{
+"id": "2430516534",
+"description": "Daniel Jones (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389438",
+"american": "+1200",
+"decimal": "13.00",
+"fractional": "12/1"
+}
+},
+{
+"id": "2430517721",
+"description": "Marcus Mariota (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515484427",
+"american": "+1100",
+"decimal": "12.00",
+"fractional": "11/1"
+}
+},
+{
+"id": "2430516533",
+"description": "Kaytron Allen (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515484426",
+"american": "+1000",
+"decimal": "11.00",
+"fractional": "10/1"
+}
+},
+{
+"id": "2430516532",
+"description": "Chigoziem Okonkwo (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384436",
+"american": "+1000",
+"decimal": "11.00",
+"fractional": "10/1"
+}
+},
+{
+"id": "2430516531",
+"description": "Stefon Diggs (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515384435",
+"american": "+800",
+"decimal": "9.00",
+"fractional": "8/1"
+}
+},
+{
+"id": "2430514343",
+"description": "Josh Downs (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515484425",
+"american": "+750",
+"decimal": "8.500",
+"fractional": "15/2"
+}
+},
+{
+"id": "2430514342",
+"description": "Tyler Warren (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389436",
+"american": "+650",
+"decimal": "7.500",
+"fractional": "13/2"
+}
+},
+{
+"id": "2430517720",
+"description": "Jacory Croskey-Merritt (WAS)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389435",
+"american": "+480",
+"decimal": "5.80",
+"fractional": "19/4"
+}
+},
+{
+"id": "2430515121",
+"description": "Jonathan Taylor (IND)",
+"status": "O",
+"type": "X",
+"price": {
+"id": "39515389434",
+"american": "+210",
+"decimal": "3.100",
+"fractional": "21/10"
+}
+}
+]
+}
+],
+"order": 6
+}
+],
+"availableSGP": true,
+"hasStreaming": false
+}
