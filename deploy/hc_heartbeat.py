@@ -22,6 +22,16 @@ sample landing inside an operator restart paged "DOWN" then "UP" 5 min later
 (2026-09-26). So the grace can't hide a crash loop, a service whose systemd
 NRestarts grew by FLAP_RESTARTS+ since the last pass fails as flapping.
 
+A service STOPPED cleanly (inactive, Result=success — `systemctl stop`, which
+Restart=on-failure never undoes) is parked, not down: agents stop grade-daemon
+for a few minutes while they edit parse_cache.json (investigate lesson 12), and
+a 4-min audit stop straddling a pass paged DOWN→UP (2026-10-04). Parked up to
+PARK_GRACE it passes silently; past it nobody is coming back for it, so the
+heartbeat starts it itself and DMs what it did (an agent killed mid-edit, a
+forgotten stop). A failed start — or a second auto-start inside AUTOSTART_WINDOW
+(a service that keeps exiting 0) — fails the check, so hc-repair takes over.
+A service meant to stay off must be disabled, not just stopped.
+
 A job that fails on and off would page DOWN/UP with every run, so jobs are
 flap-damped (deploy/hc_flap.py): once a timer's unit has failed twice within
 3 h, a good run keeps it listed ("flapping — …held DOWN until HH:MM") until an
@@ -34,7 +44,7 @@ start resets Result to success; that alone used to flip the check UP).
 healthchecks.io alerts only on a status CHANGE, so a second unit failing while
 a group is already down would be masked — that one case is DMed through the
 watchdog bot ("also failing now"). A first failure is the check's alert only.
-State: logs/hc_heartbeat_state.json. `--dry-run` prints, pings nothing.
+State: logs/hc_heartbeat_state.json. `--dry-run` prints, pings/starts nothing.
 """
 from __future__ import annotations
 
@@ -72,6 +82,8 @@ SETTLE_SECONDS = 60   # restarts finish in seconds; a real outage outlasts this
 SETTLE_POLL = 5
 FLAP_RESTARTS = 3     # automatic restarts between two passes (5 min) = crash loop
 KEEP_LAST_FAIL = 7 * 86400  # s a job's newest failure is remembered (weekly jobs)
+PARK_GRACE = 15 * 60  # s a cleanly stopped service may stay down before we start it
+AUTOSTART_WINDOW = 3600  # s — a second auto-start of one unit inside this fails instead
 
 GROUPS = {
     "services": ("HEARTBEAT_SERVICES_HEALTHCHECK_URL", "VPS services"),
@@ -129,8 +141,34 @@ def settle(units: list[str]) -> set[str]:
     return pending
 
 
-def check_services(restarts: dict[str, int]) -> tuple[list[str], int]:
-    """`restarts` (unit -> NRestarts at the last pass) is updated in place."""
+def stop_requester(unit: str) -> str:
+    """Who stopped `unit`, from its last stop-context journal line (best effort)."""
+    try:
+        out = subprocess.run(
+            ["journalctl", "-u", unit, "-n", "200", "-o", "cat", "--no-pager"],
+            capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    lines = [ln for ln in out.splitlines() if "stop-context:" in ln and "requester=" in ln]
+    if not lines:
+        return ""
+    chain = lines[-1].split("requester=", 1)[1].split(" mem avail=")[0].split(" < ")
+    return " < ".join(h[:70] for h in chain[:3])
+
+
+def start_unit(unit: str) -> bool:
+    try:
+        subprocess.run(["sudo", "-n", "systemctl", "start", unit],
+                       capture_output=True, text=True, timeout=90)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return not settle([unit])
+
+
+def check_services(restarts: dict[str, int], autostarts: dict[str, float],
+                   notes: list[str], dry: bool = False) -> tuple[list[str], int]:
+    """`restarts` (unit -> NRestarts at the last pass) and `autostarts` (unit ->
+    time we last started it) are updated in place; DM lines go to `notes`."""
     down, flapping, n = [], [], 0
     for unit in enabled_units("service"):
         p = show(unit, "FragmentPath", "Type", "ActiveState", "NRestarts")
@@ -152,9 +190,36 @@ def check_services(restarts: dict[str, int]) -> tuple[list[str], int]:
             flapping.append(f"{unit}: flapping ({cur - prev} automatic restarts in 5 min)")
     still_down = settle(down)
     failing = []
+    now = time.time()
+    for unit in list(autostarts):
+        if now - autostarts[unit] >= AUTOSTART_WINDOW:
+            del autostarts[unit]
     for unit in sorted(still_down):
-        p = show(unit, "ActiveState", "SubState")
-        failing.append(f"{unit}: {p.get('ActiveState')}/{p.get('SubState')}")
+        p = show(unit, "ActiveState", "SubState", "Result", "InactiveEnterTimestamp")
+        state = f"{p.get('ActiveState')}/{p.get('SubState')}"
+        stopped = _unix(p.get("InactiveEnterTimestamp", ""))
+        if p.get("ActiveState") != "inactive" or p.get("Result") != "success" or not stopped:
+            failing.append(f"{unit}: {state}")
+            continue
+        mins = int((now - stopped) // 60)
+        if now - stopped < PARK_GRACE:
+            print(f"  · {unit}: stopped cleanly {mins} min ago — parked "
+                  f"(started at {PARK_GRACE // 60} min)")
+            continue
+        if unit in autostarts:
+            failing.append(f"{unit}: {state} again — auto-started at "
+                           f"{hc_flap.clock(autostarts[unit])}, stopped since")
+            continue
+        who = stop_requester(unit)
+        if dry:
+            print(f"  · {unit}: stopped cleanly {mins} min ago — would start it ({who})")
+            continue
+        autostarts[unit] = now
+        if start_unit(unit):
+            notes.append(f"🔧 started {unit} — stopped cleanly {mins} min ago and nobody "
+                         f"started it again" + (f"\nstopped by: {who}" if who else ""))
+        else:
+            failing.append(f"{unit}: {state} — stopped {mins} min ago, auto-start failed")
     return failing + [f for f in flapping if f.split(":")[0] not in still_down], n
 
 
@@ -244,10 +309,15 @@ def main(argv: list[str]) -> int:
     except (OSError, ValueError):
         state = {}
     restarts = state.get("restarts", {})
+    autostarts = state.get("autostarts", {})
     job_fails = state.get("job_fails", {})
     listed = {f.split(":")[0] for f in state.get("jobs", [])}
-    results = {"services": check_services(restarts),
+    notes: list[str] = []
+    results = {"services": check_services(restarts, autostarts, notes, dry),
                "jobs": check_jobs(job_fails, listed)}
+    for note in notes:
+        print(note)
+        send_dm(note)
     for group, (failing, n) in results.items():
         key, label = GROUPS[group]
         print(f"{label}: {n} checked, {len(failing)} failing"
@@ -269,6 +339,7 @@ def main(argv: list[str]) -> int:
         state[group] = failing
     if not dry:
         state["restarts"] = restarts
+        state["autostarts"] = autostarts
         state["job_fails"] = job_fails
         STATE.parent.mkdir(parents=True, exist_ok=True)
         STATE.write_text(json.dumps(state, indent=1))
