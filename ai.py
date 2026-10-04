@@ -489,6 +489,55 @@ def _fix_btts_total_shape(parsed: dict) -> None:
         print("    [parse] BTTS parsed as a game total → prop BTTS")
 
 
+def _norm_header_token(s: str) -> str:
+    return s.strip().strip("*_").strip().lower()
+
+
+def _drop_capper_header_pick(parsed: dict, text: str, capper_name: str | None) -> None:
+    """Drop a "pick" that is only the forwarded post's capper-name header.
+
+    Forwards lead with the mapping's source_prefix on its own line ("Zilla\\n\\n
+    Alabama / Miss St Over 59.5 …"), and the parse once read that bare header
+    as a bet — "Zilla moneyline", sport=UFC, teams=["Zilla"] — a phantom leg
+    no scoreboard can ever resolve, context-skipped every cycle until the
+    entry went stale. Fires only on the unambiguous shape: the pick's entire
+    content is the header name (single team or bare description, no line/
+    player/prop/direction), that name is the text's first non-empty line and
+    appears nowhere else, and at least one other pick survives the drop — a
+    single-pick message is never touched, because in an unprefixed channel a
+    bare name line can BE the pick (a UFC fighter's ML).
+    """
+    cap = _norm_header_token(capper_name or "")
+    if not cap:
+        return
+    lines = [l for l in text.splitlines() if l.strip()]
+    if not lines or _norm_header_token(lines[0]) != cap:
+        return
+    if any(cap in _norm_header_token(l) for l in lines[1:]):
+        return
+    picks = parsed.get("picks") or []
+    if len(picks) < 2:
+        return
+
+    def _header_echo(p: dict) -> bool:
+        if (p.get("line") is not None or p.get("player") or p.get("prop_stat")
+                or p.get("direction")):
+            return False
+        teams = [str(t) for t in (p.get("teams") or []) if t]
+        if teams:
+            return len(teams) == 1 and _norm_header_token(teams[0]) == cap
+        desc = re.sub(r"\s+(?:moneyline|ml)$", "",
+                      _norm_header_token(p.get("description") or ""))
+        return desc == cap
+
+    kept = [p for p in picks if not _header_echo(p)]
+    if not kept or len(kept) == len(picks):
+        return
+    parsed["picks"] = kept
+    print(f"    [parse] dropped capper-header phantom pick ({capper_name!r}) — "
+          f"{len(picks)}→{len(kept)}")
+
+
 # Explicit combined-ticket wording: when any of it appears, a same-side
 # spread + ML pairing really was placed as one ticket and stays a parlay.
 _COMBINED_TICKET_RE = re.compile(
@@ -597,6 +646,7 @@ async def claude_parse(
     date: str | None = None,
     image_b64: str | None = None,
     image_media_type: str = "image/jpeg",
+    capper_name: str | None = None,
 ) -> dict | None:
     from datetime import date as _d
     d = _d.fromisoformat(date) if date else _d.today()
@@ -832,6 +882,7 @@ async def claude_parse(
                     break
 
     if parsed:
+        _drop_capper_header_pick(parsed, text, capper_name)
         _mark_slash_parlay_legs(parsed, text)   # before teaser fix: it needs the flags
         _fix_teaser_stated_lines(parsed, text)
         _fix_bare_game_total(parsed, text)

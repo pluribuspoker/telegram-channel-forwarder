@@ -650,7 +650,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     parsed = cached_parse
                 else:
                     _ptext = _annotate_blockquotes(text, msg.entities)
-                    parsed = await claude_parse(_ptext, date_str)
+                    parsed = await claude_parse(_ptext, date_str, capper_name=capper)
                     # Consult the bet slip photo as ground truth when the text parse
                     # is unreliable: (a) slang-only text ("it's coming home") where
                     # the exact market was guessed, (b) a multi-leg parlay that
@@ -677,6 +677,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             for _attempt in range(2):
                                 _img_parsed = await claude_parse(
                                     _ptext, date_str, image_b64=_img[0], image_media_type=_img[1],
+                                    capper_name=capper,
                                 )
                                 if _img_parsed and _img_parsed.get("picks"):
                                     break
