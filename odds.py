@@ -1864,6 +1864,9 @@ _BOVADA_PATHS: dict[str, str] = {
     "NHL":   "hockey/nhl",
     "UFC":   "ufc-mma",                 # all MMA orgs, like the Odds API key
     "UFL":   "football/ufl",
+    # Not a priced sport (no SPORT_KEYS entry, so fetch_odds never reaches
+    # Bovada for it) — read only by resolve_combat_sport's boxing-card check.
+    "Boxing": "boxing",
 }
 _BOVADA_BASE = "https://www.bovada.lv/services/sports/event/v2/events/A/description"
 _BOVADA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -2287,6 +2290,31 @@ async def _fetch_bovada_events(sport: str) -> list[dict]:
         events = []
     _bovada_cache[sport] = (now, events)
     return events
+
+
+async def resolve_combat_sport(sport: str, teams: list[str]) -> str:
+    """Boxing → UFC when Bovada's MMA coupon lists the fighter and its boxing
+    coupon does not.
+
+    The parse guesses a combat sport from the name alone: "Roque Conceição ML"
+    (a Dana White's Contender Series bout, 2026-10-06) read as Boxing — likely
+    via the boxer Robson Conceição — and Boxing has no odds source, so the pick
+    went unpriced (sport_unsupported) and would grade off a boxing feed. The
+    card the fighter is actually on decides. Fails closed (keeps the parse): no
+    MMA match, a boxing-card match, or an empty boxing coupon (a failed fetch
+    must not read as "not a boxer").
+    """
+    if sport != "Boxing" or not teams:
+        return sport
+    mma_ev, _ = _bovada_pick_event(await _fetch_bovada_events("UFC"), teams,
+                                   allow_started=True, sport="UFC")
+    if mma_ev is None:
+        return sport
+    boxing = await _fetch_bovada_events("Boxing")
+    if not boxing:
+        return sport
+    box_ev, _ = _bovada_pick_event(boxing, teams, allow_started=True, sport="Boxing")
+    return sport if box_ev is not None else "UFC"
 
 
 async def _fetch_bovada_bookmakers(

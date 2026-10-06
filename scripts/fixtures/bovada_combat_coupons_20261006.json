@@ -1,0 +1,1204 @@
+{
+"captured": "2026-10-06T23:52Z",
+"ufc-mma": [
+{
+"id": "31676798",
+"description": "Ernesta Kareckaite vs Melissa Gatto",
+"startTime": 1791666000000,
+"live": false,
+"competitors": [
+{
+"id": "31676798-16661277",
+"name": "Ernesta Kareckaite",
+"home": true,
+"shortName": "E. Kareckaite"
+},
+{
+"id": "31676798-16517268",
+"name": "Melissa Gatto",
+"home": false,
+"shortName": "M. Gatto"
+}
+],
+"link": "/ufc-mma/ufc/ufc-fight-night-allen-duncan/ernesta-kareckaite-melissa-gatto-202610101700"
+},
+{
+"id": "31676614",
+"description": "Alice Pereira vs Dariya Zheleznyakova",
+"startTime": 1791667200000,
+"live": false,
+"competitors": [
+{
+"id": "31676614-17161053",
+"name": "Alice Pereira",
+"home": true,
+"shortName": "A. Pereira"
+},
+{
+"id": "31676614-16623675",
+"name": "Dariya Zheleznyakova",
+"home": false,
+"shortName": "D. Zheleznyakova"
+}
+],
+"link": "/ufc-mma/ufc/ufc-fight-night-allen-duncan/alice-pereira-dariya-zheleznyakova-202610101720"
+},
+{
+"id": "31717163",
+"description": "Allen Frye vs RJ Harris",
+"startTime": 1791668400000,
+"live": false,
+"competitors": [
+{
+"id": "31717163-19297484",
+"name": "Allen Frye",
+"home": true,
+"shortName": "A. Frye"
+},
+{
+"id": "31717163-19030285",
+"name": "RJ Harris",
+"home": false,
+"shortName": "R. Harris"
+}
+],
+"link": "/ufc-mma/ufc/ufc-fight-night-allen-duncan/allen-frye-rj-harris-202610101740"
+},
+{
+"id": "31677776",
+"description": "Felipe Franco vs Brendson Ribeiro",
+"startTime": 1791669600000,
+"live": false,
+"competitors": [
+{
+"id": "31677776-17468256",
+"name": "Felipe Franco",
+"home": true,
+"shortName": "F. Franco"
+},
+{
+"id": "31677776-16656538",
+"name": "Brendson Ribeiro",
+"home": false,
+"shortName": "B. Ribeiro"
+}
+],
+"link": "/ufc-mma/ufc/ufc-fight-night-allen-duncan/felipe-franco-brendson-ribeiro-202610101800"
+},
+{
+"id": "31715596",
+"description": "Niko Price vs Leon Shahbazyan",
+"startTime": 1791670800000,
+"live": false,
+"competitors": [
+{
+"id": "31715596-16503704",
+"name": "Niko Price",
+"home": true,
+"shortName": "N. Price"
+},
+{
+"id": "31715596-22356285",
+"name": "Leon Shahbazyan",
+"home": false,
+"shortName": "L. Shahbazyan"
+}
+],
+"link": "/ufc-mma/ufc/ufc-fight-night-allen-duncan/niko-price-leon-shahbazyan-202610101820"
+},
+{
+"id": "31676615",
+"description": "Francisco Prado vs Ismael Bonfim",
+"startTime": 1791672000000,
+"live": false,
+"competitors": [
+{
+"id": "31676615-16609190",
+"name": "Francisco Prado",
+"home": true,
+"shortName": "F. Prado"
+},
+{
+"id": "31676615-16576544",
+"name": "Ismael Bonfim",
+"home": false,
+"shortName": "I. Bonfim"
+}
+],
+"link": "/ufc-mma/ufc/ufc-fight-night-allen-duncan/francisco-prado-ismael-bonfim-202610101840"
+},
+{
+"id": "31676611",
+"description": "Malcolm Wellmaker vs Otar Tanzilovi",
+"startTime": 1791676800000,
+"live": false,
+"competitors": [
+{
+"id": "31676611-16724031",
+"name": "Malcolm Wellmaker",
+"home": true,
+"shortName": "M. Wellmaker"
+},
+{
+"id": "31676611-16726907",
+"name": "Otar Tanzilovi",
+"home": false,
+"shortName": "O. Tanzilovi"
+}
+],
+"link": "/ufc-mma/ufc/ufc-fight-night-allen-duncan/malcolm-wellmaker-otar-tanzilovi-202610102000"
+},
+{
+"id": "31677775",
+"description": "Julius Walker vs Gerald Meerschaert",
+"startTime": 1791678000000,
+"live": false,
+"competitors": [
+{
+"id": "31677775-16758404",
+"name": "Julius Walker",
+"home": true,
+"shortName": "J. Walker"
+},
+{
+"id": "31677775-16517269",
+"name": "Gerald Meerschaert",
+"home": false,
+"shortName": "G. Meerschaert"
+}
+],
+"link": "/ufc-mma/ufc/ufc-fight-night-allen-duncan/julius-walker-gerald-meerschaert-202610102020"
+},
+{
+"id": "31676613",
+"description": "Andre Fili vs Kai Kamaka III",
+"startTime": 1791679200000,
+"live": false,
+"competitors": [
+{
+"id": "31676613-16545199",
+"name": "Andre Fili",
+"home": true,
+"shortName": "A. Fili"
+},
+{
+"id": "31676613-16519624",
+"name": "Kai Kamaka III",
+"home": false,
+"shortName": "K. Kamaka"
+}
+],
+"link": "/ufc-mma/ufc/ufc-fight-night-allen-duncan/andre-fili-kai-kamaka-iii-202610102040"
+},
+{
+"id": "31677185",
+"description": "Lupita Godinez vs Ketlen Souza",
+"startTime": 1791680400000,
+"live": false,
+"competitors": [
+{
+"id": "31677185-16504717",
+"name": "Lupita Godinez",
+"home": true,
+"shortName": "L. Godinez"
+},
+{
+"id": "31677185-16631368",
+"name": "Ketlen Souza",
+"home": false,
+"shortName": "K. Souza"
+}
+],
+"link": "/ufc-mma/ufc/ufc-fight-night-allen-duncan/lupita-godinez-ketlen-souza-202610102100"
+},
+{
+"id": "31677186",
+"description": "Matheus Camilo vs Jai Herbert",
+"startTime": 1791681600000,
+"live": false,
+"competitors": [
+{
+"id": "31677186-16659808",
+"name": "Matheus Camilo",
+"home": true,
+"shortName": "M. Camilo"
+},
+{
+"id": "31677186-16509726",
+"name": "Jai Herbert",
+"home": false,
+"shortName": "J. Herbert"
+}
+],
+"link": "/ufc-mma/ufc/ufc-fight-night-allen-duncan/matheus-camilo-jai-herbert-202610102120"
+},
+{
+"id": "31671576",
+"description": "Brendan Allen vs Christian Leroy Duncan",
+"startTime": 1791682800000,
+"live": false,
+"competitors": [
+{
+"id": "31671576-16530746",
+"name": "Brendan Allen",
+"home": true,
+"shortName": "B. Allen"
+},
+{
+"id": "31671576-16618806",
+"name": "Christian Leroy Duncan",
+"home": false,
+"shortName": "C. Duncan"
+}
+],
+"link": "/ufc-mma/ufc/ufc-fight-night-allen-duncan/brendan-allen-christian-leroy-duncan-202610102140"
+},
+{
+"id": "29684764",
+"description": "Petr Yan vs Merab Dvalishvili",
+"startTime": 1792868400000,
+"live": false,
+"competitors": [
+{
+"id": "29684764-16504079",
+"name": "Petr Yan",
+"home": true,
+"shortName": "P. Yan"
+},
+{
+"id": "29684764-16503225",
+"name": "Merab Dvalishvili",
+"home": false,
+"shortName": "M. Dvalishvili"
+}
+],
+"link": "/ufc-mma/ufc/ufc-333-volkanovski-evloev/petr-yan-merab-dvalishvili-202610241500"
+},
+{
+"id": "29710974",
+"description": "Alexander Volkanovski vs Movsar Evloev",
+"startTime": 1792870200000,
+"live": false,
+"competitors": [
+{
+"id": "29710974-16503249",
+"name": "Alexander Volkanovski",
+"home": true,
+"shortName": "A. Volkanovski"
+},
+{
+"id": "29710974-16522479",
+"name": "Movsar Evloev",
+"home": false,
+"shortName": "M. Evloev"
+}
+],
+"link": "/ufc-mma/ufc/ufc-333-volkanovski-evloev/alexander-volkanovski-movsar-evloev-202610241530"
+},
+{
+"id": "31257163",
+"description": "Ciryl Gane vs Josh Hokit",
+"startTime": 1794711600000,
+"live": false,
+"competitors": [
+{
+"id": "31257163-14669370",
+"name": "Ciryl Gane",
+"home": true,
+"shortName": "Gane"
+},
+{
+"id": "31257163-16662485",
+"name": "Josh Hokit",
+"home": false,
+"shortName": "J. Hokit"
+}
+],
+"link": "/ufc-mma/ufc/ufc-334-gane-hokit/ciryl-gane-josh-hokit-202611142200"
+},
+{
+"id": "31257164",
+"description": "Kayla Harrison vs Amanda Nunes",
+"startTime": 1794711600000,
+"live": false,
+"competitors": [
+{
+"id": "31257164-16523789",
+"name": "Kayla Harrison",
+"home": true,
+"shortName": "K. Harrison"
+},
+{
+"id": "31257164-16504397",
+"name": "Amanda Nunes",
+"home": false,
+"shortName": "A. Nunes"
+}
+],
+"link": "/ufc-mma/ufc/ufc-334-gane-hokit/kayla-harrison-amanda-nunes-202611142200"
+},
+{
+"id": "26624931",
+"description": "Nassourdine Imavov vs Sean Strickland",
+"startTime": 1798693200000,
+"live": false,
+"competitors": [
+{
+"id": "26624931-16422587",
+"name": "Nassourdine Imavov",
+"home": true,
+"shortName": "Imavov"
+},
+{
+"id": "26624931-7077810",
+"name": "Sean Strickland",
+"home": false,
+"shortName": "S. Strickland"
+}
+],
+"link": "/ufc-mma/ufc/potential-fights/nassourdine-imavov-sean-strickland-202612310000"
+},
+{
+"id": "31844183",
+"description": "Ryuho Miyaguchi vs Mateus Soares",
+"startTime": 1791330300000,
+"live": true,
+"competitors": [
+{
+"id": "31844183-22006084",
+"name": "Ryuho Miyaguchi",
+"home": true,
+"shortName": "Ryuho"
+},
+{
+"id": "31844183-16688411",
+"name": "Mateus Soares",
+"home": false,
+"shortName": "Mateus"
+}
+],
+"link": "/ufc-mma/dana-white-s-contender-series/contender-series-2026-week-9/ryuho-miyaguchi-mateus-soares-202610061945"
+},
+{
+"id": "31852589",
+"description": "Roque Conceicao vs Alexander Chavez",
+"startTime": 1791332100000,
+"live": false,
+"competitors": [
+{
+"id": "31852589-18071053",
+"name": "Roque Conceicao",
+"home": true,
+"shortName": "R. Conceicao"
+},
+{
+"id": "31852589-24053116",
+"name": "Alexander Chavez",
+"home": false,
+"shortName": "Alexander"
+}
+],
+"link": "/ufc-mma/dana-white-s-contender-series/contender-series-2026-week-9/roque-conceicao-alexander-chavez-202610062015"
+},
+{
+"id": "31845776",
+"description": "Sal Everett vs Ozzy Martin",
+"startTime": 1791333900000,
+"live": false,
+"competitors": [
+{
+"id": "31845776-22782316",
+"name": "Sal Everett",
+"home": true,
+"shortName": "Everett"
+},
+{
+"id": "31845776-24050116",
+"name": "Ozzy Martin",
+"home": false,
+"shortName": "Ozzy"
+}
+],
+"link": "/ufc-mma/dana-white-s-contender-series/contender-series-2026-week-9/sal-everett-ozzy-martin-202610062045"
+},
+{
+"id": "31844383",
+"description": "Preston Lagrange vs Nell Ariano",
+"startTime": 1791335700000,
+"live": true,
+"competitors": [
+{
+"id": "31844383-19921085",
+"name": "Preston Lagrange",
+"home": true,
+"shortName": "Preston"
+},
+{
+"id": "31844383-16693576",
+"name": "Nell Ariano",
+"home": false,
+"shortName": "Nell"
+}
+],
+"link": "/ufc-mma/dana-white-s-contender-series/contender-series-2026-week-9/preston-lagrange-nell-ariano-202610062115"
+},
+{
+"id": "30804397",
+"description": "Kristians Boguzs vs Kacper Cholewa",
+"startTime": 1791651600000,
+"live": false,
+"competitors": [
+{
+"id": "30804397-20267885",
+"name": "Kristians Boguzs",
+"home": true,
+"shortName": "Kristians"
+},
+{
+"id": "30804397-23688316",
+"name": "Kacper Cholewa",
+"home": false,
+"shortName": "Kacper"
+}
+],
+"link": "/ufc-mma/ksw/ksw-122-yakymenko-morelli/kristians-boguzs-kacper-cholewa-202610101300"
+},
+{
+"id": "30804608",
+"description": "Szymon Bajor vs Kacper Paczoski",
+"startTime": 1791655200000,
+"live": false,
+"competitors": [
+{
+"id": "30804608-16569162",
+"name": "Szymon Bajor",
+"home": true,
+"shortName": "S. Bajor"
+},
+{
+"id": "30804608-18103056",
+"name": "Kacper Paczoski",
+"home": false,
+"shortName": "Kacper"
+}
+],
+"link": "/ufc-mma/ksw/ksw-122-yakymenko-morelli/szymon-bajor-kacper-paczoski-202610101400"
+},
+{
+"id": "31608570",
+"description": "Sergiusz Zajac vs Salim El Ouassaidi",
+"startTime": 1791656400000,
+"live": false,
+"competitors": [
+{
+"id": "31608570-16723343",
+"name": "Sergiusz Zajac",
+"home": true,
+"shortName": "Sergiusz"
+},
+{
+"id": "31608570-16703475",
+"name": "Salim El Ouassaidi",
+"home": false,
+"shortName": "Salim"
+}
+],
+"link": "/ufc-mma/ksw/ksw-122-yakymenko-morelli/sergiusz-zajac-salim-el-ouassaidi-202610101420"
+},
+{
+"id": "30804396",
+"description": "Welisson Paiva vs Igor Wlodarczyk",
+"startTime": 1791657000000,
+"live": false,
+"competitors": [
+{
+"id": "30804396-16714246",
+"name": "Welisson Paiva",
+"home": true,
+"shortName": "Welisson"
+},
+{
+"id": "30804396-16778917",
+"name": "Igor Wlodarczyk",
+"home": false,
+"shortName": "Igor"
+}
+],
+"link": "/ufc-mma/ksw/ksw-122-yakymenko-morelli/welisson-paiva-igor-wlodarczyk-202610101430"
+},
+{
+"id": "30804610",
+"description": "Marian Ziolkowski vs Wilson Varela",
+"startTime": 1791657600000,
+"live": false,
+"competitors": [
+{
+"id": "30804610-16522210",
+"name": "Marian Ziolkowski",
+"home": true,
+"shortName": "M. Ziolkowski"
+},
+{
+"id": "30804610-16544209",
+"name": "Wilson Varela",
+"home": false,
+"shortName": "W. Varela"
+}
+],
+"link": "/ufc-mma/ksw/ksw-122-yakymenko-morelli/marian-ziolkowski-wilson-varela-202610101440"
+},
+{
+"id": "30804183",
+"description": "Mateusz Makarowski vs Adam Soldaev",
+"startTime": 1791658800000,
+"live": false,
+"competitors": [
+{
+"id": "30804183-16688486",
+"name": "Mateusz Makarowski",
+"home": true,
+"shortName": "Mateusz"
+},
+{
+"id": "30804183-16530891",
+"name": "Adam Soldaev",
+"home": false,
+"shortName": "A. Soldaev"
+}
+],
+"link": "/ufc-mma/ksw/ksw-122-yakymenko-morelli/mateusz-makarowski-adam-soldaev-202610101500"
+},
+{
+"id": "30804399",
+"description": "Laid Zerhouni vs Andrzej Grzebyk",
+"startTime": 1791660000000,
+"live": false,
+"competitors": [
+{
+"id": "30804399-16677342",
+"name": "Laid Zerhouni",
+"home": true,
+"shortName": "Laid"
+},
+{
+"id": "30804399-16527925",
+"name": "Andrzej Grzebyk",
+"home": false,
+"shortName": "A. Grzebyk"
+}
+],
+"link": "/ufc-mma/ksw/ksw-122-yakymenko-morelli/laid-zerhouni-andrzej-grzebyk-202610101520"
+},
+{
+"id": "30804182",
+"description": "Vitaliy Yakimenko vs Marcelo Morrelli",
+"startTime": 1791661200000,
+"live": false,
+"competitors": [
+{
+"id": "30804182-16654685",
+"name": "Vitaliy Yakimenko",
+"home": true,
+"shortName": "V. Yakimenko"
+},
+{
+"id": "30804182-16777711",
+"name": "Marcelo Morrelli",
+"home": false,
+"shortName": "Marcelo"
+}
+],
+"link": "/ufc-mma/ksw/ksw-122-yakymenko-morelli/vitaliy-yakimenko-marcelo-morrelli-202610101540"
+},
+{
+"id": "31851379",
+"description": "Kongsuk Sitsarawatsuer vs Ruslan Tokhtarov",
+"startTime": 1791548100000,
+"live": false,
+"competitors": [
+{
+"id": "31851379-20826687",
+"name": "Kongsuk Sitsarawatsuer",
+"home": true,
+"shortName": "Kongsuk"
+},
+{
+"id": "31851379-16768913",
+"name": "Ruslan Tokhtarov",
+"home": false,
+"shortName": "Ruslan"
+}
+],
+"link": "/ufc-mma/one-championship/one-friday-fights-174/kongsuk-sitsarawatsuer-ruslan-tokhtarov-202610090815"
+},
+{
+"id": "31851363",
+"description": "Tyson Harrison vs Linus Bylander",
+"startTime": 1791549300000,
+"live": false,
+"competitors": [
+{
+"id": "31851363-16634896",
+"name": "Tyson Harrison",
+"home": true,
+"shortName": "Tyson"
+},
+{
+"id": "31851363-18448252",
+"name": "Linus Bylander",
+"home": false,
+"shortName": "Linus"
+}
+],
+"link": "/ufc-mma/one-championship/one-friday-fights-174/tyson-harrison-linus-bylander-202610090835"
+},
+{
+"id": "31850595",
+"description": "Suriyanlek OBT Kamphee vs Rustam Yunusov",
+"startTime": 1791550800000,
+"live": false,
+"competitors": [
+{
+"id": "31850595-16645174",
+"name": "Suriyanlek OBT Kamphee",
+"home": true,
+"shortName": "S. Kamphee"
+},
+{
+"id": "31850595-16686097",
+"name": "Rustam Yunusov",
+"home": false,
+"shortName": "Rustam"
+}
+],
+"link": "/ufc-mma/one-championship/one-friday-fights-174/suriyanlek-obt-kamphee-rustam-yunusov-202610090900"
+},
+{
+"id": "31850999",
+"description": "Dedduanglek Torfunfarm vs Mongkoldetlek Por Pim-On",
+"startTime": 1791562500000,
+"live": false,
+"competitors": [
+{
+"id": "31850999-24051516",
+"name": "Dedduanglek Torfunfarm",
+"home": true,
+"shortName": "Dedduanglek"
+},
+{
+"id": "31850999-22003484",
+"name": "Mongkoldetlek Por Pim-On",
+"home": false,
+"shortName": "Mongkoldetlek"
+}
+],
+"link": "/ufc-mma/one-championship/one-friday-fights-174/dedduanglek-torfunfarm-mongkoldetlek-por-pim-on-202610091215"
+}
+],
+"boxing": [
+{
+"id": "24803499",
+"description": "Tyson Fury vs Anthony Joshua",
+"startTime": 1797030000000,
+"live": false,
+"competitors": [
+{
+"id": "24803499-16503670",
+"name": "Tyson Fury",
+"home": true,
+"shortName": "T. Fury"
+},
+{
+"id": "24803499-16503180",
+"name": "Anthony Joshua",
+"home": false,
+"shortName": "A. Joshua"
+}
+],
+"link": "/boxing/elite-boxing/tyson-fury-anthony-joshua-202612111800"
+},
+{
+"id": "31903963",
+"description": "Thomas Chabot  vs Jose Antonio Sanchez Romero",
+"startTime": 1791498600000,
+"live": false,
+"competitors": [
+{
+"id": "31903963-16636470",
+"name": "Thomas Chabot ",
+"home": true,
+"shortName": "Thomas"
+},
+{
+"id": "31903963-24048918",
+"name": "Jose Antonio Sanchez Romero",
+"home": false,
+"shortName": "Jose"
+}
+],
+"link": "/boxing/boxing-lines/thomas-chabot-jose-antonio-sanchez-romero-202610081830"
+},
+{
+"id": "29838368",
+"description": "Imam Khataev vs Padraig McCrory",
+"startTime": 1791504000000,
+"live": false,
+"competitors": [
+{
+"id": "29838368-16587123",
+"name": "Imam Khataev",
+"home": true,
+"shortName": "I. Khataev"
+},
+{
+"id": "29838368-16515022",
+"name": "Padraig McCrory",
+"home": false,
+"shortName": "P. McCrory"
+}
+],
+"link": "/boxing/boxing-lines/imam-khataev-padraig-mccrory-202610082000"
+},
+{
+"id": "29838565",
+"description": "Luis Santana vs Dzmitry Asanau",
+"startTime": 1791507600000,
+"live": false,
+"competitors": [
+{
+"id": "29838565-18816689",
+"name": "Luis Santana",
+"home": true,
+"shortName": "L. Santana"
+},
+{
+"id": "29838565-16551526",
+"name": "Dzmitry Asanau",
+"home": false,
+"shortName": "D. Asanau"
+}
+],
+"link": "/boxing/boxing-lines/luis-santana-dzmitry-asanau-202610082100"
+},
+{
+"id": "29838369",
+"description": "Wilkens Mathieu vs Vladimir Shishkin",
+"startTime": 1791511200000,
+"live": false,
+"competitors": [
+{
+"id": "29838369-16636494",
+"name": "Wilkens Mathieu",
+"home": true,
+"shortName": "W. Mathieu"
+},
+{
+"id": "29838369-16603477",
+"name": "Vladimir Shishkin",
+"home": false,
+"shortName": "V. Shishkin"
+}
+],
+"link": "/boxing/boxing-lines/wilkens-mathieu-vladimir-shishkin-202610082200"
+},
+{
+"id": "29837789",
+"description": "Osleys Iglesias vs Oliver Zaren",
+"startTime": 1791514800000,
+"live": false,
+"competitors": [
+{
+"id": "29837789-16532646",
+"name": "Osleys Iglesias",
+"home": true,
+"shortName": "O. Iglesias"
+},
+{
+"id": "29837789-16644695",
+"name": "Oliver Zaren",
+"home": false,
+"shortName": "O. Zaren"
+}
+],
+"link": "/boxing/boxing-lines/osleys-iglesias-oliver-zaren-202610082300"
+},
+{
+"id": "31893373",
+"description": "Yuito Moriwaki vs Deok No Yun",
+"startTime": 1791525600000,
+"live": false,
+"competitors": [
+{
+"id": "31893373-21625485",
+"name": "Yuito Moriwaki",
+"home": true,
+"shortName": "Yuito"
+},
+{
+"id": "31893373-21625484",
+"name": "Deok No Yun",
+"home": false,
+"shortName": "Deok"
+}
+],
+"link": "/boxing/boxing-lines/yuito-moriwaki-deok-no-yun-202610090200"
+},
+{
+"id": "31889967",
+"description": "Grant Flores vs Mikey Dahlman",
+"startTime": 1791666000000,
+"live": false,
+"competitors": [
+{
+"id": "31889967-16705649",
+"name": "Grant Flores",
+"home": true,
+"shortName": "G. Flores"
+},
+{
+"id": "31889967-16976253",
+"name": "Mikey Dahlman",
+"home": false,
+"shortName": "M. Dahlman"
+}
+],
+"link": "/boxing/boxing-lines/grant-flores-mikey-dahlman-202610101700"
+},
+{
+"id": "31890168",
+"description": "Tristan Kalkreuth vs Ivan Rosado",
+"startTime": 1791666000000,
+"live": false,
+"competitors": [
+{
+"id": "31890168-16642992",
+"name": "Tristan Kalkreuth",
+"home": true,
+"shortName": "T. Kalkreuth"
+},
+{
+"id": "31890168-24063916",
+"name": "Ivan Rosado",
+"home": false,
+"shortName": "Ivan"
+}
+],
+"link": "/boxing/boxing-lines/tristan-kalkreuth-ivan-rosado-202610101700"
+},
+{
+"id": "31888207",
+"description": "Jahmal Harvey vs Pedro Castaneda Castro",
+"startTime": 1791669600000,
+"live": false,
+"competitors": [
+{
+"id": "31888207-17087652",
+"name": "Jahmal Harvey",
+"home": true,
+"shortName": "J. Harvey"
+},
+{
+"id": "31888207-16770713",
+"name": "Pedro Castaneda Castro",
+"home": false,
+"shortName": "Pedro"
+}
+],
+"link": "/boxing/boxing-lines/jahmal-harvey-pedro-castaneda-castro-202610101800"
+},
+{
+"id": "31890368",
+"description": "Joshua Edwards (CHA) vs Craig Lewis",
+"startTime": 1791680400000,
+"live": false,
+"competitors": [
+{
+"id": "31890368-16767563",
+"name": "Joshua Edwards (CHA)",
+"home": true,
+"shortName": "Joshua"
+},
+{
+"id": "31890368-16519155",
+"name": "Craig Lewis",
+"home": false,
+"shortName": "C. Lewis"
+}
+],
+"link": "/boxing/boxing-lines/joshua-edwards-cha-craig-lewis-202610102100"
+},
+{
+"id": "31530202",
+"description": "Ricardo Sandoval vs Sergio Mendoza Cordova",
+"startTime": 1791680400000,
+"live": false,
+"competitors": [
+{
+"id": "31530202-16563507",
+"name": "Ricardo Sandoval",
+"home": true,
+"shortName": "R. Sandoval"
+},
+{
+"id": "31530202-16727495",
+"name": "Sergio Mendoza Cordova",
+"home": false,
+"shortName": "S. Mendoza"
+}
+],
+"link": "/boxing/boxing-lines/ricardo-sandoval-sergio-mendoza-cordova-202610102100"
+},
+{
+"id": "30289963",
+"description": "Floyd Schofield vs Lucas Bahdi",
+"startTime": 1791688500000,
+"live": false,
+"competitors": [
+{
+"id": "30289963-16568475",
+"name": "Floyd Schofield",
+"home": true,
+"shortName": "F. Schofield"
+},
+{
+"id": "30289963-16632314",
+"name": "Lucas Bahdi",
+"home": false,
+"shortName": "L. Bahdi"
+}
+],
+"link": "/boxing/boxing-lines/floyd-schofield-lucas-bahdi-202610102315"
+},
+{
+"id": "31165594",
+"description": "Louie Odoherty vs Michael Gomez Jr",
+"startTime": 1792263600000,
+"live": false,
+"competitors": [
+{
+"id": "31165594-16734744",
+"name": "Louie Odoherty",
+"home": true,
+"shortName": "L. Odoherty"
+},
+{
+"id": "31165594-16620762",
+"name": "Michael Gomez Jr",
+"home": false,
+"shortName": "M. Gomez"
+}
+],
+"link": "/boxing/boxing-lines/louie-odoherty-michael-gomez-jr-202610171500"
+},
+{
+"id": "31164638",
+"description": "Bakhodir Jalolov vs Solomon Dacres",
+"startTime": 1792267200000,
+"live": false,
+"competitors": [
+{
+"id": "31164638-16538148",
+"name": "Bakhodir Jalolov",
+"home": true,
+"shortName": "B. Jalolov"
+},
+{
+"id": "31164638-16503303",
+"name": "Solomon Dacres",
+"home": false,
+"shortName": "S. Dacres"
+}
+],
+"link": "/boxing/boxing-lines/bakhodir-jalolov-solomon-dacres-202610171600"
+},
+{
+"id": "30336580",
+"description": "Daniel Dubois vs Fabio Wardley",
+"startTime": 1792270800000,
+"live": false,
+"competitors": [
+{
+"id": "30336580-16552785",
+"name": "Daniel Dubois",
+"home": true,
+"shortName": "D. Dubois"
+},
+{
+"id": "30336580-16533829",
+"name": "Fabio Wardley",
+"home": false,
+"shortName": "F. Wardley"
+}
+],
+"link": "/boxing/boxing-lines/daniel-dubois-fabio-wardley-202610171700"
+},
+{
+"id": "30288380",
+"description": "Jermall Charlo vs Koen Mazoudier",
+"startTime": 1792285200000,
+"live": false,
+"competitors": [
+{
+"id": "30288380-16551852",
+"name": "Jermall Charlo",
+"home": true,
+"shortName": "J. Charlo"
+},
+{
+"id": "30288380-16516667",
+"name": "Koen Mazoudier",
+"home": false,
+"shortName": "K. Mazoudier"
+}
+],
+"link": "/boxing/boxing-lines/jermall-charlo-koen-mazoudier-202610172100"
+},
+{
+"id": "30289377",
+"description": "Brandon Figueroa vs Tomoki Kameda",
+"startTime": 1792288800000,
+"live": false,
+"competitors": [
+{
+"id": "30289377-16503172",
+"name": "Brandon Figueroa",
+"home": true,
+"shortName": "B. Figueroa"
+},
+{
+"id": "30289377-16662779",
+"name": "Tomoki Kameda",
+"home": false,
+"shortName": "T. Kameda"
+}
+],
+"link": "/boxing/boxing-lines/brandon-figueroa-tomoki-kameda-202610172200"
+},
+{
+"id": "30185563",
+"description": "Sebastian Fundora vs Ermal Hadribeaj",
+"startTime": 1792292400000,
+"live": false,
+"competitors": [
+{
+"id": "30185563-16519854",
+"name": "Sebastian Fundora",
+"home": true,
+"shortName": "S. Fundora"
+},
+{
+"id": "30185563-16679131",
+"name": "Ermal Hadribeaj",
+"home": false,
+"shortName": "E. Hadribeaj"
+}
+],
+"link": "/boxing/boxing-lines/sebastian-fundora-ermal-hadribeaj-202610172300"
+},
+{
+"id": "29838801",
+"description": "Giorgio Visioli vs Maxi Hughes",
+"startTime": 1792868400000,
+"live": false,
+"competitors": [
+{
+"id": "29838801-16671333",
+"name": "Giorgio Visioli",
+"home": true,
+"shortName": "G. Visioli"
+},
+{
+"id": "29838801-16539764",
+"name": "Maxi Hughes",
+"home": false,
+"shortName": "M. Hughes"
+}
+],
+"link": "/boxing/boxing-lines/giorgio-visioli-maxi-hughes-202610241500"
+},
+{
+"id": "22943301",
+"description": "Eddie Hearn vs Dana White",
+"startTime": 1798693200000,
+"live": false,
+"competitors": [
+{
+"id": "22943301-20749484",
+"name": "Eddie Hearn",
+"home": true,
+"shortName": "E. Hearn"
+},
+{
+"id": "22943301-20749485",
+"name": "Dana White",
+"home": false,
+"shortName": "D. White"
+}
+],
+"link": "/boxing/potential-fights/eddie-hearn-dana-white-202612310000"
+},
+{
+"id": "22903299",
+"description": "Le'Veon Bell vs Logan Paul",
+"startTime": 1798693200000,
+"live": false,
+"competitors": [
+{
+"id": "22903299-20736684",
+"name": "Le'Veon Bell",
+"home": true,
+"shortName": "L. Bell"
+},
+{
+"id": "22903299-11892957",
+"name": "Logan Paul",
+"home": false,
+"shortName": "L. Paul"
+}
+],
+"link": "/boxing/potential-fights/le-veon-bell-logan-paul-202612310000"
+},
+{
+"id": "30964563",
+"description": "Ryan Garcia vs Teofimo Lopez",
+"startTime": 1798693200000,
+"live": false,
+"competitors": [
+{
+"id": "30964563-11881702",
+"name": "Ryan Garcia",
+"home": true,
+"shortName": "R. Garcia"
+},
+{
+"id": "30964563-16505478",
+"name": "Teofimo Lopez",
+"home": false,
+"shortName": "T. Lopez"
+}
+],
+"link": "/boxing/potential-fights/ryan-garcia-teofimo-lopez-202612310000"
+},
+{
+"id": "25848699",
+"description": "Ryan Garcia vs Ilia Topuria",
+"startTime": 1798754400000,
+"live": false,
+"competitors": [
+{
+"id": "25848699-16512084",
+"name": "Ryan Garcia",
+"home": true,
+"shortName": "R. Garcia"
+},
+{
+"id": "25848699-21923884",
+"name": "Ilia Topuria",
+"home": false,
+"shortName": "I.Topuria"
+}
+],
+"link": "/boxing/potential-fights/ryan-garcia-ilia-topuria-202612311700"
+}
+]
+}

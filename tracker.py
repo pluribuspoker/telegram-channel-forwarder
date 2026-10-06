@@ -40,7 +40,8 @@ from scores import (
 )
 from odds import (fetch_odds, fetch_odds_current, quota_used as odds_quota_used,
                   quota_exhausted as odds_quota_exhausted, OddsResult,
-                  should_retry_odds, hist_rescues_msg_date)
+                  should_retry_odds, hist_rescues_msg_date,
+                  resolve_combat_sport)
 from pikkit import get_pick_splits
 from ai import (
     claude_parse,
@@ -757,6 +758,23 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         if ps0 and ps0 != sport:
                             print(f"  Clearing pick[0] sport override: {ps0} -> inherit {sport}")
                             del picks[0]["sport"]
+
+                    # Combat sports: the parse guesses Boxing vs UFC from the
+                    # name alone; the card the fighter is on decides (Boxing
+                    # has no odds source, so a wrong Boxing goes unpriced).
+                    combat = await resolve_combat_sport(sport, teams)
+                    if combat != sport:
+                        print(f"  combat sport override: {sport} -> {combat} ({teams})")
+                        sport = combat
+                        parsed["sport"] = sport
+                        if picks[0].get("sport") not in (None, sport):
+                            del picks[0]["sport"]
+                    for pick in picks[1:]:
+                        if pick.get("sport") == "Boxing":
+                            combat = await resolve_combat_sport("Boxing", pick.get("teams") or [])
+                            if combat != "Boxing":
+                                print(f"  combat pick sport override: Boxing -> {combat} ({pick.get('teams')})")
+                                pick["sport"] = combat
 
                     # Also validate per-pick sport overrides (cross-sport parlays)
                     for pick in picks[1:]:
