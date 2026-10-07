@@ -105,7 +105,7 @@ def make_clone() -> Path:
 # Live credentials never reach a test: a test that forgot to fake one would
 # DM the operator, ping a healthcheck, or open a real session.
 _SECRET_KEY = re.compile(r"(?:TOKEN|SESSION|SECRET|API_KEY|HEALTHCHECK_URL|CREDENTIALS|"
-                         r"PASSWORD|_CT0)$|^WATCHDOG_|^MOE_ALLOW_API$")
+                         r"PASSWORD|_CT0)$|^MOE_ALLOW_API$")
 # Commands a test must never run for real — the 2026-10-07 lesson: a copy of
 # run_trent_watcher.sh kept its `sudo -n systemctl start trent-repair`, and two
 # runs of this suite started the live auto-repair (operator DMs, an Opus

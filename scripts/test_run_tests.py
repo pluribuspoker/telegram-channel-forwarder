@@ -36,12 +36,14 @@ clone = tmp / "app"
 rt.make_shims(tmp / "shims")
 os.environ["FAKE_BOT_TOKEN"] = "123:secret"
 os.environ["FAKE_HEALTHCHECK_URL"] = "https://hc-ping.com/x"
+os.environ["WATCHDOG_BOT_TOKEN"] = "9:bot"
 os.environ["WATCHDOG_USER_ID"] = "42"
 env = rt.app_env(tmp / "shims")
 
 check("credentials are blanked for tests",
       env["FAKE_BOT_TOKEN"] == "" and env["FAKE_HEALTHCHECK_URL"] == ""
-      and env["WATCHDOG_USER_ID"] == "", {k: env[k] for k in ("FAKE_BOT_TOKEN",)})
+      and env["WATCHDOG_BOT_TOKEN"] == "", {k: env[k] for k in ("FAKE_BOT_TOKEN",)})
+check("non-secret ids survive (modules int() them at import)", env["WATCHDOG_USER_ID"] == "42")
 check("the shims come first on PATH", env["PATH"].split(os.pathsep)[0] == str(tmp / "shims"))
 
 (clone / "scripts" / "test_sneaky.py").write_text(
