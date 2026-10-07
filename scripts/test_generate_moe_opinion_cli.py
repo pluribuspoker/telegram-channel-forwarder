@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import unittest
@@ -14,10 +15,11 @@ SCRIPT = ROOT / "scripts" / "generate_moe_opinion.py"
 
 
 class GenerateMoeOpinionCliTests(unittest.TestCase):
-    def _run(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+    def _run(self, *arguments: str, env: dict | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(SCRIPT), "--event-id", "unused", *arguments],
             cwd=ROOT,
+            env={**os.environ, **(env or {})},
             capture_output=True,
             check=False,
             text=True,
@@ -55,8 +57,17 @@ class GenerateMoeOpinionCliTests(unittest.TestCase):
             result.stderr,
         )
 
+    def test_api_is_refused_without_the_operator_override(self) -> None:
+        result = self._run("--api", env={"MOE_ALLOW_API": ""})
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("every Claude call is subscription-only", result.stderr)
+
     def test_input_file_is_refused_with_api(self) -> None:
-        result = self._run("--api", "--input-file", "input.json")
+        # Past the subscription-only refusal (c78267a, 2026-10-03), which
+        # otherwise answers first; parser.error exits before any API call.
+        result = self._run("--api", "--input-file", "input.json",
+                           env={"MOE_ALLOW_API": "1"})
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("--input-file is not valid with --api", result.stderr)
