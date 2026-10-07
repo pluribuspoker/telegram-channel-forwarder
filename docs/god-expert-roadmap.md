@@ -39,7 +39,7 @@ These are settled. Do not relitigate them inside an implementation session.
   suite), and `git` inside the clone must run as forwarder (root trips the
   dubious-ownership check). The VPS venv has no numpy/scipy: fits are pure
   stdlib.
-- Deploy: commit on main → push → `git pull` **as root** in
+- Deploy: commit on main → push → `git pull` **as forwarder** (`runuser -u forwarder -- git pull`; a root pull leaves root-owned files) in
   `/home/forwarder/app` (root owns files there; a pull as `forwarder` fails
   half-way and leaves a partial checkout) → `systemctl restart
   telegram-intake.service` only when `moe.py` or `intake_bot.py` changed.
@@ -580,7 +580,7 @@ approves them.
 - CLAUDE.md, the skill runbook, the intake plan, and this status log updated.
 
 Deploy runbook (when the user says go): no env change, so no `syncenv`;
-`git push`; on the VPS `git pull` as root in `/home/forwarder/app`;
+`git push`; on the VPS `runuser -u forwarder -- git pull` in `/home/forwarder/app`;
 `systemctl restart telegram-intake.service` (`moe.py` changed); no systemd
 unit changed, so `bash scripts/check_deploy_sync.sh` should still report in
 sync. **Then, before the next `god-judge.timer` pass**: as forwarder in

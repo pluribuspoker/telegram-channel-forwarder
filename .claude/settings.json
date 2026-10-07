@@ -9,6 +9,15 @@
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/env_guard_hint.py\" 2>/dev/null || python \"$CLAUDE_PROJECT_DIR/.claude/hooks/env_guard_hint.py\""
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/test_before_push_hint.py\" 2>/dev/null || python \"$CLAUDE_PROJECT_DIR/.claude/hooks/test_before_push_hint.py\""
+          }
+        ]
       }
     ]
   }

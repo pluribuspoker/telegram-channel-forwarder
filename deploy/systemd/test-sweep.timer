@@ -1,0 +1,14 @@
+# Nightly at 02:40 ET (the VPS clock is America/New_York): after the last
+# late West-coast finals settle, clear of the 04:05 ungraded audit, the 05:23
+# MOE grader and the ~06:00–06:31 reboot/upgrade window.
+[Unit]
+Description=Run the offline test sweep nightly
+
+[Timer]
+OnCalendar=*-*-* 02:40:00
+AccuracySec=1min
+Persistent=true
+Unit=test-sweep.service
+
+[Install]
+WantedBy=timers.target

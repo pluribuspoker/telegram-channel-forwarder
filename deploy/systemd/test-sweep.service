@@ -1,0 +1,30 @@
+# Nightly offline test sweep: scripts/run_tests.py --trigger nightly --notify
+# via run_test_sweep.sh. No Claude call, no Telethon session, no network
+# beyond the watchdog-bot DM — the tests are offline and run in a scratch
+# clone (never ~/app state). ~3.5 min for ~90 tests, sequential.
+#
+# TimeoutStartSec=3600: each test is capped at 300 s (TEST_TIMEOUT_S); a
+# whole night of timeouts is the alert, not a hang.
+#
+# Environment: .env/.env.local (watchdog bot + config some modules read at
+# import; run_tests.py also passes them to each test). Nice'd so the
+# grade-daemon and tracker keep priority.
+[Unit]
+Description=Nightly offline test sweep (CI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+Environment=HOME=/home/forwarder
+ExecStart=/home/forwarder/app/run_test_sweep.sh
+TimeoutStartSec=3600
+Nice=10
+SyslogIdentifier=test-sweep
+StandardOutput=journal
+StandardError=journal

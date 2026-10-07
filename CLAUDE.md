@@ -7,6 +7,13 @@ Rules here are terse on purpose. Each section points to a `docs/*.md` file holdi
 - Chain related shell steps with `&&` on one line.
 - Parallel tasks use git worktrees: `git worktree add ../telegram-forwarder-<slug> -b <branch>`, commit+push there, merge from the main repo dir, `git worktree remove` after.
 
+## Tests = CI (2026-10-07)
+
+- **Run `python3 scripts/run_tests.py` before every `git push`** (operator rule) and fix what it breaks on the spot — a test whose expectation an intended change moved gets updated in the same commit. ~3.5 min, offline, ~90 tests one at a time in a scratch clone of HEAD + your uncommitted changes (never `~/app` state); `--only a,b` while iterating (a partial run doesn't count as green). The PreToolUse FYI `.claude/hooks/test_before_push_hint.py` reminds on a push with no green full run of HEAD (docs-only commits since a green run are covered); advisory, never a gate — an urgent push without one is OK if you say so. Nothing ran tests before this: four sat broken 1 day–6 months.
+- **CI time is tracked** — every run appends per-test seconds to `logs/test_runs.jsonl`; `--report` prints the trend + slowest tests. Budgets `TEST_SUITE_BUDGET_S` 300 / `TEST_BUDGET_S` 30. A new test must be offline and fast (a capture, not a live call); anything spending money or needing a live session goes in `SKIP` with its reason.
+- `test-sweep.timer` (02:40 ET, `run_test_sweep.sh`, `TEST_SWEEP_HEALTHCHECK_URL`) runs the suite nightly and DMs via the watchdog bot only on a failure, a slower/over-budget test or suite, plus a Sunday CI-time line. Red tests are a DM, not a job failure (hc-repair must not spend an agent on them).
+- Deploy pulls run AS forwarder (`runuser -u forwarder -- git pull`): a root pull left 177 source files + 1,687 `.git` objects root-owned (in-place edits failed; chowned back 2026-10-07).
+
 ## Claude calls = subscription only (2026-10-03)
 
 - **Every Claude call bills the subscription, never the API** (operator rule). The one path is `claude_sub.create` (headless `claude -p --safe-mode --tools "" --strict-mcp-config`, stream-json in/out so images work, OAuth token from env or `~/.claude/auth.env`, no `ANTHROPIC_API_KEY` in its env), reached via `ai._claude_create_with_retry` (same kwargs/response shape as `messages.create`). `ai.claude()` (the old API client) raises. Parse, grade, Trent classifiers, sauce, slip OCR, the odds review all ride it; `generate_moe_opinion.py --api` refuses unless `MOE_ALLOW_API=1`.
@@ -201,7 +208,7 @@ Rules here are terse on purpose. Each section points to a `docs/*.md` file holdi
 
 ```bash
 # Local (env changes happen ON the VPS via set_env_local.py / env_mappings.py; pull_env.py refreshes the desktop)
-git push
+python3 scripts/run_tests.py && git push
 # On VPS
-ssh root@209.38.51.86 'cd /home/forwarder/app && git pull && systemctl restart telegram-forwarder'
+ssh root@209.38.51.86 'cd /home/forwarder/app && runuser -u forwarder -- git pull && systemctl restart telegram-forwarder'
 ```
