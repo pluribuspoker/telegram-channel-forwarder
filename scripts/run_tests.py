@@ -27,7 +27,7 @@ run) and TEST_BUDGET_S (30 s per test); a test also counts as SLOWER when it
 takes > 2x its median over the last runs and > 5 s more. Keep new tests
 offline and fast — a slow one shows up in the nightly DM.
 
-    python3 scripts/run_tests.py                 # full suite, ~3 min
+    python3 scripts/run_tests.py                 # full suite (MOE excluded), ~1.5 min
     python3 scripts/run_tests.py --only test_odds_watch,test_moe
     python3 scripts/run_tests.py --report        # CI-time trend, no run
 """
@@ -62,6 +62,12 @@ SKIP = {
     "test_parlay_veto": "real Claude calls on the subscription (~$0.02/run)",
     "test_claude_sub": "real subscription CLI call",
 }
+# The NFL MOE / God Expert family (CLAUDE.md "NFL MOE + God Expert": moe_*,
+# the judge runner, celebrity, intake/desk bot, NFL lines/history/schedule,
+# Pikkit opinions) is out of CI by operator decision (2026-10-07) — it has its
+# own protocol (scripts/godbuild_test.sh). `--moe` opts back in for a run.
+MOE_TEST = re.compile(r"^test_(?:moe|nfl_|god_|celebrity_|intake_bot$|pikkit_opinion_runner$"
+                      r"|generate_moe_opinion)")
 # Copied into the clone for tests that replay real data (read-only use).
 DATA_FILES = ("parse_cache.json",)
 
@@ -271,6 +277,7 @@ def main() -> int:
     ap.add_argument("--notify", action="store_true", help="DM failures/slowdowns (nightly)")
     ap.add_argument("--report", action="store_true", help="print the CI-time trend and exit")
     ap.add_argument("--runs", type=int, default=14)
+    ap.add_argument("--moe", action="store_true", help="also run the NFL MOE / God Expert tests")
     ap.add_argument("--no-record", action="store_true", help="don't append to the ledger")
     args = ap.parse_args()
 
@@ -287,7 +294,8 @@ def main() -> int:
         print(f"unknown test(s): {sorted(only - set(names))}", file=sys.stderr)
         return 2
     skipped = [n for n in names if n in SKIP]
-    names = [n for n in names if n not in SKIP]
+    moe = [n for n in names if MOE_TEST.match(n) and not args.moe and not only]
+    names = [n for n in names if n not in SKIP and n not in moe]
 
     t0 = time.monotonic()
     clone = make_clone()
@@ -320,7 +328,8 @@ def main() -> int:
 
     print(f"\n{len(results) - len(failed)}/{len(results)} passed in {total:.0f}s"
           + (f" — FAILED: {', '.join(failed)}" if failed else "")
-          + (f" · skipped (not offline): {', '.join(skipped)}" if skipped else ""))
+          + (f" · skipped (not offline): {', '.join(skipped)}" if skipped else "")
+          + (f" · {len(moe)} MOE tests excluded (--moe to include)" if moe else ""))
     for name, secs, med in slower_tests(run, history):
         print(f"🐢 {name}: {secs:.1f}s vs median {med:.1f}s")
     if total > SUITE_BUDGET and not only:

@@ -67,6 +67,15 @@ check("a unittest.TestCase file runs via -m unittest and passes",
 (clone / "scripts" / "test_bad.py").write_text("raise SystemExit(1)\n")
 check("a failing script fails", rt.run_one(clone, "test_bad", env)["status"] == "fail")
 
+moe = [n for n in rt.discover(None) if rt.MOE_TEST.match(n)]
+check("MOE family is out of CI (operator 2026-10-07)",
+      {"test_moe_god", "test_god_judge_runner", "test_intake_bot", "test_nfl_lines",
+       "test_celebrity_grades", "test_pikkit_opinion_runner",
+       "test_generate_moe_opinion_cli"} <= set(moe), moe)
+check("…but the tracker's Pikkit splits and the watchdog relay stay in",
+      not rt.MOE_TEST.match("test_pikkit") and not rt.MOE_TEST.match("test_pikkit_relay")
+      and not rt.MOE_TEST.match("test_odds_watch"))
+
 hist = [{"ok": True, "secs": {"a": 2.0, "b": 10.0}} for _ in range(5)]
 slow = rt.slower_tests({"secs": {"a": 9.0, "b": 14.0}}, hist)
 check("slower = >2x the median AND +5 s", [s[0] for s in slow] == ["a"], slow)
