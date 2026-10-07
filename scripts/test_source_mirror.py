@@ -33,6 +33,11 @@ PICK = {"description": "Eagles vs Bears UNDER 42.5", "sport": "NFL", "bet_type":
         "is_parlay_leg": False, "period": "game", "teams": ["Philadelphia Eagles", "Chicago Bears"],
         "player": None, "prop_stat": None, "line": 42.5, "direction": "under"}
 TODAY = date(2026, 9, 29)
+# Pin the mirror's "today" to the fixtures' week: against the real clock the
+# MIRROR_DAYS cutoff aged every 2026-09-28 fixture out on 2026-10-06 and the
+# plan came back empty (8 FAILs, no edits).
+_real_plan = source_mirror.plan_source_syncs
+source_mirror.plan_source_syncs = lambda *a, **kw: _real_plan(*a, **{**kw, "today": TODAY})
 
 
 def entry(verdict=None, odds=-112, mapping="dagger-to-fc", msg_date="2026-09-28", **kw):

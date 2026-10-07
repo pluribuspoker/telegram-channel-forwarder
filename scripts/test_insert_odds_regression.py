@@ -1,49 +1,53 @@
 #!/usr/bin/env python3
 """
-Regression test for _insert_odds line placement.
+Corpus replay for _insert_odds tag placement: old (a git ref) vs new (working tree).
 
-For each recent channel message that has an odds tag:
-  1. Strip the tag to reconstruct the "original" message
-  2. AI-parse to get picks
-  3. Run BOTH old (main) and new (patched) _insert_odds with dummy odds
-  4. PASS if both produce the same tag placement
-  5. DIFF if they differ — may be a fix or a regression (printed for review)
+For every priced parse_cache.json entry with rendered html_text:
+  1. strip the odds tags to reconstruct the untagged post
+  2. run _insert_odds from BOTH tracker_format versions with the entry's
+     real picks + odds_by_pick
+  3. SAME if the outputs match; DIFF otherwise (a fix or a regression —
+     printed for review, exit 1)
+
+Offline: no Telegram, no Claude. This is the "corpus replay" docs/odds.md
+names as the real net for placement changes.
+
+The old version of this script read 300 live posts through the operator's
+Telethon session, re-parsed each through Claude, and imported `_ODDS_TAG_RE`
+from tracker — which left tracker in the 2026-04-03 module split (92b29dc),
+so it had crashed on import ever since.
 
 Usage:
-  python scripts/test_insert_odds_regression.py
+  python scripts/test_insert_odds_regression.py              # vs HEAD
+  python scripts/test_insert_odds_regression.py --base origin/main~3
 """
-import asyncio, os, re, sys
-sys.stdout.reconfigure(encoding='utf-8')
+import argparse
+import importlib.util
+import json
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from dotenv import load_dotenv
-load_dotenv(ROOT / ".env", override=True)
-load_dotenv(ROOT / ".env.local", override=True)
-
-from telethon import TelegramClient
-from telethon.sessions import StringSession
-from telethon.extensions import html as tl_html
-
-import importlib.util
-
-from ai import claude_parse
-
-# Old version: from main branch (on sys.path via ROOT)
-from tracker import _insert_odds as _insert_odds_old, _ODDS_TAG_RE
-
-# New version: patched tracker in this worktree
-_spec = importlib.util.spec_from_file_location("tracker_new", ROOT / "tracker.py")
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
-_insert_odds_new = _mod._insert_odds
-
-CHANNEL_ID = int(os.environ.get("DEST_CHANNEL", "-1002486251914"))
+import tracker_format as new_tf  # noqa: E402
+from tracker_format import _ODDS_TAG_RE  # noqa: E402
 
 
-def find_tagged_lines(text: str) -> list[int]:
+def load_old(ref: str):
+    src = subprocess.run(["git", "-C", str(ROOT), "show", f"{ref}:tracker_format.py"],
+                         check=True, capture_output=True, text=True).stdout
+    path = Path(tempfile.mkdtemp()) / "tracker_format_old.py"
+    path.write_text(src, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("tracker_format_old", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)   # its own imports resolve against ROOT (sys.path)
+    return mod
+
+
+def tagged_lines(text: str) -> list[int]:
     return [i for i, l in enumerate(text.split("\n")) if _ODDS_TAG_RE.search(l)]
 
 
@@ -51,70 +55,46 @@ def strip_odds_tags(text: str) -> str:
     return "\n".join(_ODDS_TAG_RE.sub("", l) for l in text.split("\n"))
 
 
-async def main():
-    client = TelegramClient(
-        StringSession(os.environ["TELEGRAM_SESSION"]),
-        int(os.environ["TELEGRAM_API_ID"]),
-        os.environ["TELEGRAM_API_HASH"],
-    )
-    await client.start()
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--base", default="HEAD", help="git ref for the OLD tracker_format.py")
+    ap.add_argument("--cache", default=str(ROOT / "parse_cache.json"))
+    args = ap.parse_args()
 
-    msgs = await client.get_messages(CHANNEL_ID, limit=300)
-    tagged = []
-    for msg in msgs:
-        if not msg.raw_text:
+    old_tf = load_old(args.base)
+    cache = json.loads(Path(args.cache).read_text(encoding="utf-8"))
+    same = diffs = errors = 0
+    for key, e in cache.items():
+        if not isinstance(e, dict) or e.get("_dupe") or not e.get("html_text"):
             continue
-        ht = tl_html.unparse(msg.raw_text, msg.entities or [])
-        if find_tagged_lines(ht):
-            tagged.append((msg.id, ht))
-
-    await client.disconnect()
-
-    print(f"Testing {len(tagged)} messages with existing odds tags\n")
-
-    passed = diffs = skipped = 0
-
-    for msg_id, current_text in tagged:
-        original_text = strip_odds_tags(current_text)
-
-        parsed = await claude_parse(original_text)
-        if not parsed:
-            print(f"  msg {msg_id}: SKIP (parse failed)")
-            skipped += 1
+        picks = (e.get("parsed") or {}).get("picks") or []
+        odds = e.get("odds_by_pick") or {}
+        if not picks or not any(isinstance(o, dict) and o.get("odds") is not None
+                                for o in odds.values()):
             continue
-
-        picks = parsed.get("picks", [])
-        if not picks:
-            print(f"  msg {msg_id}: SKIP (no picks extracted)")
-            skipped += 1
+        original = strip_odds_tags(e["html_text"])
+        try:
+            old = old_tf._insert_odds(original, picks, odds)
+            new = new_tf._insert_odds(original, picks, odds)
+        except Exception as exc:  # noqa: BLE001 - report, keep replaying
+            print(f"  {key}: ERROR {type(exc).__name__}: {exc}")
+            errors += 1
             continue
+        if old == new:
+            same += 1
+            continue
+        diffs += 1
+        ol, nl = tagged_lines(old), tagged_lines(new)
+        print(f"  {key}: DIFF  old→{ol}  new→{nl}")
+        for i, (a, b) in enumerate(zip(old.split("\n"), new.split("\n"))):
+            if a != b:
+                print(f"    {i:2} old: {a[:100]}\n    {i:2} new: {b[:100]}")
 
-        dummy = {str(i): {"odds": -110, "match_type": ""} for i in range(len(picks))}
-
-        old_result = _insert_odds_old(original_text, picks, dummy)
-        new_result = _insert_odds_new(original_text, picks, dummy)
-
-        old_lines = find_tagged_lines(old_result)
-        new_lines = find_tagged_lines(new_result)
-
-        if old_result == new_result:
-            print(f"  msg {msg_id}: PASS  tag(s) on line(s) {new_lines}")
-            passed += 1
-        else:
-            print(f"  msg {msg_id}: DIFF  old→{old_lines}  new→{new_lines}")
-            orig_lines = original_text.split("\n")
-            for i, l in enumerate(orig_lines[:14]):
-                old_m  = " <OLD>" if i in old_lines and i not in new_lines else ""
-                new_m  = " <NEW>" if i in new_lines and i not in old_lines else ""
-                both_m = " <BOTH>" if i in old_lines and i in new_lines else ""
-                if old_m or new_m or both_m:
-                    print(f"    {i:2}: {l[:90].encode('ascii','replace').decode()}{old_m}{new_m}{both_m}")
-            diffs += 1
-
-    print(f"\nResults: {passed} same, {diffs} differ, {skipped} skipped")
+    print(f"\nReplayed vs {args.base}: {same} same, {diffs} differ, {errors} errors")
     if diffs:
-        print("(DIFF lines above need manual review — could be fixes or regressions)")
+        print("(DIFF lines above need review — could be fixes or regressions)")
+    return 1 if diffs or errors else 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(main())
