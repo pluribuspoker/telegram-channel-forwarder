@@ -358,15 +358,18 @@ def send_dm(text: str) -> bool:
 
 
 def nightly_message(run: dict, results: list[dict], history: list[dict],
-                    weekly: bool) -> str | None:
+                    weekly: bool, repair_handoff: bool = False) -> str | None:
     """None = nothing worth a DM (all green, in budget, nothing slower)."""
-    failed = [r for r in results if r["status"] != "pass"]
+    failed = [r for r in results if r["status"] != "pass" and not repair_handoff]
     slow = slower_tests(run, history)
     budget = over_budget(run)
     suite_over = run["total_s"] > SUITE_BUDGET
     if not (failed or slow or budget or suite_over or weekly):
         return None
-    head = "🧪 tests: " + (f"{len(failed)} FAILING" if failed else "all pass") + \
+    n_red = sum(r["status"] != "pass" for r in results)
+    state = (f"{len(failed)} FAILING" if failed else
+             f"{n_red} failing → repair agent" if n_red else "all pass")
+    head = "🧪 tests: " + state + \
         f" · {run['total_s']:.0f}s for {run['n']} tests ({run['head'][:7]})"
     parts = [head]
     for r in failed:
@@ -390,6 +393,8 @@ def main() -> int:
     ap.add_argument("--only", help="comma-separated test names (test_x or x)")
     ap.add_argument("--trigger", default="manual", choices=("manual", "prepush", "nightly"))
     ap.add_argument("--notify", action="store_true", help="DM failures/slowdowns (nightly)")
+    ap.add_argument("--repair-handoff", action="store_true",
+                    help="with --notify: failures are scripts/nightly_test_repair.py's DM, not ours")
     ap.add_argument("--report", action="store_true", help="print the CI-time trend and exit")
     ap.add_argument("--runs", type=int, default=14)
     ap.add_argument("--moe", action="store_true", help="also run the NFL MOE / God Expert tests")
@@ -461,7 +466,10 @@ def main() -> int:
            "trigger": args.trigger, "mode": mode, "base": base_sha,
            "head": head, "dirty": dirty, "total_s": total,
            "n": len(results), "ok": not failed, "failed": failed,
-           "secs": {r["name"]: r["secs"] for r in results}}
+           "secs": {r["name"]: r["secs"] for r in results},
+           # the failing tests' output tails — scripts/nightly_test_repair.py hands
+           # them to the nightly repair agent
+           "tails": {r["name"]: r["tail"][-1500:] for r in results if r["status"] != "pass"}}
     if not args.no_record:
         LEDGER.parent.mkdir(parents=True, exist_ok=True)
         with LEDGER.open("a", encoding="utf-8") as fh:
@@ -478,7 +486,8 @@ def main() -> int:
 
     if args.notify:
         msg = nightly_message(run, results, history,
-                              weekly=datetime.now().weekday() == 6)
+                              weekly=datetime.now().weekday() == 6,
+                              repair_handoff=args.repair_handoff)
         if msg:
             send_dm(msg)
     return 1 if failed else 0

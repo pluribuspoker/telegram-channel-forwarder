@@ -2,8 +2,9 @@
 # Nightly offline test sweep — invoked by test-sweep.timer at 02:40 ET.
 # scripts/run_tests.py runs every offline scripts/test_*.py in a scratch clone
 # (one at a time — ~1 GB RAM), records per-test timings to
-# logs/test_runs.jsonl, and DMs the operator via the watchdog bot ONLY on a
-# failing test, a slow suite/test, or the Sunday weekly CI-time line.
+# logs/test_runs.jsonl, and DMs the operator via the watchdog bot only on a
+# slow suite/test or the Sunday weekly CI-time line; failing tests go to the
+# repair agent below, whose DM carries the result.
 # Failing TESTS are content, not a job failure: the healthcheck pings success
 # whenever the sweep itself completed (exit 0 or 1), so hc-repair never spends
 # an agent on a red test. Only a crashed runner (exit ≥ 2) pings /fail.
@@ -28,8 +29,15 @@ ping_hc() {
 
 cd "$APP_DIR"
 ping_hc "/start"
-$PYTHON scripts/run_tests.py --trigger nightly --notify 2>&1 | tee "$LOGFILE"
+$PYTHON scripts/run_tests.py --trigger nightly --notify --repair-handoff 2>&1 | tee "$LOGFILE"
 STATUS=$?
+
+# Red tests → ONE repair agent fixes them, verifies with its own sandboxed
+# run, pushes only if green, and DMs the result (scripts/nightly_test_repair.py;
+# kill switch TEST_REPAIR_DISABLED=1 → a plain failure DM instead).
+if [ "$STATUS" -eq 1 ]; then
+    $PYTHON scripts/nightly_test_repair.py 2>&1 | tee -a "$LOGFILE"
+fi
 
 if [ "$STATUS" -le 1 ]; then
     ping_hc "" "$(tail -20 "$LOGFILE")"

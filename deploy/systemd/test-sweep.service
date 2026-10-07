@@ -1,10 +1,11 @@
 # Nightly offline test sweep: scripts/run_tests.py --trigger nightly --notify
-# via run_test_sweep.sh. No Claude call, no Telethon session, no network
-# beyond the watchdog-bot DM — the tests are offline and run in a scratch
-# clone (never ~/app state). ~3.5 min for ~90 tests, sequential.
+# via run_test_sweep.sh (~1 min, ~65 tests, sequential, in a scratch clone —
+# never ~/app state). On red tests it runs scripts/nightly_test_repair.py: ONE
+# headless Opus agent (subscription OAuth from auth.env, never the API) fixes
+# them, the runner re-verifies, pushes only if green, DMs the result.
 #
-# TimeoutStartSec=3600: each test is capped at 300 s (TEST_TIMEOUT_S); a
-# whole night of timeouts is the alert, not a hang.
+# TimeoutStartSec=3600: sweep (~1 min) + repair agent (1500 s) + the
+# runner's two verify runs; each test is capped at 300 s (TEST_TIMEOUT_S).
 #
 # Environment: .env/.env.local (watchdog bot + config some modules read at
 # import; run_tests.py also passes them to each test). Nice'd so the
@@ -21,6 +22,8 @@ Group=forwarder
 WorkingDirectory=/home/forwarder/app
 EnvironmentFile=/home/forwarder/app/.env
 EnvironmentFile=-/home/forwarder/app/.env.local
+EnvironmentFile=-/home/forwarder/.claude/auth.env
+Environment=PATH=/home/forwarder/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=/home/forwarder
 ExecStart=/home/forwarder/app/run_test_sweep.sh
 TimeoutStartSec=3600
