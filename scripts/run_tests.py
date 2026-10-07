@@ -102,32 +102,58 @@ def make_clone() -> Path:
     return clone
 
 
-def app_env() -> dict:
-    """This process's env + .env + .env.local, as systemd hands them to the
-    services (some modules read config at import: trent_watcher needs
-    TELEGRAM_API_ID). Passed as variables — the secrets files are never
-    copied into the clone. Tests stay offline; the values are only read."""
+# Live credentials never reach a test: a test that forgot to fake one would
+# DM the operator, ping a healthcheck, or open a real session.
+_SECRET_KEY = re.compile(r"(?:TOKEN|SESSION|SECRET|API_KEY|HEALTHCHECK_URL|CREDENTIALS|"
+                         r"PASSWORD|_CT0)$|^WATCHDOG_|^MOE_ALLOW_API$")
+# Commands a test must never run for real — the 2026-10-07 lesson: a copy of
+# run_trent_watcher.sh kept its `sudo -n systemctl start trent-repair`, and two
+# runs of this suite started the live auto-repair (operator DMs, an Opus
+# agent, its 6h cooldown burned). Shims on PATH record the attempt and fail;
+# the runner reports the test as LIVE.
+LIVE_COMMANDS = ("sudo", "systemctl", "systemd-run", "claude", "runuser")
+
+
+def app_env(shim_dir: Path) -> dict:
+    """The env a test runs in: this process's env + .env (config some modules
+    read at import: trent_watcher needs TELEGRAM_API_ID) — never .env.local —
+    minus every credential, with the live-command shims first on PATH.
+    Passed as variables; no env file is copied into the clone."""
     env = dict(os.environ)
     code = ("import json,sys; from dotenv import dotenv_values; "
-            "print(json.dumps({k: v for f in sys.argv[1:] for k, v in dotenv_values(f).items() "
+            "print(json.dumps({k: v for k, v in dotenv_values(sys.argv[1]).items() "
             "if v is not None}))")
-    files = [str(ROOT / f) for f in (".env", ".env.local") if (ROOT / f).exists()]
-    if files:
+    if (ROOT / ".env").exists():
         try:
-            p = subprocess.run([PYTHON, "-c", code, *files], capture_output=True,
+            p = subprocess.run([PYTHON, "-c", code, str(ROOT / ".env")], capture_output=True,
                                text=True, timeout=30, check=True)
             env.update(json.loads(p.stdout))
         except (subprocess.SubprocessError, json.JSONDecodeError, OSError) as exc:
-            print(f"(env files not loaded: {exc})", file=sys.stderr)
-    for k in ("MOE_ALLOW_API", "ANTHROPIC_API_KEY"):   # never let a test bill the API
-        env.pop(k, None)
+            print(f"(.env not loaded: {exc})", file=sys.stderr)
+    for k in [k for k in env if _SECRET_KEY.search(k)]:
+        env[k] = ""   # present but empty: import-time os.environ[...] still works,
+                      # every sender/pinger treats it as unset (ping_hc: [ -n ])
+    env["PATH"] = f"{shim_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["RUN_TESTS_LIVE_LOG"] = str(shim_dir / "live.log")
     return env
+
+
+def make_shims(shim_dir: Path) -> None:
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    for cmd in LIVE_COMMANDS:
+        f = shim_dir / cmd
+        f.write_text('#!/bin/sh\necho "$(basename "$0") $*" >> "$RUN_TESTS_LIVE_LOG"\n'
+                     'echo "run_tests: live command blocked: $(basename "$0") $*" >&2\nexit 1\n')
+        f.chmod(0o755)
 
 
 def run_one(clone: Path, name: str, env: dict | None = None) -> dict:
     path = clone / "scripts" / f"{name}.py"
     cmd = ([PYTHON, "-m", "unittest", f"scripts.{name}"] if is_unittest(path)
            else [PYTHON, str(path)])
+    live_log = Path(env["RUN_TESTS_LIVE_LOG"]) if env else None
+    if live_log and live_log.exists():
+        live_log.unlink()
     t0 = time.monotonic()
     try:
         p = subprocess.run(cmd, cwd=clone, capture_output=True, text=True,
@@ -138,6 +164,10 @@ def run_one(clone: Path, name: str, env: dict | None = None) -> dict:
         status = "timeout"
         out = ((exc.stdout or b"").decode(errors="replace") if isinstance(exc.stdout, bytes)
                else (exc.stdout or "")) + f"\n[timed out after {TEST_TIMEOUT}s]"
+    if live_log and live_log.exists():
+        status = "live"
+        out = (f"tried to run a live command (blocked) — fake it in the test:\n"
+               + live_log.read_text(errors="replace") + out)
     return {"name": name, "status": status, "secs": round(time.monotonic() - t0, 2),
             "tail": "\n".join(out.strip().splitlines()[-15:]) if status != "pass" else ""}
 
@@ -257,13 +287,14 @@ def main() -> int:
 
     t0 = time.monotonic()
     clone = make_clone()
-    env = app_env()
+    make_shims(clone.parent / "shims")
+    env = app_env(clone.parent / "shims")
     results = []
     try:
         for name in names:
             r = run_one(clone, name, env)
             results.append(r)
-            mark = {"pass": "✓", "fail": "✗", "timeout": "⏱"}[r["status"]]
+            mark = {"pass": "✓", "fail": "✗", "timeout": "⏱", "live": "☠"}[r["status"]]
             print(f"{mark} {r['secs']:6.1f}s  {name}", flush=True)
             if r["status"] != "pass":
                 print("    " + r["tail"].replace("\n", "\n    "), flush=True)
