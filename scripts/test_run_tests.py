@@ -40,10 +40,12 @@ os.environ["WATCHDOG_BOT_TOKEN"] = "9:bot"
 os.environ["WATCHDOG_USER_ID"] = "42"
 env = rt.app_env(tmp / "shims")
 
-check("credentials are blanked for tests",
-      env["FAKE_BOT_TOKEN"] == "" and env["FAKE_HEALTHCHECK_URL"] == ""
-      and env["WATCHDOG_BOT_TOKEN"] == "", {k: env[k] for k in ("FAKE_BOT_TOKEN",)})
-check("non-secret ids survive (modules int() them at import)", env["WATCHDOG_USER_ID"] == "42")
+D = rt.PLACEHOLDER
+check("credentials are replaced by an inert placeholder for tests",
+      env["FAKE_BOT_TOKEN"] == D and env["FAKE_HEALTHCHECK_URL"] == D
+      and env["WATCHDOG_BOT_TOKEN"] == D, {k: env[k] for k in ("FAKE_BOT_TOKEN",)})
+check("non-secret ids survive (modules int() them at import)",
+      env["WATCHDOG_USER_ID"] not in ("", D))
 check("the shims come first on PATH", env["PATH"].split(os.pathsep)[0] == str(tmp / "shims"))
 
 (clone / "scripts" / "test_sneaky.py").write_text(

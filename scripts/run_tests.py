@@ -111,6 +111,7 @@ _SECRET_KEY = re.compile(r"(?:TOKEN|SESSION|SECRET|API_KEY|HEALTHCHECK_URL|CREDE
 # runs of this suite started the live auto-repair (operator DMs, an Opus
 # agent, its 6h cooldown burned). Shims on PATH record the attempt and fail;
 # the runner reports the test as LIVE.
+PLACEHOLDER = "run-tests-dummy"
 LIVE_COMMANDS = ("sudo", "systemctl", "systemd-run", "claude", "runuser")
 
 
@@ -131,8 +132,11 @@ def app_env(shim_dir: Path) -> dict:
         except (subprocess.SubprocessError, json.JSONDecodeError, OSError) as exc:
             print(f"(.env not loaded: {exc})", file=sys.stderr)
     for k in [k for k in env if _SECRET_KEY.search(k)]:
-        env[k] = ""   # present but empty: import-time os.environ[...] still works,
-                      # every sender/pinger treats it as unset (ping_hc: [ -n ])
+        # An inert placeholder, not removal or "": import-time os.environ[...]
+        # (trent_watcher) still works, a test's os.environ.setdefault(...) fake
+        # is NOT shadowed by an empty value, and a pinger/sender that forgot to
+        # fake it hits "run-tests-dummy" — never a real check, bot or session.
+        env[k] = PLACEHOLDER
     env["PATH"] = f"{shim_dir}{os.pathsep}{env.get('PATH', '')}"
     env["RUN_TESTS_LIVE_LOG"] = str(shim_dir / "live.log")
     return env
