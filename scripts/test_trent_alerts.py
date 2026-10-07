@@ -379,8 +379,13 @@ finally:
 # A copy with every live path swapped for the temp dir and the 60s backoff cut,
 # run with a minimal env (no TRENT_HEALTHCHECK_URL, so ping_hc is a no-op).
 runner = (ROOT / "run_trent_watcher.sh").read_text()
+# The repair trigger is swapped too: run as forwarder on the VPS, the failing
+# case's real `sudo systemctl start trent-repair` spawned the live auto-repair
+# (an authed X fetch, the operator's DM, an Opus agent, the 6h cooldown burned)
+# every time this test ran — twice on 2026-10-07.
 live_bits = ('APP_DIR="/home/forwarder/app"', 'PYTHON="/home/forwarder/venv/bin/python"',
-             'LOGFILE="/tmp/trent_watcher_last_run.log"', "sleep 60")
+             'LOGFILE="/tmp/trent_watcher_last_run.log"', "sleep 60",
+             "sudo -n systemctl start --no-block trent-repair.service")
 check("runner has the expected live paths to swap", all(runner.count(b) == 1 for b in live_bits))
 stub = TMP / "stub_python"
 stub.write_text('#!/bin/bash\necho "${TRENT_FINAL_ATTEMPT:-unset}" >> "$REC"\nexit "$STUB_EXIT"\n')
@@ -388,17 +393,24 @@ stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
 safe = (runner.replace(live_bits[0], f'APP_DIR="{TMP}"')
               .replace(live_bits[1], f'PYTHON="{stub}"')
               .replace(live_bits[2], f'LOGFILE="{TMP}/last_run.log"')
-              .replace(live_bits[3], "sleep 0"))
+              .replace(live_bits[3], "sleep 0")
+              .replace(live_bits[4], 'echo spawn >> "$REPAIR_REC"'))
 assert "/home/forwarder/app" not in safe and "/tmp/trent_watcher_last_run.log" not in safe
 assert "/home/forwarder/venv" not in safe
+assert "sudo" not in safe and "systemctl" not in safe
 (TMP / "runner.sh").write_text(safe)
-for exit_code, want_rc, want in (("1", 1, ["0", "1"]), ("0", 0, ["0"])):
+for exit_code, want_rc, want, want_spawns in (("1", 1, ["0", "1"], 1), ("0", 0, ["0"], 0)):
     rec = TMP / f"rec_{exit_code}"
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(TMP), "REC": str(rec), "STUB_EXIT": exit_code}
+    repair_rec = TMP / f"repair_{exit_code}"
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(TMP), "REC": str(rec),
+           "REPAIR_REC": str(repair_rec), "STUB_EXIT": exit_code}
     r = subprocess.run(["bash", str(TMP / "runner.sh")], env=env, capture_output=True, text=True, timeout=60)
     got = rec.read_text().split() if rec.exists() else []
     check(f"runner exports TRENT_FINAL_ATTEMPT per attempt (watcher exit {exit_code})",
           r.returncode == want_rc and got == want, f"rc={r.returncode} got={got} {r.stdout[-120:]}")
+    spawns = len(repair_rec.read_text().split()) if repair_rec.exists() else 0
+    check(f"runner triggers trent-repair only after both attempts fail (watcher exit {exit_code})",
+          spawns == want_spawns, f"{spawns} spawns")
 check("runner keeps its exec bit", os.access(ROOT / "run_trent_watcher.sh", os.X_OK))
 
 # (h) main() wiring, fully faked: temp DB (never the live picks.db), fake X API.
