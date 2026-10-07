@@ -2875,17 +2875,49 @@ async def verify_picks_on_schedule(
             slates[psport] = names
         return slates.get(psport)
 
+    wide: dict[str, list[str]] = {}
+
+    # Confirmation looks across the whole VALIDATE_WINDOW (the window
+    # validate_sport confirms the sport in): a Wednesday post for a Saturday
+    # game ("Kentucky +10.5", 2026-10-07) found no Kentucky Wildcats on
+    # Wed/Thu, so the repair below rebound it to Thursday's Western Kentucky —
+    # a different game, a 9.5-point price gap. Only confirmation widens; the
+    # repair/suspect passes keep the near-day slate, where a wider net would
+    # only add same-token candidates (Eastern Kentucky also plays Saturday).
+    async def _window_slate(psport: str) -> list[str]:
+        if psport not in wide:
+            names: list[str] = []
+            try:
+                days = _window(date_str, *VALIDATE_WINDOW)
+            except ValueError:
+                days = []
+            for d in days:
+                if d in seen_days:
+                    continue
+                key = (psport, d)
+                if key not in scoreboard_cache:
+                    scoreboard_cache[key] = await fetch_espn(psport, d)
+                sb = scoreboard_cache[key]
+                if sb and sb.get("events"):
+                    names.extend(_competitor_names(sb.get("events", [])))
+            wide[psport] = names
+        return wide[psport]
+
     # Pass 1 — confirm what we can, and record who each confirmed leg is using.
     pending: list[int] = []
     for i, pick in enumerate(picks):
         psport = pick.get("sport") or sport
         names = await _slate(psport)
-        if names is None:
+        teams = [t for t in (pick.get("teams") or []) if t]
+        hits = ([n for t in teams for n in names if _team_matches(t.lower(), n.lower())]
+                if names else [])
+        if not hits and teams and psport in ESPN_LEAGUES and psport != "CFL":
+            hits = [n for t in teams for n in await _window_slate(psport)
+                    if _team_matches(t.lower(), n.lower())]
+        if names is None and not hits:
             results.append({"index": i, "status": "n/a", "teams": pick.get("teams", []),
                             "description": pick.get("description", ""), "note": ""})
             continue
-        teams = [t for t in (pick.get("teams") or []) if t]
-        hits = [n for t in teams for n in names if _team_matches(t.lower(), n.lower())]
         if hits:
             claimed.update(h.lower() for h in hits)
             results.append({"index": i, "status": "confirmed", "teams": teams,

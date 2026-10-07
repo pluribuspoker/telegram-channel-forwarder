@@ -1,0 +1,216 @@
+{
+ "NCAAF_20261006": [],
+ "NCAAF_20261007": [],
+ "NCAAF_20261008": [
+  {
+   "id": "401871052",
+   "name": "Missouri State Bears at Western Kentucky Hilltoppers",
+   "date": "2026-10-08T23:00Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Western Kentucky Hilltoppers"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Missouri State Bears"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401869933",
+   "name": "South Alabama Jaguars at Arkansas State Red Wolves",
+   "date": "2026-10-08T23:30Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Arkansas State Red Wolves"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "South Alabama Jaguars"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "NCAAF_20261009": [],
+ "NCAAF_20261010": [
+  {
+   "id": "401858255",
+   "name": "Duke Blue Devils at Georgia Tech Yellow Jackets",
+   "date": "2026-10-10T19:30Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Georgia Tech Yellow Jackets"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Duke Blue Devils"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401868329",
+   "name": "Florida A&M Rattlers at Alabama State Hornets",
+   "date": "2026-10-10T20:00Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Alabama State Hornets"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Florida A&M Rattlers"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401868144",
+   "name": "West Georgia Wolves at Eastern Kentucky Colonels",
+   "date": "2026-10-10T22:00Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Eastern Kentucky Colonels"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "West Georgia Wolves"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401856715",
+   "name": "LSU Tigers at Kentucky Wildcats",
+   "date": "2026-10-10T23:00Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Kentucky Wildcats"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "LSU Tigers"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401868300",
+   "name": "Bethune-Cookman Wildcats at Alabama A&M Bulldogs",
+   "date": "2026-10-10T23:00Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Alabama A&M Bulldogs"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Bethune-Cookman Wildcats"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401856712",
+   "name": "Georgia Bulldogs at Alabama Crimson Tide",
+   "date": "2026-10-10T23:30Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Alabama Crimson Tide"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "Georgia Bulldogs"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401869949",
+   "name": "James Madison Dukes at Georgia Southern Eagles",
+   "date": "2026-10-10T23:30Z",
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "displayName": "Georgia Southern Eagles"
+       }
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "displayName": "James Madison Dukes"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
