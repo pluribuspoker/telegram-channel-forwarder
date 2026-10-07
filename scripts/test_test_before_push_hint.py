@@ -60,6 +60,9 @@ check("no runs → FYI", "no passing" in (h.note("git push", [], c1) or ""))
 check("failing run of HEAD → names the tests",
       "test_x" in (h.note("git push", [run(c1, ok=False, failed=["test_x"])], c1) or ""))
 check("a partial (--only) run doesn't count", h.note("git push", [run(c1, n=2)], c1) is not None)
+check("a green changed-files run of HEAD counts, even with 0 tests (docs/config only)",
+      h.note("git push", [{**run(c1, n=0), "mode": "changed"}], c1) is None)
+check("an --area run doesn't count", h.note("git push", [{**run(c1), "mode": "area"}], c1) is not None)
 check("a run of a dirty tree doesn't count", h.note("git push", [run(c1, dirty=True)], c1) is not None)
 check("not a push → silent", h.note("git status", [], c1) is None)
 

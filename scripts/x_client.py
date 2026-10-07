@@ -211,7 +211,12 @@ _CHUNK_DIGESTS: dict[str, tuple[str | None, tuple[str, ...], tuple[int, int, int
 
 
 def _digest_chunk(url: str, body: str):
-    m = _INDICES_FILE_RE.search(body)
+    # Substring gate first: the regex's lazy `[\w./-]*?` restarts at every
+    # offset, quadratic over minified JS's long word runs (2.7 s over the
+    # test's 430 chunks; every live scan paid it too). It can only match
+    # where one of these literals occurs, so the gate never changes a result.
+    m = (_INDICES_FILE_RE.search(body)
+         if "ondemand.s" in body or "sign.o" in body else None)
     if m:
         return urljoin(url, m.group(0)), (), None
     sig = None

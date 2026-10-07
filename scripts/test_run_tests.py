@@ -76,6 +76,35 @@ check("…but the tracker's Pikkit splits and the watchdog relay stay in",
       not rt.MOE_TEST.match("test_pikkit") and not rt.MOE_TEST.match("test_pikkit_relay")
       and not rt.MOE_TEST.match("test_odds_watch"))
 
+# ── selection: only the tests a change touches ──
+import subprocess  # noqa: E402
+repo = tmp / "sel"
+(repo / "scripts").mkdir(parents=True)
+(repo / "docs").mkdir()
+(repo / "scripts" / "__init__.py").write_text("")
+(repo / "b.py").write_text("X = 1\n")
+(repo / "a.py").write_text("import b\n")
+(repo / "c.py").write_text("Y = 2\n")
+(repo / "run_y.sh").write_text("echo y\n")
+(repo / "docs" / "n.md").write_text("doc\n")
+(repo / "scripts" / "test_x.py").write_text("from a import *\n")
+(repo / "scripts" / "test_y.py").write_text("import subprocess  # runs run_y.sh\n")
+(repo / "scripts" / "helper.py").write_text("Z = 3\n")
+(repo / "scripts" / "test_z.py").write_text("from scripts import helper\n")
+for c in (["init", "-q"], ["add", "."]):
+    subprocess.run(["git", "-C", str(repo), *c], check=True)
+T = ["test_x", "test_y", "test_z"]
+def sel(*changed):
+    return rt.select_affected(T, list(changed), root=repo)
+check("a transitive import selects the test", list(sel("b.py")[0]) == ["test_x"], sel("b.py"))
+check("a file the test names (runner .sh) selects it", list(sel("run_y.sh")[0]) == ["test_y"])
+check("`from scripts import helper` resolves", list(sel("scripts/helper.py")[0]) == ["test_z"])
+check("editing the test itself selects it", list(sel("scripts/test_y.py")[0]) == ["test_y"])
+check("docs select nothing and aren't 'uncovered'", sel("docs/n.md", "README.md") == ({}, []))
+check("code no test reaches is reported uncovered", sel("c.py") == ({}, ["c.py"]))
+check("--area matches test names and imported module paths",
+      rt.area_tests(T, "helper", root=repo) == ["test_z"] and rt.area_tests(T, "x", root=repo) == ["test_x"])
+
 hist = [{"ok": True, "secs": {"a": 2.0, "b": 10.0}} for _ in range(5)]
 slow = rt.slower_tests({"secs": {"a": 9.0, "b": 14.0}}, hist)
 check("slower = >2x the median AND +5 s", [s[0] for s in slow] == ["a"], slow)

@@ -3,9 +3,9 @@
 
 Operator rule (2026-10-07): every Claude session runs the offline suite before
 pushing, so a test broken by a change is fixed on the spot — four had rotted
-for 1 day to 6 months because nothing ran them. The suite is
-`python3 scripts/run_tests.py` (~3.5 min); each run lands in
-logs/test_runs.jsonl.
+for 1 day to 6 months because nothing ran them. `python3 scripts/run_tests.py`
+runs the tests your changes vs origin/main touch (`--all` = everything); each
+run lands in logs/test_runs.jsonl.
 
 On a `git push` this looks for a passing run of HEAD in that ledger (a run of
 an earlier commit still counts when everything since touched only docs /
@@ -40,8 +40,11 @@ def runs() -> list[dict]:
 
 
 def covered(head: str, run: dict) -> bool:
-    """A full green run of `head`, or of an ancestor with only docs since."""
-    if not run.get("ok") or run.get("n", 0) < 10 or run.get("dirty"):
+    """A green full (`--all`) or changed-files (the default) run of `head`, or
+    of an ancestor with only docs since. A changed-files run tested every test
+    the diff vs origin/main touches — possibly none (docs/config only)."""
+    mode = run.get("mode") or ("all" if run.get("n", 0) >= 10 else "only")
+    if not run.get("ok") or run.get("dirty") or mode not in ("all", "changed"):
         return False
     if run.get("head") == head:
         return True
@@ -65,7 +68,8 @@ def note(cmd: str, ledger: list[dict], head: str) -> str | None:
                 "change was intended) before pushing — operator rule 2026-10-07. If this push "
                 "must go out anyway, say so to the operator.")
     return (f"FYI (tests): no passing `python3 scripts/run_tests.py` run of HEAD {head[:7]} — "
-            "run it before pushing (~3.5 min, offline, in a scratch clone; operator rule "
+            "run it before pushing (runs only the tests your changes touch, offline, in a "
+            "scratch clone; operator rule "
             "2026-10-07) and fix anything it breaks on the spot. If this push must go out "
             "anyway, say so to the operator.")
 

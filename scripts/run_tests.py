@@ -27,8 +27,11 @@ run) and TEST_BUDGET_S (30 s per test); a test also counts as SLOWER when it
 takes > 2x its median over the last runs and > 5 s more. Keep new tests
 offline and fast — a slow one shows up in the nightly DM.
 
-    python3 scripts/run_tests.py                 # full suite (MOE excluded), ~1.5 min
-    python3 scripts/run_tests.py --only test_odds_watch,test_moe
+    python3 scripts/run_tests.py                 # only the tests your changes touch (vs origin/main)
+    python3 scripts/run_tests.py --why           # … and which change selected each one
+    python3 scripts/run_tests.py --area trent    # one area by keyword (test names + imported modules)
+    python3 scripts/run_tests.py --all           # the full suite (MOE excluded), ~45 s — nightly does this
+    python3 scripts/run_tests.py --only test_odds_watch,test_hc_flap
     python3 scripts/run_tests.py --report        # CI-time trend, no run
 """
 
@@ -75,6 +78,118 @@ DATA_FILES = ("parse_cache.json",)
 def discover(only: set[str] | None) -> list[str]:
     names = sorted(p.stem for p in (ROOT / "scripts").glob("test_*.py"))
     return [n for n in names if not only or n in only]
+
+
+# ─── which tests a change touches ────────────────────────────────────────────
+# No hand-kept area lists (they drift): a test is affected by a file when the
+# file is in the test's transitive import closure (static, via ast), or when
+# the test's own source names the file (a runner .sh it executes, a hook it
+# loads by path, a module it imports dynamically). Docs/markdown touch nothing.
+# Directories modules are imported from (tests put scripts/, deploy/ and
+# .claude/hooks/ on sys.path).
+SEARCH_DIRS = ("", "scripts", "deploy", ".claude/hooks", "angles")
+NO_TEST_NEEDED = re.compile(r"(?:^docs/|\.md$|^\.gitignore$)")
+
+
+def _module_index(files: list[str]) -> dict[str, str]:
+    idx: dict[str, str] = {}
+    for f in files:
+        mod = f[:-3].replace("/", ".")
+        if mod.endswith(".__init__"):
+            mod = mod[: -len(".__init__")]
+        idx.setdefault(mod, f)
+        for d in SEARCH_DIRS:
+            pre = (d.replace("/", ".") + ".") if d else ""
+            if d and mod.startswith(pre):
+                idx.setdefault(mod[len(pre):], f)
+    return idx
+
+
+def _imports(root: Path, rel: str) -> set[str]:
+    import ast
+    try:
+        tree = ast.parse((root / rel).read_text(encoding="utf-8", errors="replace"))
+    except (SyntaxError, OSError, ValueError):
+        return set()
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            out.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            out.add(node.module)
+            out.update(f"{node.module}.{a.name}" for a in node.names)
+    return out
+
+
+def dependency_closures(root: Path, tests: list[str]) -> dict[str, set[str]]:
+    """test name -> every repo .py file it (transitively) imports, itself included."""
+    files = [f for f in git("ls-files", "*.py", cwd=root).splitlines() if f]
+    files += [f for f in git("ls-files", "--others", "--exclude-standard", "*.py",
+                             cwd=root).splitlines() if f]
+    idx = _module_index(files)
+    graph: dict[str, set[str]] = {}
+
+    def deps(f: str) -> set[str]:
+        if f not in graph:
+            found = set()
+            for name in _imports(root, f):
+                parts = name.split(".")
+                for i in range(len(parts), 0, -1):   # a.b.c → a.b.c, a.b, a
+                    hit = idx.get(".".join(parts[:i]))
+                    if hit:
+                        found.add(hit)
+                        break
+            graph[f] = found
+        return graph[f]
+
+    out = {}
+    for t in tests:
+        start = f"scripts/{t}.py"
+        seen, todo = {start}, [start]
+        while todo:
+            for d in deps(todo.pop()):
+                if d not in seen:
+                    seen.add(d)
+                    todo.append(d)
+        out[t] = seen
+    return out
+
+
+def changed_files(base: str) -> list[str]:
+    """Tracked files that differ from `base` (default origin/main): unpushed
+    commits + uncommitted edits (a new file counts once it is `git add`ed —
+    the tree holds untracked scratch scripts that would only add noise)."""
+    mb = git("merge-base", base, "HEAD").strip()
+    return sorted(f for f in git("diff", "--name-only", mb).splitlines() if f)
+
+
+def select_affected(tests: list[str], changed: list[str], root: Path = ROOT
+                    ) -> tuple[dict[str, list[str]], list[str]]:
+    """(test -> the changed files that select it, changed code files no test covers)."""
+    closures = dependency_closures(root, tests)
+    sources = {t: (root / f"scripts/{t}.py").read_text(encoding="utf-8", errors="replace")
+               for t in tests}
+    why: dict[str, list[str]] = {}
+    uncovered = []
+    for f in changed:
+        if NO_TEST_NEEDED.search(f):
+            continue
+        base = f.rsplit("/", 1)[-1]
+        hits = [t for t in tests if f in closures[t] or base in sources[t]
+                or (f.endswith(".py") and f"{base[:-3]}" == t)]
+        for t in hits:
+            why.setdefault(t, []).append(f)
+        if not hits and f.endswith((".py", ".sh")):
+            uncovered.append(f)
+    return why, uncovered
+
+
+def area_tests(tests: list[str], area: str, root: Path = ROOT) -> list[str]:
+    """Tests named for the area, or importing a module whose path names it."""
+    closures = dependency_closures(root, tests)
+    a = area.lower()
+    return [t for t in tests if a in t.lower()
+            or any(a in f.lower() for f in closures[t] if not f.endswith(f"/{t}.py"))]
 
 
 def is_unittest(path: Path) -> bool:
@@ -213,15 +328,15 @@ def report(runs: list[dict], n: int) -> str:
     lines = [f"CI time — last {min(n, len(runs))} of {len(runs)} runs "
              f"(budget {SUITE_BUDGET:.0f}s suite / {TEST_BUDGET:.0f}s per test):"]
     for r in runs[-n:]:
-        lines.append(f"  {r['ts'][:16]}  {r['trigger']:<8} {r['head'][:7]}  "
+        lines.append(f"  {r['ts'][:16]}  {r['trigger']:<8} {r.get('mode', 'all'):<7} {r['head'][:7]}  "
                      f"{r['total_s']:6.1f}s  {r['n']} tests  "
                      + ("ok" if r["ok"] else f"FAILED {','.join(r['failed'])}"))
-    last = runs[-1]
+    last = next((r for r in reversed(runs) if r.get("mode", "all") == "all"), runs[-1])
     top = sorted(last["secs"].items(), key=lambda x: -x[1])[:8]
-    lines.append("slowest in the last run: " + ", ".join(f"{k} {v:.1f}s" for k, v in top))
-    totals = [r["total_s"] for r in runs[-n:] if r["n"] >= 10]
+    lines.append("slowest in the last full run: " + ", ".join(f"{k} {v:.1f}s" for k, v in top))
+    totals = [r["total_s"] for r in runs[-n:] if r.get("mode", "all") == "all" and r["n"] >= 10]
     if len(totals) >= 2:
-        lines.append(f"suite trend: first {totals[0]:.0f}s → last {totals[-1]:.0f}s, "
+        lines.append(f"full-suite trend: first {totals[0]:.0f}s → last {totals[-1]:.0f}s, "
                      f"median {statistics.median(totals):.0f}s")
     return "\n".join(lines)
 
@@ -278,6 +393,12 @@ def main() -> int:
     ap.add_argument("--report", action="store_true", help="print the CI-time trend and exit")
     ap.add_argument("--runs", type=int, default=14)
     ap.add_argument("--moe", action="store_true", help="also run the NFL MOE / God Expert tests")
+    ap.add_argument("--all", action="store_true",
+                    help="every test (default: only those your changes vs --base touch)")
+    ap.add_argument("--base", default="origin/main",
+                    help="what 'changed' is measured against (default origin/main)")
+    ap.add_argument("--area", help="tests for one area by keyword: trent, odds, soccer, hc, …")
+    ap.add_argument("--why", action="store_true", help="show which change selected each test")
     ap.add_argument("--no-record", action="store_true", help="don't append to the ledger")
     args = ap.parse_args()
 
@@ -296,9 +417,28 @@ def main() -> int:
     skipped = [n for n in names if n in SKIP]
     moe = [n for n in names if MOE_TEST.match(n) and not args.moe and not only]
     names = [n for n in names if n not in SKIP and n not in moe]
+    mode, base_sha = ("only" if only else "area" if args.area
+                      else "all" if args.all or args.trigger == "nightly" else "changed"), None
+    if mode == "area":
+        names = area_tests(names, args.area)
+        print(f"area {args.area!r}: {len(names)} test(s)")
+    elif mode == "changed":
+        base_sha = git("merge-base", args.base, "HEAD").strip()
+        changed = changed_files(args.base)
+        why, uncovered = select_affected(names, changed)
+        names = [n for n in names if n in why]
+        print(f"{len(changed)} file(s) changed vs {args.base} ({base_sha[:7]}) → "
+              f"{len(names)} affected test(s)" + ("" if names else
+              " — nothing to run (docs/config only, or MOE-only); --all runs everything"))
+        if args.why:
+            for n in names:
+                print(f"  {n}  ← {', '.join(why[n][:4])}{' …' if len(why[n]) > 4 else ''}")
+        if uncovered:
+            print(f"  no test covers: {', '.join(uncovered[:8])}"
+                  + (" …" if len(uncovered) > 8 else ""))
 
     t0 = time.monotonic()
-    clone = make_clone()
+    clone = make_clone() if names else Path(tempfile.mkdtemp(prefix="run_tests_")) / "app"
     make_shims(clone.parent / "shims")
     env = app_env(clone.parent / "shims")
     results = []
@@ -318,7 +458,8 @@ def main() -> int:
     head = git("rev-parse", "HEAD").strip()
     dirty = bool(git("status", "--porcelain", "--untracked-files=no").strip())
     run = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-           "trigger": args.trigger, "head": head, "dirty": dirty, "total_s": total,
+           "trigger": args.trigger, "mode": mode, "base": base_sha,
+           "head": head, "dirty": dirty, "total_s": total,
            "n": len(results), "ok": not failed, "failed": failed,
            "secs": {r["name"]: r["secs"] for r in results}}
     if not args.no_record:
@@ -332,7 +473,7 @@ def main() -> int:
           + (f" · {len(moe)} MOE tests excluded (--moe to include)" if moe else ""))
     for name, secs, med in slower_tests(run, history):
         print(f"🐢 {name}: {secs:.1f}s vs median {med:.1f}s")
-    if total > SUITE_BUDGET and not only:
+    if total > SUITE_BUDGET and mode == "all":
         print(f"🐢 suite took {total:.0f}s — over the {SUITE_BUDGET:.0f}s budget")
 
     if args.notify:

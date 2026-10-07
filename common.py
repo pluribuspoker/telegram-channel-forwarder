@@ -11,7 +11,9 @@ import sys
 
 from datetime import date, datetime, timedelta, timezone
 
-from telethon.tl.types import MessageEntityBlockquote, MessageEntityBold, MessageMediaDocument, MessageMediaPhoto
+# Telethon is imported inside the functions that use it: it costs ~0.6 s at
+# import, and nearly every module (and test) imports common without ever
+# touching Telegram — loading it here was 37% of the test suite's time.
 
 
 # ── Ungradeable-leg cap ──────────────────────────────────────────────────────
@@ -317,6 +319,7 @@ def resolve_dest(mapping, use_test):
 
 def strip_collapsed_blockquotes(text, entities):
     """Remove collapsed blockquote ranges from text and adjust remaining entity offsets."""
+    from telethon.tl.types import MessageEntityBlockquote
     if not entities:
         return text, entities
     collapsed = sorted(
@@ -351,6 +354,7 @@ def prepend_header(text, entities, header):
     """Put a bold `header` line above `text` (raw_text + its entities). Entity offsets
     are UTF-16 code units, so every existing entity shifts by the header's UTF-16
     length plus the blank-line separator — never by len()."""
+    from telethon.tl.types import MessageEntityBold
     if not text:
         return header, [MessageEntityBold(offset=0, length=_utf16_len(header))]
     sep = f"{header}\n\n"
@@ -381,6 +385,7 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
     text_suffix is appended at the END, so it shifts no existing offset.
     text_prefix is a bold header line ABOVE the text (`prepend_header` shifts every
     entity); a caption_override gets it as markdown, since that text is parsed."""
+    from telethon.tl.types import MessageMediaDocument, MessageMediaPhoto
     sender = sender or client
     if text_prefix and caption_override is not None:
         caption_override = f"**{text_prefix}**\n\n{caption_override}" if caption_override else f"**{text_prefix}**"
