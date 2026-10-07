@@ -273,6 +273,8 @@ def _tme(key: str) -> str:
 def build_prompt(groups: list[dict], cache: dict, *, now_et: str, head: str) -> str:
     has_miss = any(h["rule"] == "miss" for g in groups for h in g["hits"])
     has_hold = any(h["rule"] == "hold" for g in groups for h in g["hits"])
+    has_estimate = any(h["rule"] == "estimate" or (
+        h["rule"] == "hold" and "estimate:" in h["detail"]) for g in groups for h in g["hits"])
     lines = [
         f"/investigate ODDS WATCH {now_et}: {len(groups)} forwarded message(s) "
         "flagged — a price that MAY be wrong, and/or a pick we found NO price "
@@ -347,6 +349,30 @@ def build_prompt(groups: list[dict], cache: dict, *, now_et: str, head: str) -> 
             "- A miss caused by a misparse (wrong sport/market/team) is a parse "
             "bug: fix the class, re-price → `fixed`.",
         ]
+    if has_estimate:
+        lines += [
+            "",
+            "## An `estimate` (priced off a neighbouring line, not quoted)",
+            "- The tag is a linear price-per-point slide off the nearest line a "
+            "free book quoted (`api_line` in odds_by_pick), held so it does not "
+            "post. Hunt the EXACT line NOW, FREE sources only — never the paid "
+            "Odds API, not even to check: Pinnacle's guest API (`_fetch_pinnacle_"
+            "league`: alternate ladders, often listed hours after the main line), "
+            "Bovada's Alternate Lines group, ESPN, or another free, "
+            "unauthenticated feed you can verify from the VPS.",
+            "- Found a quote at the bet's own line: write it into the leg's "
+            "odds_by_pick (`odds`, `bookmaker`, `match_type: \"exact\"`, "
+            "`api_line`; keep `hold`) on EVERY copy. If our code should have "
+            "found it (a source/market/period not wired, a matcher missing the "
+            "line) wire it with a pinned test from a real captured payload → "
+            "`fixed`; a timing miss (the ladder appeared after pricing) → "
+            "`repaired`.",
+            "- No free source quotes that line right now → `no_free_source`, "
+            "naming each source you checked and the lines it does list. The "
+            "estimate then posts, and the tracker keeps re-checking the free "
+            "books every 30 min until kickoff, swapping in a quote once one "
+            "appears — so do not wait or poll for one yourself.",
+        ]
     lines += [
         "",
         "## When it IS wrong",
@@ -359,8 +385,10 @@ def build_prompt(groups: list[dict], cache: dict, *, now_et: str, head: str) -> 
         "grade_source applies): cache entry (odds_by_pick / parsed) and the "
         "live Telegram post. Re-pricing before first pitch: delete the leg's "
         "odds_by_pick and run the targeted tracker; after start: write the "
-        "closing line via odds._try_pregame(...) per docs/odds.md. Verify "
-        "the live post text afterwards.",
+        "closing line via odds._try_pregame(...) per docs/odds.md. A leg "
+        "whose wrong tag is ALREADY on the post: set `replaced` (the old "
+        "price) on its new odds_by_pick entry so _insert_odds swaps the tag "
+        "instead of keeping it. Verify the live post text afterwards.",
         "- If the only correct source is paid or the fix needs a product "
         "decision → `needs_human` with exactly what the operator must decide.",
         "",

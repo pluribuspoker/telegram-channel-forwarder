@@ -541,6 +541,26 @@ def _held_odds(entry: dict) -> int | None:
     return entry.get("odds")
 
 
+def _strip_replaced_tags(lines: list[str], idxs: list[int], odds_by_pick: dict) -> None:
+    """Drop the stale tag of a leg whose displayed estimate a free retry
+    replaced with a quote (`replaced` = the old price, tracker.py), so the
+    new tag can land — every renderer starts from the live post text, which
+    still carries the old one. Only an unambiguous tag goes: exactly one
+    "[old]"/"[old now]" in the post; two legs sharing the old price keep it.
+    Idempotent: once swapped, the old tag is gone."""
+    for i in idxs:
+        entry = odds_by_pick.get(str(i)) or {}
+        old = entry.get("replaced")
+        if not isinstance(old, int) or old == _held_odds(entry):
+            continue
+        sign = "+" if old > 0 else ""
+        for stale in (f" [{sign}{old}]", f" [{sign}{old} now]"):
+            where = [j for j, line in enumerate(lines) if stale in line]
+            if len(where) == 1 and lines[where[0]].count(stale) == 1:
+                lines[where[0]] = lines[where[0]].replace(stale, "", 1)
+                break
+
+
 def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     """
     Insert odds tags directly after each pick line, e.g. 'Duke -4.5 (-153)'.
@@ -561,6 +581,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     # (the emoji matcher) has excluded these all along; without the same rule
     # here the two paths disagree about which line is the pick.
     bq_lines = _blockquote_lines(lines)
+    _strip_replaced_tags(lines, standalone_idxs, odds_by_pick)
 
     if parlay_idxs:
         # A held leg (odds_gate: the pre-publish review found it suspicious,

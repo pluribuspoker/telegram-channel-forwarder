@@ -19,7 +19,6 @@ LINE_DOG, LINE_FAV = 170, -230
 ML_DOG, ML_FAV = 450, -700
 PROP_DOG = 800
 TEASER_MAX = 220           # real 2-3 leg teaser cards price about -140..+180
-PROXIMITY_GAP = 2.0
 NOW_MOVE = 0.10            # implied-probability gap, stated vs ours
 FANOUT_GAP = 0.06
 KICKOFF_GAP_H = 6
@@ -32,7 +31,7 @@ RULE_TITLES = {
     "leg_band": "parlay leg outside the straight bands",
     "parlay_same_game": "parlay legs on the same team(s) multiplied as independent",
     "teaser_long": "teaser combined price beyond any teaser card",
-    "proximity_gap": "price estimated from a line 2+ pts away",
+    "estimate": "price estimated off a neighbouring line, not quoted at the bet's own",
     "now_move": "far from the capper's stated price",
     "game_mismatch": "priced from a different game than the bound event",
     "fanout_price": "fan-out copies carry different prices",
@@ -103,6 +102,15 @@ def _same_game_pairs(picks: list[dict], legs: list[int]) -> list[tuple[int, int]
                     picks[b].get("period") or "game"):
                 pairs.append((a, b))
     return pairs
+
+
+def _pregame(o: dict, now: datetime) -> bool:
+    """The priced game hasn't started (kickoff unknown: its date isn't past)."""
+    ct = ts(o.get("commence_time"))
+    if ct:
+        return now < ct
+    gd = str(o.get("game_date") or "")
+    return not gd or gd >= (now - timedelta(hours=4)).date().isoformat()
 
 
 def _miss_due(o: dict, now: datetime) -> bool:
@@ -177,9 +185,14 @@ def scan_entry(key: str, entry: dict, *, now: datetime | None = None,
                 hit(i, "ml_long", price, what)
         elif bt == "prop" and price >= PROP_DOG:
             hit(i, "prop_long", price, what)
-        m = re.match(r"proximity_([\d.]+)pts", mt)
-        if m and float(m.group(1)) >= PROXIMITY_GAP and shown and not pick.get("is_parlay_leg"):
-            hit(i, "proximity_gap", price, what)
+        # An estimate (odds._adjust_for_gap: a linear price-per-point slide
+        # off the nearest quoted line) is never what a book offers — hold it
+        # so the agent hunts the exact line on a FREE source before it posts
+        # (operator 2026-10-07). Teaser legs aren't alt-line prices to begin
+        # with; a started game can't be priced pregame any more.
+        if mt.startswith("proximity_") and shown and not teaser and _pregame(o, now):
+            hit(i, "estimate", price, f"{what}: quoted line {o.get('api_line')}"
+                f" vs the bet's {pick.get('line')}")
         # Wrong-game binding: the price's game vs the event the leg is bound
         # to at post time (espn_events, legacy soccer_events).
         bound = ((entry.get("espn_events") or entry.get("soccer_events") or {})

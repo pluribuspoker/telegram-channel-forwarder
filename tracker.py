@@ -890,13 +890,19 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 cached_entry = pending_cache.get(cache_key) if isinstance(pending_cache.get(cache_key), dict) else {}
                 odds_by_pick: dict = {} if skip_odds else cached_entry.get("odds_by_pick", {})
                 odds_were_empty = not odds_by_pick
+                # Estimates retry for standalone legs only: a parlay leg's
+                # re-price would also move the combined tag (one stale tag per
+                # leg is what _insert_odds knows how to swap).
                 retry_keys = (set() if (skip_odds or odds_were_empty) else
-                              {k for k, v in odds_by_pick.items() if should_retry_odds(v)})
+                              {k for k, v in odds_by_pick.items() if should_retry_odds(v)
+                               and (v.get("odds") is None or not (
+                                   k.isdigit() and int(k) < len(picks)
+                                   and picks[int(k)].get("is_parlay_leg")))})
                 odds_refreshed = (odds_were_empty or bool(retry_keys)) and not skip_odds
                 if odds_were_empty and not skip_odds:
                     print(f"  [odds] fetching fresh (no cache) for {cache_key}")
                 elif retry_keys:
-                    print(f"  [odds] retrying misses (free sources) for {cache_key}: picks {sorted(retry_keys)}")
+                    print(f"  [odds] retrying misses/estimates (free sources) for {cache_key}: picks {sorted(retry_keys)}")
                 fresh_legs: set[int] = set()
                 if odds_refreshed:
                     for i, pick in enumerate(picks):
@@ -945,6 +951,19 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
 
                         display_odds, warn = result.validate_for_display()
                         pick_desc = pick.get("description", "")
+                        prev_stored = odds_by_pick.get(str(i)) if is_retry else None
+                        if (prev_stored or {}).get("odds") is not None:
+                            # Retrying a displayed ESTIMATE: adopt only a book's
+                            # quote at the bet's own line — a re-estimate (or a
+                            # quota-out ESPN main line) would just churn the tag.
+                            if display_odds is None or warn or result.match_type != "exact":
+                                prev_stored["_retry_n"] = prev_stored.get("_retry_n", 0) + 1
+                                prev_stored["_retry_ts"] = time.time()
+                                fresh_legs.discard(i)
+                                continue
+                            print(f"  [odds] estimate → quote {pick_desc[:50]}: "
+                                  f"{prev_stored['odds']:+d} ({prev_stored.get('match_type')}) → "
+                                  f"{display_odds:+d} ({result.bookmaker})")
                         if display_odds is None:
                             reason = warn or result.match_type
                             print(f"  [odds] miss({result.match_type}) {pick_desc[:60]}")
@@ -964,7 +983,6 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             else:
                                 prefix = ""
                             await audit.warn(prefix + _fmt_odds_audit(pick, pick_sport, capper, result))
-                        prev_stored = odds_by_pick.get(str(i)) if is_retry else None
                         odds_by_pick[str(i)] = {
                             "odds":               display_odds,
                             "bookmaker":          result.bookmaker,
@@ -981,6 +999,10 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             # estimate slid from; read by the odds review/agent.
                             "api_line":           result.api_line,
                         }
+                        if (prev_stored or {}).get("odds") is not None:
+                            # The estimate's tag is already on the post:
+                            # _insert_odds swaps it for the quote.
+                            odds_by_pick[str(i)]["replaced"] = prev_stored["odds"]
                         if display_odds is None:
                             odds_by_pick[str(i)]["_retry_n"] = (prev_stored or {}).get("_retry_n", 0) + (1 if is_retry else 0)
                             odds_by_pick[str(i)]["_retry_ts"] = time.time()

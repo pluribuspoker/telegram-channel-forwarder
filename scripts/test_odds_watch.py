@@ -94,10 +94,29 @@ check("a small move stays quiet", rules(NOW_SMALL) == [], rules(NOW_SMALL))
 
 PROX = {"html_text": "Broncos +7.5 [-169]",
         "parsed": {"picks": [pick("Broncos +7.5", "spread", teams=["Denver Broncos"], line=7.5)]},
-        "odds_by_pick": {"0": o(-169, "proximity_2.5pts")}}
-check("estimate 2.5 pts off → proximity_gap", rules(PROX) == ["proximity_gap"], rules(PROX))
-PROX_NEAR = {**PROX, "odds_by_pick": {"0": o(-120, "proximity_0.5pts")}}
-check("half-point estimate is quiet", rules(PROX_NEAR) == [], rules(PROX_NEAR))
+        "odds_by_pick": {"0": o(-169, "proximity_2.5pts", api_line=5.0)}}
+check("estimate 2.5 pts off → estimate", rules(PROX) == ["estimate"], rules(PROX))
+# 2026-10-03 TCU +8.5: Pinnacle had only the +8 main line at pricing time.
+TCU = {"html_text": "TCU +8.5 [-179]",
+       "parsed": {"picks": [pick("TCU +8.5", "spread", teams=["TCU Horned Frogs"], line=8.5)]},
+       "odds_by_pick": {"0": o(-179, "proximity_0.5pts", api_line=8.0, bookmaker="pinnacle")}}
+check("even a half-point estimate → estimate (hunt the exact line)",
+      rules(TCU) == ["estimate"], rules(TCU))
+tcu_hit = oc.scan_entry("-100:1", TCU)[0]
+check("estimate hit names the quoted line", "quoted line 8.0" in tcu_hit["detail"], tcu_hit)
+check("an estimate holds its leg before posting",
+      oc.holdable(oc.scan_entry("-100:1", TCU), TCU["parsed"]["picks"]).keys() == {0})
+STARTED = {**TCU, "odds_by_pick": {"0": o(-179, "proximity_0.5pts", api_line=8.0,
+                                           commence_time="2020-01-01T00:00Z")}}
+check("an estimate on a started game is quiet (nothing pregame to find)",
+      rules(STARTED) == [], rules(STARTED))
+PROX_LEG = {"html_text": "Parlay: [+270]\nTCU +8.5\nEagles ML",
+            "parsed": {"picks": [pick("TCU +8.5", "spread", teams=["TCU Horned Frogs"], leg=True, line=8.5),
+                                 pick("Eagles ML", "moneyline", teams=["Philadelphia Eagles"], leg=True)]},
+            "odds_by_pick": {"0": o(-179, "proximity_0.5pts", api_line=8.0), "1": o(-150)}}
+check("an estimated parlay leg → estimate", rules(PROX_LEG) == ["estimate"], rules(PROX_LEG))
+TEASER_PROX = {**TEASER, "odds_by_pick": {"0": o(-250, "proximity_0.5pts"), "1": o(-240)}}
+check("an estimated teaser leg is quiet", rules(TEASER_PROX) == [], rules(TEASER_PROX))
 
 HIDDEN = {"html_text": "Michigan -3 -160 1U",  # capper's price shown, ours never displayed
           "parsed": {"picks": [pick("Michigan -3", "spread", teams=["Michigan Wolverines"], line=-3)]},
@@ -317,6 +336,50 @@ claude_sub.create = _real_create
 check("the review goes through claude_sub (the subscription path) with its model/effort/system",
       sus == [] and seen["model"] == og.REVIEW_MODEL and seen["effort"] == og.REVIEW_EFFORT
       and seen["system"] == og.SYSTEM_PROMPT, seen)
+
+# ── estimates: hunted before posting, swapped for a quote when one appears ──
+r, odds = gate_on(TCU, {0}, [], key="-11:1")
+check("gate: a fresh estimate is held + starts the agent (no Claude suspicion needed)",
+      list(r["held"]) == [0] and r["trigger"] and "estimate:" in odds["0"]["hold"]["why"][0], r)
+held_tcu = {**TCU, "odds_by_pick": odds}
+eh = oc.scan_entry("-11:1", held_tcu)
+check("the held estimate reaches the watch as a hold", [h["rule"] for h in eh] == ["hold"], eh)
+eg = ow.group_by_message(eh, {"-11:1": held_tcu})
+ep = ow.build_prompt(eg, {"-11:1": held_tcu}, now_et="2026-10-03 08:00 EDT", head="abc")
+check("prompt: an estimate hold gets the free-only exact-line hunt",
+      "## An `estimate`" in ep and "FREE sources only" in ep and "every 30 min" in ep, ep[-1500:])
+check("prompt: no estimate section without an estimate", "## An `estimate`" not in prompt)
+
+from odds import should_retry_odds  # noqa: E402
+_t0 = datetime(2026, 10, 3, 12, tzinfo=timezone.utc)
+_est = {"odds": -179, "match_type": "proximity_0.5pts", "commence_time": "2026-10-03T23:00Z"}
+check("retry: a pregame estimate re-fetches (free) until kickoff",
+      should_retry_odds(_est, _t0) and not should_retry_odds(_est, datetime(2026, 10, 4, tzinfo=timezone.utc)))
+check("retry: never a held estimate, never a quote",
+      not should_retry_odds({**_est, "hold": {"why": ["x"]}}, _t0)
+      and not should_retry_odds({**_est, "match_type": "exact"}, _t0))
+check("retry: estimates keep the 30-min spacing",
+      not should_retry_odds({**_est, "_retry_ts": _t0.timestamp() - 60}, _t0))
+
+swap = {"0": o(-160, bookmaker="pinnacle", replaced=-179)}
+tcu_pick = TCU["parsed"]["picks"]
+check("swap: the quote replaces the estimate's tag on the live text",
+      _insert_odds("TCU +8.5 [-179]", tcu_pick, swap) == "TCU +8.5 [-160]",
+      _insert_odds("TCU +8.5 [-179]", tcu_pick, swap))
+check("swap: idempotent once swapped",
+      _insert_odds("TCU +8.5 [-160]", tcu_pick, swap) == "TCU +8.5 [-160]")
+two = [pick("TCU +8.5", "spread", teams=["TCU Horned Frogs"], line=8.5),
+       pick("Baylor -3", "spread", teams=["Baylor Bears"], line=-3)]
+amb = "TCU +8.5 [-179]\nBaylor -3 [-179]"
+check("swap: an ambiguous old tag (two legs at that price) is left alone",
+      _insert_odds(amb, two, {"0": o(-160, replaced=-179), "1": o(-179)}) == amb)
+check("swap: a held quote just drops the stale estimate tag",
+      _insert_odds("TCU +8.5 [-179]", tcu_pick,
+                   {"0": o(-160, replaced=-179, hold={"why": ["x"]})}) == "TCU +8.5")
+stated = [pick("TCU +8.5 (-150)", "spread", teams=["TCU Horned Frogs"], line=8.5)]
+check("swap: a stale [X now] tag goes too",
+      _insert_odds("TCU +8.5 (-150) [-179 now]", stated, {"0": o(-160, replaced=-179)})
+      == "TCU +8.5 (-150)")
 
 print(f"\n{'ALL PASS' if not failures else f'{len(failures)} FAILED'}")
 sys.exit(1 if failures else 0)

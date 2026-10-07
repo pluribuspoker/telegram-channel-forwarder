@@ -401,6 +401,12 @@ def hist_rescues_msg_date(hist: "OddsResult", msg_date: str, window_days: int = 
 # structural misses stay final; the bound comes from commence_time when the
 # /events match provided one, else the eastern game date (a post-start attempt
 # then resolves through the started branch and stores a final verdict).
+# A proximity ESTIMATE retries the same way (2026-10-07): Pinnacle posts a
+# game's main line first and its ±2-pt half-point alternate ladder later
+# (TCU +8.5 / Clemson +16.5 were estimated off the main line that way), so a
+# re-fetch near kickoff often finds the exact quote. The tracker adopts a
+# retry only when it IS a quote at the bet's own line (never a re-estimate),
+# for standalone legs only — see tracker.py "Fetch odds at first encounter".
 
 _RETRYABLE_MISS_RE = re.compile(r"no_\w+_data")
 _ODDS_RETRY_SPACING_S = 30 * 60
@@ -408,15 +414,19 @@ _ODDS_RETRY_MAX = 300           # safety valve; the 30-min spacing is the real l
 
 
 def should_retry_odds(stored: dict, now: datetime | None = None) -> bool:
-    """True if a stored odds_by_pick result is a miss worth re-fetching now."""
-    if not isinstance(stored, dict) or stored.get("odds") is not None:
-        return False
+    """True if a stored odds_by_pick result is a miss (or an estimate) worth
+    re-fetching now."""
+    if not isinstance(stored, dict) or stored.get("hold"):
+        return False      # a held leg is the odds-watch agent's until released
     mt = stored.get("match_type") or ""
+    if stored.get("odds") is not None and not mt.startswith("proximity_"):
+        return False
     # prop_not_found: a mapped prop stat Bovada hasn't listed yet — prop
     # markets appear near game time, same window story as no_*_data. (An
     # unmapped stat stores player_prop_unavailable / prop_stat_unsupported
     # instead, which stay final.)
-    if not (mt in ("no_game", "prop_not_found") or _RETRYABLE_MISS_RE.fullmatch(mt)):
+    if not (mt in ("no_game", "prop_not_found") or _RETRYABLE_MISS_RE.fullmatch(mt)
+            or mt.startswith("proximity_")):
         return False
     if stored.get("_retry_n", 0) >= _ODDS_RETRY_MAX:
         return False
