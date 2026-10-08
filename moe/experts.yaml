@@ -175,6 +175,23 @@ experts:
     committee_optional: true
     initial_weight: 1.0
     markets: [side, total]
+  disappointment:
+    name: Disappointment Expert
+    mode: agent
+    version: 1
+    prompt_version: 1
+    prompt: prompts/disappointment/v1.md
+    input_profile: disappointment
+    output_schema_version: 3
+    default_model: claude-opus-5-5
+    reasoning_effort: high
+    allowed_models:
+      - claude-opus-5-5
+      - claude-opus-4-8
+    enabled: true
+    committee_optional: true
+    initial_weight: 1.0
+    markets: [side, total]
   rating_elo:
     name: Rating Expert (Elo)
     mode: model

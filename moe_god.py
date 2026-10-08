@@ -154,6 +154,14 @@ VOICE_LENSES: dict[str, str] = {
         "historical results of comparable full-game weekly extremes. "
         "No team-quality inputs, records, news, or injuries."
     ),
+    "disappointment": (
+        "Sees only this season's closing spreads, closing totals, and final "
+        "scores for the two teams: each team's results against the spread "
+        "and its points scored and allowed against the implied team totals, "
+        "season-long and over the last three games. It weighs a momentum "
+        "reading against a regression reading and commits to one. No "
+        "injuries, rosters, news, or prior seasons."
+    ),
     "rating_elo": (
         "Sees one Elo rating per team built from every regular-season final "
         "since 1999 with home advantage and margin of victory, updated "

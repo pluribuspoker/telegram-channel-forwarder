@@ -716,6 +716,54 @@ no weekly extreme and describe their current line values and ranks.
   `[side, total]`, automatic validation approval, and
   `committee_optional: true`.
 
+### Implemented locally — 2026-10-07: Disappointment Expert v1
+
+The Disappointment Expert is a committee-optional side+total voice that asks,
+for one matchup, which team has been disappointing against market expectation
+this season and which has been the opposite. Its input is deliberately narrow:
+the closing spread, closing total, and final score of every prior
+regular-season game this season for the two teams, plus this game's current
+line. No injuries, rosters, news, ratings, prior seasons, or other experts.
+
+- `moe_disappointment.py` joins this season's ESPN finals
+  (`current_season_finals`) to `nfl_games` rows by exact teams and a ±6h
+  kickoff window. A completed game's `latest_*` columns are its closing line:
+  the lines fetcher skips started games, and a capture stamped at or after
+  kickoff is refused and counted under `data_limits.*_games_without_closing_line`.
+- Per game, from each team's side: `ats_margin` (score − opponent score + team
+  closing spread), `offense_surplus` (scored − implied team total),
+  `defense_surplus` (implied opponent total − allowed), and
+  `game_total_margin` (total points − closing total). Implied totals split the
+  closing total by the spread, the same formula as `moe_god`'s
+  `implied_totals`. `game_log` is keyed `week_<N>` so a single game is a
+  citable path.
+- `season` and `last_3` summaries carry records as `wins/losses/ties` objects
+  (ATS covers/non-covers/pushes, games beating/missing each projection,
+  overs/unders/pushes) so the shared record validator can ground `2-1`
+  claims, signed means, per-measure labels (exceeding / disappointing /
+  as_expected), and a profile (disappointing / exceeding / mixed /
+  as_expected / no_games). `comparison.<window>` sets the teams side by side
+  and states `"<Away> profile …; <Home> profile …."`.
+- The prompt makes the model weigh a **momentum** reading (the deviation is
+  real and not yet priced) against a **regression** reading (the closing line
+  already adjusted and deviations revert), then commit to one via
+  `perspective`. The validator requires the chosen word in the thesis and a
+  supporting factor, the rejected word in a counterargument, the exact season
+  statement (and the last-3 statement when it differs), citations of both
+  teams' `season` blocks (and `last_3` when it is a distinct window),
+  `current_market`, and `data_limits`. Stars cap at 1/2/3 when the thinner team
+  has 0 / fewer than 3 / fewer than 6 priced prior games. `full_opinion` opens
+  with `Perspective: <Chosen> (over <rejected>).`; the raw response keeps
+  `perspective`.
+- The shared one-game scoreline matcher also accepts a cited evidence object
+  carrying `team_score`/`opponent_score`, in either order, so `lost 27-17`
+  grounds against the cited `game_log.week_N` row.
+- Registry ID `disappointment`, Opus 5.5 at high effort (Opus 4.8 allowed),
+  output schema v3, markets `[side, total]`, automatic validation approval,
+  `committee_optional: true`. Generation is manual through the
+  `generate-nfl-moe-opinion` skill like the other LLM voices.
+- Test: `scripts/test_moe_disappointment.py`.
+
 ### Implemented — 2026-09-08: Celebrity Expert
 
 The Celebrity Expert is an Opus 4.8-only, committee-optional voice

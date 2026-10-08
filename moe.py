@@ -56,6 +56,7 @@ from moe_rating import (
     normalize_rating_opinion,
     rating_response,
 )
+from moe_disappointment import build_disappointment_input
 from moe_hi_lo import build_hi_lo_input
 from moe_win_total import build_win_total_input
 
@@ -401,6 +402,8 @@ def _source_sha256(expert: dict[str, Any]) -> str:
                 ROOT / "data" / "nfl_lines_history.csv",
             )
         )
+    if expert.get("input_profile") == "disappointment":
+        paths.append(ROOT / "moe_disappointment.py")
     if expert.get("input_profile") == AGGREGATOR_PROFILE:
         paths.extend((ROOT / "moe_god.py", ROOT / "moe_ak.py", MARGINS_TABLE_PATH))
     if expert.get("input_profile") == RATING_PROFILE:
@@ -1322,6 +1325,17 @@ def _matches_single_game_scoreline(
 ) -> bool:
     if len(scoreline) != 2 or not isinstance(value, dict):
         return False
+    team_score = value.get("team_score")
+    opponent_score = value.get("opponent_score")
+    if (
+        isinstance(team_score, int)
+        and not isinstance(team_score, bool)
+        and isinstance(opponent_score, int)
+        and not isinstance(opponent_score, bool)
+    ):
+        # A one-game log row (Disappointment Expert): a score is written
+        # winner-first or team-first, so either order matches.
+        return sorted(scoreline) == sorted((team_score, opponent_score))
     games = value.get("games")
     if (
         isinstance(games, bool)
@@ -1836,8 +1850,23 @@ def _normalize_cited_opinion(
             f"{bucket_description}.\n\n"
             f"{normalized['full_opinion']}"
         )
+    if input_payload.get("input_profile") == "disappointment":
+        perspective = str(opinion.get("perspective") or "").strip().lower()
+        if perspective not in DISAPPOINTMENT_PERSPECTIVES:
+            raise ValueError(
+                "Disappointment opinion perspective must be momentum or "
+                "regression"
+            )
+        normalized["perspective"] = perspective
+        (rejected,) = set(DISAPPOINTMENT_PERSPECTIVES) - {perspective}
+        normalized["full_opinion"] = (
+            f"Perspective: {perspective.capitalize()} "
+            f"(over {rejected}).\n\n{normalized['full_opinion']}"
+        )
     return normalized
 
+
+DISAPPOINTMENT_PERSPECTIVES = ("momentum", "regression")
 
 _TEAM_EVIDENCE_LABELS = {
     "all_games": "all games",
@@ -2806,6 +2835,115 @@ def _validate_divisional_cohort_coverage(
             )
 
 
+def _validate_disappointment_opinion(
+    opinion: dict[str, Any],
+    input_payload: dict[str, Any],
+) -> None:
+    """Coverage, perspective, and confidence rules of the Disappointment
+    Expert, on an opinion already normalized by ``_normalize_cited_opinion``.
+    """
+    perspective = str(opinion.get("perspective") or "")
+    if perspective not in DISAPPOINTMENT_PERSPECTIVES:
+        raise ValueError(
+            "Disappointment opinion perspective must be momentum or regression"
+        )
+    (rejected,) = set(DISAPPOINTMENT_PERSPECTIVES) - {perspective}
+    thesis = opinion["thesis_citation"]
+    supporting = list(opinion.get("supporting_factors", []))
+    counter = list(opinion.get("counterarguments", []))
+    claims = [
+        thesis,
+        *supporting,
+        *counter,
+        *opinion.get("no_signal_factors", []),
+    ]
+
+    def mentions(claim: dict[str, Any], word: str) -> bool:
+        return bool(
+            re.search(
+                rf"\b{word}\b", str(claim.get("claim") or ""), re.IGNORECASE
+            )
+        )
+
+    if not mentions(thesis, perspective):
+        raise ValueError(
+            f"Disappointment thesis must name the chosen perspective: "
+            f"{perspective}"
+        )
+    if not any(mentions(claim, perspective) for claim in supporting):
+        raise ValueError(
+            "Disappointment opinion needs a supporting factor arguing the "
+            f"chosen perspective: {perspective}"
+        )
+    if not any(mentions(claim, rejected) for claim in counter):
+        raise ValueError(
+            "Disappointment opinion needs a counterargument arguing the "
+            f"rejected perspective: {rejected}"
+        )
+
+    def cited(claim: dict[str, Any]) -> list[str]:
+        return [
+            str(evidence.get("path") or "")
+            for evidence in claim.get("evidence", [])
+        ]
+
+    def citing(prefix: str) -> list[dict[str, Any]]:
+        return [
+            claim
+            for claim in claims
+            if any(
+                path == prefix or path.startswith(f"{prefix}.")
+                for path in cited(claim)
+            )
+        ]
+
+    missing = [
+        prefix
+        for prefix in ("current_market", "data_limits")
+        if not citing(prefix)
+    ]
+    teams = input_payload["teams"]
+    for side in ("away_team", "home_team"):
+        if not citing(f"teams.{side}.season"):
+            missing.append(f"teams.{side}.season")
+        if not teams[side]["last_3"]["same_as_season"] and not citing(
+            f"teams.{side}.last_3"
+        ):
+            missing.append(f"teams.{side}.last_3")
+    if missing:
+        raise ValueError(
+            "Disappointment opinion must cite every required section; "
+            f"missing paths: {sorted(missing)}"
+        )
+    comparison = input_payload["comparison"]
+    windows = ["season"]
+    if comparison["last_3"]["statement"] != comparison["season"]["statement"]:
+        windows.append("last_3")
+    for window in windows:
+        statement = str(comparison[window]["statement"]).rstrip(".")
+        rendered = " ".join(
+            str(claim.get("claim") or "")
+            for claim in citing(f"comparison.{window}")
+        )
+        if statement.casefold() not in rendered.casefold():
+            raise ValueError(
+                f"Disappointment opinion must cite comparison.{window} and "
+                f"state its exact statement: {statement}"
+            )
+    fewest_games = min(
+        int(teams[side]["season"]["games"]) for side in ("away_team", "home_team")
+    )
+    confidence = int(opinion["confidence_stars"])
+    for floor, cap in ((1, 1), (3, 2), (6, 3)):
+        if fewest_games < floor and confidence > cap:
+            raise ValueError(
+                f"Disappointment confidence cannot exceed {cap} star"
+                f"{'s' if cap != 1 else ''} when a team has fewer than "
+                f"{floor} prior game{'s' if floor != 1 else ''} with a "
+                "closing line"
+            )
+
+
 def validate_opinion(
     opinion: dict[str, Any],
     *,
@@ -2822,6 +2960,7 @@ def validate_opinion(
             "win_total",
             "cee_calibration",
             "hi_lo_outliers",
+            "disappointment",
         }
         and isinstance(opinion.get("thesis_citation"), dict)
     )
@@ -3495,6 +3634,11 @@ def validate_opinion(
                 "Hi Lo confidence cannot exceed three stars with fewer than "
                 "30 historical observations"
             )
+    if (
+        schedule_input is not None
+        and schedule_input.get("input_profile") == "disappointment"
+    ):
+        _validate_disappointment_opinion(opinion, schedule_input)
     winner = str(opinion.get("predicted_winner") or "")
     if winner not in {away_team, home_team}:
         raise ValueError("predicted_winner must exactly match one game team")
@@ -3841,6 +3985,17 @@ async def generate_opinion(
         if games is None:
             raise ValueError("Hi Lo expert requires the NFL games board")
         input_payload = build_hi_lo_input(game, games)
+    elif expert["input_profile"] == "disappointment":
+        if games is None or current_season_results is None:
+            raise ValueError(
+                "Disappointment expert requires the NFL games board and "
+                "this season's finals"
+            )
+        input_payload = build_disappointment_input(
+            game,
+            games,
+            current_season_results,
+        )
     elif expert["input_profile"] == AGGREGATOR_PROFILE:
         if opinions is None:
             raise ValueError(

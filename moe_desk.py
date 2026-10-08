@@ -102,6 +102,7 @@ VOICE_ABBREVIATIONS = {
     "cee": "Cee",
     "celebrity": "Celeb",
     "hi_lo": "Hi Lo",
+    "disappointment": "Disap",
     "pikkit": "Pikkit",
     RULES_EXPERT_ID: "Rules",
     JUDGE_EXPERT_ID: "Judge",
@@ -115,6 +116,7 @@ VOICE_NAMES = {
     "cee": "Cee",
     "celebrity": "Celebrity",
     "hi_lo": "Hi Lo",
+    "disappointment": "Disappointment",
     "pikkit": "Pikkit",
 }
 VOICE_DISPLAY_ORDER = [
@@ -126,6 +128,7 @@ VOICE_DISPLAY_ORDER = [
     "cee",
     "celebrity",
     "hi_lo",
+    "disappointment",
     "pikkit",
 ]
 

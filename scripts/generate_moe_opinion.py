@@ -28,6 +28,7 @@ from moe import (
 )
 from moe_ak import build_ak_input
 from moe_cee import build_cee_input
+from moe_disappointment import build_disappointment_input
 from moe_hi_lo import build_hi_lo_input
 from moe_god import (
     AGGREGATOR_PROFILE,
@@ -321,6 +322,9 @@ async def main() -> None:
     elif expert["input_profile"] == RATING_PROFILE:
         # Preseason ratings plus this season's finals before kickoff.
         current_results = _current_results()
+    elif expert["input_profile"] == "disappointment":
+        # This season's finals, priced against the nfl_games closing lines.
+        current_results = _current_results()
     elif expert["input_profile"] == "ak_calibration":
         ak_user_id = resolve_moe_expert_user_id_from_spreadsheet(
             spreadsheet,
@@ -426,6 +430,12 @@ async def main() -> None:
             )
         elif expert["input_profile"] == "hi_lo_outliers":
             input_payload = build_hi_lo_input(game, games)
+        elif expert["input_profile"] == "disappointment":
+            input_payload = build_disappointment_input(
+                game,
+                games,
+                current_results or [],
+            )
         elif expert["input_profile"] == RATING_PROFILE:
             input_payload = build_rating_input(game, current_results or [])
         elif expert["input_profile"] == AGGREGATOR_PROFILE:

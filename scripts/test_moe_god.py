@@ -1869,6 +1869,7 @@ class RegistryTests(unittest.TestCase):
                 "ak": ["side", "total"],
                 "cee": ["side"],
                 "celebrity": ["side", "total"],
+                "disappointment": ["side", "total"],
                 "divisional": ["side"],
                 "hi_lo": ["side", "total"],
                 "pikkit": ["side", "total"],
