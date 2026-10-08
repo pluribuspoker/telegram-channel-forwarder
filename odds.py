@@ -1556,11 +1556,12 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH,
             prop_market = PROP_STAT_MARKETS.get(sport, {}).get(prop_stat)
             phrases     = _bovada_prop_phrases(sport, prop_stat)
             scorer      = _bovada_scorer_market(sport, pick)
+            pin_phrases = _pinnacle_prop_phrases(sport, prop_stat)
             if sport == "Soccer" and prop_stat == "BTTS":
                 btts = await _soccer_btts_odds(pick, teams)
                 if btts is not None:
                     return btts
-            if not prop_market and not phrases and not scorer:
+            if not prop_market and not phrases and not scorer and not pin_phrases:
                 return OddsResult(match_type=f"prop_stat_unsupported({prop_stat})", pick_line=pick.get("line"))
             player    = pick.get("player") or ""
             direction = pick.get("direction") or "over"
@@ -1595,11 +1596,20 @@ async def fetch_odds_current(sport: str, pick: dict, db_path: str = DB_PATH,
                             game_date=gd or bov_gd, commence_time=commence,
                         )
 
+            # Pinnacle quotes a line Bovada lacks (pregame only, exact line).
+            if pin_phrases and not started and (pick.get("period") or "game") == "game":
+                pin = await _pinnacle_prop_odds(sport, teams, player, pin_phrases, direction, prop_line)
+                if pin:
+                    return OddsResult(match_type="exact", odds=pin[0], bookmaker="pinnacle",
+                                      api_line=prop_line, pick_line=pick.get("line"),
+                                      game_date=gd or _utc_to_eastern_date(pin[1]),
+                                      commence_time=commence or pin[1])
+
             if free_only:
                 # A mapped stat Bovada hasn't listed yet is retryable until
                 # start (prop markets appear near game time); an unmapped one
                 # can never price free — final.
-                return OddsResult(match_type="prop_not_found" if phrases or scorer else "player_prop_unavailable",
+                return OddsResult(match_type="prop_not_found" if phrases or scorer or pin_phrases else "player_prop_unavailable",
                                   pick_line=pick.get("line"), game_date=gd, commence_time=commence)
             if not prop_market:
                 # Bovada missed and the paid API has no market for this stat.
@@ -2072,6 +2082,14 @@ _FOOTBALL_PROP_PHRASES: dict[str, tuple[str, ...]] = {
     "PASSING_TD":          ("Total Passing Touchdowns",),
     "PASS_TOUCHDOWNS":     ("Total Passing Touchdowns",),
     "PASSING_TOUCHDOWNS":  ("Total Passing Touchdowns",),
+    # "Total Completions - Jalon Daniels (TB)" (TB@DAL capture, 2026-10-08).
+    "COMP":                ("Total Completions",),
+    "COMPS":               ("Total Completions",),
+    "CMP":                 ("Total Completions",),
+    "COMPLETIONS":         ("Total Completions",),
+    "PASS_COMP":           ("Total Completions",),
+    "PASS_COMPLETIONS":    ("Total Completions",),
+    "PASSING_COMPLETIONS": ("Total Completions",),
 }
 
 _BOVADA_PROP_PHRASES: dict[str, dict[str, tuple[str, ...]]] = {
@@ -2595,6 +2613,90 @@ async def _fetch_pinnacle_league_raw(league: int) -> tuple[list[dict], list[dict
         matchups, markets = [], []
     _pinnacle_raw_cache[league] = (now, matchups, markets)
     return matchups, markets
+
+
+# Pinnacle "Player Props" specials: one matchup per player+stat, described
+# "<Player> <phrase>", with one Over/Under total market (s;0;ou). Phrases are
+# EXACT from the 2026-10-08 NFL feed — Pinnacle quotes lines Bovada doesn't
+# (Jalon Daniels completions o17.5 -127 vs Bovada's lone 18.5). Pregame only.
+_PINNACLE_FOOTBALL_PROP_PHRASES: dict[str, tuple[str, ...]] = {
+    **{k: ("Total Pass Completions",) for k in (
+        "COMP", "COMPS", "CMP", "COMPLETIONS", "PASS_COMP", "PASS_COMPLETIONS",
+        "PASSING_COMPLETIONS")},
+    **{k: ("Total Passing Yards",) for k in ("PASSING_YDS", "PASS_YDS")},
+    **{k: ("Total Rushing Yards",) for k in ("RUSHING_YDS", "RUSH_YDS")},
+    **{k: ("Total Touchdown Passes",) for k in (
+        "PASSING_TDS", "PASS_TDS", "PTD", "PTDS", "PASS_TD", "PASSING_TD",
+        "PASS_TOUCHDOWNS", "PASSING_TOUCHDOWNS")},
+    **{k: ("Total Pass Attempts",) for k in ("PASS_ATT", "PASSING_ATTEMPTS", "PASS_ATTEMPTS")},
+}
+_PINNACLE_PROP_PHRASES: dict[str, dict[str, tuple[str, ...]]] = {
+    "NFL": _PINNACLE_FOOTBALL_PROP_PHRASES,
+}
+
+
+def _pinnacle_prop_phrases(sport: str, prop_stat: str) -> tuple[str, ...]:
+    stat = re.sub(r"[\s_]+", "_", (prop_stat or "").strip().upper())
+    return _PINNACLE_PROP_PHRASES.get(sport, {}).get(stat, ())
+
+
+def _person_key(name: str) -> str:
+    return re.sub(r"[^a-z]", "", (name or "").lower())
+
+
+def _pinnacle_prop_price(matchups: list[dict], markets: list[dict], teams: list[str],
+                         player: str, phrases: tuple[str, ...], direction: str,
+                         line: float, now: datetime) -> tuple[int, str] | None:
+    """(price, commence) for the player's exact O/U line on a Pinnacle prop special.
+
+    The player name must match EXACTLY (punctuation-blind: "C.J." = "CJ") —
+    "Jalon Daniels" and "Jayden Daniels" both carry completions specials. With
+    teams, the special's parent game must involve one of them. Pregame only.
+    """
+    want_player = _person_key(player)
+    side = "over" if direction == "over" else "under" if direction == "under" else ""
+    if not want_player or not side:
+        return None
+    for sp in matchups:
+        if sp.get("type") != "special" or sp.get("isLive"):
+            continue
+        desc = (sp.get("special") or {}).get("description") or ""
+        phrase = next((p for p in phrases if desc.endswith(f" {p}")), None)
+        if not phrase or _person_key(desc[: -len(phrase) - 1]) != want_player:
+            continue
+        parent = sp.get("parent") or {}
+        start = parent.get("startTime") or sp.get("startTime") or ""
+        try:
+            if datetime.fromisoformat(start.replace("Z", "+00:00")) <= now:
+                continue
+        except ValueError:
+            continue
+        if teams:
+            names = [(p.get("name") or "").lower() for p in parent.get("participants") or []]
+            if not any(_team_matches(t.lower(), n) for t in teams for n in names):
+                continue
+        pid = {(p.get("name") or "").lower(): p.get("id") for p in sp.get("participants") or []}
+        target = pid.get(side)
+        for mk in markets:
+            if mk.get("matchupId") != sp.get("id") or mk.get("type") != "total" or mk.get("period") != 0:
+                continue
+            for pr in mk.get("prices") or []:
+                pts = pr.get("points")
+                if (pr.get("participantId") == target and pr.get("price") is not None
+                        and pts is not None and abs(float(pts) - line) < 0.01):
+                    return int(pr["price"]), start.replace("+00:00", "Z")
+    return None
+
+
+async def _pinnacle_prop_odds(sport: str, teams: list[str], player: str,
+                              phrases: tuple[str, ...], direction: str, line: float,
+                              now: datetime | None = None) -> tuple[int, str] | None:
+    league = _PINNACLE_LEAGUES.get(sport)
+    if not league or not phrases:
+        return None
+    matchups, markets = await _fetch_pinnacle_league_raw(league)
+    return _pinnacle_prop_price(matchups, markets, teams, player, phrases, direction, line,
+                                now or datetime.now(timezone.utc))
 
 
 def _btts_wants_no(pick: dict) -> bool:

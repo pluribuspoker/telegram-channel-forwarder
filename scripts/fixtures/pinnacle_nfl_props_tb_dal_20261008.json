@@ -1,0 +1,444 @@
+{
+ "matchups": [
+  {
+   "ageLimit": 0,
+   "altTeaser": false,
+   "featureOrder": -1,
+   "hasAltSpread": false,
+   "hasAltTotal": false,
+   "hasBetshare": false,
+   "hasLive": true,
+   "hasMarkets": true,
+   "id": 1637943503,
+   "isBetshareEnabled": false,
+   "isFeatured": false,
+   "isHighlighted": false,
+   "isLive": false,
+   "isPromoted": false,
+   "league": {
+    "ageLimit": 0,
+    "featureOrder": 0,
+    "group": "USA",
+    "id": 889,
+    "isFeatured": true,
+    "isHidden": false,
+    "isPromoted": false,
+    "isSticky": false,
+    "matchupCount": 48,
+    "matchupCountSE": 33,
+    "name": "NFL",
+    "sequence": 1,
+    "sport": {
+     "featureOrder": 2,
+     "id": 15,
+     "isFeatured": true,
+     "isHidden": false,
+     "isSticky": false,
+     "matchupCount": 118,
+     "matchupCountSE": 103,
+     "name": "Football",
+     "primaryMarketType": "spread"
+    }
+   },
+   "liveMode": null,
+   "parent": {
+    "hasMarkets": true,
+    "id": 1637432185,
+    "isLive": false,
+    "participants": [
+     {
+      "alignment": "home",
+      "name": "Washington Commanders",
+      "order": 1,
+      "stats": [
+       {
+        "period": 0
+       },
+       {
+        "period": 1
+       },
+       {
+        "period": 3
+       }
+      ]
+     },
+     {
+      "alignment": "away",
+      "name": "New York Giants",
+      "order": 0,
+      "stats": [
+       {
+        "period": 0
+       },
+       {
+        "period": 1
+       },
+       {
+        "period": 3
+       }
+      ]
+     }
+    ],
+    "startTime": "2026-10-11T17:00:00Z",
+    "state": {}
+   },
+   "parentId": 1637432185,
+   "parlayRestriction": null,
+   "participants": [
+    {
+     "alignment": "neutral",
+     "id": 1637943504,
+     "name": "Over",
+     "order": 0,
+     "rotation": 463
+    },
+    {
+     "alignment": "neutral",
+     "id": 1637943505,
+     "name": "Under",
+     "order": 0,
+     "rotation": 464
+    }
+   ],
+   "periods": [
+    {
+     "cutoffAt": "2026-10-11T17:00:00Z",
+     "period": 0,
+     "status": "open"
+    }
+   ],
+   "rotation": 463,
+   "special": {
+    "category": "Player Props",
+    "description": "Jayden Daniels Total Pass Completions"
+   },
+   "startTime": "2026-10-11T17:00:00Z",
+   "state": {},
+   "status": "pending",
+   "totalMarketCount": 1,
+   "type": "special",
+   "units": "Pass Completions",
+   "version": 648729863
+  },
+  {
+   "ageLimit": 0,
+   "altTeaser": false,
+   "featureOrder": -1,
+   "hasAltSpread": false,
+   "hasAltTotal": false,
+   "hasBetshare": false,
+   "hasLive": true,
+   "hasMarkets": true,
+   "id": 1637783952,
+   "isBetshareEnabled": false,
+   "isFeatured": false,
+   "isHighlighted": false,
+   "isLive": false,
+   "isPromoted": false,
+   "league": {
+    "ageLimit": 0,
+    "featureOrder": 0,
+    "group": "USA",
+    "id": 889,
+    "isFeatured": true,
+    "isHidden": false,
+    "isPromoted": false,
+    "isSticky": false,
+    "matchupCount": 48,
+    "matchupCountSE": 33,
+    "name": "NFL",
+    "sequence": 1,
+    "sport": {
+     "featureOrder": 2,
+     "id": 15,
+     "isFeatured": true,
+     "isHidden": false,
+     "isSticky": false,
+     "matchupCount": 118,
+     "matchupCountSE": 103,
+     "name": "Football",
+     "primaryMarketType": "spread"
+    }
+   },
+   "liveMode": null,
+   "parent": {
+    "hasMarkets": true,
+    "id": 1637432971,
+    "isLive": false,
+    "participants": [
+     {
+      "alignment": "home",
+      "name": "Dallas Cowboys",
+      "order": 1,
+      "stats": [
+       {
+        "period": 0
+       },
+       {
+        "period": 1
+       },
+       {
+        "period": 3
+       }
+      ]
+     },
+     {
+      "alignment": "away",
+      "name": "Tampa Bay Buccaneers",
+      "order": 0,
+      "stats": [
+       {
+        "period": 0
+       },
+       {
+        "period": 1
+       },
+       {
+        "period": 3
+       }
+      ]
+     }
+    ],
+    "startTime": "2026-10-09T00:15:00Z",
+    "state": {}
+   },
+   "parentId": 1637432971,
+   "parlayRestriction": null,
+   "participants": [
+    {
+     "alignment": "neutral",
+     "id": 1637783953,
+     "name": "Over",
+     "order": 0,
+     "rotation": 307
+    },
+    {
+     "alignment": "neutral",
+     "id": 1637783954,
+     "name": "Under",
+     "order": 0,
+     "rotation": 308
+    }
+   ],
+   "periods": [
+    {
+     "cutoffAt": "2026-10-09T00:15:00Z",
+     "period": 0,
+     "status": "open"
+    }
+   ],
+   "rotation": 307,
+   "special": {
+    "category": "Player Props",
+    "description": "Jalon Daniels Total Pass Attempts"
+   },
+   "startTime": "2026-10-09T00:15:00Z",
+   "state": {},
+   "status": "pending",
+   "totalMarketCount": 1,
+   "type": "special",
+   "units": "Pass Attempts",
+   "version": 648854236
+  },
+  {
+   "ageLimit": 0,
+   "altTeaser": false,
+   "featureOrder": -1,
+   "hasAltSpread": false,
+   "hasAltTotal": false,
+   "hasBetshare": false,
+   "hasLive": true,
+   "hasMarkets": true,
+   "id": 1637783946,
+   "isBetshareEnabled": false,
+   "isFeatured": false,
+   "isHighlighted": false,
+   "isLive": false,
+   "isPromoted": false,
+   "league": {
+    "ageLimit": 0,
+    "featureOrder": 0,
+    "group": "USA",
+    "id": 889,
+    "isFeatured": true,
+    "isHidden": false,
+    "isPromoted": false,
+    "isSticky": false,
+    "matchupCount": 48,
+    "matchupCountSE": 33,
+    "name": "NFL",
+    "sequence": 1,
+    "sport": {
+     "featureOrder": 2,
+     "id": 15,
+     "isFeatured": true,
+     "isHidden": false,
+     "isSticky": false,
+     "matchupCount": 118,
+     "matchupCountSE": 103,
+     "name": "Football",
+     "primaryMarketType": "spread"
+    }
+   },
+   "liveMode": null,
+   "parent": {
+    "hasMarkets": true,
+    "id": 1637432971,
+    "isLive": false,
+    "participants": [
+     {
+      "alignment": "home",
+      "name": "Dallas Cowboys",
+      "order": 1,
+      "stats": [
+       {
+        "period": 0
+       },
+       {
+        "period": 1
+       },
+       {
+        "period": 3
+       }
+      ]
+     },
+     {
+      "alignment": "away",
+      "name": "Tampa Bay Buccaneers",
+      "order": 0,
+      "stats": [
+       {
+        "period": 0
+       },
+       {
+        "period": 1
+       },
+       {
+        "period": 3
+       }
+      ]
+     }
+    ],
+    "startTime": "2026-10-09T00:15:00Z",
+    "state": {}
+   },
+   "parentId": 1637432971,
+   "parlayRestriction": null,
+   "participants": [
+    {
+     "alignment": "neutral",
+     "id": 1637783947,
+     "name": "Over",
+     "order": 0,
+     "rotation": 307
+    },
+    {
+     "alignment": "neutral",
+     "id": 1637783948,
+     "name": "Under",
+     "order": 0,
+     "rotation": 308
+    }
+   ],
+   "periods": [
+    {
+     "cutoffAt": "2026-10-09T00:15:00Z",
+     "period": 0,
+     "status": "open"
+    }
+   ],
+   "rotation": 307,
+   "special": {
+    "category": "Player Props",
+    "description": "Jalon Daniels Total Pass Completions"
+   },
+   "startTime": "2026-10-09T00:15:00Z",
+   "state": {},
+   "status": "pending",
+   "totalMarketCount": 1,
+   "type": "special",
+   "units": "Pass Completions",
+   "version": 648854235
+  }
+ ],
+ "markets": [
+  {
+   "cutoffAt": "2026-10-09T00:15:00+00:00",
+   "key": "s;0;ou",
+   "limits": [
+    {
+     "amount": 7500,
+     "type": "maxRiskStake"
+    }
+   ],
+   "matchupId": 1637783946,
+   "period": 0,
+   "prices": [
+    {
+     "participantId": 1637783947,
+     "points": 17.5,
+     "price": -127
+    },
+    {
+     "participantId": 1637783948,
+     "points": 17.5,
+     "price": 105
+    }
+   ],
+   "type": "total",
+   "version": 6498435620
+  },
+  {
+   "cutoffAt": "2026-10-11T17:00:00+00:00",
+   "key": "s;0;ou",
+   "limits": [
+    {
+     "amount": 250,
+     "type": "maxRiskStake"
+    }
+   ],
+   "matchupId": 1637943503,
+   "period": 0,
+   "prices": [
+    {
+     "participantId": 1637943504,
+     "points": 18.5,
+     "price": 101
+    },
+    {
+     "participantId": 1637943505,
+     "points": 18.5,
+     "price": -133
+    }
+   ],
+   "type": "total",
+   "version": 6497449060
+  },
+  {
+   "cutoffAt": "2026-10-09T00:15:00+00:00",
+   "key": "s;0;ou",
+   "limits": [
+    {
+     "amount": 7500,
+     "type": "maxRiskStake"
+    }
+   ],
+   "matchupId": 1637783952,
+   "period": 0,
+   "prices": [
+    {
+     "participantId": 1637783953,
+     "points": 28.5,
+     "price": -118
+    },
+    {
+     "participantId": 1637783954,
+     "points": 28.5,
+     "price": -103
+    }
+   ],
+   "type": "total",
+   "version": 6498401799
+  }
+ ]
+}
