@@ -1191,6 +1191,68 @@ class SyncTests(unittest.TestCase):
             "<b>Rules</b> no bet · line moved against",
         )
 
+    def test_only_alert_experts_get_bet_cards(self) -> None:
+        # ALERT_EXPERTS (operator-picked 2026-10-09): God arms alert on
+        # sides only — their totals stay on the silent picks card.
+        rows = committee("401", arms_status="approved")
+        rows[5]["total_pick_json"] = json.dumps(OVER)  # rules bets the total
+        rows[6]["total_pick_json"] = json.dumps(OVER)  # judge too
+        summary = self.sync(rows)
+        self.assertEqual(summary.posted, ["picks:401"])
+        self.assertEqual(summary.alerts, [])
+        self.assertNotIn("betcard:401:total", self.state["announced"])
+        self.assertTrue(all(m["silent"] for m in self.api.sent))
+
+    def test_an_ak_total_gets_a_loud_card_with_its_stars(self) -> None:
+        rows = committee("401", arms_status="approved")
+        rows[3]["pick_market"] = "side_and_total"
+        rows[3]["total_pick_json"] = json.dumps(
+            {**OVER, "stake_units": None, "confidence_stars": 2}
+        )
+        rows[5]["total_pick_json"] = json.dumps(OVER)  # off the list: no row
+        summary = self.sync(rows)
+        self.assertEqual(summary.alerts, ["betcard:401:total"])
+        alert = next(m for m in self.api.sent if not m["silent"])
+        self.assertEqual(
+            alert["text"],
+            "🔔 <b>Over 44.5</b> · Patriots @ Seahawks\n"
+            "<b>AK</b> ★★ (-105)",
+        )
+        self.assertEqual(
+            list(self.state["announced"]["betcard:401:total"]["arms"]), ["ak"]
+        )
+
+    def test_an_arm_off_the_list_drops_off_its_standing_card(self) -> None:
+        # a total card announced before 2026-10-09 carried the God arms
+        rows = committee("401", arms_status="approved")
+        rows[3]["pick_market"] = "side_and_total"
+        rows[3]["total_pick_json"] = json.dumps(OVER)
+        self.state["announced"]["betcard:401:total"] = {
+            "at": NOW.isoformat(),
+            "event_id": "401",
+            "kind": "total",
+            "message_id": 7,
+            "hash": "old",
+            "arms": {
+                "god_rules": {
+                    "opinion_id": "c884d868-0000",
+                    "leg": "Over 44.5 (-105) 0.5u",
+                    "first": {"selection": "Over", "line": 44.5, "stars": 1, "units": 0.5},
+                }
+            },
+        }
+        summary = self.sync(rows)
+        self.assertEqual(summary.alerts, ["betcard:401:total"])
+        self.assertIn(7, self.api.deleted)
+        self.assertEqual(
+            self.api.sent[-1]["text"],
+            "🔔 <b>Over 44.5</b> · Patriots @ Seahawks\n"
+            "<b>AK</b> 0.5u (-105)",
+        )
+        self.assertEqual(
+            list(self.state["announced"]["betcard:401:total"]["arms"]), ["ak"]
+        )
+
     def test_a_line_move_shows_in_the_headline(self) -> None:
         rows = committee("401", arms_status="approved")
         rows[5]["side_pick_json"] = json.dumps(SEA_SIDE)

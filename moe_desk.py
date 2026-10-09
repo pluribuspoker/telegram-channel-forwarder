@@ -80,6 +80,16 @@ ARM_LABELS = {RULES_EXPERT_ID: "Rules", JUDGE_EXPERT_ID: "Judge"}
 # cards' wording can move independently of the opinion-detail views.
 BET_ARM_ORDER = (JUDGE_EXPERT_ID, RULES_EXPERT_ID)
 BET_ARM_NAMES = {JUDGE_EXPERT_ID: "God", RULES_EXPERT_ID: "Rules"}
+# Which expert × market earns a 🔔 bet card, in row order (operator-picked
+# 2026-10-09, "option A": the markets with a winning season record — God
+# Judge and God Rules sides, AK totals). Every other bet stays on the
+# silent picks card only. moe_grade.py --notify DMs the operator when the
+# season records say a market should join or leave this list
+# (``alert_list_review``); changing it is this one dict.
+ALERT_EXPERTS: dict[str, tuple[str, ...]] = {
+    "side": (JUDGE_EXPERT_ID, RULES_EXPERT_ID),
+    "total": ("ak",),
+}
 # The judge's marker on the picks card (operator-asked 2026-09-20: an icon
 # specifically on God's picks). Confidence already renders as ★, so the
 # marker must not be a star.
@@ -1771,16 +1781,34 @@ def _teams_short(desk: GameDesk, team_abbrevs: dict[str, str] | None) -> str:
     return _esc(f"{away} @ {home}")
 
 
+def _card_rows(desk: GameDesk, kind: str) -> dict[str, dict[str, Any] | None]:
+    """The standing row of every expert that alerts on ``kind``
+    (``ALERT_EXPERTS``), in card order; ``None`` = no row yet."""
+    voices = {
+        str(row.get("expert_id") or ""): row for row in desk.approved_voices
+    }
+    rows: dict[str, dict[str, Any] | None] = {}
+    for expert_id in ALERT_EXPERTS.get(kind, ()):
+        if expert_id == JUDGE_EXPERT_ID:
+            rows[expert_id] = desk.judge
+        elif expert_id == RULES_EXPERT_ID:
+            rows[expert_id] = desk.rules
+        else:
+            rows[expert_id] = voices.get(expert_id)
+    return rows
+
+
+def _card_name(expert_id: str) -> str:
+    return BET_ARM_NAMES.get(expert_id) or VOICE_NAMES.get(expert_id, expert_id)
+
+
 def _card_legs(desk: GameDesk, kind: str) -> dict[str, dict[str, Any] | None]:
     legs: dict[str, dict[str, Any] | None] = {}
-    for expert_id, arm_row in (
-        (JUDGE_EXPERT_ID, desk.judge),
-        (RULES_EXPERT_ID, desk.rules),
-    ):
-        if arm_row is None:
+    for expert_id, row in _card_rows(desk, kind).items():
+        if row is None:
             legs[expert_id] = None
             continue
-        side, total = arm_legs(arm_row)
+        side, total = arm_legs(row)
         legs[expert_id] = side if kind == "side" else total
     return legs
 
@@ -1793,8 +1821,9 @@ def render_bet_card(
     team_abbrevs: dict[str, str] | None = None,
 ) -> str:
     """The one 🔔 message per bet (event+kind): a bold headline with the
-    selection, then a row per arm — God first — with units and price (stars
-    left the cards 2026-09-20: units carry the arms' conviction).
+    selection, then a row per alerting expert (``ALERT_EXPERTS`` — God
+    first on sides) with units and price (stars left the cards 2026-09-20:
+    units carry the arms' conviction; a voice with no stake shows its ★).
     Units (and the headline's line) render announced→current when they
     have drifted from ``arms_state``'s ``first`` baselines; the card is
     edited in place as numbers move, so it carries no timestamps. A
@@ -1803,6 +1832,7 @@ def render_bet_card(
     struck — the card IS the withdrawal record; nothing pings (operator-
     picked, 2026-09-13)."""
     legs = _card_legs(desk, kind)
+    order = ALERT_EXPERTS.get(kind, ())
     withdrawn = {
         expert_id
         for expert_id, info in arms_state.items()
@@ -1811,7 +1841,7 @@ def render_bet_card(
     primary = next(
         (
             eid
-            for eid in BET_ARM_ORDER
+            for eid in order
             if eid not in withdrawn and leg_is_bet(legs.get(eid))
         ),
         None,
@@ -1835,7 +1865,7 @@ def render_bet_card(
         label = next(
             (
                 str((arms_state.get(eid) or {}).get("leg") or "")
-                for eid in BET_ARM_ORDER
+                for eid in order
                 if eid in withdrawn
             ),
             "",
@@ -1843,8 +1873,8 @@ def render_bet_card(
         head_text = _label_head(label) or label or "bet"
         head = f"🔕 <s>{_esc(head_text)}</s> · {_teams_short(desk, team_abbrevs)}"
     lines = [head]
-    for expert_id in BET_ARM_ORDER:
-        name = BET_ARM_NAMES[expert_id]
+    for expert_id in order:
+        name = _card_name(expert_id)
         leg = legs.get(expert_id)
         if expert_id in withdrawn:
             label = str((arms_state.get(expert_id) or {}).get("leg") or "")
@@ -1871,7 +1901,8 @@ def render_bet_card(
         units = _leg_units(leg)
         first_units = first.get("units")
         if units is None:
-            units_text = ""
+            # an unstaked voice (AK): its conviction is the ★
+            units_text = "★" * _leg_stars(leg)
         elif first_units in (None, units):
             units_text = f"{units:g}u"
         else:
@@ -2649,7 +2680,7 @@ def _sync_bet_card(
     entry = state["announced"].get(key)
     if not isinstance(entry, dict):
         entry = None
-    rows = {JUDGE_EXPERT_ID: desk.judge, RULES_EXPERT_ID: desk.rules}
+    rows = _card_rows(desk, kind)
     betting: dict[str, dict[str, Any]] = {}
     for expert_id, arm_row in rows.items():
         if arm_row is None:
@@ -2658,10 +2689,11 @@ def _sync_bet_card(
         leg = side if kind == "side" else total
         if leg_is_bet(leg):
             betting[expert_id] = leg
+    # An expert taken off ALERT_EXPERTS drops off its standing cards.
     arms_state: dict[str, Any] = {
         expert_id: info
         for expert_id, info in ((entry or {}).get("arms") or {}).items()
-        if isinstance(info, dict)
+        if isinstance(info, dict) and expert_id in rows
     }
     legacy = (
         {} if entry else _legacy_announced(state, event_id=desk.event_id, kind=kind)

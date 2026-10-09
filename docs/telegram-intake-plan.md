@@ -1019,6 +1019,23 @@ either person sees or does.
   for the DM views; legacy pending and rejected rows are visible to
   reviewers through the deep link in their DMs, while the DM browser
   (`/guess_nfl_game` → 🧠) stays approved-only.
+- Which bets get a 🔔 card (operator-picked "option A", 2026-10-09):
+  only the expert × market pairs in `moe_desk.ALERT_EXPERTS` — God Judge
+  and God Rules sides, AK totals, the markets with a winning season
+  record at the time (God Judge sides 4-0, God Rules sides 7-2 +6.8u, AK
+  totals 27-17 +7.5u; both arms' totals were -2.4u and -10.5u, AK sides
+  -6.8u). Every other bet shows only on the silent picks card. The card's
+  rows are the list's experts in order (`_card_rows`): a voice row is its
+  latest approved row, and an unstaked voice (AK) shows its ★ where an arm
+  shows units. An expert taken off the list drops off its standing cards
+  (the entry's arm is discarded on the next sync). The list never changes
+  by itself: `moe_grade.py --notify` (daily) runs `run_alert_review` over
+  the standing row per game at each expert's own stake (1u unstaked) and
+  DMs the operator via the watchdog bot "➕ Add X?" at 10+ graded bets and
+  +10% ROI off the list, "➖ Drop X?" for a listed market under 0% ROI at
+  10+ bets — each suggestion once, when it first appears (state
+  `logs/moe_alert_review.json`; an undelivered DM retries next run, a
+  cleared suggestion re-arms). Changing the list = that one dict.
 - Loud and silent. Every card post and edit is silent. Bets live on ONE
   🔔 card per event+kind (`betcard:<event>:<side|total>`, 2026-09-13,
   5b05759 — the previous `bet:<opinion>` key re-alerted an unchanged bet

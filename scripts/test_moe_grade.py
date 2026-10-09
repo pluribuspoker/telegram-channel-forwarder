@@ -13,7 +13,10 @@ actual bet legs; then the season scoreboard.
 
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from moe_god import GRADES_TAB, MEAN_OF_ARMS_ID
 from nfl_lines import (
@@ -25,7 +28,10 @@ from scripts.moe_grade import (
     NOTIFY_MAX_CHARS,
     NOTIFY_MAX_GAMES,
     _record_line,
+    alert_list_review,
+    market_records,
     notification_text,
+    run_alert_review,
 )
 
 AWAY = "New England Patriots"
@@ -433,6 +439,103 @@ class BudgetTests(unittest.TestCase):
         self.assertEqual(len(text), NOTIFY_MAX_CHARS)
         self.assertTrue(text.endswith("…"))
         self.assertTrue(text.startswith("pickbot: MOE grades · season 2026"))
+
+
+def _review_opinion(opinion_id, expert_id, event_id, generated, *, side=None, total=None):
+    return {
+        "opinion_id": opinion_id,
+        "expert_id": expert_id,
+        "event_id": event_id,
+        "generated_at_utc": generated,
+        "side_pick_json": json.dumps(side) if side else "",
+        "total_pick_json": json.dumps(total) if total else "",
+    }
+
+
+def _review_graded(opinion_id, expert_id, event_id, *legs):
+    return {
+        "opinion_id": opinion_id,
+        "expert_id": expert_id,
+        "event_id": event_id,
+        "legs": [{"kind": kind, "result": result} for kind, result in legs],
+    }
+
+
+class AlertReviewTests(unittest.TestCase):
+    """The 🔔 alert-list check (operator-asked 2026-10-09)."""
+
+    ALERTING = {"side": ("god_judge", "god_rules"), "total": ("ak",)}
+
+    def _records(self, expert_id, kind, results, *, price=-110, units=None):
+        opinions, graded = [], []
+        for i, result in enumerate(results):
+            leg = {"selection": "x", "line": 1, "price": price, "stake_units": units}
+            opinions.append(
+                _review_opinion(f"o{i}", expert_id, f"ev{i}", "2026-09-10T00:00:00Z",
+                         **{kind: leg})
+            )
+            graded.append(_review_graded(f"o{i}", expert_id, f"ev{i}", (kind, result)))
+        return market_records(opinions, graded)
+
+    def test_standing_row_counts_once_at_its_own_stake(self) -> None:
+        opinions = [
+            _review_opinion("old", "god_rules", "ev1", "2026-09-10T00:00:00Z",
+                     side={"price": -110, "stake_units": 3}),
+            _review_opinion("new", "god_rules", "ev1", "2026-09-10T01:00:00Z",
+                     side={"price": 120, "stake_units": 2}),
+        ]
+        graded = [
+            _review_graded("old", "god_rules", "ev1", ("side", "L")),
+            _review_graded("new", "god_rules", "ev1", ("side", "W")),
+        ]
+        rec = market_records(opinions, graded)[("god_rules", "side")]
+        self.assertEqual((rec["w"], rec["l"], rec["p"]), (1, 0, 0))
+        self.assertAlmostEqual(rec["units"], 2.4)
+        self.assertEqual(rec["risk"], 2)
+
+    def test_unstaked_voice_bets_one_unit(self) -> None:
+        rec = self._records("ak", "total", ["W", "L", "P"])[("ak", "total")]
+        self.assertAlmostEqual(rec["units"], 100 / 110 - 1)
+        self.assertEqual(rec["risk"], 3)
+
+    def test_add_needs_ten_bets_and_ten_percent(self) -> None:
+        nine = self._records("cee", "side", ["W"] * 9)
+        self.assertEqual(alert_list_review(nine, self.ALERTING), [])
+        hot = self._records("cee", "side", ["W"] * 7 + ["L"] * 3)  # +36%
+        [item] = alert_list_review(hot, self.ALERTING)
+        self.assertEqual((item["action"], item["expert_id"]), ("add", "cee"))
+        flat = self._records("cee", "side", ["W"] * 6 + ["L"] * 5)  # +4%
+        self.assertEqual(alert_list_review(flat, self.ALERTING), [])
+
+    def test_a_listed_market_under_water_is_a_drop(self) -> None:
+        cold = self._records("ak", "total", ["W"] * 5 + ["L"] * 5)
+        [item] = alert_list_review(cold, self.ALERTING)
+        self.assertEqual((item["action"], item["kind"]), ("drop", "total"))
+        # listed and winning, or off the list and losing: nothing to say
+        self.assertEqual(
+            alert_list_review(self._records("ak", "side", ["L"] * 10), self.ALERTING),
+            [],
+        )
+
+    def test_each_suggestion_dms_once_and_re_arms_after_clearing(self) -> None:
+        hot = self._records("cee", "side", ["W"] * 10)
+        sent = []
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "review.json"
+            run = lambda records, ok=True: run_alert_review(
+                records, alerting=self.ALERTING, state_path=state,
+                send=lambda text: sent.append(text) or ok,
+            )
+            run(hot, ok=False)  # undelivered: no state, retried next run
+            self.assertFalse(state.exists())
+            run(hot)
+            run(hot)
+            self.assertEqual(len(sent), 2)
+            self.assertIn("➕ Add Cee sides? 10-0, +9.09u, ROI +90.9% (10 bets)", sent[-1])
+            self.assertIn("Alerts now: God Judge sides · God Rules sides · AK totals", sent[-1])
+            run({})  # cleared
+            run(hot)
+            self.assertEqual(len(sent), 3)
 
 
 if __name__ == "__main__":

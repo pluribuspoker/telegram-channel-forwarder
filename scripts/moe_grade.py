@@ -22,7 +22,9 @@ the season scoreboard — to the desk group's Scores topic when one is
 configured (moe_desk.py), else DMs the operator through the watchdog bot,
 only when rows were appended (the run ``moe-grade.timer`` makes daily); a
 digest that reaches neither after a successful append exits non-zero so
-the healthcheck alerts.
+the healthcheck alerts. --notify also runs the 🔔 alert-list check
+(``run_alert_review``): a DM when an expert × market's season record says
+it should join or leave ``moe_desk.ALERT_EXPERTS``.
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ from moe_god import (
     GRADE_HEADERS,
     GRADES_TAB,
     MEAN_OF_ARMS_ID,
+    _row_order,
     aggregator_policy,
     arm_pairs,
     build_scoreboard,
@@ -523,6 +526,144 @@ def notification_text(
     return text[: NOTIFY_MAX_CHARS - 1] + "…"
 
 
+# The 🔔 alert-list check (operator-asked 2026-10-09: "notify me when an
+# expert should be dropped or added"). moe_desk.ALERT_EXPERTS is the list;
+# over the standing row per game, at each expert's own stake (1u when it
+# has none), a market off the list earns an "add?" at ALERT_MIN_BETS graded
+# bets and ALERT_ADD_MIN_ROI, and a listed one a "drop?" once it is under
+# ALERT_DROP_MAX_ROI over as many bets. Each suggestion DMs the operator
+# once, when it first appears; it re-arms after it clears. Nothing changes
+# the list by itself.
+ALERT_MIN_BETS = 10
+ALERT_ADD_MIN_ROI = 0.10
+ALERT_DROP_MAX_ROI = 0.0
+ALERT_REVIEW_STATE = ROOT / "logs" / "moe_alert_review.json"
+_ALERT_NAMES = {"god_judge": "God Judge", "god_rules": "God Rules"}
+_ALERT_MARKETS = {"side": "sides", "total": "totals"}
+
+
+def _alert_name(expert_id: str, kind: str) -> str:
+    from moe_desk import VOICE_NAMES
+
+    name = _ALERT_NAMES.get(expert_id) or VOICE_NAMES.get(expert_id, expert_id)
+    return f"{name} {_ALERT_MARKETS.get(kind, kind)}"
+
+
+def _leg_payout(result: str, price, units: float) -> float:
+    """Units won/lost at ``price`` (−110 when unknown) — scripts/record.py's
+    payout, so the DM and a /record message agree."""
+    if result == "P":
+        return 0.0
+    if result == "L":
+        return -units
+    price = _num(price) or -110
+    return units * (100 / abs(price) if price < 0 else price / 100)
+
+
+def market_records(opinions: list[dict], graded: list[dict]) -> dict:
+    """``{(expert_id, kind): {w, l, p, units, risk}}`` over each expert's
+    standing row per game (the latest, as ``build_scoreboard
+    (latest_per_game=True)``), staked at the leg's ``stake_units``."""
+    rows = {str(row.get("opinion_id") or ""): row for row in opinions}
+    standing: dict[tuple[str, str], dict] = {}
+    for result in graded:
+        row = rows.get(result["opinion_id"])
+        if row is None:
+            continue
+        key = (result["expert_id"], result["event_id"])
+        prior = standing.get(key)
+        if prior is None or _row_order(row) > _row_order(rows[prior["opinion_id"]]):
+            standing[key] = result
+    records: dict[tuple[str, str], dict] = {}
+    for result in standing.values():
+        row = rows[result["opinion_id"]]
+        for leg in result["legs"]:
+            kind = leg["kind"]
+            try:
+                pick = json.loads(row.get(f"{kind}_pick_json") or "{}")
+            except ValueError:
+                pick = {}
+            pick = pick if isinstance(pick, dict) else {}
+            units = _num(pick.get("stake_units")) or 1.0
+            rec = records.setdefault(
+                (result["expert_id"], kind),
+                {"w": 0, "l": 0, "p": 0, "units": 0.0, "risk": 0.0},
+            )
+            rec[leg["result"].lower()] += 1
+            rec["units"] += _leg_payout(leg["result"], pick.get("price"), units)
+            rec["risk"] += units
+    return records
+
+
+def alert_list_review(records: dict, alerting: dict) -> list[dict]:
+    """The add/drop suggestions ``records`` make against ``alerting``
+    (moe_desk.ALERT_EXPERTS shape), sorted by expert then market."""
+    suggestions = []
+    for (expert_id, kind), rec in sorted(records.items()):
+        bets = rec["w"] + rec["l"] + rec["p"]
+        if bets < ALERT_MIN_BETS or rec["risk"] <= 0:
+            continue
+        roi = rec["units"] / rec["risk"]
+        listed = expert_id in alerting.get(kind, ())
+        if not listed and roi >= ALERT_ADD_MIN_ROI:
+            action = "add"
+        elif listed and roi < ALERT_DROP_MAX_ROI:
+            action = "drop"
+        else:
+            continue
+        suggestions.append(
+            {"action": action, "expert_id": expert_id, "kind": kind,
+             "bets": bets, "roi": roi, **rec}
+        )
+    return suggestions
+
+
+def alert_review_text(new: list[dict], alerting: dict) -> str:
+    lines = ["🔔 MOE alert list check"]
+    for item in new:
+        record = f"{item['w']}-{item['l']}" + (f"-{item['p']}" if item["p"] else "")
+        verb = "➕ Add" if item["action"] == "add" else "➖ Drop"
+        lines.append(
+            f"{verb} {_alert_name(item['expert_id'], item['kind'])}? "
+            f"{record}, {item['units']:+.2f}u, ROI {100 * item['roi']:+.1f}% "
+            f"({item['bets']} bets)"
+        )
+    current = [
+        _alert_name(expert_id, kind)
+        for kind, experts in alerting.items()
+        for expert_id in experts
+    ]
+    lines.append("Alerts now: " + (" · ".join(current) or "none"))
+    lines.append("Reply to change the list.")
+    return "\n".join(lines)
+
+
+def run_alert_review(
+    records: dict,
+    *,
+    alerting: dict,
+    send,
+    state_path: Path = ALERT_REVIEW_STATE,
+) -> list[dict]:
+    """DM the suggestions that are new since the last run; returns them.
+    State is written only after a delivered DM (an undelivered one retries
+    next run); a cleared suggestion leaves the state, so it can fire again."""
+    suggestions = alert_list_review(records, alerting)
+    keys = [f"{s['action']}:{s['expert_id']}:{s['kind']}" for s in suggestions]
+    try:
+        prior = set(json.loads(Path(state_path).read_text()).get("suggested", []))
+    except (OSError, ValueError, AttributeError):
+        prior = set()
+    new = [s for s, key in zip(suggestions, keys) if key not in prior]
+    if new and not send(alert_review_text(new, alerting)):
+        print("alert review: DM not delivered; retrying next run", file=sys.stderr)
+        return new
+    if set(keys) != prior:
+        Path(state_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(state_path).write_text(json.dumps({"suggested": sorted(keys)}) + "\n")
+    return new
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -659,6 +800,15 @@ def main() -> None:
                 )
     if not args.write:
         return
+    if args.notify:
+        from moe_desk import ALERT_EXPERTS
+
+        for item in run_alert_review(
+            market_records(approved, graded),
+            alerting=ALERT_EXPERTS,
+            send=send_watchdog_dm,
+        ):
+            print(f"alert review: {item['action']} {item['expert_id']} {item['kind']}")
     celebrity_inserted = configured_celebrity_grade_store(
         writable=True,
         initialize=True,
