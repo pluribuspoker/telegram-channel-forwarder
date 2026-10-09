@@ -96,14 +96,24 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS trent_seen (
     tweet_id    TEXT PRIMARY KEY,
     processed_at TEXT NOT NULL,
-    had_pick    INTEGER NOT NULL DEFAULT 0
+    had_pick    INTEGER NOT NULL DEFAULT 0,
+    text        TEXT
 );
 """
+
+# The repeat veto (`is_repeat`) checks a would-be pick against the picks
+# forwarded in this window. Each carries its age, so a bet on the same team's
+# NEXT game (playoff series, consecutive days) still reads as new.
+_RECENT_PICKS_HOURS = 24
+_RECENT_PICKS_MAX = 8
 
 
 def _db():
     con = sqlite3.connect(DB_PATH)
     con.execute(_SCHEMA)
+    cols = {r[1] for r in con.execute("PRAGMA table_info(trent_seen)")}
+    if "text" not in cols:
+        con.execute("ALTER TABLE trent_seen ADD COLUMN text TEXT")
     con.commit()
     return con
 
@@ -114,12 +124,29 @@ def _get_seen(con: sqlite3.Connection) -> set[str]:
     return {r[0] for r in rows}
 
 
-def _mark_seen(con: sqlite3.Connection, tweet_id: str, had_pick: bool):
+def _mark_seen(con: sqlite3.Connection, tweet_id: str, had_pick: bool, text: str = ""):
+    """Record a processed tweet; a forwarded pick keeps its text for the
+    repeat veto (`_recent_picks`)."""
     con.execute(
-        "INSERT OR IGNORE INTO trent_seen (tweet_id, processed_at, had_pick) VALUES (?, ?, ?)",
-        (tweet_id, datetime.now(timezone.utc).isoformat(), int(had_pick)),
+        "INSERT OR IGNORE INTO trent_seen (tweet_id, processed_at, had_pick, text) "
+        "VALUES (?, ?, ?, ?)",
+        (tweet_id, datetime.now(timezone.utc).isoformat(), int(had_pick),
+         _strip_tco(text) if had_pick and text else None),
     )
     con.commit()
+
+
+def _recent_picks(con: sqlite3.Connection, now: datetime | None = None) -> list[tuple[float, str]]:
+    """(hours ago, text) of the picks forwarded in the last _RECENT_PICKS_HOURS,
+    oldest first."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = (now - timedelta(hours=_RECENT_PICKS_HOURS)).isoformat()
+    rows = con.execute(
+        "SELECT processed_at, text FROM trent_seen WHERE had_pick = 1 AND text IS NOT NULL "
+        "AND processed_at >= ? ORDER BY processed_at DESC LIMIT ?",
+        (cutoff, _RECENT_PICKS_MAX),
+    ).fetchall()
+    return [((now - _parse_ts(ts)).total_seconds() / 3600, text) for ts, text in reversed(rows)]
 
 
 def _prune_old(con: sqlite3.Connection, days: int = 7):
@@ -449,6 +476,40 @@ Return only: true or false
 Tweet:
 {text}"""
 
+# Asked only about a tweet already headed for the channel, and only when picks
+# were forwarded recently. A separate call on purpose: putting the recent picks
+# into _IS_PICK_PROMPT itself shifted its main verdict — real terse picks
+# ("Panthers ML live for a mega.", "My biggest bet of the day is Bengals -2.5.")
+# replayed false with the list present and true without it.
+_IS_REPEAT_PROMPT = """\
+A sports bettor just tweeted something that reads as a pick. Below are the picks he already \
+announced in the last {hours} hours. Is the new tweet only a REPEAT of one of them?
+
+Already announced:
+{picks}
+
+It is a repeat ONLY when its words name the very same bet as an entry above — same team or \
+player, same side, same market, same period, and the same line (or no line at all) — and add \
+no other bet. Typical repeats: restating it ("VT -2.5 is a MORTAL mega max @friend" after \
+"VIRGINIA TECH -2.5 SPREAD & ML"), bragging or sweating about it ("$702,000 pending on Cowboys \
+spread" after "COWBOYS -8.5").
+
+Everything else is new, including:
+- a different market on the same team or game (ML after a spread, an NRFI after an ML, a \
+player prop after a team bet), or the other side of the same game
+- a correction or clarification that changes the team ("mississippi state -6.5***" after \
+"MISSISSIPPI -6.5")
+- the full announcement with a price/units after a teaser that named no line
+- the same team's NEXT game (a later day — playoff series play daily)
+- a tweet whose words barely name a bet ("Bills", "Joe Burrow today.") — the bet is in an \
+image you cannot see
+- anything you are not sure about
+
+New tweet:
+{text}
+
+If it is a repeat, answer "repeat: " followed by the entry it repeats. Otherwise answer only: new"""
+
 _IMAGE_IS_PICK_PROMPT = """\
 This tweet has an attached image. Does it show a sports bet being placed (bet slip, wager confirmation)?
 
@@ -520,6 +581,33 @@ async def is_pick_text(tweet: dict) -> bool:
         print(f"  ERROR text-check {tweet['id']}: {e}")
         raise _ClassifyError(str(e)) from e
     return _parse_bool(resp.content[0].text)
+
+
+async def is_repeat(tweet: dict, recent: list[tuple[float, str]]) -> bool:
+    """Does this would-be pick only restate picks already forwarded (`recent`)?
+
+    The 2026-10-08 "$702,000 pending on Cowboys spread" flex, posted 4h after
+    the Cowboys -8.5 MEGA, was forwarded as a second, line-less pick: the pick
+    prompt's "I have $X on [team]" signal fired and nothing knew the bet was
+    old (likewise 2026-10-02 "VT -2.5 is a MORTAL mega max @shadybiev"). Runs
+    last, on forward candidates only, so it can only ever remove a repeat —
+    never change what counts as a pick.
+    """
+    if not recent:
+        return False
+    picks = "\n".join(f"--- posted {h:.0f}h ago:\n{t}" for h, t in recent) + "\n---"
+    prompt = _IS_REPEAT_PROMPT.format(
+        hours=_RECENT_PICKS_HOURS, picks=picks, text=_strip_tco(tweet.get("text", "").strip()))
+    try:
+        resp = await _claude_create_with_retry(
+            model=CLASSIFY_MODEL,
+            max_tokens=10,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except Exception as e:
+        print(f"  ERROR repeat-check {tweet['id']}: {e}")
+        raise _ClassifyError(str(e)) from e
+    return resp.content[0].text.strip().lower().lstrip("`'\"").startswith("repeat")
 
 
 async def download_image(url: str) -> tuple[str, bytes] | None:
@@ -769,6 +857,12 @@ async def main():
             if is_pick and tw.get("photos") and await is_parlay_image(tw):
                 print(f"  skipping {tw['id']}: image shows a multi-leg parlay")
                 is_pick = False
+
+            # Repeat veto — a brag/sweat/restatement of a pick already
+            # forwarded is not a second pick (2026-10-08 Cowboys flex).
+            if is_pick and await is_repeat(tw, _recent_picks(con)):
+                print(f"  skipping {tw['id']}: restates a pick already forwarded")
+                is_pick = False
         except _ClassifyError as e:
             # Transient blip — leave the tweet UNSEEN so it retries next run
             # (bounded: it stops being fetched once it ages out of the window).
@@ -783,7 +877,7 @@ async def main():
         # suppress the tweet from every later real run, so `--dry-run` would
         # silently destroy the thing it was meant to preview.
         if not args.dry_run:
-            _mark_seen(con, tw["id"], had_pick=is_pick)
+            _mark_seen(con, tw["id"], had_pick=is_pick, text=tw.get("text", ""))
 
     con.close()
     print(f"Done: {picks_sent} picks sent, {len(new_tweets)} tweets processed")
