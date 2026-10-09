@@ -85,10 +85,12 @@ from moe_desk import (
     topic_id_from_reply,
     save_state as save_desk_state,
     sync_desk,
+    market_records as desk_market_records,
 )
 from moe_god import (
     aggregator_policy as moe_aggregator_policy,
     build_scoreboard as build_moe_scoreboard,
+    grade_all as moe_grade_all,
     load_registry as load_moe_registry,
 )
 from nfl_game_annotations import load_game_annotations
@@ -1829,13 +1831,9 @@ def expire_sheet_cache(key: str) -> None:
             _SHEET_CACHE[key] = (float("-inf"), cached[1])
 
 
-def load_expert_records() -> dict[str, Any]:
-    """Per-expert season records for the desk picks cards: the scoreboard's
-    ``by_expert`` map, one standing row per expert per game — the same
-    numbers as the grading digest's "bets" section, so the card's ``(5-2)``
-    tags and the digest never disagree. Cached for an hour; ``{}`` (no
-    records shown) when any input is unavailable — records decorate the
-    cards and must never stall the desk sync."""
+def _load_desk_records(part: str) -> dict[str, Any]:
+    """One hourly cached load of the desk's season records: ``by_expert``
+    (the picks cards) and ``markets`` (the 🔔 bet cards)."""
 
     def _load() -> dict[str, Any]:
         # Imported here because scripts.generate_moe_opinion imports
@@ -1859,18 +1857,33 @@ def load_expert_records() -> dict[str, Any]:
         if not seasons:
             return {}
         registry = load_moe_registry()
-        return build_moe_scoreboard(
-            approved,
-            finals=current_season_finals(history, seasons[-1], annotation_rows),
-            snapshots=snapshots,
-            registry=registry,
-            policy=moe_aggregator_policy(registry),
-            as_of=datetime.now(timezone.utc).isoformat(),
-            latest_per_game=True,
-        )["by_expert"]
+        finals = current_season_finals(history, seasons[-1], annotation_rows)
+        policy = moe_aggregator_policy(registry)
+        return {
+            "by_expert": build_moe_scoreboard(
+                approved,
+                finals=finals,
+                snapshots=snapshots,
+                registry=registry,
+                policy=policy,
+                as_of=datetime.now(timezone.utc).isoformat(),
+                latest_per_game=True,
+            )["by_expert"],
+            # the 🔔 cards' per-market records (moe_desk.market_records)
+            "markets": desk_market_records(
+                approved,
+                moe_grade_all(
+                    approved,
+                    finals=finals,
+                    snapshots=snapshots,
+                    registry=registry,
+                    policy=policy,
+                ),
+            ),
+        }
 
     try:
-        return _cached_sheet_value(
+        loaded = _cached_sheet_value(
             "moe_expert_records", MOE_RECORDS_CACHE_TTL_SECONDS, _load
         )
     except Exception as exc:  # noqa: BLE001 - records are decoration
@@ -1879,6 +1892,27 @@ def load_expert_records() -> dict[str, Any]:
         # one warning an hour, not one per 120 s sync pass.
         _set_sheet_cache("moe_expert_records", {})
         return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return loaded.get(part) or {}
+
+
+def load_expert_records() -> dict[str, Any]:
+    """Per-expert season records for the desk picks cards: the scoreboard's
+    ``by_expert`` map, one standing row per expert per game — the same
+    numbers as the grading digest's "bets" section, so the card's ``(5-2)``
+    tags and the digest never disagree. Cached for an hour; ``{}`` (no
+    records shown) when any input is unavailable — records decorate the
+    cards and must never stall the desk sync."""
+    return _load_desk_records("by_expert")
+
+
+def load_market_records() -> dict[str, Any]:
+    """Per expert × market season bet records for the 🔔 bet cards
+    (``moe_desk.market_records``: ``"ak:total"`` → w/l/p/units), from the
+    same hourly cached load as ``load_expert_records``; ``{}`` on any
+    failure."""
+    return _load_desk_records("markets")
 
 
 def latest_markets_from_games(
@@ -1985,6 +2019,7 @@ def desk_sync_once(
                 team_abbrevs=team_abbrevs,
                 latest_markets=latest_markets,
                 records=load_expert_records(),
+                market_records=load_market_records(),
             )
         finally:
             save_desk_state(config.state_path, state)

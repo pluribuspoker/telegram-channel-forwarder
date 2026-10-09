@@ -105,6 +105,7 @@ class DeskPicksViewTests(unittest.TestCase):
                 patch.object(intake_bot, "load_cached_moe_opinions", return_value=[]),
                 patch.object(intake_bot, "load_intake_data", return_value=([], [], {})),
                 patch.object(intake_bot, "load_expert_records", return_value={}),
+                patch.object(intake_bot, "load_market_records", return_value={}),
                 patch.object(intake_bot, "load_moe_registry", return_value={}),
                 patch.object(intake_bot, "build_desk_model", return_value=[desk]),
                 patch.object(intake_bot, "expire_sheet_cache") as expire,

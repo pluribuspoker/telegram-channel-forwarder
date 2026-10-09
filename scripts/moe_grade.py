@@ -55,7 +55,6 @@ from moe_god import (
     GRADE_HEADERS,
     GRADES_TAB,
     MEAN_OF_ARMS_ID,
-    _row_order,
     aggregator_policy,
     arm_pairs,
     build_scoreboard,
@@ -87,6 +86,7 @@ from nfl_lines import (
 from nfl_win_predictions import ensure_worksheet
 from scripts.generate_moe_opinion import _latest_alignment
 from scripts.god_judge_runner import send_watchdog_dm
+from moe_desk import market_records
 
 
 def deliver_notification(text: str, html: str | None = None) -> bool:
@@ -549,57 +549,13 @@ def _alert_name(expert_id: str, kind: str) -> str:
     return f"{name} {_ALERT_MARKETS.get(kind, kind)}"
 
 
-def _leg_payout(result: str, price, units: float) -> float:
-    """Units won/lost at ``price`` (−110 when unknown) — scripts/record.py's
-    payout, so the DM and a /record message agree."""
-    if result == "P":
-        return 0.0
-    if result == "L":
-        return -units
-    price = _num(price) or -110
-    return units * (100 / abs(price) if price < 0 else price / 100)
-
-
-def market_records(opinions: list[dict], graded: list[dict]) -> dict:
-    """``{(expert_id, kind): {w, l, p, units, risk}}`` over each expert's
-    standing row per game (the latest, as ``build_scoreboard
-    (latest_per_game=True)``), staked at the leg's ``stake_units``."""
-    rows = {str(row.get("opinion_id") or ""): row for row in opinions}
-    standing: dict[tuple[str, str], dict] = {}
-    for result in graded:
-        row = rows.get(result["opinion_id"])
-        if row is None:
-            continue
-        key = (result["expert_id"], result["event_id"])
-        prior = standing.get(key)
-        if prior is None or _row_order(row) > _row_order(rows[prior["opinion_id"]]):
-            standing[key] = result
-    records: dict[tuple[str, str], dict] = {}
-    for result in standing.values():
-        row = rows[result["opinion_id"]]
-        for leg in result["legs"]:
-            kind = leg["kind"]
-            try:
-                pick = json.loads(row.get(f"{kind}_pick_json") or "{}")
-            except ValueError:
-                pick = {}
-            pick = pick if isinstance(pick, dict) else {}
-            units = _num(pick.get("stake_units")) or 1.0
-            rec = records.setdefault(
-                (result["expert_id"], kind),
-                {"w": 0, "l": 0, "p": 0, "units": 0.0, "risk": 0.0},
-            )
-            rec[leg["result"].lower()] += 1
-            rec["units"] += _leg_payout(leg["result"], pick.get("price"), units)
-            rec["risk"] += units
-    return records
-
-
 def alert_list_review(records: dict, alerting: dict) -> list[dict]:
-    """The add/drop suggestions ``records`` make against ``alerting``
+    """The add/drop suggestions ``records`` (moe_desk.market_records) make
+    against ``alerting``
     (moe_desk.ALERT_EXPERTS shape), sorted by expert then market."""
     suggestions = []
-    for (expert_id, kind), rec in sorted(records.items()):
+    for key, rec in sorted(records.items()):
+        expert_id, _, kind = key.rpartition(":")
         bets = rec["w"] + rec["l"] + rec["p"]
         if bets < ALERT_MIN_BETS or rec["risk"] <= 0:
             continue

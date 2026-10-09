@@ -1798,6 +1798,72 @@ def _card_rows(desk: GameDesk, kind: str) -> dict[str, dict[str, Any] | None]:
     return rows
 
 
+def _leg_payout(result: str, price: Any, units: float) -> float:
+    """Units won/lost at ``price`` (−110 when unknown) — scripts/record.py's
+    payout, so a card, the grader's DM and a /record message agree."""
+    if result == "P":
+        return 0.0
+    if result == "L":
+        return -units
+    try:
+        price = float(price) or -110.0
+    except (TypeError, ValueError):
+        price = -110.0
+    return units * (100 / abs(price) if price < 0 else price / 100)
+
+
+def market_records(
+    opinions: Iterable[dict[str, Any]], graded: Iterable[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """``{"<expert_id>:<side|total>": {w, l, p, units, risk}}`` — each
+    expert's season bet record per market over its standing row per game
+    (the latest, as ``build_scoreboard(latest_per_game=True)``), staked at
+    the leg's ``stake_units`` (1u when it has none). ``graded`` is
+    ``moe_god.grade_all`` over ``opinions``."""
+    rows = {str(row.get("opinion_id") or ""): row for row in opinions}
+    standing: dict[tuple[str, str], dict[str, Any]] = {}
+    for result in graded:
+        row = rows.get(str(result.get("opinion_id") or ""))
+        if row is None:
+            continue
+        key = (str(result["expert_id"]), str(result["event_id"]))
+        prior = standing.get(key)
+        if prior is None or row_key(row) > row_key(rows[prior["opinion_id"]]):
+            standing[key] = result
+    records: dict[str, dict[str, Any]] = {}
+    for result in standing.values():
+        row = rows[result["opinion_id"]]
+        for leg in result["legs"]:
+            kind = leg["kind"]
+            pick = leg_from_json(row.get(f"{kind}_pick_json")) or {}
+            units = _leg_units(pick) or 1.0
+            rec = records.setdefault(
+                f"{result['expert_id']}:{kind}",
+                {"w": 0, "l": 0, "p": 0, "units": 0.0, "risk": 0.0},
+            )
+            rec[str(leg["result"]).lower()] += 1
+            rec["units"] += _leg_payout(leg["result"], pick.get("price"), units)
+            rec["risk"] += units
+    return records
+
+
+def _market_record_text(record: Any, kind: str) -> str:
+    """``totals 27-17 +7.5u`` — the bet card's per-market season record
+    (operator-asked 2026-10-09); empty before the first graded bet."""
+    if not isinstance(record, dict):
+        return ""
+    try:
+        wins, losses, pushes = (int(record.get(k) or 0) for k in ("w", "l", "p"))
+        units = float(record.get("units") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if not (wins or losses or pushes):
+        return ""
+    tail = f"-{pushes}" if pushes else ""
+    market = "sides" if kind == "side" else "totals"
+    return f"{market} {wins}-{losses}{tail} {units:+.1f}u"
+
+
 def _card_name(expert_id: str) -> str:
     return BET_ARM_NAMES.get(expert_id) or VOICE_NAMES.get(expert_id, expert_id)
 
@@ -1819,11 +1885,14 @@ def render_bet_card(
     arms_state: dict[str, Any],
     *,
     team_abbrevs: dict[str, str] | None = None,
+    records: dict[str, Any] | None = None,
 ) -> str:
     """The one 🔔 message per bet (event+kind): a bold headline with the
     selection, then a row per alerting expert (``ALERT_EXPERTS`` — God
     first on sides) with units and price (stars left the cards 2026-09-20:
-    units carry the arms' conviction; a voice with no stake shows its ★).
+    units carry the arms' conviction; a voice with no stake shows its ★),
+    and the expert's season record in this market (``records``, the
+    ``market_records`` shape; operator-asked 2026-10-09).
     Units (and the headline's line) render announced→current when they
     have drifted from ``arms_state``'s ``first`` baselines; the card is
     edited in place as numbers move, so it carries no timestamps. A
@@ -1912,6 +1981,9 @@ def render_bet_card(
         # baseline stays parseable.
         parts = [units_text, _price_text(leg.get("price"))]
         row_text = f"<b>{name}</b> " + " ".join(part for part in parts if part)
+        record_text = _market_record_text(
+            (records or {}).get(f"{expert_id}:{kind}"), kind
+        )
         if expert_id != primary:
             own_selection = str(leg.get("selection") or "")
             own_line = _leg_line(leg)
@@ -1929,6 +2001,8 @@ def render_bet_card(
                 row_text += f" · {_esc(own_text)}"
             elif own_line != line:
                 row_text += f" · {_esc(_line_text(own_line, kind))}"
+        if record_text:
+            row_text += f" · {_esc(record_text)}"
         lines.append(row_text)
     return "\n".join(lines)
 
@@ -2508,6 +2582,7 @@ def sync_desk(
     team_abbrevs: dict[str, str] | None = None,
     latest_markets: dict[str, dict[str, Any]] | None = None,
     records: dict[str, Any] | None = None,
+    market_records: dict[str, Any] | None = None,
     max_posts: int = MAX_POSTS_PER_SYNC,
 ) -> SyncSummary:
     """Reconcile the group with the model: post missing cards, edit changed
@@ -2647,6 +2722,7 @@ def sync_desk(
                 summary=summary,
                 now=now,
                 team_abbrevs=team_abbrevs,
+                records=market_records,
             )
     return summary
 
@@ -2663,6 +2739,7 @@ def _sync_bet_card(
     summary: SyncSummary,
     now: datetime,
     team_abbrevs: dict[str, str] | None,
+    records: dict[str, Any] | None = None,
 ) -> None:
     """Reconcile the one card for this event+kind.
 
@@ -2778,7 +2855,9 @@ def _sync_bet_card(
         if covered:
             return  # pre-card alerts stand and nothing has moved
 
-    text = render_bet_card(desk, kind, arms_state, team_abbrevs=team_abbrevs)
+    text = render_bet_card(
+        desk, kind, arms_state, team_abbrevs=team_abbrevs, records=records
+    )
     digest = content_hash(text, [], config.picks_topic)
     message_id = (entry or {}).get("message_id")
     new_entry = {

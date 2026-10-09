@@ -480,21 +480,21 @@ class AlertReviewTests(unittest.TestCase):
     def test_standing_row_counts_once_at_its_own_stake(self) -> None:
         opinions = [
             _review_opinion("old", "god_rules", "ev1", "2026-09-10T00:00:00Z",
-                     side={"price": -110, "stake_units": 3}),
+                     side={"selection": "x", "price": -110, "stake_units": 3}),
             _review_opinion("new", "god_rules", "ev1", "2026-09-10T01:00:00Z",
-                     side={"price": 120, "stake_units": 2}),
+                     side={"selection": "x", "price": 120, "stake_units": 2}),
         ]
         graded = [
             _review_graded("old", "god_rules", "ev1", ("side", "L")),
             _review_graded("new", "god_rules", "ev1", ("side", "W")),
         ]
-        rec = market_records(opinions, graded)[("god_rules", "side")]
+        rec = market_records(opinions, graded)["god_rules:side"]
         self.assertEqual((rec["w"], rec["l"], rec["p"]), (1, 0, 0))
         self.assertAlmostEqual(rec["units"], 2.4)
         self.assertEqual(rec["risk"], 2)
 
     def test_unstaked_voice_bets_one_unit(self) -> None:
-        rec = self._records("ak", "total", ["W", "L", "P"])[("ak", "total")]
+        rec = self._records("ak", "total", ["W", "L", "P"])["ak:total"]
         self.assertAlmostEqual(rec["units"], 100 / 110 - 1)
         self.assertEqual(rec["risk"], 3)
 

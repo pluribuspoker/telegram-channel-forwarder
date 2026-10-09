@@ -1222,6 +1222,64 @@ class SyncTests(unittest.TestCase):
             list(self.state["announced"]["betcard:401:total"]["arms"]), ["ak"]
         )
 
+    def test_bet_rows_carry_the_experts_record_in_that_market(self) -> None:
+        # operator-asked 2026-10-09: an AK totals alert shows AK's totals
+        # record, a God sides alert God's sides record (betting rows only)
+        rows = committee("401", arms_status="approved")
+        rows[3]["pick_market"] = "side_and_total"
+        rows[3]["total_pick_json"] = json.dumps(
+            {**OVER, "stake_units": None, "confidence_stars": 2}
+        )
+        rows[6]["side_pick_json"] = json.dumps(SEA_SIDE)  # judge bets
+        markets = {
+            "ak:total": {"w": 27, "l": 17, "p": 0, "units": 7.545, "risk": 44.0},
+            "ak:side": {"w": 20, "l": 25, "p": 5, "units": -6.8, "risk": 50.0},
+            "god_judge:side": {"w": 4, "l": 0, "p": 0, "units": 3.16, "risk": 3.4},
+            "god_rules:side": {"w": 7, "l": 2, "p": 0, "units": 6.76, "risk": 12.8},
+        }
+        self.sync(rows, market_records=markets)
+        texts = [m["text"] for m in self.api.sent if not m["silent"]]
+        self.assertEqual(
+            texts,
+            [
+                "🔔 <b>Seahawks -3.5</b> · Patriots @ Seahawks\n"
+                "<b>God</b> 0.6u (+100) · sides 4-0 +3.2u\n"
+                "<b>Rules</b> no bet · line moved against",
+                "🔔 <b>Over 44.5</b> · Patriots @ Seahawks\n"
+                "<b>AK</b> ★★ (-105) · totals 27-17 +7.5u",
+            ],
+        )
+
+    def test_market_records_count_the_standing_row_at_its_stake(self) -> None:
+        def leg(price, units):
+            return json.dumps({"selection": "Over", "line": 44.5, "price": price,
+                               "stake_units": units})
+        opinions = [
+            {"opinion_id": "old", "expert_id": "god_rules", "event_id": "401",
+             "generated_at_utc": "2026-09-12T12:00:00+00:00",
+             "total_pick_json": leg(-110, 3)},
+            {"opinion_id": "new", "expert_id": "god_rules", "event_id": "401",
+             "generated_at_utc": "2026-09-12T13:00:00+00:00",
+             "total_pick_json": leg(120, 2)},
+            {"opinion_id": "ak", "expert_id": "ak", "event_id": "401",
+             "generated_at_utc": "2026-09-12T13:00:00+00:00",
+             "total_pick_json": leg(None, None)},
+        ]
+        graded = [
+            {"opinion_id": oid, "expert_id": eid, "event_id": "401",
+             "legs": [{"kind": "total", "result": result}]}
+            for oid, eid, result in (("old", "god_rules", "L"),
+                                     ("new", "god_rules", "W"),
+                                     ("ak", "ak", "W"))
+        ]
+        records = moe_desk.market_records(opinions, graded)
+        self.assertEqual(
+            records["god_rules:total"],
+            {"w": 1, "l": 0, "p": 0, "units": 2.4, "risk": 2.0},
+        )
+        self.assertAlmostEqual(records["ak:total"]["units"], 100 / 110)
+        self.assertEqual(records["ak:total"]["risk"], 1.0)
+
     def test_an_arm_off_the_list_drops_off_its_standing_card(self) -> None:
         # a total card announced before 2026-10-09 carried the God arms
         rows = committee("401", arms_status="approved")
