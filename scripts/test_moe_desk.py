@@ -1243,10 +1243,10 @@ class SyncTests(unittest.TestCase):
             texts,
             [
                 "🔔 <b>Seahawks -3.5</b> · Patriots @ Seahawks\n"
-                "<b>God</b> 0.6u (+100) · sides 4-0 +3.2u\n"
+                "<b>God</b> 0.6u (+100) · sides 4-0\n"
                 "<b>Rules</b> no bet · line moved against",
                 "🔔 <b>Over 44.5</b> · Patriots @ Seahawks\n"
-                "<b>AK</b> ★★ (-105) · totals 27-17 +7.5u",
+                "<b>AK</b> ★★ (-105) · totals 27-17",
             ],
         )
 

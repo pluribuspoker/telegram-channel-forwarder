@@ -1036,6 +1036,11 @@ either person sees or does.
   10+ bets — each suggestion once, when it first appears (state
   `logs/moe_alert_review.json`; an undelivered DM retries next run, a
   cleared suggestion re-arms). Changing the list = that one dict.
+  Each betting row ends with that expert's season record in the card's
+  market (`sides 4-0` / `totals 27-17`, W-L-P only — the operator removed
+  units the same day), from `moe_desk.market_records` computed in the
+  intake bot's hourly cached records load (`load_market_records`); a
+  record change is a silent edit.
 - Loud and silent. Every card post and edit is silent. Bets live on ONE
   🔔 card per event+kind (`betcard:<event>:<side|total>`, 2026-09-13,
   5b05759 — the previous `bet:<opinion>` key re-alerted an unchanged bet

@@ -1848,20 +1848,20 @@ def market_records(
 
 
 def _market_record_text(record: Any, kind: str) -> str:
-    """``totals 27-17 +7.5u`` — the bet card's per-market season record
-    (operator-asked 2026-10-09); empty before the first graded bet."""
+    """``totals 27-17`` — the bet card's per-market season record
+    (operator-asked 2026-10-09; W-L only — the operator removed the units
+    profit the same day); empty before the first graded bet."""
     if not isinstance(record, dict):
         return ""
     try:
         wins, losses, pushes = (int(record.get(k) or 0) for k in ("w", "l", "p"))
-        units = float(record.get("units") or 0)
     except (TypeError, ValueError):
         return ""
     if not (wins or losses or pushes):
         return ""
     tail = f"-{pushes}" if pushes else ""
     market = "sides" if kind == "side" else "totals"
-    return f"{market} {wins}-{losses}{tail} {units:+.1f}u"
+    return f"{market} {wins}-{losses}{tail}"
 
 
 def _card_name(expert_id: str) -> str:
