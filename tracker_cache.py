@@ -103,6 +103,43 @@ def _find_mirror_entry(
     return None
 
 
+def find_sibling_verdict(
+    pending_cache: dict,
+    source_key: str | None,
+    exclude_key: str,
+    leg_idx: int,
+    pick: dict,
+) -> dict | None:
+    """A resolved verdict for this same leg on a fan-out sibling, else None.
+
+    Copies of one source message share `_source_key` and (via the parse mirror) an
+    identical parse, so leg i is the same bet on the same game in every copy: the
+    first copy to resolve it settles it for the rest. Without this, each copy paid
+    its own ESPN context and — for non-math legs — its own Claude grade, and a
+    sampled grade could even diverge between copies (the 2026-08-24 Marlins F5
+    PUSH-vs-WIN split). The description must match, so a copy whose parse somehow
+    diverged never inherits; only WIN/LOSS/PUSH mirror — VOID is parlay-ticket
+    state that each copy derives itself, and `broadcasted` is deliberately NOT
+    copied (each copy broadcasts, or not, per its own channel).
+    """
+    if not source_key:
+        return None
+    want = pick.get("description", "")
+    for key, entry in pending_cache.items():
+        if key == exclude_key or not isinstance(entry, dict):
+            continue
+        if entry.get("_source_key") != source_key:
+            continue
+        sib_picks = entry.get("parsed", {}).get("picks", [])
+        if leg_idx >= len(sib_picks) or sib_picks[leg_idx].get("description", "") != want:
+            continue
+        lv = entry.get("leg_verdicts")
+        leg = lv.get(str(leg_idx)) if isinstance(lv, dict) else None
+        if isinstance(leg, dict) and leg.get("verdict") in ("WIN", "LOSS", "PUSH"):
+            return leg
+    return None
+
+
 def _find_duplicate_cache_key(
     pending_cache: dict,
     channel_id: int,

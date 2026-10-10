@@ -61,7 +61,7 @@ from ai import (
     usage_cost,
     fmt_cost,
 )
-from tracker_cache import _load_pending_cache, _save_pending_cache
+from tracker_cache import _load_pending_cache, _save_pending_cache, find_sibling_verdict
 from tracker_grading import _overall_verdict
 from tracker_format import (
     _held_odds,
@@ -920,6 +920,21 @@ async def _grade_cycle(
             pick_sport = pick.get("sport") or sport
             odds_gd = odds_by_pick.get(str(i), {}).get("game_date")
             eff_date = effective_grade_date(odds_gd, msg_date)
+
+            # Fan-out copies share _source_key and an identical parse: the first
+            # copy to resolve a leg settles it for every sibling in the same cycle
+            # (the cache dict is live, so copy 2 sees copy 1's verdict). Skips the
+            # whole ESPN-context + Claude path per duplicate copy.
+            sib = find_sibling_verdict(cache, entry.get("_source_key"), cache_key, i, pick)
+            if sib:
+                leg_verdicts[str(i)] = {
+                    "verdict": sib["verdict"], "calc": sib.get("calc", ""),
+                    "sport": sib.get("sport", pick_sport),
+                    "game_date": sib.get("game_date") or msg_date,
+                }
+                newly_resolved.append((i, pick, sib["verdict"], sib.get("calc", ""),
+                                       sib.get("sport", pick_sport), sib.get("game_date")))
+                continue
 
             sb = await espn_cache.get(pick_sport, eff_date)
             leg_bound = (entry.get("espn_events") or entry.get("soccer_events") or {}).get(str(i))
