@@ -53,7 +53,10 @@ experts:
       - claude-haiku-4-5
     enabled: true
     initial_weight: 1.0
-    markets: [side, total]
+    # Sides only since 2026-10-10 (operator-approved off the Idea Lab replay):
+    # the total pool weighted its O/U lean (28-34) by side skill; committee
+    # totals replayed +11.8u better without it. Same reasoning as rating_elo.
+    markets: [side]
   divisional:
     name: Divisional Expert
     mode: agent

@@ -586,7 +586,7 @@ class LedgerTests(unittest.TestCase):
         game = prepared["games"][0]
         self.assertEqual(game["final"], {"away_score": 20, "home_score": 27})
         self.assertIsNone(game["closing"])
-        self.assertEqual([voice["markets"] for voice in game["voices"]], [["side", "total"], ["side"], ["side", "total"], ["side"]])
+        self.assertEqual([voice["markets"] for voice in game["voices"]], [["side", "total"], ["side"], ["side"], ["side"]])
         self.assertEqual(game["weighting"], {"weights": {"ak": 1.0, "divisional": 1.0, "schedule": 1.0, "win_total": 1.0}, "active": False, "mean_brier": None})
         self.assertEqual(game["policy"]["veto_adverse_price_cents"], DEFAULT_POLICY["veto_adverse_price_cents"])  # the row predates the knob
         self.assertEqual(game["policy"]["shrink_lambda"], 0.5)
@@ -619,7 +619,8 @@ class LedgerTests(unittest.TestCase):
         expected_brier = ((1 - estimates[0]["home_win_probability"]) ** 2 + estimates[1]["home_win_probability"] ** 2) / 2
         self.assertAlmostEqual(registry["ml"]["brier"], expected_brier, places=4)
         # Seahawks -3.5 is vetoed on the price move; under the WP5 total pool
-        # (ak and schedule only) Over 44.5 clears the floor and wins (47);
+        # (ak alone — schedule is sides-only since 2026-10-10) Over 44.5
+        # clears the floor and wins (47);
         # 49ers +3.5 bets and wins (24-20); the Rams total stays under the bar.
         self.assertEqual(registry["legs"]["record"], "2-0-0")
         self.assertEqual((registry["by_kind"]["side"]["record"], registry["by_kind"]["total"]["record"]), ("1-0-0", "1-0-0"))

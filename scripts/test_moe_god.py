@@ -1875,7 +1875,9 @@ class RegistryTests(unittest.TestCase):
                 "pikkit": ["side", "total"],
                 # WP7's rating voice: its total is the league scoring rate.
                 "rating_elo": ["side"],
-                "schedule": ["side", "total"],
+                # Sides-only since 2026-10-10: the total pool weighted its
+                # O/U lean by side skill (operator-approved registry change).
+                "schedule": ["side"],
                 "win_total": ["side"],
             },
         )
@@ -1895,18 +1897,19 @@ class RegistryTests(unittest.TestCase):
 class MovementRenderTests(unittest.TestCase):
     def test_rendering_mentions_price_moves_and_policy_notes(self) -> None:
         registry = load_registry()
-        # Since the total pool holds only the total-informed voices (schedule
-        # and ak: 46 and 48), the shrunk total is 45.75 and the Over clears
-        # the 2% floor at 0.048; a 5% floor keeps the floor note on show.
-        policy = dict(aggregator_policy(registry), min_ev_per_unit=0.05)
+        # Since the total pool holds only the total-informed voice (ak: 48 —
+        # schedule is sides-only since 2026-10-10), the shrunk total is 46.25
+        # and the Over clears the 2% floor at 0.077; an 8% floor keeps the
+        # floor note on show.
+        policy = dict(aggregator_policy(registry), min_ev_per_unit=0.08)
         payload = build_aggregator_input(
             _game(), approved_opinions=_committee(), finals=[], snapshots=[], registry=registry, policy=policy
         )
         # The knobs ride in the input, so they are hash-bound like the rest.
-        self.assertEqual(payload["policy"]["min_ev_per_unit"], 0.05)
+        self.assertEqual(payload["policy"]["min_ev_per_unit"], 0.08)
         self.assertEqual(payload["policy"]["veto_adverse_price_cents"], 10.0)
         self.assertEqual(payload["market"]["movement_since_open"]["home_spread_price"], 10.0)
-        self.assertEqual(payload["feature_block"]["shrunk"]["projected_total"], 45.75)
+        self.assertEqual(payload["feature_block"]["shrunk"]["projected_total"], 46.25)
         opinion = normalize_aggregator_opinion(rules_arm_response(payload), payload, expert=load_expert("god_rules"))
         validate_opinion(opinion, away_team=AWAY, home_team=HOME, schedule_input=payload)
         side = json.loads(opinion["side_pick_json"])
@@ -1918,7 +1921,7 @@ class MovementRenderTests(unittest.TestCase):
             f"Policy: adverse move: {HOME} spread price -110 → +100 (+10 cents) since open.",
             opinion["counterarguments"],
         )
-        self.assertIn("Policy: ev floor: Over 44.5 (-105) ev +0.048 under 0.050.", opinion["counterarguments"])
+        self.assertIn("Policy: ev floor: Over 44.5 (-105) ev +0.077 under 0.080.", opinion["counterarguments"])
         price_text = (
             f"{HOME} spread price +10 cents, {AWAY} spread price -10 cents, "
             "over price +5 cents, under price -5 cents"
@@ -2684,29 +2687,28 @@ class OverlapWeightTests(unittest.TestCase):
             "Pool: Divisional Expert and Schedule Expert cite the same records (overlap 1.00); Schedule Expert pools at weight 0.5 after the discount.",
             opinion["counterarguments"],
         )
-        self.assertIn("weight 0.5; markets side+total; overlap 1.00", opinion["full_opinion"])
-        self.assertIn("(side pool 3 voices, total pool 1)", opinion["full_opinion"])
+        self.assertIn("weight 0.5; markets side; overlap 1.00", opinion["full_opinion"])
+        self.assertIn("(side pool 3 voices, total pool 0)", opinion["full_opinion"])
         summary = json.loads(opinion["calibration_summary_json"])
         self.assertEqual(summary["overlap"]["divisional"]["schedule"], 1.0)
-        self.assertEqual(summary["markets"]["total"], ["schedule"])
+        self.assertEqual(summary["markets"]["total"], [])
         # No overlap, no counterpoint: the default committee cites no records.
         plain = rules_arm_response(self._payload(_committee()))
         self.assertEqual([item["voice"] for item in plain["counterpoints"]], ["market"])
 
     def test_relevance_masks_split_the_pools(self) -> None:
         feature = self._payload(_committee())["feature_block"]
-        self.assertEqual(feature["markets"], {"side": ["ak", "divisional", "schedule", "win_total"], "total": ["ak", "schedule"]})
-        # Side pool: all four; total pool: schedule 46 and ak 48 only.
+        self.assertEqual(feature["markets"], {"side": ["ak", "divisional", "schedule", "win_total"], "total": ["ak"]})
+        # Side pool: all four; total pool: ak 48 alone (schedule has been
+        # sides-only in the registry since 2026-10-10).
         self.assertAlmostEqual(feature["pool"]["home_win_probability"], (0.66 + 0.70 + 0.57 + 0.62) / 4, places=4)
         self.assertEqual(feature["pool"]["expected_home_margin"], 4.5)
-        self.assertEqual(feature["pool"]["projected_total"], 47.0)
-        self.assertEqual(feature["shrunk"]["projected_total"], 45.75)
-        self.assertEqual(feature["dispersion"]["projected_total"], {"min": 46.0, "max": 48.0, "range": 2.0})
+        self.assertEqual(feature["pool"]["projected_total"], 48.0)
+        self.assertEqual(feature["shrunk"]["projected_total"], 46.25)
+        self.assertEqual(feature["dispersion"]["projected_total"], {"min": 48.0, "max": 48.0, "range": 0.0})
         self.assertEqual(feature["dispersion"]["home_winner_votes"], 4)
         self.assertAlmostEqual(
-            feature["pool"]["p_over"],
-            (over_probability(46, 44.5, 13.5) + over_probability(48, 44.5, 13.5)) / 2,
-            places=3,
+            feature["pool"]["p_over"], over_probability(48, 44.5, 13.5), places=3
         )
 
     def test_empty_total_pool_takes_the_market_total(self) -> None:
@@ -2746,9 +2748,9 @@ class OverlapWeightTests(unittest.TestCase):
         self.assertEqual(feature["weights"][label_of["schedule"]], 0.5)
         # Membership lists follow label order, never the alphabetical id order.
         self.assertEqual(feature["markets"]["side"], ["Voice A", "Voice B", "Voice C"])
-        self.assertEqual(feature["markets"]["total"], [label_of["schedule"]])
+        self.assertEqual(feature["markets"]["total"], [])
         by_label = {voice["label"]: voice for voice in request["voices"]}
-        self.assertEqual(by_label[label_of["schedule"]]["markets"], ["side", "total"])
+        self.assertEqual(by_label[label_of["schedule"]]["markets"], ["side"])
         self.assertEqual(by_label[label_of["schedule"]]["pool_weight"], 0.5)
         self.assertEqual(by_label[label_of["schedule"]]["hedge_weight"], 1.0)
         self.assertEqual(by_label[label_of["divisional"]]["markets"], ["side"])
@@ -2811,17 +2813,17 @@ class Week1OverlapReplayTests(unittest.TestCase):
         self.assertEqual(persisted["weights"], {"ak": 1.0, "divisional": 1.0, "schedule": 1.0, "win_total": 1.0})
         self.assertEqual(feature["overlap"]["divisional"]["schedule"], 0.25)
         self.assertEqual(feature["weights"], {"ak": 1.0, "divisional": 1.0, "schedule": 0.8, "win_total": 1.0})
-        self.assertEqual(feature["markets"], {"side": ["ak", "divisional", "schedule", "win_total"], "total": ["ak", "schedule"]})
+        self.assertEqual(feature["markets"], {"side": ["ak", "divisional", "schedule", "win_total"], "total": ["ak"]})
         # (6 + 5 + 5·0.8 + 1) / 3.8
         self.assertEqual(feature["pool"]["expected_home_margin"], 4.21)
         self.assertLess(feature["pool"]["expected_home_margin"], persisted["pool"]["expected_home_margin"])
         self.assertEqual(feature["pool"]["home_win_probability"], 0.6258)
-        self.assertEqual(feature["pool"]["projected_total"], 47.11)  # (46·0.8 + 48) / 1.8
+        self.assertEqual(feature["pool"]["projected_total"], 48.0)  # ak alone (schedule sides-only since 2026-10-10)
         self.assertEqual(feature["shrunk"]["expected_home_margin"], 3.86)
-        self.assertEqual(feature["shrunk"]["projected_total"], 45.81)
+        self.assertEqual(feature["shrunk"]["projected_total"], 46.25)
         self.assertEqual(feature["edges_if_shrunk"]["home_cover"], 0.0322)
         self.assertEqual(persisted["edges_if_shrunk"]["home_cover"], 0.0328)
-        self.assertEqual(feature["edges_if_shrunk"]["over"], 0.0493)
+        self.assertEqual(feature["edges_if_shrunk"]["over"], 0.0624)
 
     def test_rams_side_edge(self) -> None:
         persisted, feature = self._replay("lar_rules")
@@ -2834,8 +2836,8 @@ class Week1OverlapReplayTests(unittest.TestCase):
         self.assertEqual(feature["shrunk"]["expected_home_margin"], 2.01)
         self.assertEqual(feature["edges_if_shrunk"]["home_cover"], -0.0438)
         self.assertLess(abs(feature["edges_if_shrunk"]["home_cover"]), abs(persisted["edges_if_shrunk"]["home_cover"]))
-        self.assertEqual(feature["pool"]["projected_total"], 47.63)  # ak 50 and schedule 45 at 0.9
-        self.assertEqual(feature["edges_if_shrunk"]["over"], -0.0162)
+        self.assertEqual(feature["pool"]["projected_total"], 50.0)  # ak alone (schedule sides-only since 2026-10-10)
+        self.assertEqual(feature["edges_if_shrunk"]["over"], 0.0187)
 
 
 class EnsembleTests(unittest.TestCase):
