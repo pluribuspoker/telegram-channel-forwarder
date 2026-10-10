@@ -9,6 +9,7 @@ contract and the silent-when-legit card. No network, no claude binary, no DMs.
 
     python scripts/test_odds_watch.py
 """
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -318,6 +319,26 @@ check("gate: a fresh unpriced leg triggers the agent (find a free source)",
       r["trigger"] and r["held"] == {}, r)
 r, _ = gate_on(F5, {0}, [{"leg": 0, "reason": "x"}], key="-10:1", review_enabled=False)
 check("gate: ODDS_REVIEW_DISABLED skips the Claude review", not r["review"]["ran"] and r["held"] == {})
+# The reviewer needs the post time to read "today": Dagger's "Washington ML …
+# on Washington today", posted Fri 20:50 ET and bound to Sunday's Commanders,
+# passed review without it (2026-10-09).
+WAS = {"html_text": "Dagger \n\nWashington ML (main play)\n\nThere's a bunch of other "
+                    "good cappers on Washington today (The Pick Don, Midwest Mike)",
+       "parsed": {"picks": [pick("Washington Commanders ML", "moneyline",
+                                 teams=["Washington Commanders"])]},
+       "odds_by_pick": {"0": {**o(-177), "commence_time": "2026-10-11T17:00:00Z"}},
+       "espn_events": {"0": {"kickoff": "2026-10-11T17:00Z",
+                             "name": "New York Giants at Washington Commanders"}}}
+calls.clear()
+gate_on(WAS, {0}, [], key="-11:1",
+        posted_at=og.datetime(2026, 10, 10, 0, 50, 53, tzinfo=og.timezone.utc))
+_sent = json.loads(calls[0]) if calls else {}
+check("review payload carries the post time + kickoff in ET with the weekday",
+      _sent.get("posted") == "Fri 2026-10-09 20:50 ET"
+      and _sent["legs"][0]["game_start"] == "Sun 2026-10-11 13:00 ET"
+      and _sent["legs"][0]["bound_game"] == "New York Giants at Washington Commanders", _sent)
+check("system prompt tells the reviewer what 'today' means",
+      "`posted`" in og.SYSTEM_PROMPT and "today" in og.SYSTEM_PROMPT)
 check("review parser takes ticket + leg suspects, rejects garbage",
       og.parse_review('ok {"suspect": [{"leg": "ticket", "reason": "r"}, {"leg": 2, "reason": "s"}]}')
       == [{"leg": "ticket", "reason": "r"}, {"leg": 2, "reason": "s"}]

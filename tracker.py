@@ -1050,7 +1050,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                             odds_gate.gate, cache_key, cached_entry, picks, odds_by_pick,
                             raw_text=text,
                             tagged_html=_insert_odds(_to_bot_html(text, msg.entities), picks, odds_by_pick),
-                            fresh=fresh_legs)
+                            fresh=fresh_legs, posted_at=msg.date)
                         if _gate["held"]:
                             print(f"  [odds-gate] HOLD legs {sorted(_gate['held'])}: "
                                   + " | ".join("; ".join(w) for w in _gate["held"].values())[:300])

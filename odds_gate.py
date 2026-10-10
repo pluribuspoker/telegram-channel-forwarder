@@ -34,6 +34,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 import odds_checks as oc
 
@@ -58,7 +59,11 @@ Flag a leg only when you are fairly confident the price is wrong, e.g.:
   priced like the full game (or the reverse); a team total priced as a game
   total (or the reverse); a player prop priced off a different stat;
 - wrong side, team, or game (a price that fits the opponent, or a game on a
-  different day);
+  different day). `posted` is when the capper posted and each leg's
+  `game_start` is its bound game, both in US Eastern time: "today"/"tonight"
+  mean the posted date, and a bare place name ("Washington", "Houston",
+  "Miami") can be the pro OR the college team — a post saying "today" bound
+  to a game days later is the wrong game;
 - the parse doesn't match the text (wrong line, wrong direction, a teaser leg
   at the un-teased line, legs combined that the capper bet separately);
 - a parlay whose legs are on the same game multiplied as if independent;
@@ -81,10 +86,29 @@ Use {"suspect": []} when every tag looks right."""
 
 # ─── Claude review (subscription) ─────────────────────────────────────────────
 
+_ET = ZoneInfo("America/New_York")
+
+
+def _et(ts: Any) -> str | None:
+    """'Fri 2026-10-09 20:50 ET' — the reviewer compares "today" against it.
+    Without the post time it can't: Dagger's "Washington ML … today", posted
+    Friday 20:50 and bound to Sunday's Commanders, passed review 2026-10-09."""
+    if isinstance(ts, str):
+        try:
+            ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(ts, datetime):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(_ET).strftime("%a %Y-%m-%d %H:%M ET")
+
+
 def review_payload(picks: list[dict], odds_by_pick: dict, raw_text: str,
-                   entry: dict) -> str:
-    """The user message the reviewer reads: the post, then every leg with
-    the price we're about to show and how it was found."""
+                   entry: dict, posted_at: datetime | None = None) -> str:
+    """The user message the reviewer reads: the post and when it went up,
+    then every leg with the price we're about to show and how it was found."""
     from common import parlay_combined_odds
     bound = entry.get("espn_events") or entry.get("soccer_events") or {}
     legs = []
@@ -98,10 +122,13 @@ def review_payload(picks: list[dict], odds_by_pick: dict, raw_text: str,
                                      "is_parlay_leg")},
             "price": o.get("odds"), "match_type": o.get("match_type"),
             "book": o.get("bookmaker"), "book_line": o.get("api_line"),
-            "game_start_utc": o.get("commence_time"),
-            "bound_game": f"{b.get('name')} {b.get('kickoff')}" if b.get("name") else None,
+            "game_start": _et(o.get("commence_time") or b.get("kickoff")),
+            "bound_game": b.get("name") or None,
         })
-    body: dict[str, Any] = {"post": raw_text.strip()[:3000], "legs": legs}
+    body: dict[str, Any] = {"post": raw_text.strip()[:3000]}
+    if _et(posted_at):
+        body["posted"] = _et(posted_at)
+    body["legs"] = legs
     parlay = [oc.price_of(odds_by_pick.get(str(i)) or {})
               for i, p in enumerate(picks) if p.get("is_parlay_leg")]
     if len(parlay) >= 2:
@@ -185,6 +212,7 @@ def _log(record: dict) -> None:
 def gate(cache_key: str, entry: dict, picks: list[dict], odds_by_pick: dict, *,
          raw_text: str, tagged_html: str, fresh: set[int],
          now: datetime | None = None,
+         posted_at: datetime | None = None,
          reviewer: Callable[[str], tuple[list[dict] | None, dict]] | None = None,
          review_enabled: bool | None = None) -> dict[str, Any]:
     """Review the legs priced THIS pass (`fresh`) and hold the suspicious
@@ -219,7 +247,7 @@ def gate(cache_key: str, entry: dict, picks: list[dict], odds_by_pick: dict, *,
         if prior and prior.get("legs") == sig:
             suspects, meta = prior.get("suspect"), {"reused": True}
         else:
-            message = review_payload(picks, odds_by_pick, raw_text, entry)
+            message = review_payload(picks, odds_by_pick, raw_text, entry, posted_at)
             suspects, meta = (reviewer or claude_review)(message)
             if suspects is not None:
                 rc[src] = {"at": time.time(), "suspect": suspects, "legs": sig}
