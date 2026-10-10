@@ -230,6 +230,21 @@ def _content_sig(group) -> str | None:
     return hashlib.sha1(norm.encode("utf-8")).hexdigest()
 
 
+def _scoped_sig(mapping, sig: str | None) -> str | None:
+    """Content-dedup key, scoped by the mapping's source topic.
+
+    CICL and CILT are different cappers in one source group sharing dest channels: a
+    byte-identical pick posted in both topics within the window must forward twice.
+    Unscoped, the second copy was suppressed permanently — the probe advances
+    last_seen past it on the same cycle that declines it, so nothing ever retried.
+    Delete-and-repost (the case this dedup exists for) happens within one topic, so
+    scoping loses nothing.
+    """
+    if not sig:
+        return None
+    return f"{mapping.get('source_topic_id') or 0}:{sig}"
+
+
 def _content_recent(dest_channel: int, text_hash: str) -> bool:
     """True if identical content was forwarded to this dest within the dedup window."""
     try:
@@ -376,7 +391,7 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
     # Content dedup — a capper deleting a pick and re-posting it (or double-tapping send)
     # produces a NEW message id, so the id-based guards above don't catch it. Suppress a
     # byte-identical repost to the same dest within the window. Skipped in test mode.
-    sig = None if use_test else _content_sig(group)
+    sig = None if use_test else _scoped_sig(mapping, _content_sig(group))
     content_key = (dest_ch, sig) if sig else None
     if content_key and (content_key in _content_in_flight or _content_recent(dest_ch, sig)):
         print(f"  ⊘ duplicate content, skipping msg {group[0].id} → {dest_ch}")
