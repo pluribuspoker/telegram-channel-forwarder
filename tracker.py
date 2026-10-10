@@ -33,7 +33,8 @@ from common import (
 from scores import (
     fetch_espn, odds_requests_used, try_early_grade_math, build_early_context,
     fetch_cfl_scoreboard, espn_current_odds,
-    validate_sport, resolve_nickname_collision, verify_picks_on_schedule,
+    validate_sport, resolve_nickname_collision, resolve_location_collision,
+    verify_picks_on_schedule,
     dropped_typed_words,
     espn_bind, binding_record, bound_matches, kickoff_passed, bindable,
     bound_scoreboard, try_soccer_grade_math, _LIVE_GRACE_H,
@@ -729,6 +730,34 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         ps0 = picks[0].get("sport")
                         if ps0 and ps0 != sport:
                             del picks[0]["sport"]
+
+                    # Bare place names shared by a pro and a college team
+                    # ("Washington ML" = Commanders or Huskies): validate_sport
+                    # confirms either reading as long as it plays this week, so
+                    # only the schedule around the POST can tell them apart.
+                    for li, lpick in enumerate(picks):
+                        lps = lpick.get("sport") or sport
+                        l_sport, l_teams, l_desc, l_note = await resolve_location_collision(
+                            lps, lpick.get("teams") or [], lpick.get("description", ""),
+                            text, date_str, scoreboard_cache, post_time=msg.date,
+                        )
+                        if not l_note:
+                            continue
+                        print(f"  location collision: {l_note}")
+                        await audit.warn(
+                            f"🔧 <b>team resolved from schedule</b>: {_html.escape(l_note)}\n{capper}")
+                        lpick["teams"], lpick["description"] = l_teams, l_desc
+                        if li == 0:
+                            # Siblings inheriting the old top-level sport keep it.
+                            for other in picks[1:]:
+                                if not other.get("sport"):
+                                    other["sport"] = sport
+                            sport = l_sport
+                            parsed["sport"] = sport
+                            lpick.pop("sport", None)
+                            teams, bet_desc = l_teams, l_desc
+                        else:
+                            lpick["sport"] = l_sport
 
                     new_sport, new_teams = await validate_sport(
                         sport, teams, bet_desc, date_str, scoreboard_cache,

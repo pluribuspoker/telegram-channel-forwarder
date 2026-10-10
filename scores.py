@@ -11,6 +11,7 @@ import time
 import httpx
 from datetime import date as _date, datetime as _datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from zoneinfo import ZoneInfo
 
 # common.py imports nothing from here, so this stays one-directional.
 from common import BTTS_RE, is_btts_as_total, is_regulation_ml
@@ -3276,6 +3277,139 @@ async def resolve_nickname_collision(
     warn = (f'ambiguous nickname "{token}" — {listing} both play {date_str}; '
             f'kept {sport} {teams}, verify')
     return sport, teams, description, warn
+
+
+# Bare place names shared by a pro team and a college team of the SAME sport
+# ("Washington ML" = Commanders or Huskies). Unlike _NICKNAME_COLLISIONS the
+# parse's pick here is usually right — NFL picks post days ahead, so "the
+# Commanders don't play today" is no evidence at all (the validate_sport trap).
+# The schedule overrules the parse only on POSITIVE evidence for the other team:
+# it kicks off within _COLLISION_NEAR_HOURS while the parsed one is
+# _COLLISION_FAR_HOURS+ away, or the capper wrote "today"/"tonight" and only it
+# plays today. ("Dagger: Washington ML (main play)… other cappers on Washington
+# today", posted 10 min before Iowa at Washington, parsed as the Commanders two
+# days out — bound, priced and pending on the wrong game, 2026-10-09.)
+_LOCATION_COLLISIONS: dict[str, list[list[tuple[str, str]]]] = {
+    "washington": [[("NFL", "Washington Commanders"), ("NCAAF", "Washington Huskies")],
+                   [("NBA", "Washington Wizards"), ("NCAAB", "Washington Huskies")]],
+    "arizona":    [[("NFL", "Arizona Cardinals"), ("NCAAF", "Arizona Wildcats")]],
+    "houston":    [[("NFL", "Houston Texans"), ("NCAAF", "Houston Cougars")],
+                   [("NBA", "Houston Rockets"), ("NCAAB", "Houston Cougars")]],
+    "minnesota":  [[("NFL", "Minnesota Vikings"), ("NCAAF", "Minnesota Golden Gophers")],
+                   [("NBA", "Minnesota Timberwolves"), ("NCAAB", "Minnesota Golden Gophers")]],
+    "tennessee":  [[("NFL", "Tennessee Titans"), ("NCAAF", "Tennessee Volunteers")]],
+    "miami":      [[("NFL", "Miami Dolphins"), ("NCAAF", "Miami Hurricanes")],
+                   [("NBA", "Miami Heat"), ("NCAAB", "Miami Hurricanes")]],
+    "buffalo":    [[("NFL", "Buffalo Bills"), ("NCAAF", "Buffalo Bulls")]],
+    "pittsburgh": [[("NFL", "Pittsburgh Steelers"), ("NCAAF", "Pittsburgh Panthers")]],
+    "cincinnati": [[("NFL", "Cincinnati Bengals"), ("NCAAF", "Cincinnati Bearcats")]],
+    "memphis":    [[("NBA", "Memphis Grizzlies"), ("NCAAB", "Memphis Tigers")]],
+    "utah":       [[("NBA", "Utah Jazz"), ("NCAAB", "Utah Utes")]],
+    "charlotte":  [[("NBA", "Charlotte Hornets"), ("NCAAB", "Charlotte 49ers")]],
+    "denver":     [[("NBA", "Denver Nuggets"), ("NCAAB", "Denver Pioneers")]],
+    "portland":   [[("NBA", "Portland Trail Blazers"), ("NCAAB", "Portland Pilots")]],
+    "indiana":    [[("NBA", "Indiana Pacers"), ("NCAAB", "Indiana Hoosiers")]],
+    "milwaukee":  [[("NBA", "Milwaukee Bucks"), ("NCAAB", "Milwaukee Panthers")]],
+}
+# "Washington State", "Miami (OH)", "Arizona St." are other schools entirely.
+_LOCATION_NOT_FOLLOWED = r"(?!\s*(?:st\b|st\.|state\b|\(\s*oh|oh\b|ohio\b))"
+_SAME_DAY_RE = re.compile(r"\b(today|tonight|tonite)\b", re.IGNORECASE)
+_ET = ZoneInfo("America/New_York")
+_OTHER_DAY_RE = re.compile(
+    r"\b(tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", re.IGNORECASE)
+
+
+async def resolve_location_collision(
+    sport: str,
+    teams: list[str],
+    description: str,
+    raw_text: str,
+    date_str: str,
+    scoreboard_cache: dict,
+    *,
+    post_time: _datetime | None = None,
+) -> tuple[str, list[str], str, str | None]:
+    """Re-point a single-team pick at the other same-sport team sharing its bare
+    place name, when the schedule says that is the game the capper meant.
+
+    Returns (sport, teams, description, note); `note` is set only when the pick
+    was changed. Fails closed: no token, a typed nickname, a two-team pick, any
+    scoreboard outage on the post date, or no positive evidence → unchanged.
+    """
+    if post_time is None or len(teams) != 1:
+        return sport, teams, description, None
+    low = (raw_text or "").lower()
+    parsed = teams[0].lower()
+    group = token = None
+    for tok, groups in _LOCATION_COLLISIONS.items():
+        if not re.search(rf"\b{tok}\b{_LOCATION_NOT_FOLLOWED}", low):
+            continue
+        for g in groups:
+            if any(t.lower() == parsed and s == sport for s, t in g):
+                group, token = g, tok
+                break
+        if group:
+            break
+    if not group:
+        return sport, teams, description, None
+    # A typed nickname ("Huskies", "Commanders") already decided it.
+    if any(re.search(rf"\b{re.escape(t.split()[-1].lower())}\b", low) for _s, t in group):
+        return sport, teams, description, None
+
+    try:
+        post_day = _date.fromisoformat(date_str)
+    except ValueError:
+        return sport, teams, description, None
+    weekday = post_day.strftime("%A").lower()
+    other_day = any(m.lower() != weekday for m in _OTHER_DAY_RE.findall(low))
+    if other_day:
+        return sport, teams, description, None
+
+    days = _window(date_str, 0, VALIDATE_WINDOW[1])
+    nxt: dict[str, tuple[_datetime, str] | None] = {}
+    for cand_sport, cand_team in group:
+        best = None
+        for d in days:
+            key = (cand_sport, d)
+            if key not in scoreboard_cache:
+                scoreboard_cache[key] = await fetch_espn(cand_sport, d)
+            sb = scoreboard_cache[key]
+            if sb is None:
+                if d == date_str:
+                    return sport, teams, description, None   # outage ≠ evidence
+                continue
+            for e in sb.get("events", []):
+                names = {(c.get("team") or {}).get("displayName", "").lower()
+                         for comp in e.get("competitions", [])[:1]
+                         for c in comp.get("competitors", [])}
+                start = _event_start(e)
+                if cand_team.lower() in names and start and start > post_time:
+                    if best is None or start < best[0]:
+                        # The game's own ET date: college scoreboards are
+                        # week-scoped and list Saturday's game on Friday's.
+                        best = (start, start.astimezone(_ET).date().isoformat())
+        nxt[cand_team] = best
+
+    own = nxt.get(next(t for _s, t in group if t.lower() == parsed))
+    for cand_sport, cand_team in group:
+        if cand_team.lower() == parsed or not nxt.get(cand_team):
+            continue
+        start, day = nxt[cand_team]
+        hours = (start - post_time).total_seconds() / 3600
+        own_hours = (own[0] - post_time).total_seconds() / 3600 if own else None
+        imminent = hours <= _COLLISION_NEAR_HOURS and (own_hours is None
+                                                       or own_hours >= _COLLISION_FAR_HOURS)
+        same_day = bool(_SAME_DAY_RE.search(low) and day == date_str
+                        and (own is None or own[1] != date_str))
+        if imminent or same_day:
+            why = (f"kicks off {hours:.1f}h after the post" if imminent
+                   else "the only one playing the day the capper said 'today'")
+            note = (f'"{token}" {sport} {teams[0]} -> {cand_sport} {cand_team} '
+                    f'({cand_team} {why}; {teams[0]} '
+                    + (f"{own_hours:.0f}h out)" if own else "not on the slate)"))
+            return (cand_sport, [cand_team],
+                    _swap_team_in_desc(description, token, teams[0], cand_team), note)
+    return sport, teams, description, None
 
 
 # Days around the post date a parsed team may play and still confirm its sport
