@@ -367,12 +367,16 @@ def prepend_header(text, entities, header):
     return sep + text, [MessageEntityBold(offset=0, length=_utf16_len(header))] + shifted
 
 
-async def send_group(client, group, dest_entity, sender=None, caption_override=None, text_only=False, reply_to=None, text_suffix=None, text_prefix=None):
+async def send_group(client, group, dest_entity, sender=None, caption_override=None, text_only=False, reply_to=None, text_suffix=None, text_prefix=None, media_override=None):
     """Send a list of messages (album or single) to dest_entity, preserving formatting.
     Uses `sender` client for writing if provided, otherwise uses `client`.
     caption_override replaces the message text (e.g. after OCR enrichment).
     text_only=True skips all media and sends just the caption as a plain message.
     text_suffix appends text (e.g. source label) without discarding original entities.
+    media_override: already-uploaded media (one object, or a list for an album) taken
+    from a message this same `sender` sent earlier — the fan-out's reuse path. It is
+    sent by file reference, skipping both the source download and the re-upload; the
+    caller must fall back to a plain send if Telegram rejects the stale reference.
 
     INVARIANT: whatever text we hand to Telegram alongside `formatting_entities`
     must be `msg.raw_text`. Telethon's `msg.text` is `parse_mode.unparse(raw_text,
@@ -393,14 +397,9 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
         sent = await sender.send_message(dest_entity, caption_override, silent=False, reply_to=reply_to)
         return sent
     if len(group) > 1:
-        files = []
         caption = ""
         caption_entities = None
         for m in group:
-            data = await client.download_media(m.media, file=bytes)
-            buf = io.BytesIO(data)
-            buf.name = "photo.jpg"
-            files.append(buf)
             if m.raw_text and caption_override is None:
                 # raw_text, NOT text: entity offsets index the raw string, while `.text`
                 # is the markdown *render* of it (bold → literal `**…**`). Passing the
@@ -408,6 +407,15 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
                 # message and shifts every later entity. See send_group's docstring.
                 caption = m.raw_text
                 caption_entities = m.entities
+        if media_override is not None:
+            files = media_override
+        else:
+            files = []
+            for m in group:
+                data = await client.download_media(m.media, file=bytes)
+                buf = io.BytesIO(data)
+                buf.name = "photo.jpg"
+                files.append(buf)
         if caption_override is not None:
             caption = caption_override
             caption_entities = None
@@ -431,13 +439,19 @@ async def send_group(client, group, dest_entity, sender=None, caption_override=N
         if text_suffix:
             cap = f"{cap}\n\n{text_suffix}" if cap else text_suffix
         if isinstance(msg.media, MessageMediaPhoto):
-            photo = await client.download_media(msg.media, file=bytes)
-            buf = io.BytesIO(photo)
-            buf.name = "photo.jpg"
-            sent = await sender.send_file(dest_entity, buf, caption=cap, formatting_entities=ents, silent=False, reply_to=reply_to)
+            if media_override is not None:
+                file = media_override
+            else:
+                photo = await client.download_media(msg.media, file=bytes)
+                file = io.BytesIO(photo)
+                file.name = "photo.jpg"
+            sent = await sender.send_file(dest_entity, file, caption=cap, formatting_entities=ents, silent=False, reply_to=reply_to)
 
         elif isinstance(msg.media, MessageMediaDocument):
-            doc = await client.download_media(msg.media, file=bytes)
+            if media_override is not None:
+                doc = media_override
+            else:
+                doc = await client.download_media(msg.media, file=bytes)
             sent = await sender.send_file(dest_entity, doc, caption=cap, formatting_entities=ents, silent=False, reply_to=reply_to)
 
         elif msg.text:

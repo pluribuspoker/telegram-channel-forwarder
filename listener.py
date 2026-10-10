@@ -30,6 +30,7 @@ logging.basicConfig(
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+from telethon.tl.types import MessageMediaDocument, MessageMediaPhoto
 
 from common import enrich_caption, log_group, parse_channel, passes_filter, resolve_dest, send_group
 from tracker_cache import _load_pending_cache, _save_pending_cache
@@ -274,6 +275,40 @@ def _content_save(dest_channel: int, text_hash: str) -> None:
         pass
 
 
+# ── Media relay cache ────────────────────────────────────────────────────────
+# A photo pick fanned out to N dests used to be downloaded from the source and
+# re-uploaded N times (once per dest, sequentially — the slowest part of the
+# fan-out chain). The first successful send now caches the SENT message's media,
+# and the other dests send that by file reference: 1 download + 1 upload total.
+# Keyed by sender client too, since a file reference only works for the account
+# that produced it (bot vs send_as_user user session).
+_MEDIA_RELAY_TTL = 15 * 60
+_media_relay: dict[tuple[int, int, int], tuple[float, object]] = {}  # (src_ch, first_msg_id, sender_id) → (ts, media | [media])
+
+
+def _relay_get(key):
+    v = _media_relay.get(key)
+    if not v:
+        return None
+    ts, media = v
+    if time.time() - ts > _MEDIA_RELAY_TTL:
+        _media_relay.pop(key, None)
+        return None
+    return media
+
+
+def _relay_put(key, media) -> None:
+    now = time.time()
+    for k in [k for k, (ts, _) in _media_relay.items() if now - ts > _MEDIA_RELAY_TTL]:
+        _media_relay.pop(k, None)
+    _media_relay[key] = (now, media)
+
+
+def _relayable_media(group) -> bool:
+    """Only photo/document media is re-sendable by reference; a webpage preview is not."""
+    return any(isinstance(m.media, (MessageMediaDocument, MessageMediaPhoto)) for m in group)
+
+
 _trigger_lock = asyncio.Lock()
 # Work queue of (dest_channel, message_id) pairs this listener just created and still owes a
 # quick tracker pass. One source pick fanned out to N dest channels enqueues N entries.
@@ -428,14 +463,36 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
             if capper_key is None and len(chain_cappers) == 1:
                 capper_key = chain_cappers[0].lower()
             reply_to = _reply_chain_get(dest_ch, capper_key)
+        relayable = not odds and _relayable_media(group)
+        relay_key = (ch_id, group[0].id, id(sender)) if relayable else None
+
+        async def _send(reply_to_arg):
+            media_override = _relay_get(relay_key) if relayable else None
+            try:
+                return await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds), reply_to=reply_to_arg, text_suffix=text_suffix, text_prefix=text_prefix, media_override=media_override)
+            except Exception:
+                if media_override is None:
+                    raise
+                # Cached file reference went stale or was rejected — drop it and
+                # pay the normal download+upload path for this dest.
+                _media_relay.pop(relay_key, None)
+                return await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds), reply_to=reply_to_arg, text_suffix=text_suffix, text_prefix=text_prefix)
+
         try:
-            sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds), reply_to=reply_to, text_suffix=text_suffix, text_prefix=text_prefix)
+            sent = await _send(reply_to)
         except Exception:
             if reply_to:
                 # Reply target may have been deleted — retry without reply
-                sent = await send_group(client, group, dest_entity, sender=sender, caption_override=caption, text_only=bool(odds), text_suffix=text_suffix, text_prefix=text_prefix)
+                sent = await _send(None)
             else:
                 raise
+        # Cache the sent media so the remaining fan-out dests resend by reference.
+        if relayable and sent and sent is not True:
+            _sent_list = sent if isinstance(sent, list) else [sent]
+            _media = [s.media for s in _sent_list
+                      if isinstance(getattr(s, "media", None), (MessageMediaDocument, MessageMediaPhoto))]
+            if _media:
+                _relay_put(relay_key, _media if len(group) > 1 else _media[0])
         for m in group:
             _forwarded_save(ch_id, dest_ch, m.id)
         if content_key:
