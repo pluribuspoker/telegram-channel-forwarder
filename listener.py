@@ -548,12 +548,27 @@ async def main():
             print(f"  ⚠ Skipping mapping '{mid}': cannot resolve source channel ({e})")
             continue
         dest_raw = resolve_dest(mapping, use_test)
-        dest_entity = await client.get_entity(dest_raw)
-        bot_dest_entity = await bot.get_entity(dest_raw)
+        try:
+            dest_entity = await client.get_entity(dest_raw)
+            bot_dest_entity = await bot.get_entity(dest_raw)
+        except Exception as e:
+            # Same guard as the source above: one dead dest channel (deleted, bot
+            # kicked, never met) must cost only its own mapping — unguarded, it
+            # crash-looped main() and took every other mapping down with it.
+            mid = mapping.get("id", dest_raw)
+            print(f"  ⚠ Skipping mapping '{mid}': cannot resolve dest channel ({e})")
+            continue
 
         # Resolve sent_by_user username → numeric ID
         if mapping.get("sent_by_user"):
-            user_entity = await client.get_entity(mapping["sent_by_user"])
+            try:
+                user_entity = await client.get_entity(mapping["sent_by_user"])
+            except Exception as e:
+                # Skip rather than forward unfiltered: a failed resolve would
+                # otherwise disable the sender filter for this mapping.
+                mid = mapping.get("id", dest_raw)
+                print(f"  ⚠ Skipping mapping '{mid}': cannot resolve sent_by_user ({e})")
+                continue
             mapping["_sent_by_user_id"] = user_entity.id
             print(f"  Resolved sent_by_user '{mapping['sent_by_user']}' → {user_entity.id}")
 
@@ -567,6 +582,11 @@ async def main():
 
         pair = (source_entity.id, dest_entity.id, topic_id)
         if pair in registered:
+            # One mapping per (source, dest, topic): a second one here would be
+            # dead config — its filter/prefix would never run. Say so instead of
+            # silently ignoring it.
+            print(f"  ⚠ Mapping '{mapping.get('id', '?')}' shares (source, dest, topic) with an "
+                  f"earlier mapping and is IGNORED — merge the two into one mapping")
             continue
         registered.add(pair)
 
