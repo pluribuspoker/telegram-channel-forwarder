@@ -62,13 +62,18 @@ async def heartbeat():
 async def connection_watchdog(client):
     """Probe Telegram every 60s with a real round-trip. Raises on failure to trigger restart."""
     await asyncio.sleep(60)  # let startup settle
+    last_ok_log = 0.0
     while True:
         await asyncio.sleep(60)
         try:
             await asyncio.wait_for(client.get_me(), timeout=15)
-            print("  ⇌")
         except Exception as e:
             raise RuntimeError(f"Watchdog: connection probe failed ({e})")
+        # One ⇌ per hour, not per probe — the per-minute line was pure journal noise
+        # (failure is loud: it raises and restarts the service).
+        if time.monotonic() - last_ok_log > 3600:
+            print("  ⇌")
+            last_ok_log = time.monotonic()
 
 
 _DB_PATH = os.path.join(os.path.dirname(__file__), "picks.db")
@@ -524,50 +529,62 @@ async def _forward_group(group, mapping, client, sender, dest_entity, use_test, 
             _content_in_flight.discard(content_key)
 
 
-async def channel_probe(client, channels, use_test):
-    """Every 5 min, log the latest message in each source channel. Forward any missed messages."""
-    await asyncio.sleep(60)
-    last_seen: dict = _probe_db_load()
-    while True:
-        await asyncio.sleep(60)
-        # Snapshot min_ids so all mappings sharing a probe_key use the same
-        # starting point within one cycle (otherwise the first mapping to
-        # process updates last_seen and the second mapping misses catch-ups).
-        min_ids_snapshot = dict(last_seen)
-        for source_entity, sender_dest_entity, src_label, _, topic_id, mapping, sender_client in channels:
-            try:
-                probe_key = (source_entity.id, topic_id or 0)
-                kwargs = {"reply_to": topic_id} if topic_id else {}
-                if probe_key not in last_seen:
-                    # New mapping — seed with newest msg so we don't replay history
-                    seed = await client.get_messages(source_entity, limit=1, **kwargs)
-                    seed_id = seed[0].id if seed else 0
-                    last_seen[probe_key] = seed_id
-                    min_ids_snapshot[probe_key] = seed_id
-                    _probe_db_save(source_entity.id, topic_id, seed_id)
-                min_id = min_ids_snapshot[probe_key]
-                msgs = await client.get_messages(source_entity, min_id=min_id, limit=50, **kwargs)
-                if not msgs:
-                    print(f"\033[2m  ⊙ {src_label}: no new msg\033[0m")
-                    continue
+def _build_probe_groups(channels):
+    """Group resolved mappings by (source channel, topic).
 
-                # Update last_seen to the newest message
-                newest = max(msgs, key=lambda m: m.id)
-                last_seen[probe_key] = newest.id
-                _probe_db_save(source_entity.id, topic_id, newest.id)
+    The probe fetches history once per group per cycle: a source fanned out to N
+    dests costs one RPC instead of N identical ones (it was O(mappings) per minute,
+    which is why the old loop needed a min_ids snapshot — the first mapping to see
+    new messages advanced last_seen under its siblings)."""
+    groups: dict[tuple[int, int], list] = {}
+    for chan in channels:
+        source_entity, topic_id = chan[0], chan[4]
+        groups.setdefault((source_entity.id, topic_id or 0), []).append(chan)
+    return groups
 
-                # Log probe status
-                age = datetime.datetime.now(datetime.timezone.utc) - newest.date
-                preview = (newest.text or "[media]").replace("\n", " ")[:28]
-                print(f"  ⊙ {src_label}: new msg ({age.seconds//60}m ago) {preview!r}")
+
+async def _probe_cycle(client, groups, last_seen, use_test) -> int:
+    """One probe pass: fetch each (source, topic) once, catch up every mapping on it.
+    Returns the number of quiet groups (no new messages)."""
+    quiet = 0
+    for (src_id, _topic0), group_chans in groups.items():
+        source_entity, _, src_label, _, topic_id, _, _ = group_chans[0]
+        try:
+            probe_key = (src_id, topic_id or 0)
+            kwargs = {"reply_to": topic_id} if topic_id else {}
+            if probe_key not in last_seen:
+                # New mapping — seed with newest msg so we don't replay history
+                seed = await client.get_messages(source_entity, limit=1, **kwargs)
+                seed_id = seed[0].id if seed else 0
+                last_seen[probe_key] = seed_id
+                _probe_db_save(src_id, topic_id, seed_id)
+            min_id = last_seen[probe_key]
+            msgs = await client.get_messages(source_entity, min_id=min_id, limit=50, **kwargs)
+            if not msgs:
+                quiet += 1
+                continue
+
+            # Update last_seen to the newest message
+            newest = max(msgs, key=lambda m: m.id)
+            last_seen[probe_key] = newest.id
+            _probe_db_save(src_id, topic_id, newest.id)
+
+            # Log probe status
+            age = datetime.datetime.now(datetime.timezone.utc) - newest.date
+            preview = (newest.text or "[media]").replace("\n", " ")[:28]
+            print(f"  ⊙ {src_label}: new msg ({age.seconds//60}m ago) {preview!r}")
+
+            ordered = sorted(msgs, key=lambda m: m.id)
+            for chan in group_chans:
+                _, sender_dest_entity, _, _, _, mapping, sender_client = chan
+                probe_dest = mapping.get("test_dest_channel") if use_test else mapping.get("dest_channel")
 
                 # Catch-up: forward any messages not already handled by event handlers
                 # Separate into singles and albums (grouped_id)
                 albums: dict[int, list] = {}
                 singles = []
-                probe_dest = mapping.get("test_dest_channel") if use_test else mapping.get("dest_channel")
-                for msg in sorted(msgs, key=lambda m: m.id):
-                    if _was_forwarded(source_entity.id, probe_dest, msg.id):
+                for msg in ordered:
+                    if _was_forwarded(src_id, probe_dest, msg.id):
                         continue
                     if msg.grouped_id:
                         albums.setdefault(msg.grouped_id, []).append(msg)
@@ -586,8 +603,25 @@ async def channel_probe(client, channels, use_test):
                     except Exception as e:
                         print(f"  ✗ Catch-up failed album {gid}: {e}", file=sys.stderr)
 
-            except Exception as e:
-                print(f"  ⊙ {src_label}: probe failed ({str(e)[:40]})")
+        except Exception as e:
+            print(f"  ⊙ {src_label}: probe failed ({str(e)[:40]})")
+    return quiet
+
+
+async def channel_probe(client, channels, use_test):
+    """Every 60s, poll each source (channel, topic) once; forward anything the event
+    handlers missed. Quiet polls log one summary line per hour — the per-mapping
+    'no new msg' line every minute was ~90% of this unit's journal."""
+    await asyncio.sleep(60)
+    last_seen: dict = _probe_db_load()
+    groups = _build_probe_groups(channels)
+    last_quiet_log = 0.0
+    while True:
+        await asyncio.sleep(60)
+        quiet = await _probe_cycle(client, groups, last_seen, use_test)
+        if quiet and time.monotonic() - last_quiet_log > 3600:
+            print(f"  ⊙ probe: {quiet}/{len(groups)} source topics quiet this pass")
+            last_quiet_log = time.monotonic()
 
 
 async def main():
