@@ -289,6 +289,7 @@ _BET_TOKEN_RE = re.compile(
 
 ANOMALY_TITLES = {
     "fanout_split": "fan-out copies disagree",
+    "team_split": "same typed bet, different teams",
     "bare_label": "label names no bet",
 }
 
@@ -340,6 +341,35 @@ def _anomaly_hits(key: str, entry: dict, *, rendered: set[int],
     return hits
 
 
+_TEAM_MARKETS = {"moneyline", "spread", "total", "team_total"}
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _typed_team_words(entry: dict, teams: list[str]) -> frozenset[str]:
+    """The words of the parsed team names the capper actually typed — what
+    two messages restating one bet share even when their parses disagree
+    ("Washington" in both, Huskies in one parse and Commanders in the other)."""
+    text = html.unescape(_TAG_RE.sub(" ", entry.get("html_text") or "")).lower()
+    words = set()
+    for t in teams:
+        for w in re.findall(r"[a-z0-9]+", (t or "").lower()):
+            if len(w) >= 3 and re.search(rf"\b{re.escape(w)}\b", text):
+                words.add(w)
+    return frozenset(words)
+
+
+def _same_teams(a: frozenset, b: frozenset) -> bool:
+    """Parse spellings of one team agree ("Missouri" / "Missouri Tigers"):
+    every team on each side has a counterpart whose words contain, or are
+    contained in, its own."""
+    def ws(t: str) -> set[str]:
+        return set(re.findall(r"[a-z0-9]+", t))
+
+    def covered(x, y):
+        return all(any(ws(t) <= ws(u) or ws(u) <= ws(t) for u in y) for t in x)
+    return covered(a, b) and covered(b, a)
+
+
 def scan_anomalies(
     cache: dict,
     state: dict,
@@ -361,6 +391,7 @@ def scan_anomalies(
     floor = (today_et - timedelta(days=days_back)).isoformat()
     hits: list[dict[str, Any]] = []
     fanout: dict[tuple, list[tuple[str, int, str]]] = {}
+    typed: dict[tuple, list[tuple[str, int, frozenset, str]]] = {}
     for key, entry in cache.items():
         if not isinstance(entry, dict) or "parsed" not in entry or entry.get("_dupe"):
             continue
@@ -376,6 +407,26 @@ def scan_anomalies(
         # Fan-out copies grade independently; a split verdict on the same
         # leg of the same game means one copy is wrong.
         picks = (entry.get("parsed") or {}).get("picks") or []
+        # Restatements of one bet (another source, a re-post) parse
+        # independently; the same typed words bound to different teams means
+        # one copy is on the wrong game. Pending legs count: a wrong binding
+        # to a LATER game is invisible to every other check until it grades
+        # (Dagger's Huskies ML parsed as Sunday's Commanders, 2026-10-09).
+        for i, pick in enumerate(picks):
+            teams = [t for t in (pick.get("teams") or []) if t]
+            if (pick.get("bet_type") not in _TEAM_MARKETS or pick.get("player")
+                    or not teams):
+                continue
+            words = _typed_team_words(entry, teams)
+            if not words:
+                continue
+            line = None if pick.get("bet_type") == "moneyline" else pick.get("line")
+            fp = (str(entry.get("capper_name") or "").strip().lower(), msg_date,
+                  pick.get("bet_type"), pick.get("period") or "game", line,
+                  pick.get("direction"), words)
+            typed.setdefault(fp, []).append((
+                key, i, frozenset(t.lower() for t in teams),
+                str((lv.get(str(i)) or {}).get("verdict") or "pending")))
         for i, pick in enumerate(picks):
             leg = lv.get(str(i)) or {}
             if leg.get("verdict") not in RESOLVED or not leg.get("game_date"):
@@ -399,6 +450,25 @@ def scan_anomalies(
                 "ref_date": gd, "capper": str(entry.get("capper_name") or ""),
                 "detail": "copies graded " + " / ".join(
                     f"{k}={v}" for k, _, v in sorted(copies)),
+            })
+
+    for (capper, md, *_rest, words), copies in typed.items():
+        if all(_same_teams(a[2], b[2]) for a in copies for b in copies):
+            continue
+        summary = " / ".join(f"{k}={'+'.join(sorted(tm))} ({v})"
+                             for k, _, tm, v in sorted(copies))
+        for key, i, _tm, verdict in copies:
+            entry = cache[key]
+            pick = entry["parsed"]["picks"][i]
+            hits.append({
+                "key": key, "idx": i, "rule": "team_split",
+                "description": pick.get("description") or "",
+                "label": "", "verdict": verdict,
+                "bet_type": pick.get("bet_type") or "",
+                "period": pick.get("period") or "",
+                "ref_date": md, "capper": str(entry.get("capper_name") or ""),
+                "detail": f"typed {'/'.join(sorted(words))!r} parsed as "
+                          f"different teams: {summary}",
             })
 
     groups: dict[str, dict[str, Any]] = {}
@@ -560,9 +630,13 @@ def build_anomaly_prompt(group: dict[str, Any], *, today_et: date) -> str:
     lines = [
         f"/investigate NIGHTLY ANOMALY AUDIT {today_et.isoformat()}: the "
         f"deterministic invariant `{rule}` ({group['title']}) fired on "
-        f"{len(group['instances'])} already-GRADED leg(s). Their verdicts may "
-        "well be right — the suspect is the label, parse shape, price, or one "
-        "fan-out copy. Confirm whether each instance is a real defect; if yes, "
+        f"{len(group['instances'])} "
+        + ("leg(s), some possibly still PENDING" if rule == "team_split"
+           else "already-GRADED leg(s)")
+        + ". Their verdicts may well be right — the "
+        "suspect is the label, parse shape, price, one fan-out copy, or one "
+        "restatement bound to the wrong team. Confirm whether each instance "
+        "is a real defect; if yes, "
         "fix the whole class in code and repair every live artifact; if the "
         "rule misfired, change nothing and say why.",
         "",
@@ -587,6 +661,15 @@ def build_anomaly_prompt(group: dict[str, Any], *, today_et: date) -> str:
         "- A wrong parse field (period, bet_type, line) in the cache: fix the "
         "parse code, then correct the cached parse of each instance (daemon "
         "stopped) so the next reader sees the right shape.",
+        "- `team_split` (one restated bet parsed as different teams): decide "
+        "which team the capper meant from outside the parse (post time vs "
+        "each kickoff, the capper's history, the other copy's price), then "
+        "correct the wrong copies' cached parse (sport/teams/description) "
+        "AND their `espn_events`/`odds_by_pick` binding (copy a correct "
+        "sibling's; after kickoff never re-fetch), strip the wrong price tag "
+        "from the live message, and run `tracker.py --live --target=...` with "
+        "grade-daemon stopped. A pending copy grades on the wrong game when "
+        "that game ends — repairing it beats any code fix.",
         "- A wrong verdict (fan-out split, or a verdict the corrected parse "
         "contradicts): fix grades row + leg_verdicts + message emoji + "
         "broadcast, per the investigate lessons on sibling sweeps.",

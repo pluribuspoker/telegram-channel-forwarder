@@ -388,6 +388,43 @@ class AnomalyScan(unittest.TestCase):
                                         game_date="2026-09-06", teams=["Chicago Cubs"])}
         self.assertEqual(anomalies(days), [])
 
+    def test_team_split_restatement_on_another_team_fires(self):
+        # The 2026-10-09 shape, byte-exact texts: DAGGER's copy graded the
+        # Huskies; the CILT restatement parsed as the Commanders and sat
+        # PENDING on Sunday's game — pending legs must count.
+        good = graded("Washington Huskies moneyline -150", verdict="LOSS",
+                      game_date="2026-09-05", teams=["Washington Huskies"])
+        good["html_text"] = ("<strong>Dagger</strong>\n\n\u2757\ufe0f\u2757\ufe0fMAIN PLAY"
+                             "\u2757\ufe0f\u2757\ufe0f\n\nWashington ML -150 2U\u274c")
+        bad = entry(picks=[pick("Washington Commanders ML",
+                                teams=["Washington Commanders"])],
+                    odds={"0": {"game_date": "2026-09-07"}})
+        bad["html_text"] = ("Dagger \n\nWashington ML (main play) [-177]\n\nThere&#x27;s a "
+                            "bunch of other good cappers on Washington today (The "
+                            "Pick Don, Midwest Mike)")
+        cache = {f"{RENDERED}:3995": good, f"{RENDERED}:3996": bad}
+        groups = anomalies(cache)
+        self.assertEqual([g["rule"] for g in groups], ["team_split"])
+        self.assertEqual(sorted(groups[0]["keys"]), sorted(cache))
+        prompt = build_anomaly_prompt(groups[0], today_et=TODAY)
+        self.assertIn("team_split", prompt)
+        self.assertIn("pending", prompt)
+
+    def test_team_split_silent_on_spelling_variants_and_other_days(self):
+        def ml(team, text, msg_date="2026-09-05"):
+            e = graded(f"{team} ML", teams=[team])
+            e["html_text"], e["msg_date"] = text, msg_date
+            return e
+        # "Missouri" / "Missouri Tigers" is one team (live-cache noise).
+        same = {f"{RENDERED}:1": ml("Missouri", "Missouri ML"),
+                f"{UNRENDERED}:1": ml("Missouri Tigers", "Missouri ML")}
+        self.assertEqual(anomalies(same), [])
+        # Saturday's Huskies and Sunday's Commanders posted on different days.
+        days = {f"{RENDERED}:1": ml("Washington Huskies", "Washington ML"),
+                f"{RENDERED}:2": ml("Washington Commanders", "Washington ML",
+                                    msg_date="2026-09-06")}
+        self.assertEqual(anomalies(days), [])
+
     def test_prices_are_not_a_nightly_rule(self):
         # scripts/odds_watch.py owns wrong prices (test_odds_watch.py).
         cache = {f"{RENDERED}:1": graded(

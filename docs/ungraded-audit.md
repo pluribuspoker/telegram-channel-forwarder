@@ -48,6 +48,17 @@ window (zero API cost; an agent runs only when a rule fires):
   MAPPINGS_CONFIG) — elsewhere the label is never shown.
 - `fanout_split` — fan-out copies (same capper + description + game date)
   graded differently.
+- `team_split` — one restated bet parsed as different teams: same capper +
+  post date + bet_type/period/line/direction + the same TYPED team words
+  (the words of the parsed names that appear in the message), but parses
+  naming different teams ("Missouri"/"Missouri Tigers" counts as one —
+  either name's words contain the other's). Unlike every other rule it
+  counts PENDING legs: a copy bound to a later game is invisible to every
+  other check until it grades on that game (Dagger's "Washington ML" via
+  DAGGER = Huskies ❌, via CILT = Sunday's Commanders, 2026-10-09). Every
+  copy, the correct one included, lands in the group. Swept over the live
+  cache (535 entries, Jun–Oct 2026) at build time: 0 hits once spelling
+  variants were folded, the incident reproduced on a pre-repair copy.
 - (`price_band` was retired 2026-10-03: wrong prices belong to the odds
   watch, `scripts/odds_watch.py`, every 15 min — docs/odds.md.)
 
