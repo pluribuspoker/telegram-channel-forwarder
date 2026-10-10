@@ -10,6 +10,7 @@ import time
 
 import httpx
 from datetime import date as _date, datetime as _datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 
 # common.py imports nothing from here, so this stays one-directional.
 from common import BTTS_RE, is_btts_as_total, is_regulation_ml
@@ -612,6 +613,18 @@ async def _fetch_cfl_games() -> list[dict]:
             _cfl_games_cache = (time.monotonic(), [])
             return []
     games = _parse_cfl_schedule(r.text)
+    # cfl.ca's data layer has served hours-stale snapshots (2026-10-10: the
+    # late game still "NotStarted" after its final). When a near-today game is
+    # unsettled, reconcile status/finals from theScore before caching.
+    try:
+        today = _datetime.now(timezone.utc).date()
+        stale_risk = any(
+            not g["final"] and abs((_date.fromisoformat(g["date"]) - today).days) <= 1
+            for g in games)
+    except (TypeError, ValueError):
+        stale_risk = bool(games)
+    if stale_risk:
+        _merge_thescore_cfl_status(games, await _fetch_thescore_cfl_events())
     _cfl_games_cache = (time.monotonic(), games)
     return games
 
@@ -726,9 +739,13 @@ async def _ensure_cfl_quarters(game: dict) -> None:
     if not (game.get("final") or game.get("live")):
         return
     gid = game.get("genius_id")
-    if not gid:
-        return
-    state = await _fetch_cfl_quarters(gid)
+    state = await _fetch_cfl_quarters(gid) if gid else None
+    if not state:
+        # 2026-10-10: the widget redeployed as a client-side app with no SSR
+        # state (its data host resolves only inside Genius infra), so the
+        # quarter source went dark league-wide. theScore carries the same
+        # per-quarter line scores on an open JSON endpoint.
+        state = await _fetch_thescore_cfl_quarters(game)
     if not state:
         return
     game["away_quarters"] = state["away"]
@@ -739,6 +756,178 @@ async def _ensure_cfl_quarters(game: dict) -> None:
         game["ot"] = True
     if game.get("live") and state.get("current_phase"):
         game["current_period"] = state["current_phase"]
+
+
+# ─── theScore CFL fallback (game status + quarter scores) ────────────────────
+# 2026-10-10, both cfl.ca sources died in one night: the site's data layer
+# froze mid-slate (every fixture's revision_at pinned at 01:58Z, so the late
+# game sat "NotStarted" 0-0 hours after its final — BC Lions 1H -7.5 pended
+# forever) and the Genius widget dropped its SSR state (Hamilton 1H +4.5
+# capped UNKNOWN×6 on a quarterless final). theScore's open JSON API carries
+# both: event status/finals and per-quarter line scores. It AUGMENTS cfl.ca —
+# status only ever upgrades to final, only on the observed "final" string, and
+# quarters fill only when the widget yields nothing. Any theScore failure
+# leaves the cfl.ca state untouched (fails open to the old behavior).
+_THESCORE_CFL_EVENTS_URL = ("https://api.thescore.com/cfl/events"
+                            "?game_date.in={start}T00:00:00Z,{end}T00:00:00Z")
+_THESCORE_CFL_LINES_URL = "https://api.thescore.com/cfl/box_scores/{box_id}/line_scores"
+_thescore_cfl_events_cache: tuple[float, list[dict]] | None = None
+_thescore_cfl_lines_cache: dict[int, tuple[float, dict | None]] = {}
+
+
+async def _fetch_thescore_cfl_events() -> list[dict]:
+    """theScore CFL events for today ±2 days, cached briefly (failures too,
+    same reasoning as the schedule: the daemon re-asks per pick per cycle)."""
+    global _thescore_cfl_events_cache
+    if _thescore_cfl_events_cache:
+        age = time.monotonic() - _thescore_cfl_events_cache[0]
+        ttl = _CFL_GAMES_TTL if _thescore_cfl_events_cache[1] else _CFL_GAMES_FAIL_TTL
+        if age < ttl:
+            return _thescore_cfl_events_cache[1]
+    today = _datetime.now(timezone.utc).date()
+    url = _THESCORE_CFL_EVENTS_URL.format(
+        start=today - timedelta(days=2), end=today + timedelta(days=2))
+    events: list[dict] = []
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as http:
+        try:
+            r = await http.get(url)
+            r.raise_for_status()
+            got = r.json()
+            if isinstance(got, list):
+                events = [e for e in got if isinstance(e, dict)]
+        except Exception as exc:
+            print(f"    [CFL error] thescore events fetch: {exc}")
+    _thescore_cfl_events_cache = (time.monotonic(), events)
+    return events
+
+
+def _thescore_cfl_date(raw) -> _date | None:
+    """UTC date from theScore's RFC-2822 game_date ("Sat, 10 Oct 2026 02:12:00 -0000")."""
+    try:
+        return parsedate_to_datetime(str(raw)).astimezone(timezone.utc).date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _match_thescore_cfl_event(game: dict, events: list[dict]) -> dict | None:
+    """The theScore event for a parsed cfl.ca game: same team-abbr pair, ±1 day.
+
+    theScore abbreviations match CFL_TEAMS keys exactly (observed 2026-10-10:
+    EDM/HAM/OTT/BC/CGY/WPG). No match = None, never a guess.
+    """
+    try:
+        gd = _date.fromisoformat(game["date"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    want = {game.get("away_abbr"), game.get("home_abbr")}
+    for e in events:
+        away = ((e.get("away_team") or {}).get("abbreviation") or "").upper()
+        home = ((e.get("home_team") or {}).get("abbreviation") or "").upper()
+        if {away, home} != want:
+            continue
+        ed = _thescore_cfl_date(e.get("game_date"))
+        if ed is None or abs((ed - gd).days) > 1:
+            continue
+        return e
+    return None
+
+
+def _merge_thescore_cfl_status(games: list[dict], events: list[dict]) -> None:
+    """Upgrade stale cfl.ca game state from theScore, in place.
+
+    Only the observed-final shape acts: event_status "final" with both box
+    scores present marks the game final and takes the score. Nothing is ever
+    downgraded, and any other status is left alone — a postponed/limbo game
+    must keep failing closed as pending, never read as live.
+    """
+    for g in games:
+        if g.get("final"):
+            continue
+        e = _match_thescore_cfl_event(g, events)
+        if not e or e.get("event_status") != "final":
+            continue
+        box = e.get("box_score") or {}
+        score = box.get("score") or {}
+        away = (score.get("away") or {}).get("score")
+        home = (score.get("home") or {}).get("score")
+        if not isinstance(away, int) or not isinstance(home, int):
+            continue
+        g["away_total"], g["home_total"] = str(away), str(home)
+        g["final"], g["live"] = True, False
+        g["ot"] = bool((box.get("progress") or {}).get("overtime"))
+
+
+def _parse_thescore_cfl_line_scores(event: dict, rows) -> dict | None:
+    """theScore line_scores rows as genius-widget-shaped state, or None.
+
+    Rows map to sides via the event's team api_uri; segments 1–4 are quarters,
+    5+ overtime (same positions the genius parser uses). Each side must be
+    contiguous from segment 1 — theScore emits explicit 0 rows, so a gap means
+    a shape change and a misplaced quarter would grade wrong halves (fail
+    closed, like the genius parser's unknown-phase rule).
+    """
+    if not isinstance(rows, list):
+        return None
+    sides = {}
+    for side in ("away", "home"):
+        uri = (event.get(f"{side}_team") or {}).get("api_uri")
+        if not uri:
+            return None
+        sides[uri] = side
+    by_side: dict[str, dict[int, str]] = {"away": {}, "home": {}}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        side = sides.get(row.get("team"))
+        seg, sc = row.get("segment"), row.get("score")
+        if side is None or not isinstance(seg, int) or isinstance(sc, bool) \
+                or not isinstance(sc, (int, float)):
+            continue
+        by_side[side][seg] = str(int(sc))
+    out = {}
+    for side, scores in by_side.items():
+        if sorted(scores) != list(range(1, len(scores) + 1)):
+            return None
+        out[side] = [scores[k] for k in sorted(scores)]
+    if not out["away"] and not out["home"]:
+        return None
+    seg = ((event.get("box_score") or {}).get("progress") or {}).get("segment")
+    return {
+        "away": out["away"],
+        "home": out["home"],
+        "match_status": event.get("event_status"),
+        "current_phase": seg if isinstance(seg, int) else None,
+    }
+
+
+async def _fetch_thescore_cfl_quarters(game: dict) -> dict | None:
+    """Quarter scores for one game from theScore, genius-state-shaped.
+
+    No matching event or box score (pre_game events carry none) = None; the
+    per-box fetch is cached briefly, failures too, like the widget's."""
+    events = await _fetch_thescore_cfl_events()
+    e = _match_thescore_cfl_event(game, events)
+    if not e:
+        return None
+    box_id = (e.get("box_score") or {}).get("id")
+    if not isinstance(box_id, int):
+        return None
+    cached = _thescore_cfl_lines_cache.get(box_id)
+    if cached:
+        age = time.monotonic() - cached[0]
+        ttl = _CFL_QUARTERS_TTL if cached[1] else _CFL_QUARTERS_FAIL_TTL
+        if age < ttl:
+            return cached[1]
+    state = None
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as http:
+        try:
+            r = await http.get(_THESCORE_CFL_LINES_URL.format(box_id=box_id))
+            r.raise_for_status()
+            state = _parse_thescore_cfl_line_scores(e, r.json())
+        except Exception as exc:
+            print(f"    [CFL error] thescore line_scores fetch {box_id}: {exc}")
+    _thescore_cfl_lines_cache[box_id] = (time.monotonic(), state)
+    return state
 
 
 async def fetch_cfl_scoreboard(date: str) -> dict:

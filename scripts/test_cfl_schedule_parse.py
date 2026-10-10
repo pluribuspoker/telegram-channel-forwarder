@@ -26,6 +26,8 @@ from scores import (  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cfl_schedule_20260909.html.gz"
 WIDGET_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cfl_genius_widget_13419725.html.gz"
+EVENTS_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "thescore_cfl_events_20261010.json.gz"
+LINES_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "thescore_cfl_linescores_34952.json.gz"
 
 failures = []
 
@@ -157,11 +159,124 @@ def genius_quarters_checks(games):
     check("math settles the 1H spread", result is not None
           and result[0] == "WIN", str(result))
 
+    thescore_checks()
+
     print()
     if failures:
         print(f"{len(failures)} FAILURE(S): {failures}")
         sys.exit(1)
     print("all checks passed")
+
+
+def thescore_checks():
+    """theScore fallback (2026-10-10 audit: BC Lions 1H -7.5 pended forever).
+
+    That night BOTH cfl.ca sources died at once: the site's data layer froze
+    mid-slate (the late OTT@BC game sat "NotStarted" 0-0 hours after its
+    final) and the Genius widget redeployed with no SSR state (the earlier
+    EDM@HAM final had no quarters, capping Hamilton 1H +4.5 as ungradeable).
+    Fixtures are the real theScore payloads fetched that morning, byte-exact:
+    the events window and the OTT@BC box's line_scores."""
+    import asyncio
+    import copy
+    import json
+    import time as _time
+
+    import scores as _scores
+    from scores import (
+        _cfl_quarters_cache,
+        _ensure_cfl_quarters,
+        _match_thescore_cfl_event,
+        _merge_thescore_cfl_status,
+        _parse_thescore_cfl_line_scores,
+        _thescore_cfl_lines_cache,
+        try_early_grade_math,
+    )
+
+    events = json.loads(gzip.decompress(EVENTS_FIXTURE.read_bytes()))
+    rows = json.loads(gzip.decompress(LINES_FIXTURE.read_bytes()))
+    check("events fixture holds the slate", len(events) == 3, f"got {len(events)}")
+
+    # The OTT@BC game exactly as the stale schedule payload parsed it.
+    stale = {
+        "date": "2026-10-10", "away_abbr": "OTT", "home_abbr": "BC",
+        "away_name": "Ottawa Redblacks", "home_name": "BC Lions",
+        "away_quarters": [], "home_quarters": [],
+        "away_total": "0", "home_total": "0",
+        "final": False, "ot": False, "live": False,
+        "current_period": None, "genius_id": 13419744,
+    }
+    bc_event = _match_thescore_cfl_event(stale, events)
+    check("matches the OTT@BC event by abbr pair", bc_event is not None
+          and bc_event.get("id") == 138576, str(bc_event and bc_event.get("id")))
+
+    _merge_thescore_cfl_status([stale], events)
+    check("stale NotStarted upgrades to final", stale["final"] is True
+          and stale["live"] is False)
+    check("final score taken from theScore",
+          (stale["away_total"], stale["home_total"]) == ("20", "41"),
+          f"{stale['away_total']}-{stale['home_total']}")
+    check("regulation final", stale["ot"] is False)
+
+    # A pre_game event must not upgrade, and an unknown status never acts
+    # (postponed/limbo keeps failing closed as pending).
+    pre = {"date": "2026-10-10", "away_abbr": "CGY", "home_abbr": "WPG",
+           "away_name": "Calgary Stampeders", "home_name": "Winnipeg Blue Bombers",
+           "away_quarters": [], "home_quarters": [], "away_total": "0",
+           "home_total": "0", "final": False, "ot": False, "live": False,
+           "current_period": None, "genius_id": 13419745}
+    _merge_thescore_cfl_status([pre], events)
+    check("pre_game event leaves the game pending", pre["final"] is False
+          and pre["live"] is False and pre["away_total"] == "0")
+    weird = copy.deepcopy(events)
+    for e in weird:
+        if e.get("id") == 138576:
+            e["event_status"] = "postponed"
+    limbo = dict(stale, final=False, away_total="0", home_total="0")
+    _merge_thescore_cfl_status([limbo], weird)
+    check("unknown status never upgrades", limbo["final"] is False)
+
+    # Line scores: side mapping by team uri, quarter order by segment.
+    state = _parse_thescore_cfl_line_scores(bc_event, rows)
+    check("line scores parse", state is not None, str(state))
+    if not state:
+        return
+    check("away quarters (OTT)", state["away"] == ["6", "6", "6", "2"], str(state["away"]))
+    check("home quarters (BC)", state["home"] == ["14", "7", "7", "13"], str(state["home"]))
+    gappy = [r for r in rows
+             if not (r.get("segment") == 2 and r.get("team") == "/cfl/teams/320")]
+    check("a segment gap fails closed",
+          _parse_thescore_cfl_line_scores(bc_event, gappy) is None)
+
+    # Enrich through the real helper, offline: genius cache pre-seeded with its
+    # live failure (the SSR-less shell parses to None), theScore caches with
+    # the fixtures — the fallback must fill the quarters.
+    _cfl_quarters_cache[13419744] = (_time.monotonic(), None)
+    _scores._thescore_cfl_events_cache = (_time.monotonic(), events)
+    _thescore_cfl_lines_cache[34952] = (_time.monotonic(), state)
+    asyncio.run(_ensure_cfl_quarters(stale))
+    check("quarters filled via theScore", stale["away_quarters"] == state["away"]
+          and stale["home_quarters"] == state["home"])
+
+    ctx = _format_cfl_line_scores(stale)
+    check("context renders the halves",
+          "BC Lions: Q1=14 Q2=7 H1=21" in ctx
+          and "Ottawa Redblacks: Q1=6 Q2=6 H1=12" in ctx, ctx)
+
+    # The audited pick, end to end through the arithmetic path: BC won the
+    # half 21-12, so 1H -7.5 is a WIN the moment status + quarters exist.
+    pick = {
+        "description": "BC Lions 1H -7.5",
+        "bet_type": "spread",
+        "period": "1h",
+        "teams": ["BC Lions"],
+        "player": None,
+        "line": -7.5,
+        "direction": None,
+    }
+    result = try_early_grade_math("CFL", pick, {"events": [_cfl_event(stale)]})
+    check("math settles the audited 1H spread", result is not None
+          and result[0] == "WIN", str(result))
 
 
 if __name__ == "__main__":
