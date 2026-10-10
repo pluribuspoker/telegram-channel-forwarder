@@ -60,6 +60,7 @@ from tracker_cache import (
     _pending_entry,
     _find_duplicate_cache_key,
     _find_mirror_entry,
+    needs_stale_fetch,
 )
 from tracker_grading import _overall_verdict, grade_matches_label
 from tracker_format import (
@@ -459,6 +460,9 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     and k not in visited_keys
                     and isinstance(pending_cache.get(k), dict)
                     and "parsed" in pending_cache.get(k, {})
+                    # Skip retired/fully-broadcast entries BEFORE paying the fetch —
+                    # they were refetched every pass just to be skipped in the loop.
+                    and needs_stale_fetch(pending_cache[k])
                 ]
                 if stale_ids:
                     fetched = await client.get_messages(channel_id, ids=stale_ids)

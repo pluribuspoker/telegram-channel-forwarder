@@ -18,6 +18,13 @@ _PENDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "parse_cache.json"
 _PENDING_LOCK_PATH = _PENDING_CACHE_PATH + ".lock"
 _LOCK_TIMEOUT = 10.0
 _EVICT_AFTER_DAYS = 14
+# Terminal markers used to be kept forever ("cheap"), but they accumulate without
+# bound — 281 of 548 live entries (51%) were permanent residue on 2026-10-10 — and
+# the parsed ones are refetched from Telegram by every tracker pass's stale
+# catch-up. Entries carry no creation timestamp, so the eviction sweep stamps one
+# (_evict_ts) the first time it sees the entry and ages against that.
+_EVICT_FAILED_AFTER_DAYS = 7   # _failed markers: audit-silencers; scan window is 1d, so no re-notify
+_EVICT_SEED_AFTER_DAYS = 3     # listener seeds that never parsed (media-only posts etc.)
 
 
 class _PendingCache(dict):
@@ -70,6 +77,9 @@ def _pending_entry(capper: str, parsed: dict, leg_verdicts: dict, existing: dict
         entry["mapping_id"] = existing["mapping_id"]
     if existing.get("_source_key"):
         entry["_source_key"] = existing["_source_key"]
+    # Eviction age stamp — dropping it on a rebuild would reset the entry's clock.
+    if existing.get("_evict_ts"):
+        entry["_evict_ts"] = existing["_evict_ts"]
     # Preserve html_text + has_media for grade daemon (Bot API edits without Telethon)
     if existing.get("html_text") is not None:
         entry["html_text"] = existing["html_text"]
@@ -138,6 +148,31 @@ def find_sibling_verdict(
         if isinstance(leg, dict) and leg.get("verdict") in ("WIN", "LOSS", "PUSH"):
             return leg
     return None
+
+
+def needs_stale_fetch(entry: dict) -> bool:
+    """Should the tracker's stale catch-up refetch this old entry from Telegram?
+
+    Applied BEFORE the fetch: every 5-min pass was refetching ~250 already-done
+    messages just to skip them inside the loop. False for entries with nothing
+    left to do —
+      - retired entries (_failed with a reason): terminal by definition
+      - fully-broadcast entries (every pick has a broadcasted leg verdict), the
+        same condition the main loop skips them on after fetching.
+    A day-hint re-grade can in principle resurrect a fully-broadcast entry, but
+    stale entries are >1 day old and day hints bind around the post date; the
+    nightly graded-anomaly audit is the net for anything that late.
+    """
+    if entry.get("_failed") and entry.get("_failed_reason"):
+        return False
+    picks = entry.get("parsed", {}).get("picks", [])
+    if not picks:
+        return True
+    lv = entry.get("leg_verdicts")
+    if not isinstance(lv, dict):
+        return True
+    broadcast = {k for k, v in lv.items() if isinstance(v, dict) and v.get("broadcasted")}
+    return len(broadcast) < len(picks)
 
 
 def _find_duplicate_cache_key(
@@ -336,14 +371,38 @@ def _save_pending_cache(cache: dict) -> None:
         cache._snapshot = copy.deepcopy(dict(cache))
 
 
-def _evict_stale(cache: dict) -> None:
-    """Remove entries that are fully resolved and older than _EVICT_AFTER_DAYS.
+def _entry_age_days(entry: dict, now: datetime) -> float:
+    """Days since the eviction sweep first saw this entry (stamping on first sight).
 
-    Only evicts:
-      - Fully resolved entries (all legs WIN/LOSS/PUSH) whose newest game_date is old
-      - _dupe / _failed markers whose primary entry has already been evicted
+    `_pending_entry` preserves the stamp across rebuilds; without that, every
+    rebuild would reset the clock and the entry would never age out.
+    """
+    ts = entry.get("_evict_ts")
+    if isinstance(ts, str):
+        try:
+            return (now - datetime.fromisoformat(ts)).total_seconds() / 86400
+        except ValueError:
+            pass
+    entry["_evict_ts"] = now.isoformat(timespec="seconds")
+    return 0.0
+
+
+def _evict_stale(cache: dict) -> None:
+    """Remove entries with nothing left to do, once old enough.
+
+    Evicts:
+      - Fully resolved entries (all legs WIN/LOSS/PUSH/VOID) whose newest game_date
+        is older than _EVICT_AFTER_DAYS — VOID counts as resolved, else a settled
+        parlay with voided moot legs was immortal
+      - _failed markers (parse failures, daemon-retired entries) older than
+        _EVICT_FAILED_AFTER_DAYS — the 1-day scan window has long passed them, so
+        eviction can't re-notify audit
+      - Listener seeds that never parsed (media-only posts) older than
+        _EVICT_SEED_AFTER_DAYS
+      - _dupe markers whose primary entry has already been evicted
       - Non-dict entries (corrupt)
     """
+    now = datetime.now()
     stale_keys = []
     for key, entry in cache.items():
         if not isinstance(entry, dict):
@@ -355,15 +414,21 @@ def _evict_stale(cache: dict) -> None:
             if primary_key not in cache:
                 stale_keys.append(key)
             continue
-        # _failed markers: skip — they're cheap and prevent re-notifying audit
         if entry.get("_failed"):
+            if _entry_age_days(entry, now) > _EVICT_FAILED_AFTER_DAYS:
+                stale_keys.append(key)
             continue
         leg_verdicts = entry.get("leg_verdicts", {})
+        if "parsed" not in entry and not leg_verdicts:
+            # Listener seed that never became a pick: nothing will ever grade it.
+            if _entry_age_days(entry, now) > _EVICT_SEED_AFTER_DAYS:
+                stale_keys.append(key)
+            continue
         if not leg_verdicts:
             continue
         # Keep entries that still have unresolved legs
         all_resolved = all(
-            isinstance(v, dict) and v.get("verdict") in ("WIN", "LOSS", "PUSH")
+            isinstance(v, dict) and v.get("verdict") in ("WIN", "LOSS", "PUSH", "VOID")
             for v in leg_verdicts.values()
         )
         if not all_resolved:
