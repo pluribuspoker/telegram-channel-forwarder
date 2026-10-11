@@ -1162,10 +1162,16 @@ list: God Judge and God Rules sides, AK totals).
   tracker's verdict language) prefixed to each betting row, the primary
   expert's emoji in place of 🔔 plus the final score (away-home, matching
   the `@` matchup) in the headline — and the entry is marked `graded`
-  (never re-edited). Finals come from ESPN via `current_season_finals`
-  inside that load, so a card grades within about an hour of its game
-  going final, well inside the three-day state retention; the message then
-  stays in the topic as the record while the state entry prunes as usual.
+  (never re-edited). Same-day finals come from the LIVE ESPN scoreboard —
+  `intake_bot.live_bet_results` → `_espn_scoreboard_finals` reads
+  `scores.fetch_espn("NFL", date)`, the exact source the pick pipeline's
+  grade daemon polls, one GET per sync pass and only while a started
+  game's ungraded card lacks a result — so a card grades within a sync
+  pass (~2 min) of its game going final, the FC channel's promptness the
+  operator asked for ("Browns should already be graded", 2026-10-11). The
+  hourly load's `current_season_finals` path stays as the season-deep
+  backstop (live results win the merge); the message then stays in the
+  topic as the record while the state entry prunes as usual.
   A dead 🔕 card never grades (its standing rows pass, so no results
   exist); a withdrawn arm's ✖ row stays struck next to graded rows; a
   hand-deleted card reposts silently as the graded record.

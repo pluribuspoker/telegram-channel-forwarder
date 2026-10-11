@@ -13,7 +13,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo
 
 import anthropic
@@ -72,6 +72,8 @@ from moe import (
 )
 from moe_ak import parse_ak_projection
 from moe_desk import (
+    ALERT_EXPERTS as DESK_ALERT_EXPERTS,
+    ET as DESK_ET,
     BotApi as DeskBotApi,
     build_desks as build_desk_model,
     content_hash as desk_content_hash,
@@ -1919,10 +1921,108 @@ def load_market_records() -> dict[str, Any]:
 def load_bet_results() -> dict[str, Any]:
     """Standing-row leg results per event × expert × market for the bet
     cards' grading edits (``moe_desk.bet_results``), from the same hourly
-    cached load — ESPN finals via ``current_season_finals``, so a card
-    grades within roughly an hour of its game going final; ``{}`` on any
-    failure."""
+    cached load — the season-deep backstop. Same-day finals come from
+    ``live_bet_results`` (the live ESPN scoreboard), which overrides this;
+    ``{}`` on any failure."""
     return _load_desk_records("bet_results")
+
+
+def _espn_scoreboard_finals(
+    dates: Iterable[str], *, fetch: Callable[[str], Any] | None = None
+) -> list[dict[str, Any]]:
+    """Completed games from the live ESPN NFL scoreboard — the same source
+    the pick pipeline's grade daemon reads — shaped like nfl_game_history
+    finals rows (``_matching_history_game`` matches on the team names plus
+    kickoff within 6h). Best-effort: any fetch or shape problem skips the
+    event and the hourly path remains the backstop."""
+    if fetch is None:
+        from scores import fetch_espn  # the tracker's data layer
+
+        def fetch(date: str) -> Any:
+            # desk_sync_once runs in a worker thread (asyncio.to_thread),
+            # so running the async fetch on a private loop is safe here.
+            return asyncio.run(fetch_espn("NFL", date))
+
+    finals: list[dict[str, Any]] = []
+    for date in sorted(set(dates)):
+        try:
+            data = fetch(date)
+        except Exception as exc:  # noqa: BLE001 - live grading is best-effort
+            log.warning("desk: live scoreboard unavailable for %s: %s", date, exc)
+            continue
+        for event in (data or {}).get("events") or []:
+            try:
+                competition = event["competitions"][0]
+                status = competition.get("status") or event.get("status") or {}
+                if not (status.get("type") or {}).get("completed"):
+                    continue
+                teams = {
+                    item["homeAway"]: item for item in competition["competitors"]
+                }
+                finals.append(
+                    {
+                        "away_team": teams["away"]["team"]["displayName"],
+                        "home_team": teams["home"]["team"]["displayName"],
+                        "away_score": int(teams["away"]["score"]),
+                        "home_score": int(teams["home"]["score"]),
+                        "kickoff_utc": str(
+                            event.get("date") or competition.get("date") or ""
+                        ),
+                    }
+                )
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+    return finals
+
+
+def live_bet_results(
+    desks: list[Any],
+    state: dict[str, Any],
+    results: dict[str, Any],
+    approved: list[dict[str, Any]],
+    registry: dict[str, Any],
+    *,
+    fetch: Callable[[str], Any] | None = None,
+) -> dict[str, Any]:
+    """Same-day leg results for the standing bet cards, from the live ESPN
+    scoreboard, so a card grades on the next sync pass after its game goes
+    final instead of waiting out the hourly records cache (operator-asked
+    2026-10-11: the FC channel's promptness — "Browns should already be
+    graded"). One scoreboard GET per sync pass, and only while a started
+    game's ungraded card lacks a result from the hourly load; ``{}``
+    otherwise and on any failure."""
+    started = {desk.event_id: desk for desk in desks if desk.started}
+    pending_dates: set[str] = set()
+    for key, entry in (state.get("announced") or {}).items():
+        if not key.startswith("betcard:") or not isinstance(entry, dict):
+            continue
+        if entry.get("graded") or not entry.get("message_id"):
+            continue
+        if not isinstance(entry.get("arms"), dict) or not entry["arms"]:
+            continue
+        desk = started.get(str(entry.get("event_id") or ""))
+        if desk is None:
+            continue
+        kind = str(entry.get("kind") or "")
+        if any(
+            f"{desk.event_id}:{expert_id}:{kind}" in results
+            for expert_id in DESK_ALERT_EXPERTS.get(kind, ())
+        ):
+            continue  # the hourly load already grades this card
+        pending_dates.add(desk.kickoff.astimezone(DESK_ET).strftime("%Y%m%d"))
+    if not pending_dates:
+        return {}
+    finals = _espn_scoreboard_finals(pending_dates, fetch=fetch)
+    if not finals:
+        return {}
+    graded = moe_grade_all(
+        approved,
+        finals=finals,
+        snapshots=[],  # no closing needed for the emoji: clv stays None
+        registry=registry,
+        policy=moe_aggregator_policy(registry),
+    )
+    return desk_bet_results(approved, graded)
 
 
 def latest_markets_from_games(
@@ -2015,10 +2115,16 @@ def desk_sync_once(
         games, _, team_abbrevs = load_intake_data()
         latest_markets = latest_markets_from_games(games)
         registry = load_moe_registry()
-        desks = build_desk_model(
-            games, rows, approved_moe_opinions(rows), registry, now=now
-        )
+        approved = approved_moe_opinions(rows)
+        desks = build_desk_model(games, rows, approved, registry, now=now)
         state = load_desk_state(config.state_path)
+        # Hourly backstop first, then the live scoreboard for anything a
+        # started game's card is still waiting on — live results win.
+        bet_results = load_bet_results()
+        bet_results = {
+            **bet_results,
+            **live_bet_results(desks, state, bet_results, approved, registry),
+        }
         try:
             summary = sync_desk(
                 config=config,
@@ -2029,7 +2135,7 @@ def desk_sync_once(
                 team_abbrevs=team_abbrevs,
                 latest_markets=latest_markets,
                 market_records=load_market_records(),
-                bet_results=load_bet_results(),
+                bet_results=bet_results,
             )
         finally:
             save_desk_state(config.state_path, state)

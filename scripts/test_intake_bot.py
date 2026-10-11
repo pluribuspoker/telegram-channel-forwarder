@@ -75,6 +75,176 @@ from nfl_lines import (
 NOW = datetime(2026, 8, 4, 12, tzinfo=timezone.utc)
 
 
+class LiveBetResultsTests(unittest.TestCase):
+    """Same-day bet-card grading reads the live ESPN scoreboard (the pick
+    pipeline's source) instead of waiting out the hourly records cache."""
+
+    KICKOFF = "2026-10-11T17:00Z"
+
+    @staticmethod
+    def scoreboard(completed: bool = True) -> dict:
+        def event(away, home, away_score, home_score, done):
+            return {
+                "date": LiveBetResultsTests.KICKOFF,
+                "competitions": [
+                    {
+                        "status": {"type": {"completed": done}},
+                        "competitors": [
+                            {
+                                "homeAway": "away",
+                                "score": str(away_score),
+                                "team": {"displayName": away},
+                            },
+                            {
+                                "homeAway": "home",
+                                "score": str(home_score),
+                                "team": {"displayName": home},
+                            },
+                        ],
+                    }
+                ],
+            }
+
+        return {
+            "events": [
+                event("Cleveland Browns", "New York Jets", 20, 16, completed),
+                event("Denver Broncos", "Los Angeles Chargers", 3, 7, False),
+            ]
+        }
+
+    @staticmethod
+    def desk(event_id="401", started=True):
+        return SimpleNamespace(
+            event_id=event_id,
+            started=started,
+            kickoff=datetime(2026, 10, 11, 17, 0, tzinfo=timezone.utc),
+        )
+
+    @staticmethod
+    def state(graded=None, arms=True):
+        entry = {
+            "event_id": "401",
+            "kind": "side",
+            "message_id": 300,
+            "arms": {"god_judge": {"leg": "Browns +1 (-110) 1.3u"}} if arms else {},
+        }
+        if graded:
+            entry["graded"] = True
+        return {"announced": {"betcard:401:side": entry}}
+
+    REGISTRY = {
+        "experts": {
+            "god_rules": {"enabled": True, "mode": "aggregator"},
+            "god_judge": {"enabled": True, "mode": "aggregator_judge"},
+        }
+    }
+
+    APPROVED = [
+        {
+            "opinion_id": "j1",
+            "event_id": "401",
+            "expert_id": "god_judge",
+            "generated_at_utc": "2026-10-11T12:00:00+00:00",
+            "generation_status": "valid",
+            "review_status": "approved",
+            "away_team": "Cleveland Browns",
+            "home_team": "New York Jets",
+            "commence_time_utc": "2026-10-11T17:00:00+00:00",
+            "home_win_probability": 0.45,
+            "predicted_winner": "Cleveland Browns",
+            "predicted_away_score": 21,
+            "predicted_home_score": 17,
+            "pick_market": "side_and_total",
+            "side_pick_json": '{"selection": "Cleveland Browns", "line": 1.0, "price": 109, "stake_units": 1.3}',
+            "total_pick_json": "",
+        }
+    ]
+
+    def test_scoreboard_finals_keep_only_completed_games(self) -> None:
+        finals = intake_bot._espn_scoreboard_finals(
+            ["20261011"], fetch=lambda date: self.scoreboard()
+        )
+        self.assertEqual(
+            finals,
+            [
+                {
+                    "away_team": "Cleveland Browns",
+                    "home_team": "New York Jets",
+                    "away_score": 20,
+                    "home_score": 16,
+                    "kickoff_utc": self.KICKOFF,
+                }
+            ],
+        )
+
+    def test_pending_card_grades_from_the_live_scoreboard(self) -> None:
+        calls = []
+
+        def fetch(date):
+            calls.append(date)
+            return self.scoreboard()
+
+        results = intake_bot.live_bet_results(
+            [self.desk()],
+            self.state(),
+            {},
+            self.APPROVED,
+            self.REGISTRY,
+            fetch=fetch,
+        )
+        self.assertEqual(calls, ["20261011"])
+        # Browns +1, final 20-16: the standing judge row's side leg wins.
+        self.assertEqual(
+            results["401:god_judge:side"], {"result": "W", "final": "20-16"}
+        )
+
+    def test_no_fetch_without_a_pending_card(self) -> None:
+        def fetch(date):  # pragma: no cover - must never run
+            raise AssertionError("fetched with nothing pending")
+
+        for state in (
+            self.state(graded=True),  # already graded
+            self.state(arms=False),  # pre-card era entry
+            {"announced": {}},  # no cards at all
+        ):
+            self.assertEqual(
+                intake_bot.live_bet_results(
+                    [self.desk()], state, {}, self.APPROVED, self.REGISTRY,
+                    fetch=fetch,
+                ),
+                {},
+            )
+        # not started yet
+        self.assertEqual(
+            intake_bot.live_bet_results(
+                [self.desk(started=False)], self.state(), {},
+                self.APPROVED, self.REGISTRY, fetch=fetch,
+            ),
+            {},
+        )
+        # the hourly load already covers the card
+        self.assertEqual(
+            intake_bot.live_bet_results(
+                [self.desk()], self.state(),
+                {"401:god_judge:side": {"result": "W", "final": "20-16"}},
+                self.APPROVED, self.REGISTRY, fetch=fetch,
+            ),
+            {},
+        )
+
+    def test_a_broken_fetch_grades_nothing(self) -> None:
+        def fetch(date):
+            raise RuntimeError("espn down")
+
+        self.assertEqual(
+            intake_bot.live_bet_results(
+                [self.desk()], self.state(), {}, self.APPROVED, self.REGISTRY,
+                fetch=fetch,
+            ),
+            {},
+        )
+
+
 class DeskPicksViewTests(unittest.TestCase):
     def test_moe_channel_sheet_caches_are_one_hour(self) -> None:
         self.assertEqual(intake_bot.GAMES_CACHE_TTL_SECONDS, 3600)
