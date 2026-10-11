@@ -2319,10 +2319,16 @@ class BotApi:
         return True
 
     def delete(self, chat_id: str, message_id: int) -> bool:
+        """``True`` when the message is gone — a delete of an already-gone
+        message ("not found") counts, so an externally deleted card never
+        wedges its state entry in a retry loop. ``False`` on anything else,
+        e.g. Telegram's "message can't be deleted" wall on 48h-old bot
+        messages (clean those with the operator session —
+        scripts/desk_sweep_picks_topic.py)."""
         try:
             self.call("deleteMessage", chat_id=chat_id, message_id=message_id)
-        except DeskApiError:
-            return False
+        except DeskApiError as exc:
+            return "not found" in str(exc).lower()
         return True
 
     def create_topic(self, chat_id: str, name: str) -> int:

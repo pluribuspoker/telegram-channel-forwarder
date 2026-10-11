@@ -2096,6 +2096,21 @@ class BotApiTests(unittest.TestCase):
         with self.assertRaisesRegex(DeskApiError, "parse entities"):
             api.edit("-1", 1, "t")
 
+    def test_delete_counts_an_already_gone_message_as_deleted(self) -> None:
+        answers = iter(
+            [
+                _http_error(400, {"ok": False, "description": "Bad Request: message to delete not found"}),
+                _http_error(400, {"ok": False, "description": "Bad Request: message can't be deleted"}),
+            ]
+        )
+
+        def opener(request, timeout):
+            raise next(answers)
+
+        api = BotApi("tok", opener=opener)
+        self.assertTrue(api.delete("-1", 1))  # already gone = done
+        self.assertFalse(api.delete("-1", 2))  # the 48h wall: a real failure
+
     def test_rate_limit_is_retried_once_after_retry_after(self) -> None:
         sleeps = []
         answers = iter(
