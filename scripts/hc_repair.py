@@ -19,8 +19,19 @@ check's own grace + the heartbeat's settle window): a flap never reaches an
 agent. Checks with their own repair rung are excluded (HC_REPAIR_EXCLUDE,
 default the Trent pair — trent-repair already owns that outage).
 
+Agent-first checks (operator decision 2026-10-11): a job check tagged
+`agent-first` on healthchecks.io has NO alert channels there — this runner is
+its only notifier, guaranteeing ONE DM per failure episode: the agent's card
+when one runs, a raw 🚨 alert on any path where no agent will look (cooldown,
+parked, daily cap, kill switch), or a ✅ self-heal note when the check
+recovers below the agent threshold. `notified` on the state entry tracks the
+episode; recovery clears it (a failed DM keeps the entry for the next pass).
+Box-level checks (VPS services/jobs, telegram-forwarder) and the excluded
+Trent pair keep their healthchecks channels and page the operator directly.
+
 Guards (state logs/hc_repair_state.json, per target):
-- kill switch HC_REPAIR_DISABLED=1 → exit 0 silently
+- kill switch HC_REPAIR_DISABLED=1 → no agents; still relays raw alerts for
+  agent-first checks (they have no other notifier)
 - flock logs/.hc_repair.lock — one agent at a time (a pass during a run skips)
 - cooldown HC_REPAIR_COOLDOWN_HOURS (6) per target between spawns
 - HC_REPAIR_ATTEMPT_CAP (2) agent runs per outage streak → parked with ONE ⚠️
@@ -158,6 +169,12 @@ def latest_fail(pings: list[dict]) -> dict | None:
     return decided if decided and decided.get("type") == "fail" else None
 
 
+def agent_first(check: dict) -> bool:
+    """True for job checks tagged `agent-first` on healthchecks.io — they have
+    no alert channels there, so this runner is their only notifier."""
+    return "agent-first" in (check.get("tags") or "").split()
+
+
 def env_key_for(check: dict, env: dict[str, str]) -> str:
     uuid = check.get("uuid") or ""
     for key, value in sorted(env.items()):
@@ -180,7 +197,8 @@ def build_targets(checks: list[dict], *, env: dict[str, str],
         key = env_key_for(c, env)
         base = {"check": c.get("name", ""), "uuid": uuid, "env_key": key,
                 "desc": c.get("desc", ""), "since": d.get("since"),
-                "body": d.get("body", ""), "pings": d.get("pings", [])}
+                "body": d.get("body", ""), "pings": d.get("pings", []),
+                "agent_first": agent_first(c)}
         if key in HEARTBEAT_KEYS:
             units = failing_units(d.get("body", ""))
             if units:
@@ -197,14 +215,17 @@ def build_targets(checks: list[dict], *, env: dict[str, str],
     return targets
 
 
-def observe(state: dict, targets: list[dict], now: datetime) -> None:
+def observe(state: dict, targets: list[dict], now: datetime, notify=None) -> None:
     """Stamp first_seen on new targets; a target no longer down ends its
     streak (attempts/park reset, cooldown kept); entries with nothing left
-    to remember are dropped."""
+    to remember are dropped. An agent-first entry whose episode produced NO
+    DM is handed to `notify(key, entry)` (the self-heal note) before cleanup —
+    a False return keeps the episode for a retry on the next pass."""
     live = {t["key"] for t in targets}
     for t in targets:
         entry = state.setdefault(t["key"], {})
         entry["check"] = t["check"]
+        entry["agent_first"] = bool(t.get("agent_first"))
         if t.get("unit"):
             entry["unit"] = t["unit"]
         entry.setdefault("first_seen", now.isoformat(timespec="seconds"))
@@ -212,7 +233,12 @@ def observe(state: dict, targets: list[dict], now: datetime) -> None:
         if key.startswith("_") or key in live:
             continue
         entry = state[key]
-        for f in ("first_seen", "attempts", "parked", "parked_reason", "capped_dm_sent"):
+        if (notify is not None and entry.get("agent_first")
+                and entry.get("first_seen") and not entry.get("notified")):
+            if not notify(key, entry):
+                continue
+        for f in ("first_seen", "attempts", "parked", "parked_reason",
+                  "capped_dm_sent", "notified"):
             entry.pop(f, None)
         last = _ts(entry.get("last_spawn_at"))
         if not last or now - last > timedelta(hours=COOLDOWN_HOURS):
@@ -266,6 +292,41 @@ def settle(entry: dict, outcome: str) -> None:
                      capped_dm_sent=False)
 
 
+def skip_alerts(skipped: list[tuple[dict, str]], state: dict) -> list[tuple[dict, str]]:
+    """Agent-first targets whose skip means no agent is coming for this
+    episode (cooldown; parked with its ⚠️ already sent) and that have had no
+    DM yet — the raw alert replaces the healthchecks page. A debounce skip
+    alerts nothing: the agent (or the self-heal note) is minutes away."""
+    out = []
+    for t, reason in skipped:
+        if not t.get("agent_first"):
+            continue
+        if state.get(t["key"], {}).get("notified"):
+            continue
+        if reason.startswith(("cooldown", "parked")):
+            out.append((t, reason))
+    return out
+
+
+def raw_alert_text(target: dict, reason: str, entry: dict) -> str:
+    bits = [f"🚨 {label(target)} is DOWN and no agent will look: {reason}."]
+    if entry.get("last_outcome"):
+        bits.append(f"Last agent outcome: {entry['last_outcome']}.")
+    body = (target.get("body") or "").strip()
+    if body:
+        bits.append("Last failure:\n" + body[-400:])
+    return "\n".join(bits)
+
+
+def self_heal_text(entry: dict, now: datetime) -> str:
+    first = _ts(entry.get("first_seen"))
+    mins = int((now - first).total_seconds() // 60) if first else 0
+    tail = (" (an agent ran but its card DM failed)"
+            if int(entry.get("attempts") or 0) else "")
+    return (f"✅ {entry.get('check', '?')} went DOWN and self-recovered after "
+            f"~{mins} min — no agent needed{tail}.")
+
+
 _RESULT_RE = re.compile(r"HC_REPAIR_RESULT:\s*(\[.*?\])\s*$", re.MULTILINE | re.DOTALL)
 
 
@@ -306,9 +367,9 @@ def build_prompt(targets: list[dict], *, now_et: str, head: str,
                  journals: dict[str, str]) -> str:
     lines = [
         f"/investigate HEALTH-CHECK AUTO-REPAIR {now_et}: healthchecks.io reports "
-        f"{len(targets)} target(s) DOWN for 10+ minutes (the operator was already "
-        "paged). Find the root cause of each and fix it; report precisely if a "
-        "fix needs a human. Outages cluster — look for one shared cause first.",
+        f"{len(targets)} target(s) DOWN for 10+ minutes. Find the root cause of "
+        "each and fix it; report precisely if a fix needs a human. Outages "
+        "cluster — look for one shared cause first.",
         "",
         "## Down targets",
     ]
@@ -317,6 +378,12 @@ def build_prompt(targets: list[dict], *, now_et: str, head: str,
         lines.append(f"- check: {t['check']} (uuid {t['uuid']}; env key "
                      f"{t['env_key'] or 'unknown'}) — {t['desc'] or 'no description'}")
         lines.append(f"- down since: {t.get('since') or 'unknown'}")
+        lines.append("- notification: agent-first check — the operator has NOT "
+                     "been paged; the runner's card after you finish is their "
+                     "only notification, so make issue/action precise"
+                     if t.get("agent_first") else
+                     "- notification: the operator was already paged directly "
+                     "by healthchecks.io")
         if t.get("unit"):
             lines.append(f"- unit: {t['unit']}")
         if t.get("hint"):
@@ -510,9 +577,7 @@ def main() -> int:
     parser.add_argument("--no-push", action="store_true")
     args = parser.parse_args()
 
-    if os.environ.get("HC_REPAIR_DISABLED") == "1":
-        print("skip: HC_REPAIR_DISABLED=1")
-        return 0
+    disabled = os.environ.get("HC_REPAIR_DISABLED") == "1"
     if not os.environ.get("HEALTHCHECKS_API_KEY"):
         print("HEALTHCHECKS_API_KEY not set", file=sys.stderr)
         return 1
@@ -537,10 +602,28 @@ def main() -> int:
                if c.get("status") == "down" and c.get("name") not in EXCLUDE}
     targets = build_targets(checks, env=dict(os.environ), details=details,
                             covered=heartbeat_covered())
-    if not args.dry_run:
-        observe(state, targets, now)
 
-    eligible, capped = [], []
+    def _self_heal_dm(key: str, entry: dict) -> bool:
+        return ua.send_watchdog_dm(self_heal_text(entry, now))
+
+    if not args.dry_run:
+        observe(state, targets, now, notify=_self_heal_dm)
+
+    if disabled:
+        # Kill switch stops agents, never notifications: agent-first checks
+        # have no healthchecks channels, so the raw alert still goes out.
+        for t in targets:
+            entry = state.setdefault(t["key"], {})
+            if t.get("agent_first") and not entry.get("notified") and not args.dry_run:
+                if ua.send_watchdog_dm(raw_alert_text(
+                        t, "agent repair disabled (HC_REPAIR_DISABLED=1)", entry)):
+                    entry["notified"] = True
+        if not args.dry_run:
+            save_state(state)
+        print("HC_REPAIR_DISABLED=1 — relay only, no agents")
+        return 0
+
+    eligible, capped, skipped = [], [], []
     for t in targets:
         action, reason = gate(state.get(t["key"], {}), t, now, force=args.force)
         print(f"{label(t)}: {action} ({reason})")
@@ -548,6 +631,8 @@ def main() -> int:
             eligible.append(t)
         elif action == "capped":
             capped.append((t, reason))
+        else:
+            skipped.append((t, reason))
     if not targets:
         print("all checks up")
 
@@ -560,16 +645,29 @@ def main() -> int:
             f"scripts/hc_repair.py --rearm '{t['key']}'"
         ):
             state[t["key"]]["capped_dm_sent"] = True
+            state[t["key"]]["notified"] = True
+
+    for t, reason in skip_alerts(skipped, state):
+        if args.dry_run:
+            continue
+        if ua.send_watchdog_dm(raw_alert_text(t, reason, state.get(t["key"], {}))):
+            state.setdefault(t["key"], {})["notified"] = True
 
     spawned = daily_spawns(state, now)
     if eligible and spawned >= DAILY_CAP:
         print(f"daily cap reached ({spawned}/{DAILY_CAP} in 24h) — not spawning")
+        # Agent-first targets have no other notifier — a new one blocked by
+        # the cap re-sends the DM regardless of the 24h throttle.
+        unnotified = [t for t in eligible if t.get("agent_first")
+                      and not state.get(t["key"], {}).get("notified")]
         last_dm = _ts(state.get("_cap_dm_at"))
-        if not last_dm or now - last_dm > timedelta(hours=24):
+        if unnotified or not last_dm or now - last_dm > timedelta(hours=24):
             if not args.dry_run and ua.send_watchdog_dm(
                     f"⚠️ Health-check auto-repair hit its daily cap ({DAILY_CAP} "
                     f"agents/24h) — {', '.join(label(t) for t in eligible)} left for you."):
                 state["_cap_dm_at"] = now.isoformat(timespec="seconds")
+                for t in unnotified:
+                    state.setdefault(t["key"], {})["notified"] = True
         eligible = []
 
     if args.dry_run:
@@ -643,9 +741,15 @@ def main() -> int:
             settle(state.setdefault(t["key"], {}), reports[t["key"]]["outcome"])
         save_state(state)
         ua.append_runs_log(RUNS_LOG, record)
-        ua.send_watchdog_dm(dm_card(eligible, reports, commits=commits,
-                                    status_after=status_after, meta=invoker.last_call,
-                                    pushed=pushed), as_html=True)
+        if ua.send_watchdog_dm(dm_card(eligible, reports, commits=commits,
+                                       status_after=status_after, meta=invoker.last_call,
+                                       pushed=pushed), as_html=True):
+            # The card IS the agent-first notification; a failed send leaves
+            # notified unset so a later pass raw-alerts instead.
+            for t in eligible:
+                if t.get("agent_first"):
+                    state.setdefault(t["key"], {})["notified"] = True
+            save_state(state)
         print("done: " + "; ".join(f"{label(t)}={reports[t['key']]['outcome']}"
                                    for t in eligible))
     return 0

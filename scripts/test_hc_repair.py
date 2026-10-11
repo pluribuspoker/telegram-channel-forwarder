@@ -192,5 +192,68 @@ except urllib.error.HTTPError:
     check("HTTP 401 raises", True)
 hr.api_get = _real_get
 
+# 10. Agent-first notification invariant (operator decision 2026-10-11): a
+#     job check tagged `agent-first` has no healthchecks channels — hc-repair
+#     guarantees ONE DM per failure episode on every no-agent path.
+af_checks = [
+    {"name": "God judge", "uuid": "judge-uuid", "status": "down", "tags": "agent-first"},
+    {"name": "VPS jobs", "uuid": "jobs-uuid", "status": "down", "tags": "vps infra"},
+]
+af_targets = hr.build_targets(af_checks, env=ENV, details=DETAILS, covered=COVERED)
+af_judge = next(t for t in af_targets if t["check"] == "God judge")
+af_unit = next(t for t in af_targets if ":" in t["key"])
+check("tag marks a target agent-first", af_judge["agent_first"] is True)
+check("untagged check is not agent-first", af_unit["agent_first"] is False)
+
+stA = {"judge-uuid": {}, af_unit["key"]: {}}
+skips = [(af_judge, "cooldown (1:00:00 < 6h)"), (af_unit, "cooldown (1:00:00 < 6h)")]
+check("cooldown skip raw-alerts only agent-first targets",
+      [t["key"] for t, _ in hr.skip_alerts(skips, stA)] == ["judge-uuid"])
+check("debounce skip never raw-alerts",
+      hr.skip_alerts([(af_judge, "debounce (down 0:04:00 < 0:10:00)")], stA) == [])
+check("already-notified episode stays silent",
+      hr.skip_alerts(skips, {"judge-uuid": {"notified": True}}) == [])
+check("parked-with-DM-sent skip raw-alerts a new episode",
+      hr.skip_alerts([(af_judge, "parked (needs_human)")], stA)[0][1] == "parked (needs_human)")
+
+rtxt = hr.raw_alert_text(af_judge, "cooldown (1:00:00 < 6h)",
+                         {"last_outcome": "transient_no_change"})
+check("raw alert names check + reason + last outcome",
+      "God judge" in rtxt and "cooldown" in rtxt and "transient_no_change" in rtxt)
+check("raw alert carries the failure body tail",
+      "boom tail" in hr.raw_alert_text({"check": "X", "key": "u", "body": "a\nboom tail"},
+                                       "cooldown (x)", {}))
+sh = hr.self_heal_text({"check": "MOE grade",
+                        "first_seen": iso(NOW - timedelta(minutes=7))}, NOW)
+check("self-heal note names check + minutes", "MOE grade" in sh and "~7 min" in sh)
+check("self-heal notes a failed card DM",
+      "card DM failed" in hr.self_heal_text(
+          {"check": "x", "first_seen": iso(NOW), "attempts": 1}, NOW))
+
+stB: dict = {}
+hr.observe(stB, af_targets, NOW)
+check("observe stamps agent_first", stB["judge-uuid"]["agent_first"] is True)
+notify_calls: list = []
+notify_ok = {"v": False}
+def _notify(key, entry):
+    notify_calls.append(key)
+    return notify_ok["v"]
+hr.observe(stB, [], NOW + timedelta(minutes=5), notify=_notify)
+check("failed self-heal DM keeps the episode",
+      notify_calls == ["judge-uuid"] and "first_seen" in stB.get("judge-uuid", {}))
+notify_ok["v"] = True
+hr.observe(stB, [], NOW + timedelta(minutes=10), notify=_notify)
+check("successful self-heal DM ends the episode",
+      notify_calls == ["judge-uuid", "judge-uuid"] and "judge-uuid" not in stB)
+stC = {"k1": {"agent_first": True, "first_seen": iso(NOW), "notified": True, "check": "x"}}
+quiet: list = []
+hr.observe(stC, [], NOW, notify=lambda k, e: quiet.append(k) or True)
+check("notified episode recovers silently", quiet == [] and "k1" not in stC)
+
+pp = hr.build_prompt([af_judge], now_et="t", head="h", journals={})
+check("prompt flags agent-first (operator not paged)", "NOT been paged" in pp)
+pbox = hr.build_prompt([af_unit], now_et="t", head="h", journals={})
+check("prompt notes box-level checks already paged", "already paged" in pbox)
+
 print(f"\n{'ALL PASS' if not failures else f'{len(failures)} FAILED'}")
 sys.exit(1 if failures else 0)
