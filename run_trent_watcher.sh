@@ -32,10 +32,6 @@ SUCCESS=0
 
 for attempt in 1 2; do
     [ "$attempt" -gt 1 ] && log "Retry (attempt 2/2)..."
-    # Only the final attempt may page the operator: attempt 1 failing and
-    # attempt 2 succeeding 90s later is a blip, not an outage (the false 🔴
-    # DOWN of 2026-09-24). trent_watcher.py defers its alert when this is 0.
-    if [ "$attempt" -lt 2 ]; then export TRENT_FINAL_ATTEMPT=0; else export TRENT_FINAL_ATTEMPT=1; fi
     if $PYTHON scripts/trent_watcher.py 2>&1 | tee "$LOGFILE"; then
         SUCCESS=1
         break
@@ -48,11 +44,9 @@ if [ "$SUCCESS" -eq 1 ]; then
     ping_hc "" "$(tail -20 "$LOGFILE")"
 else
     log "Both attempts failed"
+    # The /fail body (FATAL + remedy lines) is the repair agent's context;
+    # the agent-first pipeline owns the repair AND the operator's one DM
+    # (operator 2026-10-11 — the dedicated repair unit was consolidated away).
     ping_hc "/fail" "$(tail -50 "$LOGFILE")"
-    # Fire-and-forget the auto-repair agent (scripts/trent_repair.py — every
-    # guard lives there: kill switch, cooldown, attempt cap, flock). --no-block
-    # detaches it from this dying unit; a failed start must not mask exit 1.
-    sudo -n systemctl start --no-block trent-repair.service 2>/dev/null \
-        || log "could not start trent-repair.service"
     exit 1
 fi

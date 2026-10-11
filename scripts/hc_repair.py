@@ -5,8 +5,8 @@ hc-repair.timer (every 5 min) polls the healthchecks.io API and, when a check
 has been DOWN for HC_REPAIR_MIN_DOWN_MINUTES (10), spawns ONE headless
 `claude -p "/investigate …"` agent (Opus 5.5 high, subscription-billed) that
 root-causes and fixes it, then DMs the operator a card via the watchdog bot.
-Chassis = scripts/trent_repair.py (invoker, git, DM, ledger from the ungraded
-audit); every guard lives HERE so a manual run behaves like the timer.
+Chassis = the ungraded audit's invoker/git/DM/ledger helpers; every guard
+lives HERE so a manual run behaves like the timer.
 
 Targets: one per down check — except the heartbeat groups (VPS services /
 VPS jobs), which fan out to one target per failing UNIT parsed from the
@@ -16,8 +16,8 @@ agent (outages cluster; two agents would fight over one root cause).
 
 The 10-min debounce is the second false-positive layer (the first is each
 check's own grace + the heartbeat's settle window): a flap never reaches an
-agent. Checks with their own repair rung are excluded (HC_REPAIR_EXCLUDE,
-default the Trent pair — trent-repair already owns that outage).
+agent. HC_REPAIR_EXCLUDE defaults to "Alert pipeline" alone — Trent's
+dedicated repair rung was consolidated into this one (operator 2026-10-11).
 
 Agent-first everywhere (operator decisions 2026-10-11): EVERY check is tagged
 `agent-first` with NO alert channels on healthchecks.io — this runner is the
@@ -26,13 +26,11 @@ one runs, a raw 🚨 alert on any path where no agent will look (cooldown,
 parked, daily cap, kill switch), or a ✅ self-heal note when the check
 recovers below the agent threshold. `notified` on the state entry tracks the
 episode; recovery clears it (a failed DM keeps the entry for the next pass).
-The excluded Trent pair is relay-only: trent-repair spawns and DMs (a
-/fail-ping DOWN counts as notified), but a missed-ping DOWN (dead timer)
-still escalates. The LAST RUNG is the "Alert pipeline" check — the only one
-with direct channels (HealthchecksBot + Gmail): every pass pings it success,
-or /fail once any episode is unnotified past HC_ESCALATION_OVERDUE_MINUTES
-(90) — so a dead box, a dead hc-repair or a dead watchdog-bot DM path pages
-the operator from healthchecks' own servers within its period+grace.
+The LAST RUNG is the "Alert pipeline" check — the only one with direct
+channels (HealthchecksBot + Gmail): every pass pings it success, or /fail
+once any episode is unnotified past HC_ESCALATION_OVERDUE_MINUTES (90) — so
+a dead box, a dead hc-repair or a dead watchdog-bot DM path pages the
+operator from healthchecks' own servers within its period+grace.
 
 Guards (state logs/hc_repair_state.json, per target):
 - kill switch HC_REPAIR_DISABLED=1 → no agents; still relays raw alerts for
@@ -89,8 +87,7 @@ ATTEMPT_CAP = int(os.environ.get("HC_REPAIR_ATTEMPT_CAP") or 2)
 DAILY_CAP = int(os.environ.get("HC_REPAIR_DAILY_CAP") or 6)
 MIN_DOWN = timedelta(minutes=float(os.environ.get("HC_REPAIR_MIN_DOWN_MINUTES") or 10))
 EXCLUDE = {n.strip() for n in (os.environ.get("HC_REPAIR_EXCLUDE")
-                               or "Trent monitor,Trent repair,Alert pipeline").split(",")
-           if n.strip()}
+                               or "Alert pipeline").split(",") if n.strip()}
 # The one check with direct channels: hc-repair pings it every pass — success
 # while every episode is handled, /fail once any has gone OVERDUE without a
 # DM — so a dead box, dead hc-repair or dead DM path pages the operator from
@@ -108,7 +105,10 @@ KEY_HINTS = {
                                    "(log /tmp/sauce_daily_cron.log, docs/sauce.md)",
     "ROOT_BACKUP_HEALTHCHECK_URL": "root cron 06:00 → /root/backup.sh wrapped by "
                                    "deploy/hc_run.sh (sudo -n crontab -l -u root)",
-    "TRENT_REPAIR_HEALTHCHECK_URL": "trent-repair.service (scripts/trent_repair.py)",
+    "TRENT_HEALTHCHECK_URL": "trent-monitor.timer → run_trent_watcher.sh; the "
+                             "FATAL + remedy lines in the /fail body name the "
+                             "fix (cookies vs code — docs/trent.md; dead X "
+                             "cookies = needs_human, phone re-auth only)",
 }
 
 OUTCOMES = (
@@ -212,17 +212,6 @@ def build_targets(checks: list[dict], *, env: dict[str, str],
                 "body": d.get("body", ""), "pings": d.get("pings", []),
                 "agent_first": agent_first(c)}
         if c.get("name") in EXCLUDE:
-            # Excluded + agent-first (the Trent pair): its own repair rung
-            # spawns and DMs, so hc-repair only tracks the episode for the
-            # escalation deadline — a /fail-ping DOWN means its runner ran
-            # and already DMed; a missed-ping DOWN (dead timer) stays
-            # unnotified and escalates. Excluded without the tag (Alert
-            # pipeline itself) is invisible here.
-            if base["agent_first"]:
-                targets.append({**base, "key": uuid,
-                                "unit": unit_for_key.get(key, ""),
-                                "hint": KEY_HINTS.get(key, ""),
-                                "relay_only": True})
             continue
         if key in HEARTBEAT_KEYS:
             units = failing_units(d.get("body", ""))
@@ -251,7 +240,6 @@ def observe(state: dict, targets: list[dict], now: datetime, notify=None) -> Non
         entry = state.setdefault(t["key"], {})
         entry["check"] = t["check"]
         entry["agent_first"] = bool(t.get("agent_first"))
-        entry["relay_only"] = bool(t.get("relay_only"))
         if t.get("unit"):
             entry["unit"] = t["unit"]
         entry.setdefault("first_seen", now.isoformat(timespec="seconds"))
@@ -260,7 +248,6 @@ def observe(state: dict, targets: list[dict], now: datetime, notify=None) -> Non
             continue
         entry = state[key]
         if (notify is not None and entry.get("agent_first")
-                and not entry.get("relay_only")  # its own rung does recovery
                 and entry.get("first_seen") and not entry.get("notified")):
             if not notify(key, entry):
                 continue
@@ -352,13 +339,6 @@ def self_heal_text(entry: dict, now: datetime) -> str:
             if int(entry.get("attempts") or 0) else "")
     return (f"✅ {entry.get('check', '?')} went DOWN and self-recovered after "
             f"~{mins} min — no agent needed{tail}.")
-
-
-def relay_notified(target: dict) -> bool:
-    """A relay-only check whose DOWN came from an explicit /fail ping was
-    failed by its own runner — which DMs the operator itself (Trent's 🔴).
-    A missed-ping DOWN has no fail ping: nothing has notified anyone."""
-    return bool(latest_fail(target.get("pings") or []))
 
 
 def overdue_unnotified(state: dict, now: datetime,
@@ -665,8 +645,7 @@ def main() -> int:
         print("skip: healthchecks API unreachable")
         return 0
     details = {c["uuid"]: fetch_details(c) for c in checks
-               if c.get("status") == "down"
-               and (agent_first(c) or c.get("name") not in EXCLUDE)}
+               if c.get("status") == "down" and c.get("name") not in EXCLUDE}
     targets = build_targets(checks, env=dict(os.environ), details=details,
                             covered=heartbeat_covered())
 
@@ -675,9 +654,6 @@ def main() -> int:
 
     if not args.dry_run:
         observe(state, targets, now, notify=_self_heal_dm)
-        for t in targets:
-            if t.get("relay_only") and relay_notified(t):
-                state[t["key"]]["notified"] = True
 
     if disabled:
         # Kill switch stops agents, never notifications: agent-first checks
@@ -696,9 +672,6 @@ def main() -> int:
 
     eligible, capped, skipped = [], [], []
     for t in targets:
-        if t.get("relay_only"):
-            print(f"{label(t)}: skip (excluded — its own repair rung notifies)")
-            continue
         action, reason = gate(state.get(t["key"], {}), t, now, force=args.force)
         print(f"{label(t)}: {action} ({reason})")
         if action == "run":

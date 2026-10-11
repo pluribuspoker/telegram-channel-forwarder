@@ -235,26 +235,26 @@ async def _fetch_impl(since: datetime, limit: int) -> list[dict]:
 
 # ─── Operator alerts ─────────────────────────────────────────────────────────
 #
-# Three plain-text DMs via the watchdog bot:
-#   🔴 DOWN      — only from the runner's FINAL attempt (TRENT_FINAL_ATTEMPT=0
-#                  defers it: on 2026-09-24 attempt 1 paged "DOWN" and attempt 2
-#                  succeeded 90s later); at most once per _ALERT_EVERY_HOURS.
-#   ✅ recovered — once, on the first conclusive fetch after a sent 🔴.
+# One plain-text DM via the watchdog bot:
 #   ℹ️ degraded  — bootstrap still recovering but wobbling (failed create
 #                  attempts / fallback page / content heuristic) on
 #                  _DEGRADED_MIN_EVENTS+ runs within 24h: the staged-rollout early
 #                  warning. 2026-09-23 had 6 such runs; the 4th (19:23 ET) came
 #                  ~25h before the 2026-09-24 outage. At most once per 24h.
+#
+# Outage DMs left with the consolidation (operator 2026-10-11): a failing run
+# exits non-zero, the runner /fails the Trent monitor check, and hc-repair's
+# agent-first pipeline owns both the repair agent and the operator's one DM.
+# The FATAL + remedy lines below are that agent's context (journal + ping
+# body) — keep them precise.
 
 # Alert state, kept outside the repo (same spot as mem_watchdog). A module-level
 # Path so tests can point it at a temp file.
 _ALERT_STATE = Path.home() / ".trent_watcher_state.json"
-_ALERT_EVERY_HOURS = 6
 _DEGRADED_MIN_EVENTS = 4
 _DEGRADED_WINDOW_HOURS = 24
 _DEGRADED_KEEP_HOURS = 48
 _DEGRADED_REALERT_HOURS = 24
-_RECOVERED_MSG = "✅ Trent watcher recovered — picks are flowing again."
 
 
 def _load_state() -> dict:
@@ -310,62 +310,13 @@ def _send_dm(text: str) -> bool:
     return True
 
 
-def _alert_operator(text: str) -> None:
-    """Send the 🔴 DOWN DM, at most once per _ALERT_EVERY_HOURS.
-
-    Rate-limited so a multi-day outage doesn't DM every 15 minutes. A sent DM
-    arms the ✅ recovery DM (down_alerted_at); last_auth_alert keeps the
-    rate-limit window under its old name, so older state files carry over.
-    """
-    now = datetime.now(timezone.utc)
-    state = _load_state()
-    last = _parse_ts(state.get("last_auth_alert"))
-    if last and now - last < timedelta(hours=_ALERT_EVERY_HOURS):
-        print("  (operator already alerted recently, not re-sending)")
-        return
-    if not _send_dm(text):
-        return
-    state["last_auth_alert"] = state["down_alerted_at"] = now.isoformat()
-    _save_state(state)
-
-
-def _summarize_failures(text: str) -> str:
-    """Collapse a " Failures: url -> err | url -> err | …" tail to its first entry
-    plus a count — seven identical per-page failures buried the DM. The full
-    text still reaches the journal via the FATAL line."""
-    head, sep, tail = text.partition(" Failures: ")
-    if not sep:
-        return text
-    first, *rest = tail.split(" | ")
-    if not rest:
-        return text
-    err = first.partition(" -> ")[2]
-    if all(entry.partition(" -> ")[2] == err for entry in rest):
-        return f"{head}{sep}{first} (+{len(rest)} more pages, all same)"
-    return f"{head}{sep}{first} (+{len(rest)} more)"
-
-
-def _down_message(e: _XFetchError) -> str:
-    return (
-        "🔴 Trent watcher DOWN (both attempts failed) — picks are NOT being forwarded.\n\n"
-        f"{_summarize_failures(str(e))}\n\n"
-        f"Fix: {e.remedy}\n\n"
-        f"Auto-retries every 15 min; ✅ will follow on recovery. "
-        f"(Repeat alerts muted {_ALERT_EVERY_HOURS}h.)"
-    )
-
-
 def _report_fetch_failure(e: _XFetchError) -> None:
-    """FATAL to the journal always; the 🔴 DM only from the final attempt.
-
-    run_trent_watcher.sh sets TRENT_FINAL_ATTEMPT=0 on the attempt it will retry
-    60s later — a failure there is not yet an outage. Unset (manual runs) pages.
-    """
+    """FATAL + remedy to the journal — no DM. The runner /fails the Trent
+    monitor check and hc-repair's agent-first pipeline notifies the operator;
+    these lines are the agent's context (journal tail + ping body), so the
+    remedy must name the exact fix (cookies vs code)."""
     print(f"FATAL [{e.kind}]: {e}", file=sys.stderr)
-    if os.environ.get("TRENT_FINAL_ATTEMPT", "1") == "0":
-        print("  (TRENT_FINAL_ATTEMPT=0 — operator alert deferred to the final attempt)")
-        return
-    _alert_operator(_down_message(e))
+    print(f"  remedy: {e.remedy}", file=sys.stderr)
 
 
 def _degraded_message(count: int, report: dict) -> str:
@@ -387,18 +338,14 @@ def _degraded_message(count: int, report: dict) -> str:
 
 
 def _after_conclusive_fetch(report: dict, now: datetime | None = None) -> None:
-    """Health bookkeeping once a fetch PROVED X access works: the ✅ recovery DM
-    and the ℹ️ bootstrap-degradation early warning. `report` is x_client's
-    bootstrap_report() for this process."""
+    """Health bookkeeping once a fetch PROVED X access works: the ℹ️
+    bootstrap-degradation early warning. `report` is x_client's
+    bootstrap_report() for this process. (Recovery DMs left with the
+    consolidation — the check going UP tells the pipeline; stale
+    down_alerted_at/last_auth_alert keys in old state files are ignored.)"""
     now = now or datetime.now(timezone.utc)
     state = _load_state()
     before = json.dumps(state, sort_keys=True)
-
-    if state.get("down_alerted_at"):
-        # Not rate-limited. A failed send keeps the flag so the next run retries;
-        # last_auth_alert stays, so the 6h DOWN window still holds after this.
-        if _send_dm(_RECOVERED_MSG):
-            del state["down_alerted_at"]
 
     raw = state.get("degraded_events")
     events = [

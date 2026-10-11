@@ -38,7 +38,7 @@ CHECKS = [
     {"name": "VPS jobs", "uuid": "jobs-uuid", "status": "down"},
     {"name": "God judge", "uuid": "judge-uuid", "status": "down"},
     {"name": "Root backup", "uuid": "backup-uuid", "status": "up"},
-    {"name": "Trent monitor", "uuid": "trent-uuid", "status": "down"},
+    {"name": "Alert pipeline", "uuid": "esc-uuid", "status": "down"},
     {"name": "Sauce watch", "uuid": "sauce-uuid", "status": "grace"},
 ]
 DETAILS = {
@@ -69,8 +69,17 @@ check("dedicated check maps env key → unit",
       judge["env_key"] == "GOD_JUDGE_HEALTHCHECK_URL" and judge["unit"] == "god-judge.timer")
 check("up/grace checks are not targets", not any(t["check"] in ("Root backup", "Sauce watch")
                                                  for t in targets))
-check("excluded check (own repair rung) skipped", not any(t["check"] == "Trent monitor"
-                                                         for t in targets))
+check("the escalation check is never a target", not any(t["check"] == "Alert pipeline"
+                                                        for t in targets))
+trent_t = hr.build_targets(
+    [{"name": "Trent monitor", "uuid": "trent-uuid", "status": "down",
+      "tags": "agent-first"}],
+    env={**ENV, "TRENT_HEALTHCHECK_URL": "https://hc-ping.com/trent-uuid"},
+    details={}, covered={"trent-monitor.timer": "TRENT_HEALTHCHECK_URL"})[0]
+check("Trent is an ordinary agent-first target (no special rung)",
+      trent_t["agent_first"] is True and not trent_t.get("relay_only")
+      and trent_t["unit"] == "trent-monitor.timer"
+      and "needs_human" in trent_t["hint"])
 nobody = hr.build_targets([{"name": "VPS jobs", "uuid": "jobs-uuid", "status": "down"}],
                           env=ENV, details={"jobs-uuid": {"since": None, "body": ""}},
                           covered=COVERED)
@@ -255,36 +264,9 @@ check("prompt flags agent-first (operator not paged)", "NOT been paged" in pp)
 pbox = hr.build_prompt([af_unit], now_et="t", head="h", journals={})
 check("prompt notes box-level checks already paged", "already paged" in pbox)
 
-# 11. Consolidation (operator decision 2026-10-11, round 2): every check is
-#     agent-first; the Trent pair is relay-only; the "Alert pipeline" check
-#     (direct channels) pages only when an episode is unnotified 90+ min.
-rl_checks = [
-    {"name": "Trent monitor", "uuid": "trent-uuid", "status": "down",
-     "tags": "agent-first"},
-    {"name": "Alert pipeline", "uuid": "esc-uuid", "status": "down", "tags": ""},
-]
-rl_details = {"trent-uuid": {"since": iso(NOW - timedelta(hours=1)), "body": "",
-                             "pings": [{"type": "fail", "date": iso(NOW)}]}}
-rl_targets = hr.build_targets(rl_checks, env=ENV, details=rl_details, covered=COVERED)
-check("excluded agent-first check becomes relay-only",
-      len(rl_targets) == 1 and rl_targets[0]["check"] == "Trent monitor"
-      and rl_targets[0]["relay_only"] is True)
-check("the escalation check itself is never a target",
-      not any(t["check"] == "Alert pipeline" for t in rl_targets))
-check("a /fail-ping DOWN counts as notified (its runner DMed)",
-      hr.relay_notified(rl_targets[0]) is True)
-check("a missed-ping DOWN is unnotified (dead timer)",
-      hr.relay_notified({"pings": [{"type": "success", "date": iso(NOW)}]}) is False)
-
-stD: dict = {}
-hr.observe(stD, rl_targets, NOW)
-check("observe stamps relay_only", stD["trent-uuid"]["relay_only"] is True)
-rl_quiet: list = []
-hr.observe(stD, [], NOW + timedelta(minutes=20),
-           notify=lambda k, e: rl_quiet.append(k) or True)
-check("relay-only recovery sends no self-heal DM",
-      rl_quiet == [] and "trent-uuid" not in stD)
-
+# 11. Escalation (operator decision 2026-10-11, round 2): every check is
+#     agent-first; the "Alert pipeline" check (the only one with direct
+#     channels) pages only when an episode is unnotified 90+ min.
 stE = {
     "_spawns": [],
     "young": {"agent_first": True, "check": "Young",
