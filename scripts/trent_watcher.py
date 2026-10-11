@@ -233,28 +233,22 @@ async def _fetch_impl(since: datetime, limit: int) -> list[dict]:
     return results
 
 
-# ─── Operator alerts ─────────────────────────────────────────────────────────
+# ─── Health bookkeeping ──────────────────────────────────────────────────────
 #
-# One plain-text DM via the watchdog bot:
-#   ℹ️ degraded  — bootstrap still recovering but wobbling (failed create
-#                  attempts / fallback page / content heuristic) on
-#                  _DEGRADED_MIN_EVENTS+ runs within 24h: the staged-rollout early
-#                  warning. 2026-09-23 had 6 such runs; the 4th (19:23 ET) came
-#                  ~25h before the 2026-09-24 outage. At most once per 24h.
-#
-# Outage DMs left with the consolidation (operator 2026-10-11): a failing run
-# exits non-zero, the runner /fails the Trent monitor check, and hc-repair's
-# agent-first pipeline owns both the repair agent and the operator's one DM.
-# The FATAL + remedy lines below are that agent's context (journal + ping
-# body) — keep them precise.
+# The watcher sends NO DMs at all since the 2026-10-11 consolidation. Outages:
+# a failing run exits non-zero, the runner /fails the Trent monitor check, and
+# hc-repair's agent-first pipeline owns both the repair agent and the
+# operator's one DM — the FATAL + remedy lines below are that agent's context
+# (journal + ping body), keep them precise. Bootstrap degradation (failed
+# create attempts / fallback page / content heuristic — the staged-rollout
+# early warning: 2026-09-23 had 6 wobbly runs, the 4th ~25h before the
+# outage) is RECORDED here as degraded_events; scripts/hc_digest.py reads
+# this state file and reports 4+ events/24h in the daily digest.
 
-# Alert state, kept outside the repo (same spot as mem_watchdog). A module-level
+# State, kept outside the repo (same spot as mem_watchdog). A module-level
 # Path so tests can point it at a temp file.
 _ALERT_STATE = Path.home() / ".trent_watcher_state.json"
-_DEGRADED_MIN_EVENTS = 4
-_DEGRADED_WINDOW_HOURS = 24
 _DEGRADED_KEEP_HOURS = 48
-_DEGRADED_REALERT_HOURS = 24
 
 
 def _load_state() -> dict:
@@ -288,28 +282,6 @@ def _parse_ts(value) -> datetime | None:
     return ts if ts.tzinfo else None
 
 
-def _send_dm(text: str) -> bool:
-    """One plain-text DM to the operator via the watchdog bot. True if sent."""
-    token = os.environ.get("WATCHDOG_BOT_TOKEN", "")
-    uid = os.environ.get("WATCHDOG_USER_ID", "")
-    if not token or not uid:
-        print("  WATCHDOG_BOT_TOKEN / WATCHDOG_USER_ID not set, cannot alert", file=sys.stderr)
-        return False
-    try:
-        r = httpx.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data={"chat_id": uid, "text": text},
-            timeout=20,
-        )
-    except Exception as e:
-        print(f"  alert send failed: {e}", file=sys.stderr)
-        return False
-    if r.status_code != 200:
-        print(f"  alert send failed: HTTP {r.status_code}", file=sys.stderr)
-        return False
-    return True
-
-
 def _report_fetch_failure(e: _XFetchError) -> None:
     """FATAL + remedy to the journal — no DM. The runner /fails the Trent
     monitor check and hc-repair's agent-first pipeline notifies the operator;
@@ -319,30 +291,12 @@ def _report_fetch_failure(e: _XFetchError) -> None:
     print(f"  remedy: {e.remedy}", file=sys.stderr)
 
 
-def _degraded_message(count: int, report: dict) -> str:
-    parts = [
-        "ℹ️ Trent watcher: X's web build may be shifting again (staged rollout) — "
-        f"{count} runs in the last 24h needed a bootstrap fallback to get through.",
-        "The watcher is still healthy and self-recovering; expect a possible code "
-        "fix if it worsens.",
-    ]
-    detail = []
-    if report.get("fallback_page"):
-        detail.append(f"fell back to {report['fallback_page']}")
-    if report.get("heuristic"):
-        detail.append("indices file found only by the content heuristic (update "
-                      "_INDICES_FILE_RE in scripts/x_client.py)")
-    if detail:
-        parts.append("This run: " + "; ".join(detail) + ".")
-    return "\n\n".join(parts)
-
-
 def _after_conclusive_fetch(report: dict, now: datetime | None = None) -> None:
-    """Health bookkeeping once a fetch PROVED X access works: the ℹ️
-    bootstrap-degradation early warning. `report` is x_client's
-    bootstrap_report() for this process. (Recovery DMs left with the
-    consolidation — the check going UP tells the pipeline; stale
-    down_alerted_at/last_auth_alert keys in old state files are ignored.)"""
+    """Health bookkeeping once a fetch PROVED X access works: record bootstrap
+    degradation (failed create attempts / fallback page / content heuristic)
+    into the state file for the daily digest. No DMs — ever (operator
+    2026-10-11); stale down_alerted_at/last_auth_alert/last_degraded_alert
+    keys in old state files are ignored, never resurrected."""
     now = now or datetime.now(timezone.utc)
     state = _load_state()
     before = json.dumps(state, sort_keys=True)
@@ -356,15 +310,6 @@ def _after_conclusive_fetch(report: dict, now: datetime | None = None) -> None:
         events.append(now.isoformat())
     if events or raw is not None:
         state["degraded_events"] = events
-    recent = sum(
-        1 for ts in events if now - _parse_ts(ts) <= timedelta(hours=_DEGRADED_WINDOW_HOURS)
-    )
-    last = _parse_ts(state.get("last_degraded_alert"))
-    if recent >= _DEGRADED_MIN_EVENTS and (
-        last is None or now - last >= timedelta(hours=_DEGRADED_REALERT_HOURS)
-    ):
-        if _send_dm(_degraded_message(recent, report)):
-            state["last_degraded_alert"] = now.isoformat()
 
     if json.dumps(state, sort_keys=True) != before:
         _save_state(state)

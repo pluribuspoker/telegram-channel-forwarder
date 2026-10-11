@@ -241,6 +241,9 @@ hr.observe(stB, [], NOW + timedelta(minutes=5))
 check("silent self-heal records a blip and drops the episode",
       "judge-uuid" not in stB
       and len(stB["_blips"]["judge-uuid"]["times"]) == 1, f"{stB}")
+check("the 24h blip log feeds the daily digest",
+      len(stB.get("_blip_log", [])) == 1
+      and stB["_blip_log"][0]["check"] == "God judge", f"{stB.get('_blip_log')}")
 stC = {"k1": {"agent_first": True, "first_seen": iso(NOW), "notified": True, "check": "x"}}
 hr.observe(stC, [], NOW)
 check("a notified episode leaves no blip",

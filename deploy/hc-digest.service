@@ -1,0 +1,21 @@
+# Daily alerting digest: one morning DM rolling up everything the agent-first
+# pipeline handled below the notification bar in the last 24h — silent blips,
+# agent runs + outcomes + notional cost, parked targets, open episodes,
+# grader anomalies, X bootstrap wobble (scripts/hc_digest.py). Sends nothing
+# on a clean day; its success ping proves it ran.
+[Unit]
+Description=Daily alerting digest
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+Environment=HOME=/home/forwarder
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/scripts/hc_digest.py
+TimeoutStartSec=120
+SyslogIdentifier=hc-digest

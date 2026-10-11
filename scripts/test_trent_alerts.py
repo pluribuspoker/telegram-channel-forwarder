@@ -10,12 +10,13 @@ web-build rollout took the watcher down and the bootstrap error text blamed
 the cookies until diagnose_failure separated the cases.
 
 Pins: _report_fetch_failure never DMs and prints the remedy for the agent,
-the runner is free of repair triggers and attempt-gating env, the ℹ️ early
-warning (4+ runs in 24h, once per 24h, 48h prune), and state round-trips.
+the runner is free of repair triggers and attempt-gating env, degradation
+events are RECORDED for the daily digest (hc_digest reads the state file;
+48h prune) with zero DM machinery left in the module, and state round-trips.
 
-Offline and silent: _send_dm is stubbed, httpx.post raises, WATCHDOG_* are
-unset, the state file lives in a temp dir, and the runner copy gets a minimal
-env (no healthcheck URL). Needs .env (trent_watcher reads it at import).
+Offline and silent: httpx.post raises, WATCHDOG_* are unset, the state file
+lives in a temp dir, and the runner copy gets a minimal env (no healthcheck
+URL). Needs .env (trent_watcher reads it at import).
 
     ~/venv/bin/python scripts/test_trent_alerts.py
 """
@@ -53,18 +54,6 @@ tw.httpx.post = _no_network
 TMP = Path(tempfile.mkdtemp(prefix="trent_alerts_"))
 tw._ALERT_STATE = TMP / "state.json"
 
-real_send_dm = tw._send_dm
-sent: list[str] = []
-send_ok = [True]
-
-
-def _fake_send(text: str) -> bool:
-    sent.append(text)
-    return send_ok[0]
-
-
-tw._send_dm = _fake_send
-
 failures = []
 
 
@@ -75,8 +64,6 @@ def check(label: str, ok: bool, detail: str = ""):
 
 
 def _reset(state: dict | None = None):
-    sent.clear()
-    send_ok[0] = True
     tw._ALERT_STATE.unlink(missing_ok=True)
     if state is not None:
         tw._ALERT_STATE.write_text(json.dumps(state))
@@ -152,8 +139,9 @@ _reset()
 err_out = io.StringIO()
 with contextlib.redirect_stderr(err_out):
     tw._report_fetch_failure(boot_err)
-check("a failing run sends NO DM (the agent-first pipeline notifies)",
-      sent == [], f"{sent}")
+check("the module has NO DM machinery at all",
+      not hasattr(tw, "_send_dm") and not hasattr(tw, "_degraded_message")
+      and not hasattr(tw, "_alert_operator"))
 check("a failing run writes no alert state", _state() is None, f"{_state()}")
 logged = err_out.getvalue()
 check("FATAL line carries the kind and full error",
@@ -167,7 +155,6 @@ check("bootstrap remedy blames the code, not the cookies",
 # Legacy 🔴-era state keys are ignored, never resurrected into DMs.
 _reset({"last_auth_alert": downed, "down_alerted_at": downed})
 tw._after_conclusive_fetch(CLEAN, now=T)
-check("legacy down_alerted_at state triggers no recovery DM", sent == [], f"{sent}")
 check("legacy keys survive untouched (unknown-key policy)",
       (_state() or {}).get("down_alerted_at") == downed, f"{_state()}")
 
@@ -199,66 +186,27 @@ try:
 finally:
     tw._fetch_impl = saved_impl
 
-# (d) ℹ️ degradation early warning -----------------------------------------------
+# (d) degradation events: recorded for the daily digest, pruned at 48h --------
 _reset()
 for i in range(10):
     tw._after_conclusive_fetch(CLEAN, now=T + i * MIN15)
-check("clean runs record nothing and write nothing", sent == [] and _state() is None, f"{_state()}")
+check("clean runs record nothing and write nothing", _state() is None, f"{_state()}")
 
 _reset()
-for i in range(3):
-    tw._after_conclusive_fetch(FALLBACK, now=T + i * MIN15)
-check("3 degraded runs in 24h: no ℹ️ yet", sent == [], f"{sent}")
-tw._after_conclusive_fetch(FALLBACK, now=T + 3 * MIN15)
-check("the 4th degraded run in 24h sends ℹ️", len(sent) == 1 and sent[0].startswith("ℹ️"), f"{sent}")
-check("ℹ️ carries the 24h count and the fallback page",
-      bool(sent) and "4 runs in the last 24h" in sent[0] and "https://x.com/explore" in sent[0],
-      sent[0][:160] if sent else "")
-check("ℹ️ says the watcher is still healthy and a code fix may follow",
-      bool(sent) and "still healthy and self-recovering" in sent[0] and "code fix" in sent[0])
-tw._after_conclusive_fetch(FALLBACK, now=T + 4 * MIN15)
-check("no repeat ℹ️ within 24h", len(sent) == 1, f"{len(sent)} DMs")
-
-# An extended rollout: a degraded run every 15 min for 25h -> exactly one more
-# ℹ️, at the first run 24h after the first one.
-_reset()
-for i in range(4 * 25 + 1):
-    tw._after_conclusive_fetch(FALLBACK, now=T + i * MIN15)
-st = _state() or {}
-check("25h of degraded runs send exactly two ℹ️ (24h re-arm)", len(sent) == 2, f"{len(sent)} DMs")
-check("second ℹ️ lands exactly at the re-arm",
-      st.get("last_degraded_alert") == (T + 3 * MIN15 + timedelta(hours=24)).isoformat(),
-      st.get("last_degraded_alert", ""))
-
-_reset()
-for i, rep in enumerate((RETRIED, RETRIED, RETRIED, HEURISTIC)):
+for i, rep in enumerate((FALLBACK, RETRIED, HEURISTIC, FALLBACK)):
     tw._after_conclusive_fetch(rep, now=T + i * MIN15)
-check("failed create attempts alone count as degradation", len(sent) == 1, f"{len(sent)} DMs")
-check("ℹ️ names the content heuristic when it was used",
-      bool(sent) and "content heuristic" in sent[0] and "_INDICES_FILE_RE" in sent[0], sent[0] if sent else "")
-
-_reset()
-for i in range(3):
-    tw._after_conclusive_fetch(FALLBACK, now=T + i * MIN15)
-send_ok[0] = False
-tw._after_conclusive_fetch(FALLBACK, now=T + 3 * MIN15)
-check("a failed ℹ️ send leaves the alert unarmed", "last_degraded_alert" not in (_state() or {}))
-send_ok[0] = True
-tw._after_conclusive_fetch(CLEAN, now=T + 4 * MIN15)
-check("the next conclusive run retries the ℹ️", len(sent) == 2 and "last_degraded_alert" in (_state() or {}),
-      f"{len(sent)} / {_state()}")
-
-_reset()
-for i in range(4):
-    tw._after_conclusive_fetch(FALLBACK, now=T + i * MIN15)
+check("each degraded run appends one event",
+      len((_state() or {}).get("degraded_events", [])) == 4, f"{_state()}")
 tw._after_conclusive_fetch(CLEAN, now=T + 3 * MIN15 + timedelta(hours=47))
-check("events younger than 48h are kept", len((_state() or {}).get("degraded_events", [])) == 4)
+check("events younger than 48h are kept",
+      len((_state() or {}).get("degraded_events", [])) == 4)
 tw._after_conclusive_fetch(CLEAN, now=T + timedelta(hours=48, minutes=1))
-check("events older than 48h are pruned", len((_state() or {}).get("degraded_events", [])) == 3,
+check("events older than 48h are pruned",
+      len((_state() or {}).get("degraded_events", [])) == 3,
       f"{(_state() or {}).get('degraded_events')}")
 tw._after_conclusive_fetch(CLEAN, now=T + timedelta(hours=49))
-check("... all of them, eventually", (_state() or {}).get("degraded_events") == [], f"{_state()}")
-check("stale events never re-page", len(sent) == 1, f"{len(sent)} DMs")
+check("... all of them, eventually", (_state() or {}).get("degraded_events") == [],
+      f"{_state()}")
 
 # (e) state round-trips ------------------------------------------------------------
 future = {"future_key": {"nested": [1, 2]}, "last_auth_alert": "2020-01-01T00:00:00+00:00"}
@@ -280,41 +228,6 @@ _reset({"degraded_events": "not-a-list", "last_degraded_alert": 7})
 tw._after_conclusive_fetch(FALLBACK, now=T)
 check("garbage fields are tolerated and repaired",
       (_state() or {}).get("degraded_events") == [T.isoformat()], f"{_state()}")
-
-# (f) the real _send_dm: plain text, no parse_mode --------------------------------
-calls = []
-
-
-class _R:
-    def __init__(self, code):
-        self.status_code = code
-
-
-code = [200]
-
-
-def _post(url, data=None, timeout=None, **kw):
-    calls.append((url, data, kw))
-    if code[0] is None:
-        raise OSError("network down")
-    return _R(code[0])
-
-
-tw.httpx.post = _post
-try:
-    check("no WATCHDOG_* -> False, no request", real_send_dm("x") is False and calls == [])
-    os.environ["WATCHDOG_BOT_TOKEN"], os.environ["WATCHDOG_USER_ID"] = "TEST-TOKEN", "42"
-    check("HTTP 200 -> True", real_send_dm("hello") is True)
-    check("DM is plain text (no parse_mode)",
-          calls and calls[-1][1] == {"chat_id": "42", "text": "hello"} and not calls[-1][2], f"{calls[-1:]}")
-    code[0] = 500
-    check("HTTP 500 -> False", real_send_dm("x") is False)
-    code[0] = None
-    check("network error -> False", real_send_dm("x") is False)
-finally:
-    tw.httpx.post = _no_network
-    os.environ.pop("WATCHDOG_BOT_TOKEN", None)
-    os.environ.pop("WATCHDOG_USER_ID", None)
 
 # (g) run_trent_watcher.sh: retry loop only — no repair trigger, no gating env ----
 # A copy with every live path swapped for the temp dir and the 60s backoff cut,
@@ -382,17 +295,15 @@ try:
     tw.build_api = _empty_api
     _reset({"last_auth_alert": downed, "down_alerted_at": downed})
     rc = _main("--dry-run")
-    check("main --dry-run: conclusive, no DM", rc == 0 and sent == [], f"rc={rc} {sent}")
+    check("main --dry-run: conclusive, exit 0", rc == 0, f"rc={rc}")
     rc = _main()
-    check("main with legacy 🔴-era state: conclusive run, still no DM",
-          rc == 0 and sent == [], f"rc={rc} {sent}")
+    check("main with legacy 🔴-era state: conclusive run, exit 0", rc == 0, f"rc={rc}")
 
     tw.build_api = _no_user_api
     tw.diagnose_failure = _diag_bootstrap
     _reset()
     rc = _main()
-    check("main, failing run: exit 1 and NO DM (the pipeline notifies)",
-          rc == 1 and sent == [], f"rc={rc} {sent}")
+    check("main, failing run: exit 1 (the pipeline notifies)", rc == 1, f"rc={rc}")
 finally:
     tw.DB_PATH, tw.build_api, tw.diagnose_failure, sys.argv[:] = saved_main
 

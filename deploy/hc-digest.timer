@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily alerting digest at 08:30 ET
+
+[Timer]
+OnCalendar=*-*-* 08:30:00 America/New_York
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

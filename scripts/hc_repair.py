@@ -136,6 +136,9 @@ KEY_HINTS = {
                                   "has remaining + burn rate; find the consumer "
                                   "(paid paths in odds.py; free-first rule, "
                                   "docs/odds.md); 500 credits/mo, monthly reset",
+    "ALERT_DIGEST_HEALTHCHECK_URL": "the daily digest run (scripts/hc_digest.py, "
+                                    "08:30 ET) — a miss means the digest itself "
+                                    "crashed; it only reads state files and DMs",
     "GRADER_ANOMALIES_HEALTHCHECK_URL": "parse/binding anomalies the tracker "
                                         "queued (ambiguous game, final-but-"
                                         "ungraded, refused corrections, suspect "
@@ -292,6 +295,16 @@ def observe(state: dict, targets: list[dict], now: datetime) -> None:
                 rec["unit"] = entry["unit"]
             rec["times"] = _recent(rec.get("times"), now) + [
                 now.isoformat(timespec="seconds")]
+            # 24h ledger for the daily digest (the 3h window above is the
+            # flap trigger; this is the morning read).
+            log = state.setdefault("_blip_log", [])
+            log.append({"ts": now.isoformat(timespec="seconds"),
+                        "check": entry.get("check", ""),
+                        "unit": entry.get("unit", ""),
+                        "since": entry.get("first_seen", "")})
+            state["_blip_log"] = [
+                b for b in log
+                if (t := _ts(b.get("ts"))) and now - t < timedelta(hours=25)]
         for f in ("first_seen", "attempts", "parked", "parked_reason",
                   "capped_dm_sent", "notified"):
             entry.pop(f, None)
