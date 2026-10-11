@@ -19,15 +19,20 @@ check's own grace + the heartbeat's settle window): a flap never reaches an
 agent. Checks with their own repair rung are excluded (HC_REPAIR_EXCLUDE,
 default the Trent pair — trent-repair already owns that outage).
 
-Agent-first checks (operator decision 2026-10-11): a job check tagged
-`agent-first` on healthchecks.io has NO alert channels there — this runner is
-its only notifier, guaranteeing ONE DM per failure episode: the agent's card
-when one runs, a raw 🚨 alert on any path where no agent will look (cooldown,
+Agent-first everywhere (operator decisions 2026-10-11): EVERY check is tagged
+`agent-first` with NO alert channels on healthchecks.io — this runner is the
+only notifier, guaranteeing ONE DM per failure episode: the agent's card when
+one runs, a raw 🚨 alert on any path where no agent will look (cooldown,
 parked, daily cap, kill switch), or a ✅ self-heal note when the check
 recovers below the agent threshold. `notified` on the state entry tracks the
 episode; recovery clears it (a failed DM keeps the entry for the next pass).
-Box-level checks (VPS services/jobs, telegram-forwarder) and the excluded
-Trent pair keep their healthchecks channels and page the operator directly.
+The excluded Trent pair is relay-only: trent-repair spawns and DMs (a
+/fail-ping DOWN counts as notified), but a missed-ping DOWN (dead timer)
+still escalates. The LAST RUNG is the "Alert pipeline" check — the only one
+with direct channels (HealthchecksBot + Gmail): every pass pings it success,
+or /fail once any episode is unnotified past HC_ESCALATION_OVERDUE_MINUTES
+(90) — so a dead box, a dead hc-repair or a dead watchdog-bot DM path pages
+the operator from healthchecks' own servers within its period+grace.
 
 Guards (state logs/hc_repair_state.json, per target):
 - kill switch HC_REPAIR_DISABLED=1 → no agents; still relays raw alerts for
@@ -84,7 +89,14 @@ ATTEMPT_CAP = int(os.environ.get("HC_REPAIR_ATTEMPT_CAP") or 2)
 DAILY_CAP = int(os.environ.get("HC_REPAIR_DAILY_CAP") or 6)
 MIN_DOWN = timedelta(minutes=float(os.environ.get("HC_REPAIR_MIN_DOWN_MINUTES") or 10))
 EXCLUDE = {n.strip() for n in (os.environ.get("HC_REPAIR_EXCLUDE")
-                               or "Trent monitor,Trent repair").split(",") if n.strip()}
+                               or "Trent monitor,Trent repair,Alert pipeline").split(",")
+           if n.strip()}
+# The one check with direct channels: hc-repair pings it every pass — success
+# while every episode is handled, /fail once any has gone OVERDUE without a
+# DM — so a dead box, dead hc-repair or dead DM path pages the operator from
+# healthchecks' own servers. Unset = no-op.
+ESCALATION_URL = os.environ.get("ALERT_PIPELINE_HEALTHCHECK_URL", "")
+OVERDUE = timedelta(minutes=float(os.environ.get("HC_ESCALATION_OVERDUE_MINUTES") or 90))
 
 # Checks whose /fail body lists failing units one per line ("unit: detail").
 HEARTBEAT_KEYS = ("HEARTBEAT_SERVICES_HEALTHCHECK_URL", "HEARTBEAT_JOBS_HEALTHCHECK_URL")
@@ -190,7 +202,7 @@ def build_targets(checks: list[dict], *, env: dict[str, str],
     unit_for_key = {k: u for u, k in covered.items()}
     targets = []
     for c in checks:
-        if c.get("status") != "down" or c.get("name") in EXCLUDE:
+        if c.get("status") != "down":
             continue
         uuid = c.get("uuid") or ""
         d = details.get(uuid, {})
@@ -199,6 +211,19 @@ def build_targets(checks: list[dict], *, env: dict[str, str],
                 "desc": c.get("desc", ""), "since": d.get("since"),
                 "body": d.get("body", ""), "pings": d.get("pings", []),
                 "agent_first": agent_first(c)}
+        if c.get("name") in EXCLUDE:
+            # Excluded + agent-first (the Trent pair): its own repair rung
+            # spawns and DMs, so hc-repair only tracks the episode for the
+            # escalation deadline — a /fail-ping DOWN means its runner ran
+            # and already DMed; a missed-ping DOWN (dead timer) stays
+            # unnotified and escalates. Excluded without the tag (Alert
+            # pipeline itself) is invisible here.
+            if base["agent_first"]:
+                targets.append({**base, "key": uuid,
+                                "unit": unit_for_key.get(key, ""),
+                                "hint": KEY_HINTS.get(key, ""),
+                                "relay_only": True})
+            continue
         if key in HEARTBEAT_KEYS:
             units = failing_units(d.get("body", ""))
             if units:
@@ -226,6 +251,7 @@ def observe(state: dict, targets: list[dict], now: datetime, notify=None) -> Non
         entry = state.setdefault(t["key"], {})
         entry["check"] = t["check"]
         entry["agent_first"] = bool(t.get("agent_first"))
+        entry["relay_only"] = bool(t.get("relay_only"))
         if t.get("unit"):
             entry["unit"] = t["unit"]
         entry.setdefault("first_seen", now.isoformat(timespec="seconds"))
@@ -234,6 +260,7 @@ def observe(state: dict, targets: list[dict], now: datetime, notify=None) -> Non
             continue
         entry = state[key]
         if (notify is not None and entry.get("agent_first")
+                and not entry.get("relay_only")  # its own rung does recovery
                 and entry.get("first_seen") and not entry.get("notified")):
             if not notify(key, entry):
                 continue
@@ -325,6 +352,28 @@ def self_heal_text(entry: dict, now: datetime) -> str:
             if int(entry.get("attempts") or 0) else "")
     return (f"✅ {entry.get('check', '?')} went DOWN and self-recovered after "
             f"~{mins} min — no agent needed{tail}.")
+
+
+def relay_notified(target: dict) -> bool:
+    """A relay-only check whose DOWN came from an explicit /fail ping was
+    failed by its own runner — which DMs the operator itself (Trent's 🔴).
+    A missed-ping DOWN has no fail ping: nothing has notified anyone."""
+    return bool(latest_fail(target.get("pings") or []))
+
+
+def overdue_unnotified(state: dict, now: datetime,
+                       threshold: timedelta = None) -> list[str]:
+    """Agent-first episodes DOWN past the threshold with no DM delivered —
+    the alert pipeline itself has failed these; the escalation check pages."""
+    threshold = OVERDUE if threshold is None else threshold
+    out = set()
+    for key, entry in state.items():
+        if key.startswith("_") or not entry.get("agent_first") or entry.get("notified"):
+            continue
+        first = _ts(entry.get("first_seen"))
+        if first and now - first >= threshold:
+            out.add(entry.get("check") or key)
+    return sorted(out)
 
 
 _RESULT_RE = re.compile(r"HC_REPAIR_RESULT:\s*(\[.*?\])\s*$", re.MULTILINE | re.DOTALL)
@@ -530,6 +579,23 @@ def fetch_details(check: dict) -> dict:
     return out
 
 
+def ping_escalation(overdue: list[str]) -> None:
+    """Heartbeat for the alert pipeline itself: success while every episode
+    is handled, /fail once any is overdue. No URL = no-op. A dead box or a
+    dead hc-repair stops these pings — healthchecks pages on the silence."""
+    if not ESCALATION_URL:
+        return
+    url = ESCALATION_URL + ("/fail" if overdue else "")
+    body = (("operator not DMed for 90+ min: " + ", ".join(overdue)).encode()
+            if overdue else None)
+    try:
+        with urllib.request.urlopen(
+                urllib.request.Request(url, data=body), timeout=10):
+            pass
+    except Exception as exc:
+        print(f"escalation ping failed: {exc}", file=sys.stderr)
+
+
 def journal_tail(unit: str) -> str:
     if not unit:
         return ""
@@ -599,7 +665,8 @@ def main() -> int:
         print("skip: healthchecks API unreachable")
         return 0
     details = {c["uuid"]: fetch_details(c) for c in checks
-               if c.get("status") == "down" and c.get("name") not in EXCLUDE}
+               if c.get("status") == "down"
+               and (agent_first(c) or c.get("name") not in EXCLUDE)}
     targets = build_targets(checks, env=dict(os.environ), details=details,
                             covered=heartbeat_covered())
 
@@ -608,6 +675,9 @@ def main() -> int:
 
     if not args.dry_run:
         observe(state, targets, now, notify=_self_heal_dm)
+        for t in targets:
+            if t.get("relay_only") and relay_notified(t):
+                state[t["key"]]["notified"] = True
 
     if disabled:
         # Kill switch stops agents, never notifications: agent-first checks
@@ -620,11 +690,15 @@ def main() -> int:
                     entry["notified"] = True
         if not args.dry_run:
             save_state(state)
+            ping_escalation(overdue_unnotified(state, now))
         print("HC_REPAIR_DISABLED=1 — relay only, no agents")
         return 0
 
     eligible, capped, skipped = [], [], []
     for t in targets:
+        if t.get("relay_only"):
+            print(f"{label(t)}: skip (excluded — its own repair rung notifies)")
+            continue
         action, reason = gate(state.get(t["key"], {}), t, now, force=args.force)
         print(f"{label(t)}: {action} ({reason})")
         if action == "run":
@@ -679,6 +753,7 @@ def main() -> int:
         return 0
     if not eligible:
         save_state(state)
+        ping_escalation(overdue_unnotified(state, now))
         return 0
 
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -688,6 +763,7 @@ def main() -> int:
         except BlockingIOError:
             print("an agent run holds the lock; next pass")
             save_state(state)
+            ping_escalation(overdue_unnotified(state, now))
             return 0
 
         journals = {t["unit"]: journal_tail(t["unit"]) for t in eligible}
@@ -752,6 +828,7 @@ def main() -> int:
             save_state(state)
         print("done: " + "; ".join(f"{label(t)}={reports[t['key']]['outcome']}"
                                    for t in eligible))
+        ping_escalation(overdue_unnotified(state, datetime.now(timezone.utc)))
     return 0
 
 

@@ -255,5 +255,53 @@ check("prompt flags agent-first (operator not paged)", "NOT been paged" in pp)
 pbox = hr.build_prompt([af_unit], now_et="t", head="h", journals={})
 check("prompt notes box-level checks already paged", "already paged" in pbox)
 
+# 11. Consolidation (operator decision 2026-10-11, round 2): every check is
+#     agent-first; the Trent pair is relay-only; the "Alert pipeline" check
+#     (direct channels) pages only when an episode is unnotified 90+ min.
+rl_checks = [
+    {"name": "Trent monitor", "uuid": "trent-uuid", "status": "down",
+     "tags": "agent-first"},
+    {"name": "Alert pipeline", "uuid": "esc-uuid", "status": "down", "tags": ""},
+]
+rl_details = {"trent-uuid": {"since": iso(NOW - timedelta(hours=1)), "body": "",
+                             "pings": [{"type": "fail", "date": iso(NOW)}]}}
+rl_targets = hr.build_targets(rl_checks, env=ENV, details=rl_details, covered=COVERED)
+check("excluded agent-first check becomes relay-only",
+      len(rl_targets) == 1 and rl_targets[0]["check"] == "Trent monitor"
+      and rl_targets[0]["relay_only"] is True)
+check("the escalation check itself is never a target",
+      not any(t["check"] == "Alert pipeline" for t in rl_targets))
+check("a /fail-ping DOWN counts as notified (its runner DMed)",
+      hr.relay_notified(rl_targets[0]) is True)
+check("a missed-ping DOWN is unnotified (dead timer)",
+      hr.relay_notified({"pings": [{"type": "success", "date": iso(NOW)}]}) is False)
+
+stD: dict = {}
+hr.observe(stD, rl_targets, NOW)
+check("observe stamps relay_only", stD["trent-uuid"]["relay_only"] is True)
+rl_quiet: list = []
+hr.observe(stD, [], NOW + timedelta(minutes=20),
+           notify=lambda k, e: rl_quiet.append(k) or True)
+check("relay-only recovery sends no self-heal DM",
+      rl_quiet == [] and "trent-uuid" not in stD)
+
+stE = {
+    "_spawns": [],
+    "young": {"agent_first": True, "check": "Young",
+              "first_seen": iso(NOW - timedelta(minutes=30))},
+    "old-quiet": {"agent_first": True, "check": "Old quiet",
+                  "first_seen": iso(NOW - timedelta(minutes=120))},
+    "old-dmed": {"agent_first": True, "check": "Old DMed", "notified": True,
+                 "first_seen": iso(NOW - timedelta(minutes=120))},
+    "old-direct": {"agent_first": False, "check": "Old direct",
+                   "first_seen": iso(NOW - timedelta(minutes=120))},
+}
+check("overdue = only old unnotified agent-first episodes",
+      hr.overdue_unnotified(stE, NOW) == ["Old quiet"])
+check("overdue threshold is tunable",
+      hr.overdue_unnotified(stE, NOW, threshold=timedelta(minutes=20))
+      == ["Old quiet", "Young"])
+check("clean state has no overdue", hr.overdue_unnotified({"_spawns": []}, NOW) == [])
+
 print(f"\n{'ALL PASS' if not failures else f'{len(failures)} FAILED'}")
 sys.exit(1 if failures else 0)
