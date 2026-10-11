@@ -4,13 +4,17 @@ NFL MOE committee and the God Expert.
 One supergroup with forum topics, the intake bot as admin. Every card is one
 message everyone sees:
 
-- **Picks topic** — one card per game, existing only while someone actually
-  bets it (operator-asked 2026-09-20): the betting God arms (👑 marks the
-  judge) and every voice with an actual bet leg, each with its season
-  graded-bet record. A non-betting expert is simply absent — no ``no bet``
-  filler — and lean-only stances never show here; both stay on the offline
-  card and in the full opinions, which the card's buttons page through in
-  the same shared message.
+- **Picks topic** — 🔔 bet cards ONLY (operator-asked 2026-10-11): one card
+  per event+market for the expert × market pairs in ``ALERT_EXPERTS``,
+  edited in place as numbers move and frozen at kickoff. Once the game's
+  standing rows grade, each card takes one terminal edit — ✅/❌/♻️ per
+  betting row plus the final score, the pick tracker's verdict language —
+  and the message stays in the topic as the record. The per-game picks
+  cards were retired the same day (the sync deletes any it still tracks);
+  every other bet reads from the offline card or the DM views.
+  ``render_picks_card`` and the callback views remain only so a stale
+  keyboard degrades gracefully — ``update_desk_picks_view`` edits tracked
+  cards and never posts, so nothing can resurrect one.
 - **Scores topic** — the grading digest (``scripts/moe_grade.py --notify``).
 - **Offline topic** — one plain-text card per game with the latest full-game
   lines, both God arms, every approved voice pick, and consensus. Cards update
@@ -24,10 +28,10 @@ Review topic with its ✅/❌ cards, the pinned queue card and the judge-lock
 warning were removed 2026-09-10; rejecting a bad row remains possible with
 ``scripts/review_moe_opinion.py``.
 
-Loud (a notification) in one place only: a reply under the picks card when
-a bet leg is approved — and, symmetrically, when a later pass withdraws a
-previously-announced bet (flips it to PASS). Everything else is posted
-silently and edited in place; Telegram edits never notify.
+Loud (a notification) in one place only: a bet card's first post for a new
+bet leg, and the delete+repost when an arm joins, re-bets or flips its
+selection. Everything else — withdrawals included — is posted silently and
+edited in place; Telegram edits never notify.
 
 Shared-message rules: a button either switches the shared card's view or
 deep-links into the tapper's own DM; nothing else navigates the shared
@@ -94,6 +98,11 @@ ALERT_EXPERTS: dict[str, tuple[str, ...]] = {
 # specifically on God's picks). Confidence already renders as ★, so the
 # marker must not be a star.
 JUDGE_ICON = "👑"
+# The grading edit's verdict emojis (operator-asked 2026-10-11), keyed by
+# moe_god.grade_all leg results — the same language the pick tracker's
+# broadcasts use (common.VERDICT_EMOJI, not imported: this module stays
+# Windows-runnable and free of the forwarder stack).
+RESULT_EMOJI = {"W": "✅", "L": "❌", "P": "♻️"}
 # Plain-English pass reasons for the bet card and the 🔕 withdrawal
 # (operator-picked copy, 2026-09-13); unmapped reasons show as persisted.
 PASS_REASON_SHORT = {
@@ -1812,14 +1821,13 @@ def _leg_payout(result: str, price: Any, units: float) -> float:
     return units * (100 / abs(price) if price < 0 else price / 100)
 
 
-def market_records(
+def _standing_graded(
     opinions: Iterable[dict[str, Any]], graded: Iterable[dict[str, Any]]
-) -> dict[str, dict[str, Any]]:
-    """``{"<expert_id>:<side|total>": {w, l, p, units, risk}}`` — each
-    expert's season bet record per market over its standing row per game
-    (the latest, as ``build_scoreboard(latest_per_game=True)``), staked at
-    the leg's ``stake_units`` (1u when it has none). ``graded`` is
-    ``moe_god.grade_all`` over ``opinions``."""
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """``(opinion row, grade_all result)`` for each expert's standing row
+    per game — the latest row, as ``build_scoreboard(latest_per_game=True)``
+    counts, so every desk surface grades one row per expert per game.
+    ``graded`` is ``moe_god.grade_all`` over ``opinions``."""
     rows = {str(row.get("opinion_id") or ""): row for row in opinions}
     standing: dict[tuple[str, str], dict[str, Any]] = {}
     for result in graded:
@@ -1830,9 +1838,20 @@ def market_records(
         prior = standing.get(key)
         if prior is None or row_key(row) > row_key(rows[prior["opinion_id"]]):
             standing[key] = result
+    return [
+        (rows[str(result["opinion_id"])], result)
+        for result in standing.values()
+    ]
+
+
+def market_records(
+    opinions: Iterable[dict[str, Any]], graded: Iterable[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """``{"<expert_id>:<side|total>": {w, l, p, units, risk}}`` — each
+    expert's season bet record per market over its standing row per game,
+    staked at the leg's ``stake_units`` (1u when it has none)."""
     records: dict[str, dict[str, Any]] = {}
-    for result in standing.values():
-        row = rows[result["opinion_id"]]
+    for row, result in _standing_graded(opinions, graded):
         for leg in result["legs"]:
             kind = leg["kind"]
             pick = leg_from_json(row.get(f"{kind}_pick_json")) or {}
@@ -1845,6 +1864,27 @@ def market_records(
             rec["units"] += _leg_payout(leg["result"], pick.get("price"), units)
             rec["risk"] += units
     return records
+
+
+def bet_results(
+    opinions: Iterable[dict[str, Any]], graded: Iterable[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """``{"<event>:<expert>:<side|total>": {"result": "W", "final":
+    "20-27"}}`` over each expert's standing row per game — what the bet
+    cards' grading edit renders (``RESULT_EMOJI`` plus the final score,
+    away-home like the ``@`` matchup). The same standing-row rule as
+    ``market_records``, so a card's emoji and its season record never
+    disagree."""
+    results: dict[str, dict[str, Any]] = {}
+    for _row, result in _standing_graded(opinions, graded):
+        for leg in result["legs"]:
+            results[
+                f"{result['event_id']}:{result['expert_id']}:{leg['kind']}"
+            ] = {
+                "result": str(leg.get("result") or ""),
+                "final": str(result.get("final") or ""),
+            }
+    return results
 
 
 def _market_record_text(record: Any, kind: str) -> str:
@@ -1886,6 +1926,7 @@ def render_bet_card(
     *,
     team_abbrevs: dict[str, str] | None = None,
     records: dict[str, Any] | None = None,
+    results: dict[str, Any] | None = None,
 ) -> str:
     """The one 🔔 message per bet (event+kind): a bold headline with the
     selection, then a row per alerting expert (``ALERT_EXPERTS`` — God
@@ -1899,9 +1940,21 @@ def render_bet_card(
     withdrawn arm stays on the card as ✖ with its last stake struck
     through, and once no arm bets the headline flips 🔕 with the selection
     struck — the card IS the withdrawal record; nothing pings (operator-
-    picked, 2026-09-13)."""
+    picked, 2026-09-13). ``results`` (``bet_results``) is the grading edit
+    (operator-asked 2026-10-11): a betting row with a standing-row result
+    gains its ✅/❌/♻️, and the headline takes the primary expert's emoji
+    in place of 🔔 plus the final score."""
     legs = _card_legs(desk, kind)
     order = ALERT_EXPERTS.get(kind, ())
+
+    def _result_for(expert_id: str) -> dict[str, Any] | None:
+        found = (results or {}).get(f"{desk.event_id}:{expert_id}:{kind}")
+        return found if isinstance(found, dict) else None
+
+    def _emoji_for(expert_id: str) -> str:
+        found = _result_for(expert_id) or {}
+        return RESULT_EMOJI.get(str(found.get("result") or ""), "")
+
     withdrawn = {
         expert_id
         for expert_id, info in arms_state.items()
@@ -1927,7 +1980,14 @@ def render_bet_card(
         else:
             line_text = f"{_line_text(first_line, kind)}→{_line_text(line, kind)}"
         headline = " ".join(part for part in (selection_text, line_text) if part)
-        head = f"🔔 <b>{_esc(headline)}</b> · {_teams_short(desk, team_abbrevs)}"
+        emoji = _emoji_for(primary)
+        head = (
+            f"{emoji or '🔔'} <b>{_esc(headline)}</b>"
+            f" · {_teams_short(desk, team_abbrevs)}"
+        )
+        final = str((_result_for(primary) or {}).get("final") or "")
+        if emoji and final:
+            head += f" · {_esc(final)}"
     else:
         # the bet is dead: strike the last announced selection
         selection, line = "", None
@@ -2003,6 +2063,9 @@ def render_bet_card(
                 row_text += f" · {_esc(_line_text(own_line, kind))}"
         if record_text:
             row_text += f" · {_esc(record_text)}"
+        emoji = _emoji_for(expert_id)
+        if emoji:
+            row_text = f"{emoji} {row_text}"
         lines.append(row_text)
     return "\n".join(lines)
 
@@ -2581,13 +2644,14 @@ def sync_desk(
     now: datetime,
     team_abbrevs: dict[str, str] | None = None,
     latest_markets: dict[str, dict[str, Any]] | None = None,
-    records: dict[str, Any] | None = None,
     market_records: dict[str, Any] | None = None,
+    bet_results: dict[str, Any] | None = None,
     max_posts: int = MAX_POSTS_PER_SYNC,
 ) -> SyncSummary:
     """Reconcile the group with the model: post missing cards, edit changed
     ones, announce new bet legs and withdrawals of announced bets once
-    each. Idempotent — an unchanged model is a no-op — and bounded to
+    each, and grade finished games' bet cards in place (``bet_results``).
+    Idempotent — an unchanged model is a no-op — and bounded to
     ``max_posts`` new messages per pass so a first run over a full slate
     spreads across passes."""
     desks = list(desks)
@@ -2601,17 +2665,12 @@ def sync_desk(
         api=api,
         summary=summary,
     )
-    # Delete picks cards whose game left the model (aged out or removed) or
-    # dropped below the picks gate — before prune_state forgets the entry
-    # and the message would leak. Offline cards deliberately survive here.
-    active_picks = {
-        f"picks:{desk.event_id}" for desk in desks if desk.show_picks
-    }
-    for key in [
-        key
-        for key in state["cards"]
-        if key.startswith("picks:") and key not in active_picks
-    ]:
+    # The Picks topic is bet-cards-only (operator-asked 2026-10-11): the
+    # per-game picks cards are retired, so every tracked one is deleted —
+    # the migration, like the 2026-09-20 day-card removal, except a failed
+    # delete keeps its entry for a retry (the message would otherwise
+    # leak). Offline cards deliberately survive.
+    for key in [key for key in state["cards"] if key.startswith("picks:")]:
         if _delete_entry_messages(
             key=key,
             entry=state["cards"][key],
@@ -2656,65 +2715,13 @@ def sync_desk(
                     state["cards"].pop(offline_key, None)
                     summary.deleted.append(offline_key)
 
-    # The Picks topic: one card per game, frozen at kickoff (reposted only
-    # if it went missing), deleted when the game leaves the model — the
-    # topic stays one slate deep while offline keeps the archive.
-    picks_ids: dict[str, int] = {}
-    for desk in desks:
-        if not desk.show_picks:
-            continue
-        key = f"picks:{desk.event_id}"
-        entry = state["cards"].get(key)
-        if (
-            desk.started
-            and isinstance(entry, dict)
-            and entry.get("message_id")
-        ):
-            picks_ids[desk.event_id] = int(entry["message_id"])
-            continue
-        raw_view = state["expanded_picks"].get(desk.event_id)
-        view = resolve_picks_view(desk, raw_view)
-        if view is None:
-            state["expanded_picks"].pop(desk.event_id, None)
-        else:
-            state["expanded_picks"][desk.event_id] = view
-        text, keyboard = render_picks_card(
-            desk,
-            config=config,
-            view=view,
-            records=records,
-            latest_market=latest_markets.get(desk.event_id),
-            team_abbrevs=team_abbrevs,
-        )
-        picks_id = _upsert_card(
-            key=key,
-            topic=config.picks_topic,
-            text=text,
-            keyboard=keyboard,
-            config=config,
-            api=api,
-            state=state,
-            budget=budget,
-            summary=summary,
-        )
-        if picks_id is not None:
-            picks_ids[desk.event_id] = picks_id
-
     for desk in desks:
         if desk.started:
             continue
-        picks_id = picks_ids.get(desk.event_id)
-        if desk.show_picks and picks_id is None:
-            continue  # anchor card deferred or failed: retry next pass
-        # No picks card at all (zero bets left) still syncs the bet cards:
-        # a withdrawal must strike the standing 🔔 card even though the
-        # game no longer earns a picks card — a stale live-looking alert
-        # was the 49ers@Rams failure.
         for kind in ("side", "total"):
             _sync_bet_card(
                 desk=desk,
                 kind=kind,
-                picks_id=picks_id,
                 config=config,
                 api=api,
                 state=state,
@@ -2724,6 +2731,29 @@ def sync_desk(
                 team_abbrevs=team_abbrevs,
                 records=market_records,
             )
+
+    # The grading edit (operator-asked 2026-10-11): once a started game's
+    # standing rows grade — ``bet_results``, from the same hourly records
+    # load as the season records — each of its bet cards takes one terminal
+    # edit (✅/❌/♻️ per betting row, the final score in the headline),
+    # is marked ``graded`` and never touched again; the message stays in
+    # the topic as the record while the state entry prunes as usual.
+    for desk in desks:
+        if not desk.started:
+            continue
+        for kind in ("side", "total"):
+            _grade_bet_card(
+                desk=desk,
+                kind=kind,
+                config=config,
+                api=api,
+                state=state,
+                budget=budget,
+                summary=summary,
+                team_abbrevs=team_abbrevs,
+                records=market_records,
+                results=bet_results,
+            )
     return summary
 
 
@@ -2731,7 +2761,6 @@ def _sync_bet_card(
     *,
     desk: GameDesk,
     kind: str,
-    picks_id: int | None,
     config: DeskConfig,
     api: BotApi,
     state: dict[str, Any],
@@ -2752,7 +2781,9 @@ def _sync_bet_card(
     ``bet:{opinion_id}`` alerts count as announced, so a deploy over
     standing bets stays silent until a bet actually moves; a legacy arm
     that has since withdrawn promotes to a dead card unless the loud-🔕
-    era already recorded it (a ``withdrawn:`` key)."""
+    era already recorded it (a ``withdrawn:`` key). Cards post straight to
+    the topic — the picks cards they used to reply to are retired
+    (2026-10-11)."""
     key = f"betcard:{desk.event_id}:{kind}"
     entry = state["announced"].get(key)
     if not isinstance(entry, dict):
@@ -2892,7 +2923,6 @@ def _sync_bet_card(
             config.picks_topic,
             text,
             silent=not loud,
-            reply_to=picks_id,
         )
     except DeskApiError as exc:
         summary.errors.append(f"{key}: {exc}")
@@ -2906,6 +2936,82 @@ def _sync_bet_card(
     for expert_id in (*betting, *promoted_withdrawn):
         if expert_id in legacy:
             state["announced"].pop(f"bet:{legacy[expert_id][0]}:{kind}", None)
+
+
+def _grade_bet_card(
+    *,
+    desk: GameDesk,
+    kind: str,
+    config: DeskConfig,
+    api: BotApi,
+    state: dict[str, Any],
+    budget: _Budget,
+    summary: SyncSummary,
+    team_abbrevs: dict[str, str] | None,
+    records: dict[str, Any] | None,
+    results: dict[str, Any] | None,
+) -> None:
+    """One terminal, silent edit per standing bet card once its game has
+    graded: the standing rows' leg results (``bet_results``) render as
+    ✅/❌/♻️ on every betting row and the primary expert's emoji plus the
+    final score in the headline. ``graded`` on the entry makes it
+    once-only; a hand-deleted card is reposted silently as the graded
+    record. A card whose game never grades — every arm withdrew, so no
+    standing row carries a bet leg — keeps its 🔕 state untouched."""
+    key = f"betcard:{desk.event_id}:{kind}"
+    entry = state["announced"].get(key)
+    if not isinstance(entry, dict) or entry.get("graded"):
+        return
+    arms_state = {
+        expert_id: info
+        for expert_id, info in (entry.get("arms") or {}).items()
+        if isinstance(info, dict)
+    }
+    if not arms_state:
+        return  # pre-card era entry: nothing rendered, nothing to grade
+    if not any(
+        isinstance(
+            (results or {}).get(f"{desk.event_id}:{expert_id}:{kind}"), dict
+        )
+        for expert_id in ALERT_EXPERTS.get(kind, ())
+    ):
+        return  # no final yet (or nothing on this card will ever grade)
+    text = render_bet_card(
+        desk,
+        kind,
+        arms_state,
+        team_abbrevs=team_abbrevs,
+        records=records,
+        results=results,
+    )
+    new_entry = {
+        **entry,
+        "arms": arms_state,
+        "hash": content_hash(text, [], config.picks_topic),
+        "graded": True,
+    }
+    message_id = entry.get("message_id")
+    if message_id:
+        try:
+            if api.edit(config.chat_id, int(message_id), text):
+                state["announced"][key] = new_entry
+                summary.edited.append(key)
+                return
+        except DeskApiError as exc:
+            summary.errors.append(f"{key}: {exc}")
+            return
+        # the card was deleted by hand: repost silently as the record
+    if not budget.take():
+        summary.deferred.append(key)
+        return
+    try:
+        new_id = api.send(config.chat_id, config.picks_topic, text, silent=True)
+    except DeskApiError as exc:
+        summary.errors.append(f"{key}: {exc}")
+        return
+    new_entry["message_id"] = new_id
+    state["announced"][key] = new_entry
+    summary.posted.append(key)
 
 
 def post_scores_notice(

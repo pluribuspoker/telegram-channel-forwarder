@@ -86,6 +86,7 @@ from moe_desk import (
     save_state as save_desk_state,
     sync_desk,
     market_records as desk_market_records,
+    bet_results as desk_bet_results,
 )
 from moe_god import (
     aggregator_policy as moe_aggregator_policy,
@@ -1859,6 +1860,13 @@ def _load_desk_records(part: str) -> dict[str, Any]:
         registry = load_moe_registry()
         finals = current_season_finals(history, seasons[-1], annotation_rows)
         policy = moe_aggregator_policy(registry)
+        graded = moe_grade_all(
+            approved,
+            finals=finals,
+            snapshots=snapshots,
+            registry=registry,
+            policy=policy,
+        )
         return {
             "by_expert": build_moe_scoreboard(
                 approved,
@@ -1870,16 +1878,9 @@ def _load_desk_records(part: str) -> dict[str, Any]:
                 latest_per_game=True,
             )["by_expert"],
             # the 🔔 cards' per-market records (moe_desk.market_records)
-            "markets": desk_market_records(
-                approved,
-                moe_grade_all(
-                    approved,
-                    finals=finals,
-                    snapshots=snapshots,
-                    registry=registry,
-                    policy=policy,
-                ),
-            ),
+            "markets": desk_market_records(approved, graded),
+            # the 🔔 cards' grading edits (moe_desk.bet_results)
+            "bet_results": desk_bet_results(approved, graded),
         }
 
     try:
@@ -1913,6 +1914,15 @@ def load_market_records() -> dict[str, Any]:
     same hourly cached load as ``load_expert_records``; ``{}`` on any
     failure."""
     return _load_desk_records("markets")
+
+
+def load_bet_results() -> dict[str, Any]:
+    """Standing-row leg results per event × expert × market for the bet
+    cards' grading edits (``moe_desk.bet_results``), from the same hourly
+    cached load — ESPN finals via ``current_season_finals``, so a card
+    grades within roughly an hour of its game going final; ``{}`` on any
+    failure."""
+    return _load_desk_records("bet_results")
 
 
 def latest_markets_from_games(
@@ -2018,8 +2028,8 @@ def desk_sync_once(
                 now=now,
                 team_abbrevs=team_abbrevs,
                 latest_markets=latest_markets,
-                records=load_expert_records(),
                 market_records=load_market_records(),
+                bet_results=load_bet_results(),
             )
         finally:
             save_desk_state(config.state_path, state)

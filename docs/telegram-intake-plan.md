@@ -947,7 +947,12 @@ either person sees or does.
 - Topics and cards (per-game cards again since 2026-09-20, operator-asked;
   the 2026-09-08 daily-index redesign in between grouped games behind one
   shared card per Eastern date with game buttons, and its `picks-day:*`
-  cards are deleted on the first sync after migration).
+  cards are deleted on the first sync after migration). **Superseded
+  2026-10-11: the per-game picks cards were retired in turn — the Picks
+  topic is 🔔 bet cards only, and the cards grade in place after the final
+  (see the 2026-10-11 section below). The picks-card description that
+  follows is kept as the design record of the surface the DM views still
+  render.**
   🏈 Picks is the glanceable picks surface: ONE message per game, existing
   only while someone actually bets it (`show_picks` = a betting arm leg or
   a betting voice; operator-tightened later on 2026-09-20 — a game with no
@@ -1123,6 +1128,58 @@ either person sees or does.
   transport; Windows), `ReviewerRoleTests` in `scripts/test_moe_identity.py`,
   `DeskPicksViewTests` in `scripts/test_intake_bot.py`, the pending-DM gate
   in `scripts/test_god_judge_runner.py`.
+
+### Implemented — 2026-10-11: Picks topic is bet-cards-only; bet cards grade in place
+
+Operator request (Telegram, 2026-10-11): "Make it so the only messages sent
+in moe picks channel are those from the notify list and clean up old
+messages. I also want the messages graded and result emojis edited in after
+the game is complete using the existing grading infrastructure on this box."
+The notify list is `moe_desk.ALERT_EXPERTS` (the 2026-10-09 "option A" 🔔
+list: God Judge and God Rules sides, AK totals).
+
+- **Picks topic = 🔔 bet cards only.** `sync_desk` no longer posts per-game
+  picks cards and deletes every `picks:*` card it still tracks (the
+  migration, mirroring the 2026-09-20 day-card removal; a failed delete
+  keeps its entry and retries next pass). Bet cards post straight to the
+  topic (`reply_to=None` — there is no anchor card to reply to). Every
+  other bet remains visible on the offline card and in the DM views.
+  `render_picks_card`, `resolve_picks_view` and `update_desk_picks_view`
+  are deliberately kept: the callback path only edits cards the state still
+  tracks and never posts, so a stale keyboard degrades gracefully and
+  nothing can resurrect a picks card; the renderers stay unit-tested in
+  case the operator revives the surface (it has been redesigned twice).
+- **Grading edit.** `moe_desk.bet_results(opinions, graded)` reshapes
+  `moe_god.grade_all` output into `{"<event>:<expert>:<side|total>":
+  {"result": "W|L|P", "final": "20-27"}}` over each expert's standing row
+  per game (`_standing_graded`, shared with `market_records`, so a card's
+  emoji and its season record never disagree). `intake_bot._load_desk_records`
+  computes it in the same hourly cached load as the season records — one
+  `grade_all` call now feeds both — and `desk_sync_once` passes it to
+  `sync_desk`, which runs `_grade_bet_card` over started desks: once any
+  alerting expert's standing row has a result for the card's market, the
+  card takes ONE terminal silent edit — `RESULT_EMOJI` (✅/❌/♻️, the pick
+  tracker's verdict language) prefixed to each betting row, the primary
+  expert's emoji in place of 🔔 plus the final score (away-home, matching
+  the `@` matchup) in the headline — and the entry is marked `graded`
+  (never re-edited). Finals come from ESPN via `current_season_finals`
+  inside that load, so a card grades within about an hour of its game
+  going final, well inside the three-day state retention; the message then
+  stays in the topic as the record while the state entry prunes as usual.
+  A dead 🔕 card never grades (its standing rows pass, so no results
+  exist); a withdrawn arm's ✖ row stays struck next to graded rows; a
+  hand-deleted card reposts silently as the graded record.
+- **Cleanup.** The sync migration deletes the tracked picks cards;
+  `scripts/desk_sweep_picks_topic.py` (one-off, rerunnable) enumerates the
+  Picks topic over the operator's Telethon session, keeps the live
+  bet-card message ids from `moe_desk_state.json` plus non-bot messages,
+  and deletes the rest of the intake bot's messages via the Bot API
+  (dry-run by default, `--delete` to act) — the pre-change clutter: old
+  picks cards the state no longer tracked, loud-era alert replies, and
+  pruned bet cards from before grading existed.
+- `sync_desk` lost its picks-card `records` parameter;
+  `load_expert_records` stays for the DM/callback views. Tests:
+  `GradingTests` + the reworked `SyncTests` in `scripts/test_moe_desk.py`.
 
 ### Implemented locally — 2026-09-06: God Expert aggregator (rules + judge)
 
