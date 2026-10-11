@@ -1689,8 +1689,10 @@ class SyncTests(unittest.TestCase):
 class GradingTests(unittest.TestCase):
     """The grading edit (operator-asked 2026-10-11): once a started game's
     standing rows grade, its bet cards take one terminal silent edit —
-    ✅/❌/♻️ per betting row, the primary emoji + final score in the
-    headline — and the message stays as the record."""
+    the primary emoji + final score in the headline, and a row's own
+    ✅/❌/♻️ only when its verdict diverges from the headline's
+    (duplicate emojis, operator 2026-10-11) — and the message stays as
+    the record."""
 
     def setUp(self) -> None:
         self.api = FakeApi()
@@ -1734,8 +1736,8 @@ class GradingTests(unittest.TestCase):
         self.assertEqual(
             self.api.edits[-1]["text"],
             "✅ <b>Seahawks -3.5</b> · Patriots @ Seahawks · 20-24\n"
-            "✅ <b>God</b> 0.6u (+100)\n"
-            "✅ <b>Rules</b> 0.6u (+100)",
+            "<b>God</b> 0.6u (+100)\n"
+            "<b>Rules</b> 0.6u (+100)",
         )
         self.assertTrue(self.state["announced"]["betcard:401:side"]["graded"])
         # once only: the next pass changes nothing
@@ -1744,7 +1746,10 @@ class GradingTests(unittest.TestCase):
         self.assertEqual(summary.edited, [])
         self.assertEqual(len(self.api.edits), edits)
 
-    def test_loss_and_push_emojis_per_row(self) -> None:
+    def test_only_a_diverging_row_keeps_its_own_emoji(self) -> None:
+        # The headline's emoji covers every row that matches it; a row on
+        # a different verdict (arms can grade apart on different lines)
+        # keeps its own so the split stays visible.
         rows = self.bet_card()
         results = {
             "401:god_judge:side": {"result": "P", "final": "24-20"},
@@ -1756,7 +1761,7 @@ class GradingTests(unittest.TestCase):
         self.assertEqual(
             self.api.edits[-1]["text"],
             "♻️ <b>Seahawks -3.5</b> · Patriots @ Seahawks · 24-20\n"
-            "♻️ <b>God</b> 0.6u (+100)\n"
+            "<b>God</b> 0.6u (+100)\n"
             "❌ <b>Rules</b> 0.6u (+100)",
         )
 
@@ -1772,7 +1777,7 @@ class GradingTests(unittest.TestCase):
         self.assertEqual(
             self.api.edits[-1]["text"],
             "✅ <b>Seahawks -3.5</b> · Patriots @ Seahawks · 20-24\n"
-            "✅ <b>God</b> 0.6u (+100)\n"
+            "<b>God</b> 0.6u (+100)\n"
             "<b>Rules</b> no bet · line moved against",
         )
 
@@ -1824,7 +1829,7 @@ class GradingTests(unittest.TestCase):
         self.assertEqual(
             self.api.edits[-1]["text"],
             "✅ <b>Seahawks -3.5</b> · Patriots @ Seahawks · 20-24\n"
-            "✅ <b>God</b> 0.6u (+100)\n"
+            "<b>God</b> 0.6u (+100)\n"
             "<b>Rules</b> ✖ <s>0.6u</s> · line moved against",
         )
         self.assertTrue(self.state["announced"]["betcard:401:side"]["graded"])

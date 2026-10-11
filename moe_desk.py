@@ -1941,9 +1941,12 @@ def render_bet_card(
     through, and once no arm bets the headline flips 🔕 with the selection
     struck — the card IS the withdrawal record; nothing pings (operator-
     picked, 2026-09-13). ``results`` (``bet_results``) is the grading edit
-    (operator-asked 2026-10-11): a betting row with a standing-row result
-    gains its ✅/❌/♻️, and the headline takes the primary expert's emoji
-    in place of 🔔 plus the final score."""
+    (operator-asked 2026-10-11): the headline takes the primary expert's
+    emoji in place of 🔔 plus the final score, and that emoji speaks for
+    every betting row — a row carries its own ✅/❌/♻️ only when its
+    verdict diverges from the headline's (arms on different lines can
+    split W/P/L; operator 2026-10-11: one verdict repeated per row is
+    duplicative)."""
     legs = _card_legs(desk, kind)
     order = ALERT_EXPERTS.get(kind, ())
 
@@ -1980,15 +1983,16 @@ def render_bet_card(
         else:
             line_text = f"{_line_text(first_line, kind)}→{_line_text(line, kind)}"
         headline = " ".join(part for part in (selection_text, line_text) if part)
-        emoji = _emoji_for(primary)
+        head_emoji = _emoji_for(primary)
         head = (
-            f"{emoji or '🔔'} <b>{_esc(headline)}</b>"
+            f"{head_emoji or '🔔'} <b>{_esc(headline)}</b>"
             f" · {_teams_short(desk, team_abbrevs)}"
         )
         final = str((_result_for(primary) or {}).get("final") or "")
-        if emoji and final:
+        if head_emoji and final:
             head += f" · {_esc(final)}"
     else:
+        head_emoji = ""
         # the bet is dead: strike the last announced selection
         selection, line = "", None
         label = next(
@@ -2064,7 +2068,8 @@ def render_bet_card(
         if record_text:
             row_text += f" · {_esc(record_text)}"
         emoji = _emoji_for(expert_id)
-        if emoji:
+        if emoji and emoji != head_emoji:
+            # the headline's emoji speaks for every matching row
             row_text = f"{emoji} {row_text}"
         lines.append(row_text)
     return "\n".join(lines)
@@ -2741,7 +2746,8 @@ def sync_desk(
     # The grading edit (operator-asked 2026-10-11): once a started game's
     # standing rows grade — ``bet_results``, from the same hourly records
     # load as the season records — each of its bet cards takes one terminal
-    # edit (✅/❌/♻️ per betting row, the final score in the headline),
+    # edit (primary emoji + final score in the headline, a row's own
+    # ✅/❌/♻️ only where it diverges),
     # is marked ``graded`` and never touched again; the message stays in
     # the topic as the record while the state entry prunes as usual.
     for desk in desks:
@@ -2959,8 +2965,9 @@ def _grade_bet_card(
 ) -> None:
     """One terminal, silent edit per standing bet card once its game has
     graded: the standing rows' leg results (``bet_results``) render as
-    ✅/❌/♻️ on every betting row and the primary expert's emoji plus the
-    final score in the headline. ``graded`` on the entry makes it
+    the primary expert's emoji plus the final score in the headline, and
+    ✅/❌/♻️ on only the betting rows whose verdict diverges from it
+    (duplicate emojis, operator 2026-10-11). ``graded`` on the entry makes it
     once-only; a hand-deleted card is reposted silently as the graded
     record. A card whose game never grades — every arm withdrew, so no
     standing row carries a bet leg — keeps its 🔕 state untouched."""
