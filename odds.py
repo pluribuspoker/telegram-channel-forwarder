@@ -2116,8 +2116,16 @@ _BOVADA_PROP_KEY = "bovada_prop"   # market key the shaper and _lookup_prop agre
 # team-scoped "First Touchdown Scorer - Indianapolis Colts" is a different bet
 # (+500 vs +900) and must never match. Observed for NFL only.
 _FIRST_TD_RE = re.compile(r"\b(?:first|1st)[\s_-]*(?:td|touchdown)\b|\bfttd\b", re.I)
+# Anytime TD ("ATD", "anytime touchdown scorer"): Bovada's exact "Anytime
+# Touchdown Scorer" market (2026-10-11 DET@ARI capture). Its 1H/Q1 siblings
+# share the name and differ only by period — _bovada_scorer_markets keeps the
+# full-game one; "Either Player - …" and "Defensive Player Any Time …" are
+# other bets and never match the exact name. Multi-TD bets ("2+ TDs", o1.5)
+# are not anytime: a line above 0.5 refuses.
+_ANYTIME_TD_RE = re.compile(r"\bany[\s_-]*time[\s_-]*(?:td|touchdown)s?\b|\batd\b|\batts\b", re.I)
 _BOVADA_SCORER_MARKETS: dict[str, dict[str, str]] = {
-    "NFL": {"FIRST_TD": "First Touchdown Scorer"},
+    "NFL": {"FIRST_TD": "First Touchdown Scorer",
+            "ANYTIME_TD": "Anytime Touchdown Scorer"},
 }
 
 
@@ -2137,6 +2145,8 @@ def _bovada_scorer_market(sport: str, pick: dict) -> str | None:
     blob = f"{pick.get('prop_stat') or ''} {pick.get('description') or ''}"
     if _FIRST_TD_RE.search(blob):
         return markets.get("FIRST_TD")
+    if _ANYTIME_TD_RE.search(blob) and float(pick.get("line") or 0.5) == 0.5:
+        return markets.get("ANYTIME_TD")
     return None
 
 

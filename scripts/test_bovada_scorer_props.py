@@ -51,8 +51,9 @@ def test_recognizer():
         check(f"recognizes {stat!r}",
               _bovada_scorer_market("NFL", {**DOWNS, "prop_stat": stat, "description": "x"}),
               "First Touchdown Scorer")
-    check("anytime TD is not first TD",
-          _bovada_scorer_market("NFL", {**DOWNS, "prop_stat": "TDS", "description": "Josh Downs anytime TD"}), None)
+    check("anytime TD is not first TD (its own market since 2026-10-11)",
+          _bovada_scorer_market("NFL", {**DOWNS, "prop_stat": "TDS", "description": "Josh Downs anytime TD"}),
+          "Anytime Touchdown Scorer")
     check("no player → None (team to score first is another market)",
           _bovada_scorer_market("NFL", {**DOWNS, "player": None}), None)
     check("1H period → None", _bovada_scorer_market("NFL", {**DOWNS, "period": "1h"}), None)
