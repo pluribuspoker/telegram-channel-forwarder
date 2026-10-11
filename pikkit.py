@@ -191,6 +191,9 @@ async def fetch_events_for_date(dt: str) -> dict[str, list[dict]]:
                 break
 
             data = resp.json()
+            if not isinstance(data, dict):
+                log.warning("[pikkit] events payload is not an object for %s", dt)
+                break
             leagues = data.get("leagues", [])
             if not leagues or not leagues[0]:
                 break  # no more leagues
@@ -225,21 +228,25 @@ async def fetch_events_for_date(dt: str) -> dict[str, list[dict]]:
 
 
 def _parse_event_listing(val: dict) -> dict:
-    """Extract key fields from an events-list item."""
-    ei = val.get("event_info", {})
-    ctx = val.get("event_context", {})
-    home = ei.get("home", {})
-    away = ei.get("away", {})
+    """Extract key fields from an events-list item.
+
+    Pikkit sends present-but-null objects ("event_context": null), so every
+    nested lookup must use `or {}` — a .get() default only covers a missing key.
+    """
+    ei = val.get("event_info") or {}
+    ctx = val.get("event_context") or {}
+    home = ei.get("home") or {}
+    away = ei.get("away") or {}
     return {
         "event_id":   val["_id"],
         "home_full":  home.get("full", ""),
         "away_full":  away.get("full", ""),
-        "home_abbr":  ctx.get("home", {}).get("abbr", ""),
-        "away_abbr":  ctx.get("away", {}).get("abbr", ""),
+        "home_abbr":  (ctx.get("home") or {}).get("abbr", ""),
+        "away_abbr":  (ctx.get("away") or {}).get("abbr", ""),
         "full_name":  ei.get("full_name", ""),
         "start_time": val.get("start_time", ""),
         "status":     val.get("status", ""),
-        "league":     ei.get("league", {}).get("short", ""),
+        "league":     (ei.get("league") or {}).get("short", ""),
     }
 
 
@@ -294,14 +301,16 @@ async def fetch_splits(event_id: str) -> dict | None:
             log.warning("[pikkit] splits payload is not an object for %s", event_id)
             return None
 
-    community = data.get("community", {})
-    breakdowns = community.get("breakdowns", {})
+    # A game with no picks yet answers 200 with "community": null — the key is
+    # present, so .get()'s default never applies (2026-10-11 snapshot crash).
+    community = data.get("community") or {}
+    breakdowns = community.get("breakdowns") or {}
     if not breakdowns:
         return None
 
     splits: dict[str, Any] = {
-        "num_picks": community.get("num_picks", 0),
-        "total_wagered": community.get("total_wagered", 0),
+        "num_picks": community.get("num_picks") or 0,
+        "total_wagered": community.get("total_wagered") or 0,
     }
     for market in ("moneyline", "spread", "total"):
         mkt = breakdowns.get(market, {})

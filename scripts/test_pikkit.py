@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -86,6 +87,23 @@ class FetchSplitsTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertIsNone(await pikkit.fetch_splits("event-2"))
 
+    async def test_community_null_is_an_unavailable_split(self):
+        # Live capture 2026-10-11 (PIT @ TB, newly inside the 7d window):
+        # 200 with "community": null — the key is PRESENT, so a .get default
+        # never applies; this crashed the snapshot run with AttributeError.
+        payload = json.loads(
+            (ROOT / "scripts" / "fixtures"
+             / "pikkit_splits_community_null_20261011.json").read_text()
+        )
+        self.assertIn("community", payload)
+        self.assertIsNone(payload["community"])
+        client = _Client([_Response(200, payload)])
+        with (
+            patch.dict(pikkit.os.environ, {"PIKKIT_TOKEN": "token"}),
+            patch.object(pikkit.httpx, "AsyncClient", return_value=client),
+        ):
+            self.assertIsNone(await pikkit.fetch_splits("event-null-community"))
+
     async def test_forbidden_event_does_not_report_expired_token(self):
         client = _Client([_Response(403, {})])
         alert = Mock()
@@ -102,6 +120,25 @@ class FetchEventsTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         pikkit._events_cache.clear()
         pikkit._session_state = None
+
+    async def test_null_events_payload_is_empty(self):
+        client = _Client([_Response(200, None)])
+        with (
+            patch.dict(pikkit.os.environ, {"PIKKIT_TOKEN": "token"}),
+            patch.object(pikkit.httpx, "AsyncClient", return_value=client),
+        ):
+            self.assertEqual(
+                await pikkit.fetch_events_for_date("2026-12-03"), {}
+            )
+
+    def test_event_listing_tolerates_null_objects(self):
+        parsed = pikkit._parse_event_listing(
+            {"_id": "x1", "event_info": None, "event_context": None}
+        )
+        self.assertEqual(parsed["event_id"], "x1")
+        self.assertEqual(parsed["home_full"], "")
+        self.assertEqual(parsed["home_abbr"], "")
+        self.assertEqual(parsed["league"], "")
 
     async def test_forbidden_date_does_not_report_expired_token(self):
         client = _Client([_Response(403, {})])
