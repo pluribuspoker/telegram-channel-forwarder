@@ -119,7 +119,8 @@ check("daily cap window is 24h", hr.daily_spawns(st, NOW + timedelta(hours=25)) 
 e = st["judge-uuid"]
 hr.settle(e, "fixed_needs_verify")
 check("1st non-final attempt stays armed", not e.get("parked"))
-hr.record_spawn(st, ["judge-uuid"], NOW)
+for _ in range(hr.ATTEMPT_CAP - 1):
+    hr.record_spawn(st, ["judge-uuid"], NOW)
 hr.settle(e, "transient_no_change")
 check("attempt cap parks", e.get("parked") and "attempt cap" in e["parked_reason"])
 e2: dict = {"attempts": 1}
@@ -232,32 +233,48 @@ check("raw alert names check + reason + last outcome",
 check("raw alert carries the failure body tail",
       "boom tail" in hr.raw_alert_text({"check": "X", "key": "u", "body": "a\nboom tail"},
                                        "cooldown (x)", {}))
-sh = hr.self_heal_text({"check": "MOE grade",
-                        "first_seen": iso(NOW - timedelta(minutes=7))}, NOW)
-check("self-heal note names check + minutes", "MOE grade" in sh and "~7 min" in sh)
-check("self-heal notes a failed card DM",
-      "card DM failed" in hr.self_heal_text(
-          {"check": "x", "first_seen": iso(NOW), "attempts": 1}, NOW))
-
+# Blips (operator 2026-10-11): a silent self-heal is counted, never DMed.
 stB: dict = {}
 hr.observe(stB, af_targets, NOW)
 check("observe stamps agent_first", stB["judge-uuid"]["agent_first"] is True)
-notify_calls: list = []
-notify_ok = {"v": False}
-def _notify(key, entry):
-    notify_calls.append(key)
-    return notify_ok["v"]
-hr.observe(stB, [], NOW + timedelta(minutes=5), notify=_notify)
-check("failed self-heal DM keeps the episode",
-      notify_calls == ["judge-uuid"] and "first_seen" in stB.get("judge-uuid", {}))
-notify_ok["v"] = True
-hr.observe(stB, [], NOW + timedelta(minutes=10), notify=_notify)
-check("successful self-heal DM ends the episode",
-      notify_calls == ["judge-uuid", "judge-uuid"] and "judge-uuid" not in stB)
+hr.observe(stB, [], NOW + timedelta(minutes=5))
+check("silent self-heal records a blip and drops the episode",
+      "judge-uuid" not in stB
+      and len(stB["_blips"]["judge-uuid"]["times"]) == 1, f"{stB}")
 stC = {"k1": {"agent_first": True, "first_seen": iso(NOW), "notified": True, "check": "x"}}
-quiet: list = []
-hr.observe(stC, [], NOW, notify=lambda k, e: quiet.append(k) or True)
-check("notified episode recovers silently", quiet == [] and "k1" not in stC)
+hr.observe(stC, [], NOW)
+check("a notified episode leaves no blip",
+      "k1" not in stC and "k1" not in stC.get("_blips", {}))
+
+stF = {"_blips": {"judge-uuid": {"check": "God judge", "times": [
+    iso(NOW - timedelta(minutes=50)), iso(NOW - timedelta(minutes=5))]}}}
+check("2 blips in the window = flapping",
+      list(hr.flapping_keys(stF, NOW)) == ["judge-uuid"])
+check("blips age out of the window",
+      hr.flapping_keys(stF, NOW + timedelta(hours=4)) == {})
+
+fl = hr.flapping_keys(stF, NOW)
+down_t = hr.add_flap_targets([dict(af_judge)], fl, af_checks, env=ENV,
+                             covered=COVERED, details={})
+check("flapping DOWN target is marked flap", down_t[0].get("flap") is True)
+check("flap target skips the debounce",
+      hr.gate({}, {**down_t[0], "since": iso(NOW - timedelta(minutes=2))}, NOW)[0] == "run")
+check("non-flap target still debounces",
+      hr.gate({}, {**af_judge, "since": iso(NOW - timedelta(minutes=2))}, NOW)[0] == "skip")
+up_checks = [{"name": "God judge", "uuid": "judge-uuid", "status": "up",
+              "tags": "agent-first"}]
+up_t = hr.add_flap_targets([], fl, up_checks, env=ENV, covered=COVERED,
+                           details={"judge-uuid": {"body": "boom", "pings": []}})
+check("flapping UP check synthesizes an agent target",
+      len(up_t) == 1 and up_t[0]["flap"] is True and up_t[0]["check"] == "God judge"
+      and up_t[0]["unit"] == "god-judge.timer" and up_t[0]["body"] == "boom",
+      f"{up_t}")
+pfl = hr.build_prompt(up_t, now_et="t", head="h", journals={})
+check("prompt carries the flapping context",
+      "FLAPPING: 2 short" in pfl and "root-cause the INSTABILITY" in pfl)
+stS = {"_blips": {"judge-uuid": dict(stF["_blips"]["judge-uuid"])}}
+hr.record_spawn(stS, ["judge-uuid"], NOW)
+check("spawning clears the key's blips", "judge-uuid" not in stS["_blips"])
 
 pp = hr.build_prompt([af_judge], now_et="t", head="h", journals={})
 check("prompt flags agent-first (operator not paged)", "NOT been paged" in pp)

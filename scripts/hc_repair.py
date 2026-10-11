@@ -22,10 +22,14 @@ dedicated repair rung was consolidated into this one (operator 2026-10-11).
 Agent-first everywhere (operator decisions 2026-10-11): EVERY check is tagged
 `agent-first` with NO alert channels on healthchecks.io — this runner is the
 only notifier, guaranteeing ONE DM per failure episode: the agent's card when
-one runs, a raw 🚨 alert on any path where no agent will look (cooldown,
-parked, daily cap, kill switch), or a ✅ self-heal note when the check
-recovers below the agent threshold. `notified` on the state entry tracks the
-episode; recovery clears it (a failed DM keeps the entry for the next pass).
+one runs, or a raw 🚨 alert on any path where no agent will look (cooldown,
+parked, daily cap, kill switch). A short SELF-HEALED episode is silent by
+design (operator 2026-10-11): it is counted as a blip, and FLAP_BLIPS+ blips
+inside FLAP_WINDOW_H make the check a flap target — debounce bypassed, and
+synthesized even while the check is UP — so the agent fixes the instability
+itself and its card is the notification. `notified` on the state entry
+tracks the episode; recovery clears it (a failed card send leaves it for
+the raw-alert path).
 The LAST RUNG is the "Alert pipeline" check — the only one with direct
 channels (HealthchecksBot + Gmail): every pass pings it success, or /fail
 once any episode is unnotified past HC_ESCALATION_OVERDUE_MINUTES (90) — so
@@ -36,11 +40,13 @@ Guards (state logs/hc_repair_state.json, per target):
 - kill switch HC_REPAIR_DISABLED=1 → no agents; still relays raw alerts for
   agent-first checks (they have no other notifier)
 - flock logs/.hc_repair.lock — one agent at a time (a pass during a run skips)
-- cooldown HC_REPAIR_COOLDOWN_HOURS (6) per target between spawns
-- HC_REPAIR_ATTEMPT_CAP (2) agent runs per outage streak → parked with ONE ⚠️
+- cooldown HC_REPAIR_COOLDOWN_HOURS (2) per target between spawns
+- HC_REPAIR_ATTEMPT_CAP (4) agent runs per outage streak → parked with ONE ⚠️
   DM; the target coming back up resets the streak (cooldown kept); --rearm
 - needs_human parks immediately
-- HC_REPAIR_DAILY_CAP (6) agent spawns per rolling 24h across all targets
+- HC_REPAIR_DAILY_CAP (15) agent spawns per rolling 24h across all targets
+(loosened 2026-10-11 — subscription billing is generous; the operator wants
+things fixed before they look)
 
 The agent never restarts telegram-forwarder or claude-channels, never runs a
 job whose run posts/spends/spawns agents just to turn a check green, and
@@ -81,11 +87,17 @@ API = "https://healthchecks.io/api/v3"
 
 REPAIR_MODEL = os.environ.get("HC_REPAIR_MODEL") or "claude-opus-5-5"
 REPAIR_EFFORT = os.environ.get("HC_REPAIR_EFFORT") or "high"
-AGENT_TIMEOUT = int(os.environ.get("HC_REPAIR_AGENT_TIMEOUT") or 1500)
-COOLDOWN_HOURS = float(os.environ.get("HC_REPAIR_COOLDOWN_HOURS") or 6)
-ATTEMPT_CAP = int(os.environ.get("HC_REPAIR_ATTEMPT_CAP") or 2)
-DAILY_CAP = int(os.environ.get("HC_REPAIR_DAILY_CAP") or 6)
+AGENT_TIMEOUT = int(os.environ.get("HC_REPAIR_AGENT_TIMEOUT") or 2400)
+COOLDOWN_HOURS = float(os.environ.get("HC_REPAIR_COOLDOWN_HOURS") or 2)
+ATTEMPT_CAP = int(os.environ.get("HC_REPAIR_ATTEMPT_CAP") or 4)
+DAILY_CAP = int(os.environ.get("HC_REPAIR_DAILY_CAP") or 15)
 MIN_DOWN = timedelta(minutes=float(os.environ.get("HC_REPAIR_MIN_DOWN_MINUTES") or 10))
+# Flapping (operator 2026-10-11): a short self-healed episode is counted
+# silently, never DMed; FLAP_BLIPS+ of them inside FLAP_WINDOW_H make the
+# check an agent target even while UP — the agent root-causes the
+# instability and its card is the operator's one notification.
+FLAP_BLIPS = int(os.environ.get("HC_REPAIR_FLAP_BLIPS") or 2)
+FLAP_WINDOW_H = float(os.environ.get("HC_REPAIR_FLAP_WINDOW_HOURS") or 3)
 EXCLUDE = {n.strip() for n in (os.environ.get("HC_REPAIR_EXCLUDE")
                                or "Alert pipeline").split(",") if n.strip()}
 # The one check with direct channels: hc-repair pings it every pass — success
@@ -253,12 +265,12 @@ def build_targets(checks: list[dict], *, env: dict[str, str],
     return targets
 
 
-def observe(state: dict, targets: list[dict], now: datetime, notify=None) -> None:
+def observe(state: dict, targets: list[dict], now: datetime) -> None:
     """Stamp first_seen on new targets; a target no longer down ends its
     streak (attempts/park reset, cooldown kept); entries with nothing left
-    to remember are dropped. An agent-first entry whose episode produced NO
-    DM is handed to `notify(key, entry)` (the self-heal note) before cleanup —
-    a False return keeps the episode for a retry on the next pass."""
+    to remember are dropped. An agent-first episode that produced NO DM is
+    recorded as a silent BLIP (operator 2026-10-11: self-healing never
+    notifies) — repeated blips make the check a flap target."""
     live = {t["key"] for t in targets}
     for t in targets:
         entry = state.setdefault(t["key"], {})
@@ -267,20 +279,79 @@ def observe(state: dict, targets: list[dict], now: datetime, notify=None) -> Non
         if t.get("unit"):
             entry["unit"] = t["unit"]
         entry.setdefault("first_seen", now.isoformat(timespec="seconds"))
+    blips = state.setdefault("_blips", {})
     for key in list(state):
         if key.startswith("_") or key in live:
             continue
         entry = state[key]
-        if (notify is not None and entry.get("agent_first")
-                and entry.get("first_seen") and not entry.get("notified")):
-            if not notify(key, entry):
-                continue
+        if (entry.get("agent_first") and entry.get("first_seen")
+                and not entry.get("notified")):
+            rec = blips.setdefault(key, {})
+            rec["check"] = entry.get("check", "")
+            if entry.get("unit"):
+                rec["unit"] = entry["unit"]
+            rec["times"] = _recent(rec.get("times"), now) + [
+                now.isoformat(timespec="seconds")]
         for f in ("first_seen", "attempts", "parked", "parked_reason",
                   "capped_dm_sent", "notified"):
             entry.pop(f, None)
         last = _ts(entry.get("last_spawn_at"))
         if not last or now - last > timedelta(hours=COOLDOWN_HOURS):
             del state[key]
+    for key in list(blips):
+        if not _recent(blips[key].get("times"), now):
+            del blips[key]
+
+
+def _recent(times, now: datetime) -> list[str]:
+    out = []
+    for b in times if isinstance(times, list) else []:
+        t = _ts(b)
+        if t and now - t < timedelta(hours=FLAP_WINDOW_H):
+            out.append(b)
+    return out
+
+
+def flapping_keys(state: dict, now: datetime) -> dict[str, dict]:
+    """Blip records at or over the flap threshold: these checks keep going
+    down and self-healing — an agent must root-cause the instability."""
+    return {key: rec for key, rec in (state.get("_blips") or {}).items()
+            if len(_recent(rec.get("times"), now)) >= FLAP_BLIPS}
+
+
+def add_flap_targets(targets: list[dict], flaps: dict[str, dict],
+                     checks: list[dict], *, env: dict[str, str],
+                     covered: dict[str, str], details: dict[str, dict]) -> list[dict]:
+    """Mark flapping DOWN targets (debounce bypass) and synthesize a target
+    for each flapping check that is currently UP — the instability is the
+    incident, and the agent investigates it while the check is quiet."""
+    if not flaps:
+        return targets
+    out, seen = [], set()
+    for t in targets:
+        if t["key"] in flaps:
+            t = {**t, "flap": True, "blips": flaps[t["key"]].get("times", [])}
+        out.append(t)
+        seen.add(t["key"])
+    unit_for_key = {k: u for u, k in covered.items()}
+    by_uuid = {c.get("uuid"): c for c in checks}
+    for key, rec in flaps.items():
+        if key in seen:
+            continue
+        c = by_uuid.get(key.split(":")[0])
+        if not c or c.get("name") in EXCLUDE:
+            continue
+        uuid = c.get("uuid") or ""
+        d = details.get(uuid, {})
+        env_key = env_key_for(c, env)
+        out.append({"check": c.get("name", ""), "uuid": uuid, "env_key": env_key,
+                    "desc": c.get("desc", ""), "since": None,
+                    "body": d.get("body", ""), "pings": d.get("pings", []),
+                    "agent_first": agent_first(c), "key": key,
+                    "unit": rec.get("unit") or unit_for_key.get(env_key, ""),
+                    "hint": KEY_HINTS.get(env_key, ""),
+                    "flap": True, "blips": rec.get("times", [])})
+    return out
 
 
 def gate(entry: dict, target: dict, now: datetime, *, force: bool = False) -> tuple[str, str]:
@@ -296,7 +367,7 @@ def gate(entry: dict, target: dict, now: datetime, *, force: bool = False) -> tu
             start = first or flip
         else:
             start = min([s for s in (first, flip) if s], default=None)
-        if start and now - start < MIN_DOWN:
+        if start and now - start < MIN_DOWN and not target.get("flap"):
             return "skip", f"debounce (down {now - start} < {MIN_DOWN})"
         last = _ts(entry.get("last_spawn_at"))
         if last and now - last < timedelta(hours=COOLDOWN_HOURS):
@@ -318,6 +389,7 @@ def record_spawn(state: dict, keys: list[str], now: datetime) -> None:
         entry = state.setdefault(key, {})
         entry["last_spawn_at"] = stamp
         entry["attempts"] = int(entry.get("attempts") or 0) + 1
+        state.get("_blips", {}).pop(key, None)
 
 
 def settle(entry: dict, outcome: str) -> None:
@@ -354,15 +426,6 @@ def raw_alert_text(target: dict, reason: str, entry: dict) -> str:
     if body:
         bits.append("Last failure:\n" + body[-400:])
     return "\n".join(bits)
-
-
-def self_heal_text(entry: dict, now: datetime) -> str:
-    first = _ts(entry.get("first_seen"))
-    mins = int((now - first).total_seconds() // 60) if first else 0
-    tail = (" (an agent ran but its card DM failed)"
-            if int(entry.get("attempts") or 0) else "")
-    return (f"✅ {entry.get('check', '?')} went DOWN and self-recovered after "
-            f"~{mins} min — no agent needed{tail}.")
 
 
 def overdue_unnotified(state: dict, now: datetime,
@@ -420,9 +483,9 @@ def build_prompt(targets: list[dict], *, now_et: str, head: str,
                  journals: dict[str, str]) -> str:
     lines = [
         f"/investigate HEALTH-CHECK AUTO-REPAIR {now_et}: healthchecks.io reports "
-        f"{len(targets)} target(s) DOWN for 10+ minutes. Find the root cause of "
-        "each and fix it; report precisely if a fix needs a human. Outages "
-        "cluster — look for one shared cause first.",
+        f"{len(targets)} target(s) needing repair (DOWN 10+ minutes, or flapping). "
+        "Find the root cause of each and fix it; report precisely if a fix needs "
+        "a human. Outages cluster — look for one shared cause first.",
         "",
         "## Down targets",
     ]
@@ -437,6 +500,15 @@ def build_prompt(targets: list[dict], *, now_et: str, head: str,
                      if t.get("agent_first") else
                      "- notification: the operator was already paged directly "
                      "by healthchecks.io")
+        if t.get("flap"):
+            stamps = ", ".join(str(b)[11:16] for b in (t.get("blips") or [])[-6:])
+            lines.append(f"- FLAPPING: {len(t.get('blips') or [])} short "
+                         f"self-healed outages in the last {FLAP_WINDOW_H:g}h "
+                         f"(UTC {stamps}). The check may be UP right now — "
+                         "root-cause the INSTABILITY (shared upstream, timeout, "
+                         "race, resource pressure), never report healthy just "
+                         "because the current run passes; a green pass between "
+                         "blips is the symptom, not a fix")
         if t.get("unit"):
             lines.append(f"- unit: {t['unit']}")
         if t.get("hint"):
@@ -492,7 +564,7 @@ def build_prompt(targets: list[dict], *, now_et: str, head: str,
         "-A`; the tree holds unrelated WIP), message prefixed `hc-repair:`. "
         "Unit/hook changes: edit deploy/ first, then install (CLAUDE.md Infra "
         "sync). Run the pinned tests you touched. Free sources only.",
-        "- Budget ~20 minutes; the runner kills you at 25. Do not message the "
+        "- Budget ~30 minutes; the runner kills you at 40. Do not message the "
         "operator; the runner sends the card. Add an /investigate lesson ONLY "
         "for a novel debugging technique.",
         "",
@@ -668,16 +740,19 @@ def main() -> int:
     if checks is None:
         print("skip: healthchecks API unreachable")
         return 0
+    flaps = flapping_keys(state, now)
+    flap_uuids = {k.split(":")[0] for k in flaps}
     details = {c["uuid"]: fetch_details(c) for c in checks
-               if c.get("status") == "down" and c.get("name") not in EXCLUDE}
+               if c.get("name") not in EXCLUDE
+               and (c.get("status") == "down" or c["uuid"] in flap_uuids)}
+    covered = heartbeat_covered()
     targets = build_targets(checks, env=dict(os.environ), details=details,
-                            covered=heartbeat_covered())
-
-    def _self_heal_dm(key: str, entry: dict) -> bool:
-        return ua.send_watchdog_dm(self_heal_text(entry, now))
+                            covered=covered)
+    targets = add_flap_targets(targets, flaps, checks, env=dict(os.environ),
+                               covered=covered, details=details)
 
     if not args.dry_run:
-        observe(state, targets, now, notify=_self_heal_dm)
+        observe(state, targets, now)
 
     if disabled:
         # Kill switch stops agents, never notifications: agent-first checks
