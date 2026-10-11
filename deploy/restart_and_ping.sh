@@ -3,7 +3,14 @@
 # session itself when the operator asks for a restart/reset in the Claude chat:
 #
 #   sudo -n systemd-run --collect --unit="claude-restart-$(date +%s)" \
-#     /home/forwarder/app/deploy/restart_and_ping.sh <chat_id> [message_id]
+#     /home/forwarder/app/deploy/restart_and_ping.sh <chat_id> [message_id] [model] [effort]
+#
+# A commanded restart lands on the machine default model/effort (operator,
+# 2026-10-11; twin constants in deploy/claude_models.py + run_claude_channels.sh)
+# unless args 3+ name an override — order-free, alias or full claude-… id plus
+# low..max. With an override that's refused, the restart ABORTS (a typo'd
+# --model would boot-loop the service); with no args, a reset failure merely
+# logs and the restart proceeds on the existing state.
 #
 # systemd-run puts us in our own scope, so we survive the KillMode=control-group
 # stop of claude-channels.service that kills the session and everything it
@@ -23,6 +30,7 @@ CHECK=0
 [ "${1:-}" = "--check" ] && { CHECK=1; shift; }
 CHAT_ID="${1:-}"
 MSG_ID="${2:-}"
+RESET_ARGS=("${@:3}")
 
 APP_ENV="/home/forwarder/app/.env"
 PLUGIN_ENV="/home/forwarder/.claude/channels/telegram/.env"
@@ -72,6 +80,20 @@ if [ "$CHECK" = "1" ]; then
   fi
   if stack_up; then echo "stack: up"; else echo "stack: DOWN"; fail=1; fi
   exit "$fail"
+fi
+
+# Point the next start at the default (or the stated override) BEFORE the
+# restart. Run as forwarder so the state file keeps its owner; HOME pinned
+# because a systemd-run scope has root's (or none).
+RESET_OUT="$(runuser -u forwarder -- env HOME=/home/forwarder \
+  python3 /home/forwarder/app/deploy/claude_models.py reset-state "${RESET_ARGS[@]}" 2>&1)"
+if [ $? -ne 0 ]; then
+  if [ "${#RESET_ARGS[@]}" -gt 0 ]; then
+    react "👎"
+    ping "⚠️ Restart aborted — ${RESET_OUT:-reset-state failed}"
+    exit 1
+  fi
+  echo "reset-state failed (${RESET_OUT}); restarting on the existing state" >&2
 fi
 
 # Let the session finish its turn — its "restarting" reply is sent before we

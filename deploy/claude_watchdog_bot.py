@@ -7,7 +7,8 @@ It uses its own bot token and provides a "break glass" escape hatch when
 the main Claude bot is stuck (context full, hanging, plan mode, etc.).
 
 Commands (only responds to ALLOWED_USER_ID):
-  /restart  — restart the claude-channels service
+  /restart  — restart claude-channels back onto the default model/effort
+              (claude_models.DEFAULT_*) unless args name one: /restart fable max
   /tmux     — capture last 50 lines of Claude's tmux pane (see what it's doing)
   /status   — show service status + last activity
   /logs     — show last 20 lines of claude-channels journal
@@ -46,8 +47,9 @@ from pathlib import Path
 from claude_auth_watchdog import AUTH_ENV, probe as auth_probe
 import pikkit_relay as relay
 from claude_models import (
-    CLAUDE_SETTINGS, EFFORT_LEVELS, HOME_DIR, MODEL_CHOICES, PANE,
-    launched_model, named, resolve_model, session_model, settings_model,
+    CLAUDE_SETTINGS, DEFAULT_EFFORT, DEFAULT_MODEL, EFFORT_LEVELS, HOME_DIR,
+    MODEL_CHOICES, PANE, classify_restart_args, launched_model, named,
+    read_state, resolve_model, session_model, settings_model, write_state,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -71,7 +73,7 @@ SERVICE = "claude-channels.service"
 # journal's 30-day window, then the what's-happening cluster, the
 # credit-limit kit, and last the rare recovery commands.
 MENU_COMMANDS = [
-    ("restart", "Restart claude-channels (fresh context)"),
+    ("restart", "Restart fresh on the default model (args override)"),
     ("tmux", "What Claude is doing right now"),
     ("status", "Service status"),
     ("logs", "Last 20 journal lines"),
@@ -131,36 +133,13 @@ def run_argv(argv: list[str], timeout: int = 30) -> str:
 # Two halves, and both are needed:
 #   * the LIVE session — /model typed into the tmux pane. The conversation and
 #     its context survive; a restart would throw both away.
-#   * the NEXT start — STATE_FILE, which run_claude_channels.sh reads. Without
-#     it the first restart silently reverts to the launcher's default.
-STATE_FILE = Path(os.environ.get("CLAUDE_CHANNELS_STATE") or HOME_DIR / ".claude-channels.env")
+#   * the NEXT start — the state file, which run_claude_channels.sh reads.
+#     Without it the first restart silently reverts to the launcher's default.
+# read_state/write_state and the state path live in claude_models.py, shared
+# with the restart scripts; a COMMANDED restart resets it to the machine
+# default (DEFAULT_MODEL/DEFAULT_EFFORT) unless its args name an override.
 LAUNCHER = Path(__file__).resolve().parent / "run_claude_channels.sh"
 LIMIT_WATCHDOG = Path(__file__).resolve().parent / "claude_limit_watchdog.py"
-
-
-def read_state() -> dict[str, str]:
-    out: dict[str, str] = {}
-    if STATE_FILE.exists():
-        for line in STATE_FILE.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                out[k.strip()] = v.strip().strip("\"'")
-    return out
-
-
-def write_state(**values: str) -> None:
-    """Update keys in STATE_FILE atomically — a restart may read it mid-write."""
-    state = read_state()
-    state.update(values)
-    body = (
-        "# Written by claude_watchdog_bot.py (/model, /effort).\n"
-        "# Read by deploy/run_claude_channels.sh at every service start.\n"
-        + "".join(f"{k}={v}\n" for k, v in sorted(state.items()))
-    )
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(body)
-    tmp.replace(STATE_FILE)
 
 
 def next_start() -> tuple[str, str]:
@@ -519,10 +498,23 @@ async def handle_message(update, context):
             reply += f"\n\nBun: NOT running"
         await msg.reply_text(reply, parse_mode="Markdown")
 
-    elif text == "/restart":
-        await _react(msg, "⚡")
-        out = run(f"sudo -n systemctl restart {SERVICE}", timeout=60)
-        await _report_restart(msg, out)
+    elif text == "/restart" or text.startswith("/restart "):
+        # A commanded restart lands on the machine default unless the args name
+        # a model/effort (operator, 2026-10-11): /restart [model] [effort],
+        # order-free. A bad arg aborts — nothing written, nothing restarted —
+        # because a typo'd --model would boot-loop the service.
+        args = raw.split()[1:]
+        try:
+            model, effort = classify_restart_args(args)
+        except ValueError as exc:
+            await msg.reply_text(f"{exc}\nNothing restarted.")
+        else:
+            await _react(msg, "⚡")
+            write_state(CLAUDE_CHANNELS_MODEL=model, CLAUDE_CHANNELS_EFFORT=effort)
+            if args:
+                await msg.reply_text(f"→ {named(model)} · {effort}")
+            out = run(f"sudo -n systemctl restart {SERVICE}", timeout=60)
+            await _report_restart(msg, out)
 
     elif text == "/kill":
         await _react(msg, "⚡")
@@ -672,7 +664,8 @@ async def handle_message(update, context):
     elif text == "/help":
         await msg.reply_text(
             "Emergency watchdog commands:\n"
-            "/restart — restart claude-channels\n"
+            f"/restart [model] [effort] — restart onto {named(DEFAULT_MODEL)} · "
+            f"{DEFAULT_EFFORT} unless args say otherwise\n"
             "/tmux — see what Claude is doing right now\n"
             "/status — service status\n"
             "/logs — last 20 journal lines\n"

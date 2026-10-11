@@ -17,8 +17,11 @@ set -euo pipefail
 
 SESSION="claude"
 STATE_FILE="${CLAUDE_CHANNELS_STATE:-$HOME/.claude-channels.env}"
-DEFAULT_MODEL="claude-opus-5"
-DEFAULT_EFFORT="max"
+# The machine default. Twin constants live in deploy/claude_models.py
+# (DEFAULT_MODEL/DEFAULT_EFFORT — what a commanded restart resets the state
+# file to); scripts/test_claude_model_switch.py pins the two halves in step.
+DEFAULT_MODEL="claude-opus-5-5"
+DEFAULT_EFFORT="high"
 
 # Read one KEY=value out of the state file. Deliberately NOT `source`: a file
 # the bot half-wrote must fall back to the defaults, never execute and never

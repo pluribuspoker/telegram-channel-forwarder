@@ -12,15 +12,24 @@ recurring, and both are tested here:
     smuggled in as a model name — falls back to a working default instead of
     landing on the command line or wedging the start.
 
+Since 2026-10-11 it also pins the restart default: a COMMANDED restart
+(watchdog /restart, restart_and_ping.sh via `claude_models.py reset-state`)
+lands on the machine default model/effort unless its args name one, the
+bash/python default constants stay in step, and a typo'd arg aborts instead
+of becoming a --model the CLI refuses (which boot-loops the service).
+
 Runs on Windows (the bash half skips without bash).
 """
+import asyncio
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parent.parent
 LAUNCHER = REPO / "deploy" / "run_claude_channels.sh"
@@ -29,13 +38,14 @@ LAUNCHER = REPO / "deploy" / "run_claude_channels.sh"
 os.environ.setdefault("WATCHDOG_BOT_TOKEN", "test-token")
 os.environ.setdefault("WATCHDOG_USER_ID", "1")
 sys.path.insert(0, str(REPO / "deploy"))
+import claude_models as models  # noqa: E402
 import claude_watchdog_bot as bot  # noqa: E402
 
 
 class ResolveModelTest(unittest.TestCase):
     def test_aliases_resolve_to_full_ids(self):
-        self.assertEqual(bot.resolve_model("opus"), "claude-opus-5")
-        self.assertEqual(bot.resolve_model("OPUS"), "claude-opus-5")
+        self.assertEqual(bot.resolve_model("opus"), "claude-opus-5-5")
+        self.assertEqual(bot.resolve_model("OPUS"), "claude-opus-5-5")
         self.assertEqual(bot.resolve_model(" fable "), "claude-fable-5")
 
     def test_full_ids_pass_through(self):
@@ -54,9 +64,11 @@ class StateFileTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.state = Path(self.tmp.name) / ".claude-channels.env"
-        self._saved, bot.STATE_FILE = bot.STATE_FILE, self.state
+        # The helpers moved to claude_models (shared with reset-state); the
+        # bot's imported names follow the module attribute.
+        self._saved, models.STATE_FILE = models.STATE_FILE, self.state
         self.addCleanup(self.tmp.cleanup)
-        self.addCleanup(lambda: setattr(bot, "STATE_FILE", self._saved))
+        self.addCleanup(lambda: setattr(models, "STATE_FILE", self._saved))
 
     def test_roundtrip_and_key_preservation(self):
         bot.write_state(CLAUDE_CHANNELS_MODEL="claude-opus-5")
@@ -156,13 +168,13 @@ class SwitchModelTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        saved = (bot.STATE_FILE, bot.pane_command, bot.settings_model)
-        bot.STATE_FILE = Path(self.tmp.name) / "state.env"
+        saved = (models.STATE_FILE, bot.pane_command, bot.settings_model)
+        models.STATE_FILE = Path(self.tmp.name) / "state.env"
         self.addCleanup(lambda: self._restore(saved))
 
     @staticmethod
     def _restore(saved):
-        bot.STATE_FILE, bot.pane_command, bot.settings_model = saved
+        models.STATE_FILE, bot.pane_command, bot.settings_model = saved
 
     def test_confirmed_switch_persists(self):
         bot.pane_command = lambda *a, **k: (True, "Set model to Opus 5")
@@ -229,28 +241,28 @@ class LauncherResolutionTest(unittest.TestCase):
         # The two halves have to agree on the format, not just on the values.
         with tempfile.TemporaryDirectory() as d:
             state = Path(d) / "state.env"
-            saved, bot.STATE_FILE = bot.STATE_FILE, state
+            saved, models.STATE_FILE = models.STATE_FILE, state
             try:
                 bot.write_state(CLAUDE_CHANNELS_MODEL="claude-haiku-4-5-20251001",
                                 CLAUDE_CHANNELS_EFFORT="low")
             finally:
-                bot.STATE_FILE = saved
+                models.STATE_FILE = saved
             got = self.resolve(state.read_text())
         self.assertEqual((got["model"], got["effort"]), ("claude-haiku-4-5-20251001", "low"))
 
     def test_missing_file_falls_back(self):
         got = self.resolve(None)
         self.assertEqual((got["model"], got["effort"], got["source"]),
-                         ("claude-opus-5", "max", "defaults"))
+                         (models.DEFAULT_MODEL, models.DEFAULT_EFFORT, "defaults"))
 
     def test_junk_never_reaches_the_command_line(self):
         for bad in ("claude-opus-5; rm -rf /", "$(id)", "-p", "--bare", ""):
             got = self.resolve(f"CLAUDE_CHANNELS_MODEL={bad}\n")
-            self.assertEqual(got["model"], "claude-opus-5", bad)
+            self.assertEqual(got["model"], models.DEFAULT_MODEL, bad)
 
     def test_bad_effort_falls_back_but_keeps_the_model(self):
         got = self.resolve("CLAUDE_CHANNELS_MODEL=claude-sonnet-5\nCLAUDE_CHANNELS_EFFORT=turbo\n")
-        self.assertEqual((got["model"], got["effort"]), ("claude-sonnet-5", "max"))
+        self.assertEqual((got["model"], got["effort"]), ("claude-sonnet-5", models.DEFAULT_EFFORT))
 
     def test_one_million_context_suffix_survives(self):
         got = self.resolve("CLAUDE_CHANNELS_MODEL=claude-fable-5[1m]\n")
@@ -259,6 +271,176 @@ class LauncherResolutionTest(unittest.TestCase):
     def test_last_assignment_wins(self):
         got = self.resolve("CLAUDE_CHANNELS_MODEL=claude-sonnet-5\nCLAUDE_CHANNELS_MODEL=claude-opus-5\n")
         self.assertEqual(got["model"], "claude-opus-5")
+
+
+class DefaultTwinsTest(unittest.TestCase):
+    """One machine default, two languages — the launcher's bash fallback and
+    claude_models' reset target must be the same values."""
+
+    def test_launcher_defaults_match_claude_models(self):
+        text = LAUNCHER.read_text()
+        self.assertEqual(
+            re.search(r'^DEFAULT_MODEL="([^"]*)"', text, re.M).group(1),
+            models.DEFAULT_MODEL)
+        self.assertEqual(
+            re.search(r'^DEFAULT_EFFORT="([^"]*)"', text, re.M).group(1),
+            models.DEFAULT_EFFORT)
+
+    def test_default_survives_both_allowlists(self):
+        # A default either half refuses would turn every reset into a fallback.
+        self.assertEqual(bot.resolve_model(models.DEFAULT_MODEL), models.DEFAULT_MODEL)
+        self.assertIn(models.DEFAULT_EFFORT, models.EFFORT_LEVELS)
+
+
+class RestartArgsTest(unittest.TestCase):
+    """A commanded restart lands on the default except the parts its args name."""
+
+    def test_no_args_is_the_machine_default(self):
+        self.assertEqual(models.classify_restart_args([]),
+                         (models.DEFAULT_MODEL, models.DEFAULT_EFFORT))
+
+    def test_order_free_overrides(self):
+        want = ("claude-fable-5", "max")
+        self.assertEqual(models.classify_restart_args(["fable", "max"]), want)
+        self.assertEqual(models.classify_restart_args(["MAX", "Fable"]), want)
+
+    def test_partial_override_keeps_the_other_default(self):
+        self.assertEqual(models.classify_restart_args(["fable"]),
+                         ("claude-fable-5", models.DEFAULT_EFFORT))
+        self.assertEqual(models.classify_restart_args(["xhigh"]),
+                         (models.DEFAULT_MODEL, "xhigh"))
+
+    def test_full_ids_pass_but_bare_typos_refuse(self):
+        # resolve_model admits any bare word (it reaches /model behind a
+        # confirmation step); here a typo'd token would land unconfirmed on the
+        # launcher's command line and boot-loop the service, so only aliases
+        # and claude-… ids pass.
+        self.assertEqual(models.classify_restart_args(["claude-fable-5[1m]"])[0],
+                         "claude-fable-5[1m]")
+        for bad in ("fablee", "opsu", "-p", "claude-opus-5;rm", "turbo"):
+            with self.assertRaises(ValueError, msg=bad):
+                models.classify_restart_args([bad])
+
+    def test_conflicting_args_refuse(self):
+        for toks in (["fable", "opus"], ["high", "max"]):
+            with self.assertRaises(ValueError):
+                models.classify_restart_args(toks)
+
+
+class ResetStateCliTest(unittest.TestCase):
+    """`claude_models.py reset-state` — how the restart scripts write the file."""
+
+    def cli(self, *args, state):
+        env = dict(os.environ, CLAUDE_CHANNELS_STATE=str(state))
+        return subprocess.run(
+            [sys.executable, str(REPO / "deploy" / "claude_models.py"),
+             "reset-state", *args],
+            capture_output=True, text=True, env=env, timeout=30,
+        )
+
+    @staticmethod
+    def read(state: Path) -> dict:
+        return dict(
+            ln.split("=", 1) for ln in state.read_text().splitlines()
+            if ln and not ln.startswith("#") and "=" in ln
+        )
+
+    def test_no_args_writes_the_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d) / "state.env"
+            out = self.cli(state=state)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(self.read(state), {
+                "CLAUDE_CHANNELS_MODEL": models.DEFAULT_MODEL,
+                "CLAUDE_CHANNELS_EFFORT": models.DEFAULT_EFFORT,
+            })
+
+    def test_stated_override_is_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d) / "state.env"
+            out = self.cli("max", "fable", state=state)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            got = self.read(state)
+            self.assertEqual(got["CLAUDE_CHANNELS_MODEL"], "claude-fable-5")
+            self.assertEqual(got["CLAUDE_CHANNELS_EFFORT"], "max")
+
+    def test_typo_aborts_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d) / "state.env"
+            out = self.cli("opsu", state=state)
+            self.assertNotEqual(out.returncode, 0)
+            self.assertFalse(state.exists())
+            self.assertIn("Unknown arg", out.stderr)
+
+
+class _Msg:
+    def __init__(self, text):
+        self.text = text
+        self.from_user = SimpleNamespace(id=1)
+        self.replies, self.reactions = [], []
+
+    async def reply_text(self, text, **kw):
+        self.replies.append(text)
+
+    async def set_reaction(self, emoji):
+        self.reactions.append(emoji)
+
+
+class RestartCommandTest(unittest.TestCase):
+    """The watchdog /restart: reset-to-default before the systemctl call, and a
+    bad arg aborts with nothing written, nothing restarted."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state = Path(self.tmp.name) / "state.env"
+        self.cmds = []
+        # Pin the allowed id too: the sandboxed suite carries the real
+        # WATCHDOG_USER_ID in its env, so the import-time setdefault loses.
+        saved = (models.STATE_FILE, bot.run, bot._report_restart,
+                 bot.ALLOWED_USER_ID)
+        models.STATE_FILE = self.state
+        bot.ALLOWED_USER_ID = 1
+        bot.run = lambda cmd, timeout=30: (self.cmds.append(cmd), "")[1]
+
+        async def report(msg, out, budget=60):
+            pass
+
+        bot._report_restart = report
+        self.addCleanup(lambda: self._restore(saved))
+
+    @staticmethod
+    def _restore(saved):
+        (models.STATE_FILE, bot.run, bot._report_restart,
+         bot.ALLOWED_USER_ID) = saved
+
+    def send(self, text):
+        msg = _Msg(text)
+        asyncio.run(bot.handle_message(SimpleNamespace(message=msg), None))
+        return msg
+
+    def test_bare_restart_resets_to_the_default(self):
+        msg = self.send("/restart")
+        self.assertEqual(models.read_state(), {
+            "CLAUDE_CHANNELS_MODEL": models.DEFAULT_MODEL,
+            "CLAUDE_CHANNELS_EFFORT": models.DEFAULT_EFFORT,
+        })
+        self.assertTrue(any("systemctl restart" in c for c in self.cmds), self.cmds)
+        self.assertEqual(msg.reactions, ["⚡"])
+
+    def test_stated_args_override_the_default(self):
+        msg = self.send("/restart max fable")
+        got = models.read_state()
+        self.assertEqual(got["CLAUDE_CHANNELS_MODEL"], "claude-fable-5")
+        self.assertEqual(got["CLAUDE_CHANNELS_EFFORT"], "max")
+        self.assertTrue(any("claude-fable-5" in r for r in msg.replies), msg.replies)
+
+    def test_bad_arg_aborts_before_anything_happens(self):
+        msg = self.send("/restart opsu")
+        self.assertFalse(self.state.exists())
+        self.assertEqual(self.cmds, [])
+        self.assertEqual(msg.reactions, [])
+        self.assertTrue(any("Unknown arg" in r for r in msg.replies), msg.replies)
 
 
 if __name__ == "__main__":

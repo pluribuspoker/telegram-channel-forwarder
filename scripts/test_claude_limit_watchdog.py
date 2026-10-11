@@ -134,9 +134,11 @@ class ComposeTest(unittest.TestCase):
         self.assertIn("forced check", msg)
 
     def test_recovery_names_the_model_that_came_back(self):
-        msg = lw.compose("ok", "claude-opus-5", "serving", [])
+        # The opus alias moved to claude-opus-5-5 with the restart-default
+        # change (2026-10-11); the alias suffix renders for the aliased id.
+        msg = lw.compose("ok", "claude-opus-5-5", "serving", [])
         self.assertIn("serving again", msg)
-        self.assertIn("claude-opus-5 (opus)", msg)
+        self.assertIn("claude-opus-5-5 (opus)", msg)
 
 
 class SharedTableTest(unittest.TestCase):
