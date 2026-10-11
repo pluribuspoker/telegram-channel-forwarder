@@ -102,6 +102,24 @@ def send(text: str) -> bool:
         return False
 
 
+def ping_check(suffix: str = "", body: str = "") -> bool:
+    """Agent-first signal (2026-10-11): the dedicated check carries the alarm
+    to hc-repair (/fail = out/low with the numbers as body). URL unset
+    (desktop clones) = False — caller falls back to the direct DMs. A probe
+    that cannot read the headers pings NOTHING: repeated silence trips the
+    check's own missed-ping alarm, which is the honest signal."""
+    url = os.environ.get("ODDS_QUOTA_HEALTHCHECK_URL", "")
+    if not url:
+        return False
+    try:
+        req = urllib.request.Request(url + suffix, data=body.encode() if body else None)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status == 200
+    except Exception as e:  # noqa: BLE001
+        print(f"ping failed: {e}", file=sys.stderr)
+        return False
+
+
 def probe() -> tuple[int | None, int | None, int | None]:
     """(remaining, used, cost_of_this_call) from the Odds API usage headers.
 
@@ -216,9 +234,31 @@ def main() -> None:
         save_state(state)
         return
 
+    condition = "out" if remaining <= 0 else ("low" if remaining < low_limit else "ok")
+
+    if os.environ.get("ODDS_QUOTA_HEALTHCHECK_URL", ""):
+        # Agent-first: /fail while out/low (hc-repair's agent + card are the
+        # one DM; recovery = the check going UP), success body keeps the
+        # numbers visible on healthchecks.
+        if condition != "ok" or force:
+            lines = [f"quota {condition}: used {used}, remaining {remaining} "
+                     f"(low threshold {low_limit})", rate_line]
+            if condition == "out":
+                failed, quick_failed = damage_signals(1)
+                lines.append(f"failed pricing attempts in the last hour: {failed}")
+                if quick_failed:
+                    lines.append("latest fast-path tracker run also failed on quota")
+                lines.append("pricing falls back to ESPN free lines (match_type="
+                             "espn_current) until the monthly reset")
+            ping_check("/fail", "\n".join(lines))
+        else:
+            ping_check("", f"remaining {remaining}, used {used}\n{rate_line}")
+        state["condition"] = condition
+        save_state(state)
+        return
+
     sent_any = False
 
-    condition = "out" if remaining <= 0 else ("low" if remaining < low_limit else "ok")
     prev = state.get("condition", "ok")
     changed = condition != prev
     reminder_due = (REMIND_SECS > 0

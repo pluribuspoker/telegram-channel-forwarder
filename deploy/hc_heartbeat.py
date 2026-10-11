@@ -75,6 +75,9 @@ COVERED = {
     "nfl-pikkit-snapshots.timer": "PIKKIT_SNAPSHOT_HEALTHCHECK_URL",
     "sauce-watch.timer": "SAUCE_WATCH_HEALTHCHECK_URL",
     "trent-monitor.timer": "TRENT_HEALTHCHECK_URL",
+    "mem-watchdog.timer": "MEM_WATCHDOG_HEALTHCHECK_URL",
+    "claude-spend-watchdog.timer": "CLAUDE_SPEND_HEALTHCHECK_URL",
+    "odds-quota-watchdog.timer": "ODDS_QUOTA_HEALTHCHECK_URL",
     "test-sweep.timer": "TEST_SWEEP_HEALTHCHECK_URL",
     "hc-heartbeat.timer": "HEARTBEAT_JOBS_HEALTHCHECK_URL",  # its own ping IS the check
 }

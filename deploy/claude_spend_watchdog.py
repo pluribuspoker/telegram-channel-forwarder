@@ -54,8 +54,8 @@ COST_RE = re.compile(r"\[Claude\]\s+\$([0-9]+(?:\.[0-9]+)?)")
 LEDGER = APP / "logs" / "claude_spend.jsonl"
 LEDGER_KEEP_DAYS = int(os.environ.get("CLAUDE_SPEND_LEDGER_DAYS", "30"))
 
-DAY_DEBOUNCE_SECS = 12 * 60 * 60   # at most one 💸 alert per 12h
-HOUR_DEBOUNCE_SECS = 6 * 60 * 60   # at most one ⚡ alert per 6h
+DAY_DEBOUNCE_SECS = 12 * 60 * 60   # at most one 💸 alert per 12h (legacy DM path)
+HOUR_DEBOUNCE_SECS = 6 * 60 * 60   # at most one ⚡ alert per 6h (legacy DM path)
 
 
 def load_env() -> None:
@@ -98,6 +98,22 @@ def send(text: str) -> bool:
             return r.status == 200
     except Exception as e:  # noqa: BLE001 - never let a send failure kill the check
         print(f"send failed: {e}", file=sys.stderr)
+        return False
+
+
+def ping_check(suffix: str = "", body: str = "") -> bool:
+    """Agent-first signal (2026-10-11): the dedicated check carries the alarm
+    to hc-repair (/fail = over threshold, body = the breakdown the DM used to
+    carry). URL unset (desktop clones) = False — caller falls back to DMs."""
+    url = os.environ.get("CLAUDE_SPEND_HEALTHCHECK_URL", "")
+    if not url:
+        return False
+    try:
+        req = urllib.request.Request(url + suffix, data=body.encode() if body else None)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status == 200
+    except Exception as e:  # noqa: BLE001 - the check's missed-ping alarm covers us
+        print(f"ping failed: {e}", file=sys.stderr)
         return False
 
 
@@ -233,6 +249,24 @@ def main() -> None:
 
     if recs:
         prune_ledger(recs, now)
+
+    if os.environ.get("CLAUDE_SPEND_HEALTHCHECK_URL", ""):
+        # Agent-first: /fail while over a threshold (hc-repair's agent + card
+        # are the one DM), success when back under. The current-hour figure
+        # rides along so a draining 24h window reads as exactly that.
+        over = force or hour_total > hour_limit or day_total > day_limit
+        if hour_total < day_total / 24:
+            verdict = "Current hour near zero — 24h window draining, not a live leak."
+        else:
+            verdict = "Still spending now. Normal baseline is well under $1/day."
+        body = (
+            f"trailing 24h ${day_total:.2f} ({day_calls} calls, limit ${day_limit:.2f}) [{day_src}]\n"
+            f"{fmt_breakdown(day_per)}\n"
+            f"last hour ${hour_total:.2f} ({hour_calls} calls, limit ${hour_limit:.2f})\n"
+            f"{verdict}"
+        )
+        ping_check("/fail" if over else "", body)
+        return
 
     state = load_state()
     sent_any = False

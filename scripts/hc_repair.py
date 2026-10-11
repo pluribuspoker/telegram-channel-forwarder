@@ -109,6 +109,21 @@ KEY_HINTS = {
                              "FATAL + remedy lines in the /fail body name the "
                              "fix (cookies vs code — docs/trent.md; dead X "
                              "cookies = needs_human, phone re-auth only)",
+    "MEM_WATCHDOG_HEALTHCHECK_URL": "memory incident — the /fail body names the "
+                                    "OOM-killed process or swap pressure; find "
+                                    "which unit died/ballooned (mem-watchdog's "
+                                    "journal prints per-unit RAM), restart what "
+                                    "the kernel killed; 1GB box + 2GB swap "
+                                    "(docs/vps.md)",
+    "CLAUDE_SPEND_HEALTHCHECK_URL": "API dollars should be ~$0 — every Claude "
+                                    "call rides the subscription (CLAUDE.md); "
+                                    "the /fail body has 24h/1h spend + per-source "
+                                    "breakdown; hunt the caller via "
+                                    "logs/claude_spend.jsonl",
+    "ODDS_QUOTA_HEALTHCHECK_URL": "Odds API credits burning/out — the /fail body "
+                                  "has remaining + burn rate; find the consumer "
+                                  "(paid paths in odds.py; free-first rule, "
+                                  "docs/odds.md); 500 credits/mo, monthly reset",
 }
 
 OUTCOMES = (
