@@ -124,6 +124,15 @@ KEY_HINTS = {
                                   "has remaining + burn rate; find the consumer "
                                   "(paid paths in odds.py; free-first rule, "
                                   "docs/odds.md); 500 credits/mo, monthly reset",
+    "GRADER_ANOMALIES_HEALTHCHECK_URL": "parse/binding anomalies the tracker "
+                                        "queued (ambiguous game, final-but-"
+                                        "ungraded, refused corrections, suspect "
+                                        "parses) — read pending entries in "
+                                        "logs/grader_anomalies.jsonl, fix the "
+                                        "pick per docs/tracker.md, then "
+                                        "scripts/grader_anomalies.py --resolve "
+                                        "<id>; the next tracker pass (5 min) "
+                                        "pings the check up",
 }
 
 OUTCOMES = (

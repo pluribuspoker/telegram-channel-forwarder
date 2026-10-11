@@ -17,7 +17,10 @@ Usage (from other modules):
 
 import asyncio
 import hashlib
+import json
 import os
+import time
+import urllib.request
 import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -385,6 +388,81 @@ def _post_fingerprint(row: dict, channel_name: str, capper_name: str, edit_faile
 
 
 
+ANOMALIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "logs", "grader_anomalies.jsonl")
+ANOMALY_KEEP_DAYS = 14
+
+
+def load_anomalies() -> list[dict]:
+    try:
+        with open(ANOMALIES_FILE, encoding="utf-8") as f:
+            rows = []
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
+            return rows
+    except OSError:
+        return []
+
+
+def save_anomalies(rows: list[dict]) -> None:
+    cutoff = time.time() - ANOMALY_KEEP_DAYS * 86400
+    rows = [r for r in rows
+            if r.get("status") == "pending" or float(r.get("ts") or 0) >= cutoff]
+    os.makedirs(os.path.dirname(ANOMALIES_FILE), exist_ok=True)
+    tmp = ANOMALIES_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    os.replace(tmp, ANOMALIES_FILE)
+
+
+def append_anomaly(text: str) -> None:
+    """Queue one pending anomaly (idempotent on identical pending text)."""
+    rows = load_anomalies()
+    if any(r.get("status") == "pending" and r.get("text") == text for r in rows):
+        return
+    rows.append({
+        "id": hashlib.sha256(f"{time.time()}{text}".encode()).hexdigest()[:10],
+        "ts": time.time(),
+        "text": text,
+        "status": "pending",
+    })
+    save_anomalies(rows)
+
+
+def anomaly_check_ping() -> None:
+    """Agent-first signal for queued anomalies: /fail with the pending list
+    while any exist (hc-repair's agent fixes + resolves them), success when
+    clear. GRADER_ANOMALIES_HEALTHCHECK_URL unset = no-op."""
+    url = os.getenv("GRADER_ANOMALIES_HEALTHCHECK_URL", "")
+    if not url:
+        return
+    pending = [r for r in load_anomalies() if r.get("status") == "pending"]
+    suffix, body = "", "no pending anomalies"
+    if pending:
+        suffix = "/fail"
+        lines = [f"{len(pending)} pending grader anomalies "
+                 "(resolve: scripts/grader_anomalies.py --resolve <id>|all):"]
+        for r in pending[:12]:
+            stamp = datetime.fromtimestamp(float(r.get("ts") or 0)).strftime("%m-%d %H:%M")
+            lines.append(f"[{r.get('id')}] {stamp} {str(r.get('text', ''))[:300]}")
+        body = "\n".join(lines)
+    try:
+        req = urllib.request.Request(url + suffix, data=body.encode())
+        with urllib.request.urlopen(req, timeout=10):
+            pass
+    except Exception as exc:  # noqa: BLE001
+        print(f"[audit] anomaly check ping failed: {exc}")
+
+
 class AuditLog:
     """
     Thin wrapper around the SQLite audit DB + Telegram audit channel.
@@ -397,13 +475,10 @@ class AuditLog:
         self,
         db_path: str = DB_PATH,
         bot_token: str | None = None,
-        audit_channel_id: str | int | None = None,
         broadcast_results_mappings: dict[int, int] | None = None,
     ):
         self.db_path = db_path
         self.bot_token = bot_token or os.getenv("BOT_TOKEN", "")
-        raw_cid = audit_channel_id or os.getenv("AUDIT_CHANNEL_ID", "")
-        self.audit_channel_id: int | None = int(raw_cid) if raw_cid else None
         self.broadcast_results_mappings: dict[int, int] = broadcast_results_mappings or {}
         self._init_db()
 
@@ -540,117 +615,32 @@ class AuditLog:
             "odds_match_type": odds_match_type,
         }
         row["post_fingerprint"] = _post_fingerprint(row, channel_name, capper_name, edit_failed)
-        changed = await asyncio.to_thread(self._insert, row)
-        if changed:
-            await self._post_telegram(row, channel_name=channel_name, capper_name=capper_name, edit_failed=edit_failed)
+        await asyncio.to_thread(self._insert, row)
+        # The per-pick Telegram card feed was retired 2026-10-11 (operator:
+        # never read) — the grades table, dashboard and vps_grades.py remain
+        # the query surfaces; anomalies go agent-first via warn(kind="anomaly").
 
-    # ── Telegram audit channel ─────────────────────────────────────────────────
+    # ── Operator-facing anomalies (agent-first, 2026-10-11) ──────────────────
 
-    async def _post_telegram(self, row: dict, channel_name: str = "", capper_name: str = "", edit_failed: bool = False) -> None:
-        """Post a formatted HTML summary to the audit Telegram channel."""
-        if not self.audit_channel_id or not self.bot_token:
-            return
-        if row["verdict"] == "PENDING":
-            return  # game not yet played — don't clutter audit channel
+    async def warn(self, text: str, kind: str = "info") -> None:
+        """Surface a pipeline warning. Never raises.
 
-        import html as _html
-
-        def e(s: str) -> str:
-            return _html.escape(str(s))
-
-        verdict = row["verdict"]
-        sport   = row["sport"]
-        dry_tag      = "  <code>[DRY]</code>" if row["dry_run"] else ""
-        edit_fail_tag = "  <code>[EDIT FAILED]</code>" if edit_failed else ""
-
-        channel_bare = abs(row["channel_id"])
-        link = f"https://t.me/c/{str(channel_bare)[3:]}/{row['message_id']}"
-
-        # Line 1 — capper · channel (linked)  [DRY] [EDIT FAILED]
-        ch_linked = f'<a href="{link}">{e(channel_name)}</a>' if channel_name else f'<a href="{link}">view</a>'
-        meta_parts = []
-        if capper_name:
-            meta_parts.append(f"<b>{e(capper_name)}</b>")
-        meta_parts.append(ch_linked)
-        line1 = "  ·  ".join(meta_parts) + dry_tag + edit_fail_tag
-
-        def _trunc(text: str, limit: int = 120) -> str:
-            """Truncate to full sentences up to limit chars."""
-            if len(text) <= limit:
-                return text
-            sub = text[:limit]
-            for sep in (". ", "! ", "? "):
-                idx = sub.rfind(sep)
-                if idx > limit // 3:
-                    return text[:idx + 1]
-            idx = sub.rfind(" ")
-            return (text[:idx] + "…") if idx > 0 else sub + "…"
-
-        # Line 2 — picks with per-pick emoji, tag, and calc below each
-        overall_em = VERDICT_EMOJI.get(verdict, "")
-        raw_lines = [l for l in (row["pick_desc"] or "").splitlines() if l.strip()]
-        pick_blocks = []
-        for l in raw_lines:
-            # "description|sport|game_date|calc" (calc may contain |)
-            parts = l.split("|", 3)
-            desc_raw     = parts[0] if len(parts) > 0 else l
-            pick_sport   = parts[1] if len(parts) > 1 else sport
-            game_date_raw = parts[2] if len(parts) > 2 else row["date"]
-            pick_calc    = parts[3] if len(parts) > 3 else ""
-            try:
-                gd = datetime.strptime(game_date_raw, "%Y-%m-%d")
-                date_tag = f"{gd.month}/{gd.day}"
-            except ValueError:
-                date_tag = game_date_raw
-            pick_tag = f" [{e(pick_sport)} · {date_tag}]" if pick_sport else ""
-            # Skip records prefix with "VERDICT: "
-            matched = next((v for v in VERDICT_EMOJI if desc_raw.startswith(f"{v}: ")), None)
-            if matched:
-                desc = desc_raw[len(matched) + 2:]
-                pick_line = f"{e(desc)}{VERDICT_EMOJI[matched]}{pick_tag}"
-            else:
-                pick_line = f"{e(desc_raw)}{overall_em}{pick_tag}"
-            pick_line = f"• {pick_line}"
-            block = pick_line
-            if pick_calc:
-                block += f"\n<i>{e(_trunc(pick_calc))}</i>"
-            pick_blocks.append(block)
-        line2 = "\n".join(pick_blocks) if pick_blocks else None
-
-        text = "\n".join(l for l in [line1, line2] if l)
-
-        try:
-            async with httpx.AsyncClient(timeout=10) as http:
-                await http.post(
-                    f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
-                    json={
-                        "chat_id": self.audit_channel_id,
-                        "text": text,
-                        "parse_mode": "HTML",
-                        "disable_web_page_preview": True,
-                    },
-                )
-        except Exception as exc:
-            # Never crash the main flow because of audit failures
-            print(f"[audit] Telegram post failed: {exc}")
-
-    async def warn(self, text: str) -> None:
-        """Post a plain warning message to the audit channel. Never raises."""
-        if not self.audit_channel_id or not self.bot_token:
+        kind="info": journal only — the Telegram audit channel is gone
+        (operator 2026-10-11: never read; auto-repairs, odds lines and the
+        per-pick feed live in the run log).
+        kind="anomaly": ALSO queued to logs/grader_anomalies.jsonl — the
+        agent-first path: the end-of-run check ping fails while anything is
+        pending, hc-repair's agent fixes the pick and resolves the entry
+        (scripts/grader_anomalies.py), and its card is the operator's DM.
+        """
+        plain = re.sub(r"<[^>]+>", "", text)
+        print(f"[audit] {plain}")
+        if kind != "anomaly":
             return
         try:
-            async with httpx.AsyncClient(timeout=10) as http:
-                await http.post(
-                    f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
-                    json={
-                        "chat_id": self.audit_channel_id,
-                        "text": text,
-                        "parse_mode": "HTML",
-                        "disable_web_page_preview": True,
-                    },
-                )
-        except Exception as exc:
-            print(f"[audit] warn post failed: {exc}")
+            await asyncio.to_thread(append_anomaly, plain)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[audit] anomaly queue failed: {exc}")
 
     # ── Broadcast results channel ──────────────────────────────────────────────
 

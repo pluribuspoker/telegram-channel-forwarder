@@ -301,7 +301,8 @@ async def _bind_leg(pick: dict, sport: str, eff_date: str, bindings: dict, i: in
             f"⚠️ <b>{sport}: ambiguous game</b> — not grading until resolved\n"
             f"{desc} · {capper}\n<code>{cache_key}</code> leg {i}: "
             f"two games tie on the slate ({rec['name']} is one) — set "
-            f"<code>espn_events[\"{i}\"]</code> to the right event id")
+            f"<code>espn_events[\"{i}\"]</code> to the right event id",
+            kind="anomaly")
     return rec
 
 
@@ -326,7 +327,8 @@ async def _stuck_tripwire(rec: dict | None, pick: dict, sport: str, audit, cappe
     await audit.warn(
         f"⚠️ <b>{sport}: game final, pick still ungraded</b>\n"
         f"{pick.get('description', '')} · {capper}\n"
-        f"{rec.get('name')} (<code>{rec.get('id')}</code>) · <code>{cache_key}</code> leg {i}")
+        f"{rec.get('name')} (<code>{rec.get('id')}</code>) · <code>{cache_key}</code> leg {i}",
+        kind="anomaly")
 
 
 async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = None,
@@ -776,7 +778,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         await audit.warn(
                             f"⚠️ <b>correction refused</b>: {sport} {_html.escape(str(teams))} → "
                             f"{new_sport} {_html.escape(str(new_teams))} would drop typed "
-                            f"{_html.escape(', '.join(lost))} — kept the parse\n{capper}")
+                            f"{_html.escape(', '.join(lost))} — kept the parse\n{capper}",
+                            kind="anomaly")
                         new_sport, new_teams = sport, teams
                     if new_sport != sport:
                         print(f"  ESPN sport override: {sport} -> {new_sport}")
@@ -847,7 +850,8 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                   f"{dropped_typed_words(pick.get('teams') or [], res['teams'], text)}: {res['note']}")
                             await audit.warn(
                                 f"⚠️ <b>schedule repair refused</b> (would drop a typed word): "
-                                f"{_html.escape(res['note'])}\n{capper}")
+                                f"{_html.escape(res['note'])}\n{capper}",
+                                kind="anomaly")
                         elif res["status"] == "corrected":
                             print(f"  schedule repair: {res['note']}")
                             # description is load-bearing (grading, odds routing,
@@ -861,15 +865,15 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                         elif res["status"] == "unverified":
                             print(f"  ⚠ unverified pick: {res['note']}")
                             await audit.warn(
-                                f"⚠️ <b>pick names no one on the slate</b>: {_html.escape(res['note'])}\n{capper}"
-                            )
+                                f"⚠️ <b>pick names no one on the slate</b>: {_html.escape(res['note'])}\n{capper}",
+                                kind="anomaly")
                         elif res["status"] == "suspect":
                             # Grades fine and grades WRONG — the only chance to
                             # catch it is here, before a real market prices it.
                             print(f"  ⚠ possible wrong contest: {res['note']}")
                             await audit.warn(
-                                f"⚠️ <b>possible wrong contest</b>: {_html.escape(res['note'])}\n{capper}"
-                            )
+                                f"⚠️ <b>possible wrong contest</b>: {_html.escape(res['note'])}\n{capper}",
+                                kind="anomaly")
 
                 if not picks:
                     failed += 1
@@ -1467,8 +1471,12 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
     run_type = "dry_run" if dry_run else "live"
     total_odds_quota = odds_requests_used() + odds_quota_used()
     print(f"\n[Claude total] {fmt_cost(usage_cost())}  |  [Odds API] {total_odds_quota} requests used")
-    from audit import log_api_costs
+    from audit import anomaly_check_ping, log_api_costs
     log_api_costs(run_type, usage_cost(), total_odds_quota)
+    if not dry_run:
+        # Agent-first: pending grader anomalies hold their check down until
+        # an hc-repair agent fixes the pick and resolves the queue entry.
+        anomaly_check_ping()
 
 
 # ─── grade_one ────────────────────────────────────────────────────────────────
