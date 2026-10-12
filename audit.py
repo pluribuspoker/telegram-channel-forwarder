@@ -244,7 +244,13 @@ def _format_pick_body(pick: dict) -> str:
             d = "O" if direction == "over" else "U"
             stat = f" {prop_stat}" if prop_stat else ""
             return f"{player}{period_tag} {d}{line:g}{stat}"
-        return f"{player}{period_tag}"
+        # Line-less props (anytime/first TD scorer): the stat IS the bet — a
+        # bare player name names no bet. No stat either → the capper's own
+        # wording; the name alone only as a last resort.
+        if prop_stat:
+            return f"{player}{period_tag} {prop_stat}"
+        desc = _clean_desc(pick.get("description", ""))
+        return desc or f"{player}{period_tag}"
 
     # Team-level props (BTTS, clean sheet, etc.) — no player, but has teams + prop_stat
     if bet_type == "prop" and prop_stat and teams:

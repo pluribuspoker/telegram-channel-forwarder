@@ -83,6 +83,28 @@ CASES = [
      P(bet_type="prop", player="Josh Allen", period="1h", sport="NFL"),
      "Josh Allen 1H"),
 
+    # ── line-less scorer props (reported: label was a bare "Trey McBride") ────
+    # Anytime/first TD scorer parses with line=null, direction=null on purpose
+    # (the Bovada scorer markets have no O/U); the stat is the whole bet.
+    ("anytime TD scorer (reported)",
+     P(bet_type="prop", player="Trey McBride", prop_stat="ATD",
+       period="game", sport="NFL",
+       description="Trey McBride anytime touchdown scorer +110"),
+     "Trey McBride ATD"),
+    ("first TD scorer, free-text stat",
+     P(bet_type="prop", player="Austin Hooper", prop_stat="first touchdown scorer",
+       period="game", sport="NFL",
+       description="Austin Hooper First Touchdown Scorer +3000 (SNF)"),
+     "Austin Hooper first touchdown scorer"),
+    ("line-less prop keeps period tag",
+     P(bet_type="prop", player="Trey McBride", prop_stat="ATD",
+       period="1h", sport="NFL"),
+     "Trey McBride 1H ATD"),
+    ("line-less prop, no stat → description names the bet",
+     P(bet_type="prop", player="Alvin Kamara", period="game", sport="NFL",
+       description="Alvin Kamara to score 1st Touchdown +900"),
+     "Alvin Kamara to score 1st Touchdown"),
+
     # ── branches that were already correct — pinned so they stay the analog ───
     ("spread 1h", P(bet_type="spread", teams=["Edmonton Elks"], line=2.5,
                     period="1h", sport="CFL"), "Elks 1H +2.5"),
