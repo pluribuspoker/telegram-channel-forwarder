@@ -2096,6 +2096,20 @@ def line_scores_text(summary: dict, sport: str = "") -> str:
     return "\n".join(lines) or "No line score data available"
 
 
+_DOUBLED_LETTER = re.compile(r"(.)\1+")
+
+
+def _dedouble(s: str) -> str:
+    """Collapse consecutive repeated letters: 'emmanuel' → 'emanuel'.
+
+    Capper and ESPN spellings of one player differ by doubled letters in
+    either direction (Emmanuel/Emanuel, Phillip/Philip); collapsing runs on
+    both sides makes the comparison spelling-stable without opening the
+    match to different names.
+    """
+    return _DOUBLED_LETTER.sub(r"\1", s)
+
+
 def box_score_text(summary: dict, player_hint: str = "",
                    require_all_words: bool = False) -> str:
     """Format player stats from a game box score.
@@ -2129,12 +2143,18 @@ def box_score_text(summary: dict, player_hint: str = "",
                 if not stats_raw:  # DNP row
                     continue
 
-                # If filtering to a specific player, skip non-matches
+                # If filtering to a specific player, skip non-matches.
+                # Each hint word matches as a substring, or doubled-letter-
+                # insensitively ("Emmanuel" ↔ ESPN's "Emanuel Wilson" — the
+                # strict rescue scan missed the real game on that one letter).
                 if player_hint:
                     hint_words = [w for w in player_hint.lower().split() if len(w) > 2]
                     name_lower = name.lower()
+                    name_sq = _dedouble(name_lower)
                     matcher = all if require_all_words else any
-                    if hint_words and not matcher(w in name_lower for w in hint_words):
+                    if hint_words and not matcher(
+                            w in name_lower or _dedouble(w) in name_sq
+                            for w in hint_words):
                         continue
 
                 pairs = [f"{k}={v}" for k, v in zip(keys, stats_raw)]

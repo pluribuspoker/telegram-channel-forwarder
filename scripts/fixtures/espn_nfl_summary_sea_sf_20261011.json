@@ -1,0 +1,349 @@
+{
+ "header": {
+  "competitions": [
+   {
+    "status": {
+     "type": {
+      "id": "3",
+      "name": "STATUS_FINAL",
+      "state": "post",
+      "completed": true,
+      "description": "Final",
+      "detail": "Final",
+      "shortDetail": "Final"
+     },
+     "isTBDFlex": false
+    },
+    "competitors": [
+     {
+      "team": {
+       "displayName": "Seattle Seahawks"
+      },
+      "homeAway": "home",
+      "score": "29",
+      "linescores": [
+       {
+        "displayValue": "7"
+       },
+       {
+        "displayValue": "6"
+       },
+       {
+        "displayValue": "13"
+       },
+       {
+        "displayValue": "3"
+       }
+      ]
+     },
+     {
+      "team": {
+       "displayName": "San Francisco 49ers"
+      },
+      "homeAway": "away",
+      "score": "32",
+      "linescores": [
+       {
+        "displayValue": "7"
+       },
+       {
+        "displayValue": "14"
+       },
+       {
+        "displayValue": "0"
+       },
+       {
+        "displayValue": "11"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ "boxscore": {
+  "players": [
+   {
+    "team": {
+     "displayName": "San Francisco 49ers"
+    },
+    "statistics": [
+     {
+      "name": "rushing",
+      "type": null,
+      "keys": [
+       "rushingAttempts",
+       "rushingYards",
+       "yardsPerRushAttempt",
+       "rushingTouchdowns",
+       "longRushing"
+      ],
+      "athletes": [
+       {
+        "athlete": {
+         "displayName": "Christian McCaffrey"
+        },
+        "stats": [
+         "11",
+         "68",
+         "6.2",
+         "1",
+         "13"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Kaelon Black"
+        },
+        "stats": [
+         "6",
+         "16",
+         "2.7",
+         "0",
+         "11"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Brock Purdy"
+        },
+        "stats": [
+         "5",
+         "6",
+         "1.2",
+         "0",
+         "4"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Deebo Samuel Sr."
+        },
+        "stats": [
+         "2",
+         "4",
+         "2.0",
+         "0",
+         "4"
+        ]
+       }
+      ]
+     },
+     {
+      "name": "receiving",
+      "type": null,
+      "keys": [
+       "receptions",
+       "receivingYards",
+       "yardsPerReception",
+       "receivingTouchdowns",
+       "longReception",
+       "receivingTargets"
+      ],
+      "athletes": [
+       {
+        "athlete": {
+         "displayName": "Mike Evans"
+        },
+        "stats": [
+         "7",
+         "113",
+         "16.1",
+         "1",
+         "28",
+         "10"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "George Kittle"
+        },
+        "stats": [
+         "5",
+         "24",
+         "4.8",
+         "0",
+         "13",
+         "6"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Deebo Samuel Sr."
+        },
+        "stats": [
+         "2",
+         "21",
+         "10.5",
+         "0",
+         "14",
+         "3"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Christian McCaffrey"
+        },
+        "stats": [
+         "3",
+         "15",
+         "5.0",
+         "0",
+         "8",
+         "3"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "team": {
+     "displayName": "Seattle Seahawks"
+    },
+    "statistics": [
+     {
+      "name": "rushing",
+      "type": null,
+      "keys": [
+       "rushingAttempts",
+       "rushingYards",
+       "yardsPerRushAttempt",
+       "rushingTouchdowns",
+       "longRushing"
+      ],
+      "athletes": [
+       {
+        "athlete": {
+         "displayName": "Emanuel Wilson"
+        },
+        "stats": [
+         "20",
+         "61",
+         "3.1",
+         "1",
+         "8"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Jaxon Smith-Njigba"
+        },
+        "stats": [
+         "1",
+         "16",
+         "16.0",
+         "0",
+         "16"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "George Holani"
+        },
+        "stats": [
+         "4",
+         "7",
+         "1.8",
+         "0",
+         "9"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Sam Darnold"
+        },
+        "stats": [
+         "1",
+         "5",
+         "5.0",
+         "0",
+         "5"
+        ]
+       }
+      ]
+     },
+     {
+      "name": "receiving",
+      "type": null,
+      "keys": [
+       "receptions",
+       "receivingYards",
+       "yardsPerReception",
+       "receivingTouchdowns",
+       "longReception",
+       "receivingTargets"
+      ],
+      "athletes": [
+       {
+        "athlete": {
+         "displayName": "Jaxon Smith-Njigba"
+        },
+        "stats": [
+         "5",
+         "102",
+         "20.4",
+         "1",
+         "38",
+         "8"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "George Holani"
+        },
+        "stats": [
+         "4",
+         "24",
+         "6.0",
+         "0",
+         "9",
+         "4"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Rashid Shaheed"
+        },
+        "stats": [
+         "2",
+         "23",
+         "11.5",
+         "0",
+         "22",
+         "4"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "AJ Barner"
+        },
+        "stats": [
+         "3",
+         "20",
+         "6.7",
+         "0",
+         "8",
+         "5"
+        ]
+       },
+       {
+        "athlete": {
+         "displayName": "Emanuel Wilson"
+        },
+        "stats": [
+         "2",
+         "11",
+         "5.5",
+         "0",
+         "9",
+         "2"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ }
+}

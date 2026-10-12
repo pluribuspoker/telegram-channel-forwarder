@@ -75,6 +75,22 @@ strict_ok = box_score_text(SNELL, "Blake Snell", require_all_words=True)
 check("strict match still finds the real player",
       "strikeouts=6" in strict_ok, repr(strict_ok))
 
+# ── doubled-letter spelling variants (Emmanuel ↔ Emanuel) ─────────────────────
+# Real incident (2026-10-11): "Emmanuel Wilson over 12.5 rec yards" — capper's
+# double-m spelling vs ESPN's "Emanuel Wilson" (SEA). The stale-roster rescue's
+# strict scan missed his real game on that one letter and the leg burned the
+# UNKNOWN cap with the box score sitting final (11 rec yards, a plain LOSS).
+SEA_SF = json.load(open(FIXTURES / "espn_nfl_summary_sea_sf_20261011.json"))
+
+sq = box_score_text(SEA_SF, "Emmanuel Wilson", require_all_words=True)
+check("strict match tolerates doubled-letter hint",
+      "receivingYards=11" in sq, repr(sq)[:200])
+check("exact spelling still matches",
+      "receivingYards=11" in box_score_text(SEA_SF, "Emanuel Wilson", require_all_words=True))
+check("doubled-letter tolerance stays name-scoped",
+      box_score_text(SEA_SF, "Emmanuel Williams", require_all_words=True)
+      == "No player stats found")
+
 # ── build_context stale-roster rescue ────────────────────────────────────────
 import ai  # noqa: E402
 
@@ -188,6 +204,28 @@ check("direct bind carries scoring order too",
 _nfl_sb_pre = {"events": [dict(_denkc_event, status={"type": {"completed": False}})]}
 ctx5, _ = asyncio.run(ai.build_context("NFL", "2026-09-14", _engram, _nfl_sb_pre, {}))
 check("incomplete slate defers player prop", ctx5 == ai.CONTEXT_PENDING, repr(ctx5)[:100])
+
+# Rescue end-to-end across a spelling variant: stale-roster GB binding + the
+# capper's double-m spelling must still land on ESPN's "Emanuel Wilson" (SEA).
+_seasf_event = {
+    "id": "seasf", "name": "Seattle Seahawks at San Francisco 49ers",
+    "status": {"type": {"completed": True}},
+    "competitions": [{"competitors": [
+        {"team": {"displayName": "Seattle Seahawks"}},
+        {"team": {"displayName": "San Francisco 49ers"}}]}]}
+_summaries["seasf"] = SEA_SF
+
+_wilson = {
+    "description": "Emmanuel Wilson over 12.5 receiving yards",
+    "bet_type": "prop", "period": "game",
+    "teams": ["Green Bay Packers"],  # stale roster memory — his old team
+    "player": "Emmanuel Wilson", "prop_stat": "REC YDS",
+    "line": 12.5, "direction": "over",
+}
+ctx_w, _ = asyncio.run(ai.build_context(
+    "NFL", "2026-10-11", _wilson, {"events": [_seasf_event]}, {}))
+check("rescue crosses the doubled-letter spelling",
+      "receivingYards=11" in ctx_w and "NOTE:" in ctx_w, repr(ctx_w)[:300])
 
 # ── game on a DIFFERENT date than the search date ────────────────────────────
 # A prop whose odds never anchored game_date (unsupported stat, no free
