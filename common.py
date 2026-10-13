@@ -121,6 +121,26 @@ def parlay_combined_odds(leg_odds: list[int | None]) -> int | None:
         dec *= (o / 100 + 1) if o > 0 else (100 / abs(o) + 1)
     return round((dec - 1) * 100) if dec >= 2.0 else round(-100 / (dec - 1))
 
+
+def same_game_leg_pairs(leg_picks: list[dict]) -> list[tuple[int, int]]:
+    """Positions (into leg_picks) of parlay legs naming an overlapping team
+    set — the same game, any period. Their prices are correlated, so the
+    product of the leg prices is not the ticket's price."""
+    teams = [frozenset(t.strip().lower() for t in (p.get("teams") or []) if t)
+             for p in leg_picks]
+    return [(a, b) for a in range(len(teams)) for b in range(a + 1, len(teams))
+            if teams[a] & teams[b]]
+
+
+def ticket_combined_odds(leg_picks: list[dict], leg_odds: list[int | None]) -> int | None:
+    """The parlay price every renderer may show: the product of the legs, or
+    None for a same-game parlay — "SGP: BTTS + Barca ML" multiplied -242 ×
+    -380 into -127 where books price the correlated ticket near +100
+    (Pinnacle's BTTS & Barcelona special -113, 2026-10-13)."""
+    if same_game_leg_pairs(leg_picks):
+        return None
+    return parlay_combined_odds(leg_odds)
+
 VERDICT_EMOJI = {
     "WIN":     "✅",
     "LOSS":    "❌",

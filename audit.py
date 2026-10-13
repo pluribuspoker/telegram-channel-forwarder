@@ -27,7 +27,8 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from common import VERDICT_EMOJI, is_btts_as_total, is_regulation_ml, parlay_combined_odds
+from common import (VERDICT_EMOJI, is_btts_as_total, is_regulation_ml,
+                    ticket_combined_odds)
 from tracker_grading import _overall_verdict
 
 
@@ -751,8 +752,6 @@ class AuditLog:
             odds_part = f" {e(odds_str)}" if odds_str else ""
             return f"{VERDICT_EMOJI.get(verdict, '')} {e(desc)}{odds_part}"
 
-        _parlay_combined_odds = parlay_combined_odds
-
         # Check is_parlay BEFORE the single-pick case: a parlay that settled on
         # a single lost leg (siblings still pending/dropped) has len(picks)==1 but
         # must still render as a Parlay, not a lone straight pick.
@@ -762,8 +761,10 @@ class AuditLog:
             overall_emoji = VERDICT_EMOJI[parlay_verdict]
             # A pushed leg is voided from the ticket, so it can't multiply into
             # the payout — price only the live legs (all-push → no price at all).
-            combined = _parlay_combined_odds(
-                [o for _, v, o in parlay_all if v != "PUSH"]
+            # A same-game ticket (correlated legs) has no honest product.
+            live_legs = [(p, o) for p, v, o in parlay_all if v != "PUSH"]
+            combined = ticket_combined_odds(
+                [p for p, _ in live_legs], [o for _, o in live_legs]
             )
             combined_part = f" {e(_fmt_odds(combined))}" if combined is not None else ""
             # Inline the legs on a single line (Ko ML / Duncan ML) instead of one

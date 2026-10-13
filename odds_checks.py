@@ -29,7 +29,6 @@ RULE_TITLES = {
     "ml_long": "moneyline beyond the long-price band",
     "prop_long": "prop beyond the long-price band",
     "leg_band": "parlay leg outside the straight bands",
-    "parlay_same_game": "parlay legs on the same team(s) multiplied as independent",
     "teaser_long": "teaser combined price beyond any teaser card",
     "estimate": "price estimated off a neighbouring line, not quoted at the bet's own",
     "now_move": "far from the capper's stated price",
@@ -85,23 +84,6 @@ def miss_class(match_type: str) -> str | None:
 _TEASER_RE = re.compile(r"\bteas(?:e|er|ed)\b", re.IGNORECASE)
 _NOW_TAG_RE = re.compile(r"\[([+-]\d{3,4}) now\]")
 _SRC_PRICE_RE = re.compile(r"(?<![\d.\[])([+-]\d{3,4})(?![\d.])")
-
-
-def _team_set(pick: dict) -> frozenset:
-    return frozenset(t.strip().lower() for t in (pick.get("teams") or []) if t)
-
-
-def _same_game_pairs(picks: list[dict], legs: list[int]) -> list[tuple[int, int]]:
-    """Parlay legs that name an overlapping team set (and the same period):
-    the same game, so their prices are correlated, not independent."""
-    pairs = []
-    for a_pos, a in enumerate(legs):
-        for b in legs[a_pos + 1:]:
-            ta, tb = _team_set(picks[a]), _team_set(picks[b])
-            if ta and tb and ta & tb and (picks[a].get("period") or "game") == (
-                    picks[b].get("period") or "game"):
-                pairs.append((a, b))
-    return pairs
 
 
 def _pregame(o: dict, now: datetime) -> bool:
@@ -209,13 +191,10 @@ def scan_entry(key: str, entry: dict, *, now: datetime | None = None,
         leg_prices = [price_of(o) for o in leg_odds]
         if (all(p is not None for p in leg_prices) and not any(map(is_live, leg_odds))
                 and not any(o.get("hold") for o in leg_odds)):
-            from common import parlay_combined_odds
-            comb = parlay_combined_odds(leg_prices)
-            pairs = _same_game_pairs(picks, legs)
-            if pairs:
-                hit(-1, "parlay_same_game", comb, "legs " + ", ".join(
-                    f"{a}+{b} ({', '.join(sorted(_team_set(picks[a]) & _team_set(picks[b])))})"
-                    for a, b in pairs) + f" multiplied to {fmt(comb)}")
+            # A same-game ticket never displays a product (correlated legs:
+            # ticket_combined_odds → None), so there is nothing to judge.
+            from common import ticket_combined_odds
+            comb = ticket_combined_odds([picks[i] for i in legs], leg_prices)
             if teaser and comb is not None and comb > TEASER_MAX:
                 hit(-1, "teaser_long", comb, f"{len(legs)}-leg teaser at {fmt(comb)}")
 

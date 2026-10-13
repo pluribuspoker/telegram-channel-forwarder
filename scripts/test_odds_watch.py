@@ -52,9 +52,10 @@ VT = {  # 2026-10-02 Trent 133: same-side spread & ML parsed as a 2-leg parlay
         pick("Virginia Tech Hokies ML (parlay leg)", "moneyline", teams=["Virginia Tech Hokies"], leg=True)]},
     "odds_by_pick": {"0": o(-105), "1": o(-130)},
 }
-check("VT spread&ML parlay → parlay_same_game", rules(VT) == ["parlay_same_game"], rules(VT))
-vt_hit = oc.scan_entry("-100:1", VT)[0]
-check("same-game hit carries the multiplied price", vt_hit["price"] == 245, vt_hit)
+# A same-game ticket never displays the product of its legs any more
+# (common.ticket_combined_odds, 2026-10-13), so the check has nothing to flag;
+# test_same_game_parlay_price.py pins the renderers.
+check("VT same-game parlay: no displayable product → no flag", rules(VT) == [], rules(VT))
 
 TT = {  # bare "Chiefs over 42.5" misread as a team total → deep alternate
     "html_text": "Chiefs over 42.5 [+3500]",
@@ -189,8 +190,8 @@ state = {"_spawns": [NOW_T.isoformat()] * 3 + ["2026-10-01T00:00:00+00:00"]}
 check("daily cap counts the rolling 24h only", ow.daily_spawns(state, NOW_T) == 3)
 
 # ── grouping, result contract, card ─────────────────────────────────────────
-cache = {"-100:1": {**VT, "_source_key": "-9:5", "msg_date": "2026-10-03T10:00:00+00:00", "capper_name": "Trent"},
-         "-200:1": {**VT, "_source_key": "-9:5", "msg_date": "2026-10-03T10:00:01+00:00", "capper_name": "Trent"},
+cache = {"-100:1": {**TEASER, "_source_key": "-9:5", "msg_date": "2026-10-03T10:00:00+00:00", "capper_name": "Trent"},
+         "-200:1": {**TEASER, "_source_key": "-9:5", "msg_date": "2026-10-03T10:00:01+00:00", "capper_name": "Trent"},
          "-300:1": {**TT, "msg_date": "2026-10-03T11:00:00+00:00", "capper_name": "X"}}
 groups = ow.group_by_message(ow.scan(cache, list(cache)), cache)
 check("fan-out copies group under their source, newest first",
@@ -294,8 +295,8 @@ def gate_on(entry, fresh, answer, key="-5:1", **kw):
     r = og.gate(key, entry, picks, odds, raw_text=entry["html_text"], tagged_html=tagged,
                 fresh=fresh, now=NOW_T, reviewer=fake_reviewer(answer), **kw)
     return r, odds
-r, odds = gate_on(VT, {0, 1}, [])
-check("gate: free check alone holds both same-game parlay legs + triggers",
+r, odds = gate_on(TEASER, {0, 1}, [])
+check("gate: free ticket check alone holds both teaser legs + triggers",
       sorted(r["held"]) == [0, 1] and r["trigger"] and odds["0"].get("hold"), r["held"])
 F5 = {"html_text": "Yankees F5 ML", "parsed": {"picks": [pick("Yankees F5 ML", "moneyline",
        teams=["New York Yankees"], period="1h")]}, "odds_by_pick": {"0": o(-150)}}

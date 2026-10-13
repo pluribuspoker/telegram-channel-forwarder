@@ -2,7 +2,7 @@ import re
 
 import httpx
 
-from common import VERDICT_EMOJI, parlay_combined_odds
+from common import VERDICT_EMOJI, parlay_combined_odds, ticket_combined_odds
 from tracker_grading import _overall_verdict
 
 _PICK_EMOJI = {k: v for k, v in VERDICT_EMOJI.items() if k in ("WIN", "LOSS", "PUSH")}
@@ -587,8 +587,10 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         # A held leg (odds_gate: the pre-publish review found it suspicious,
         # an agent is judging it) has no displayable price, so neither does
         # the ticket — _held_odds reads as missing and the combine bails.
+        # Same-game legs are correlated: their product isn't the ticket's
+        # price, so the ticket gets no tag (ticket_combined_odds → None).
         _leg_odds = [_held_odds(odds_by_pick.get(str(i), {})) for i in parlay_idxs]
-        _comb = parlay_combined_odds(_leg_odds)
+        _comb = ticket_combined_odds([picks[i] for i in parlay_idxs], _leg_odds)
         if _comb is not None:
             combined_tag = f" [{'+' if _comb > 0 else ''}{_comb}]"
             # Find the parlay/teaser header line (e.g. "Two Team Teaser / Parlay:")

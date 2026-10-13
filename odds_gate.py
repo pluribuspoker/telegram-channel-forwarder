@@ -109,7 +109,7 @@ def review_payload(picks: list[dict], odds_by_pick: dict, raw_text: str,
                    entry: dict, posted_at: datetime | None = None) -> str:
     """The user message the reviewer reads: the post and when it went up,
     then every leg with the price we're about to show and how it was found."""
-    from common import parlay_combined_odds
+    from common import ticket_combined_odds
     bound = entry.get("espn_events") or entry.get("soccer_events") or {}
     legs = []
     for i, p in enumerate(picks):
@@ -129,10 +129,12 @@ def review_payload(picks: list[dict], odds_by_pick: dict, raw_text: str,
     if _et(posted_at):
         body["posted"] = _et(posted_at)
     body["legs"] = legs
-    parlay = [oc.price_of(odds_by_pick.get(str(i)) or {})
-              for i, p in enumerate(picks) if p.get("is_parlay_leg")]
-    if len(parlay) >= 2:
-        body["parlay_combined_price"] = parlay_combined_odds(parlay)
+    legs_i = [i for i, p in enumerate(picks) if p.get("is_parlay_leg")]
+    if len(legs_i) >= 2:
+        # The ticket price we'd show — none for a same-game parlay.
+        body["parlay_combined_price"] = ticket_combined_odds(
+            [picks[i] for i in legs_i],
+            [oc.price_of(odds_by_pick.get(str(i)) or {}) for i in legs_i])
     return json.dumps(body, indent=1, default=str)
 
 
