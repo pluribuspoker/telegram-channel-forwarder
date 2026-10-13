@@ -73,6 +73,20 @@ CASES = [
      date(2026, 9, 27), None),
     ("no weekday at all", "Bucs +2 [-126]\n40-22 off 1 win", None,
      date(2026, 9, 27), None),
+    # -1004427337587:504, posted Tue 2026-10-13: no hint → bound/verified
+    # against Mon–Fri, missed the Saturday game, queued a grader anomaly.
+    ("abbreviated weekday: '(Sat)' posted Tuesday",
+     "Wager Stalk 💎\n\n1.5U Notre Dame -9.5 (Sat) [-131]", None,
+     date(2026, 10, 13), "2026-10-17"),
+    ("CAPS abbreviation", "SAT 3:30 LSU ML", None, date(2026, 10, 13), "2026-10-17"),
+    ("Thurs abbreviation", "Thurs night Jets ML", None, date(2026, 10, 13), "2026-10-15"),
+    ("lowercase 'sat' is English, not a day", "Kelce sat out, Chiefs -3", None,
+     date(2026, 10, 13), None),
+    ("bare 'Sun' is a team word", "ASU Sun Devils -3\nSun Belt POY", None,
+     date(2026, 10, 13), None),
+    ("bracketed '(Sun)' is a day", "Bucs +2 (Sun)", None, date(2026, 10, 13), "2026-10-18"),
+    ("abbreviation after a record is flair too", "Bucs +2\n22-13 Sat", None,
+     date(2026, 10, 13), None),
 ]
 
 

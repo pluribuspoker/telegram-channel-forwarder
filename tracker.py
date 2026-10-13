@@ -97,8 +97,18 @@ _DAY_NAMES = {
     "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
     "friday": 4, "saturday": 5, "sunday": 6,
 }
+# Abbreviations count too ("Notre Dame -9.5 (Sat)" posted Tuesday bound and
+# verified against Mon–Fri only, 2026-10-13) — Title-case or CAPS only ("he sat
+# out" is English), and "Sun" only bracketed, "(Sun)": bare it is a team word
+# ("Sun Devils", "Sun Belt", Connecticut Sun).
+_DAY_ABBR = {
+    "mon": 0, "tue": 1, "tues": 1, "wed": 2, "thu": 3, "thur": 3, "thurs": 3,
+    "fri": 4, "sat": 5, "sun": 6,
+}
+_ABBR_ALT = "|".join(f"{a.capitalize()}|{a.upper()}" for a in _DAY_ABBR if a != "sun")
 _DAY_RE = re.compile(
-    r'\b(' + '|'.join(_DAY_NAMES) + r')\b', re.IGNORECASE,
+    r'\b((?i:' + '|'.join(_DAY_NAMES) + r')|' + _ABBR_ALT + r')\b'
+    r'|(?<=[(\[])(Sun|SUN)\.?(?=[)\]])',
 )
 # A weekday right after a W-L(-T) record token is capper flair ("22-13
 # Saturday"), never the bet's schedule.
@@ -131,7 +141,8 @@ def _day_hint_date(text: str, msg_date: _date, entities=None) -> str | None:
     for m in _DAY_RE.finditer(text):
         if _RECORD_TAIL_RE.search(text[:m.start()].rsplit("\n", 1)[-1]):
             continue
-        delta = (_DAY_NAMES[m.group(1).lower()] - msg_date.weekday()) % 7
+        day = (m.group(1) or m.group(2)).lower()
+        delta = ({**_DAY_NAMES, **_DAY_ABBR}[day] - msg_date.weekday()) % 7
         if delta == 0:
             return None  # same day — no override needed
         return (msg_date + timedelta(days=delta)).isoformat()
