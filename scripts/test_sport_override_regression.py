@@ -83,6 +83,20 @@ async def main() -> None:
     check("same-sport fragment rescue unchanged",
           got, ("MLB", ["Detroit Tigers"]))
 
+    # 4. The fuzzy rescue picks the competitor naming the MOST typed fragments,
+    #    never the last one matching any: "Middle Tennessee State" (ESPN:
+    #    "Middle Tennessee Blue Raiders") was rebound to Jacksonville State on
+    #    the generic word "State" — the 2026-10-13 Trent "MIDDLE TENN ML" card
+    #    (real NCAAF scoreboard for that date).
+    ncaaf = json.loads((FIXTURE.parent / "espn_ncaaf_scoreboard_20261013.json").read_text())
+    cache = {("NCAAF", "2026-10-13"): ncaaf}
+    got = await scores.validate_sport(
+        "NCAAF", ["Middle Tennessee State"], "Middle Tennessee State moneyline +100",
+        "2026-10-13", cache, typed_text="MIDDLE TENN ML (+100)\nFIU/JVILLE ST U43.5",
+    )
+    check("fuzzy rescue ranks by fragments, not last match",
+          got, ("NCAAF", ["Middle Tennessee Blue Raiders"]))
+
     print(f"\n{'PASS' if FAILS == 0 else f'FAIL ({FAILS})'}")
     sys.exit(1 if FAILS else 0)
 

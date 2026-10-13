@@ -3506,15 +3506,26 @@ async def validate_sport(
     if sb:
         matched_ids = find_event_ids(sb.get("events", []), search_teams)
         if matched_ids:
-            corrected_teams = teams
+            # The competitor naming the MOST typed fragments wins; generic words
+            # never count, and a tie between different teams keeps the parse.
+            # (Last-match-wins let "State" in "Middle Tennessee State" rebind
+            # MTSU's ML to Jacksonville State's game on the same slate, 2026-10-13.)
+            frags = {f.lower() for f in raw_terms if f.lower() not in _TYPED_STOPWORDS}
+            scored: dict[str, int] = {}
             for evt in sb.get("events", []):
                 if evt.get("id") in matched_ids:
                     for comp in evt.get("competitions", [{}]):
                         for c in comp.get("competitors", []):
                             name = c.get("team", {}).get("displayName", "")
-                            if name and any(f.lower() in name.lower() for f in raw_terms):
-                                corrected_teams = [name]
-                                break
+                            hits = sum(1 for f in frags if f in name.lower()) if name else 0
+                            if hits:
+                                scored[name] = max(scored.get(name, 0), hits)
+            corrected_teams = teams
+            if scored:
+                best = max(scored.values())
+                top = [n for n, s in scored.items() if s == best]
+                if len(top) == 1:
+                    corrected_teams = top
             return sport, corrected_teams
 
     # Build set of alternative sports to check
