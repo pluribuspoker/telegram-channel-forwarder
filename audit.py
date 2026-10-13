@@ -277,6 +277,12 @@ def _pick_link(channel_id: int, message_id: int) -> str:
     return f"https://t.me/c/{str(abs(channel_id))[3:]}/{message_id}"
 
 
+def pick_link_for_key(key: str) -> str:
+    """t.me link for a `<channel>:<msg>` cache key; "" when it doesn't parse."""
+    m = re.fullmatch(r"(-100\d+):(\d+)", key or "")
+    return _pick_link(int(m.group(1)), int(m.group(2))) if m else ""
+
+
 def _capper_label(capper_name: str) -> str:
     """Squeeze a capper handle down to label size.
 
@@ -431,17 +437,27 @@ def save_anomalies(rows: list[dict]) -> None:
     os.replace(tmp, ANOMALIES_FILE)
 
 
-def append_anomaly(text: str) -> None:
-    """Queue one pending anomaly (idempotent on identical pending text)."""
+def append_anomaly(text: str, key: str = "", capper: str = "") -> None:
+    """Queue one pending anomaly (idempotent on identical pending text).
+
+    `key` = the pick's cache key (`<channel>:<msg>`): stored with its t.me
+    link so the agent finds the pick and hc-repair's card links it."""
     rows = load_anomalies()
     if any(r.get("status") == "pending" and r.get("text") == text for r in rows):
         return
-    rows.append({
+    row = {
         "id": hashlib.sha256(f"{time.time()}{text}".encode()).hexdigest()[:10],
         "ts": time.time(),
         "text": text,
         "status": "pending",
-    })
+    }
+    if key:
+        row["key"] = key
+        if link := pick_link_for_key(key):
+            row["link"] = link
+    if capper:
+        row["capper"] = capper
+    rows.append(row)
     save_anomalies(rows)
 
 
@@ -629,7 +645,8 @@ class AuditLog:
 
     # ── Operator-facing anomalies (agent-first, 2026-10-11) ──────────────────
 
-    async def warn(self, text: str, kind: str = "info") -> None:
+    async def warn(self, text: str, kind: str = "info", *, key: str = "",
+                   capper: str = "") -> None:
         """Surface a pipeline warning. Never raises.
 
         kind="info": journal only — the Telegram audit channel is gone
@@ -639,13 +656,14 @@ class AuditLog:
         agent-first path: the end-of-run check ping fails while anything is
         pending, hc-repair's agent fixes the pick and resolves the entry
         (scripts/grader_anomalies.py), and its card is the operator's DM.
+        `key` (cache key) + `capper` ride along so that card links the pick.
         """
         plain = re.sub(r"<[^>]+>", "", text)
         print(f"[audit] {plain}")
         if kind != "anomaly":
             return
         try:
-            await asyncio.to_thread(append_anomaly, plain)
+            await asyncio.to_thread(append_anomaly, plain, key, re.sub(r"<[^>]+>", "", capper))
         except Exception as exc:  # noqa: BLE001
             print(f"[audit] anomaly queue failed: {exc}")
 

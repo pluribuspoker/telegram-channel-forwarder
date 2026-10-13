@@ -127,7 +127,7 @@ class _Audit:
     def __init__(self):
         self.sent = []
 
-    async def warn(self, text, kind="info"):
+    async def warn(self, text, kind="info", **_):
         self.sent.append(text)
 
 

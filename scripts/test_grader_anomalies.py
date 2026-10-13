@@ -54,6 +54,17 @@ asyncio.run(log.warn("⚠️ <b>possible wrong contest</b>: Huskies vs Commander
                      kind="anomaly"))
 check("identical pending text dedupes", len(audit.load_anomalies()) == 1)
 
+# The pick's cache key rides along → a t.me link for hc-repair's card.
+asyncio.run(log.warn("⚠️ <b>pick names no one on the slate</b>: x", kind="anomaly",
+                     key="-1002486251914:4321", capper="Wager <b>Stalk</b> 💎"))
+row = audit.load_anomalies()[-1]
+check("anomaly stores the pick key, link and plain capper",
+      row.get("key") == "-1002486251914:4321"
+      and row.get("link") == "https://t.me/c/2486251914/4321"
+      and row.get("capper") == "Wager Stalk 💎", f"{row}")
+check("unparseable key → no link", audit.pick_link_for_key("abc") == "")
+audit.save_anomalies(audit.load_anomalies()[:-1])  # the rest expects one entry
+
 # The check ping: /fail with the pending list, success when clear.
 pings = []
 

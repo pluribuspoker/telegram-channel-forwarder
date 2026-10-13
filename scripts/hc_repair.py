@@ -83,6 +83,8 @@ STATE_FILE = ROOT / "logs" / "hc_repair_state.json"
 LOCK_FILE = ROOT / "logs" / ".hc_repair.lock"
 RUNS_LOG = ROOT / "logs" / "hc_repair_runs.jsonl"
 OUT_DIR = ROOT / "logs" / "hc_repair"
+ANOMALIES_FILE = ROOT / "logs" / "grader_anomalies.jsonl"
+ANOMALY_KEY = "GRADER_ANOMALIES_HEALTHCHECK_URL"
 API = "https://healthchecks.io/api/v3"
 
 REPAIR_MODEL = os.environ.get("HC_REPAIR_MODEL") or "claude-opus-5-5"
@@ -143,7 +145,8 @@ KEY_HINTS = {
                                         "queued (ambiguous game, final-but-"
                                         "ungraded, refused corrections, suspect "
                                         "parses) — read pending entries in "
-                                        "logs/grader_anomalies.jsonl, fix the "
+                                        "logs/grader_anomalies.jsonl (`key` = "
+                                        "the pick's cache key), fix the "
                                         "pick per docs/tracker.md, then "
                                         "scripts/grader_anomalies.py --resolve "
                                         "<id>; the next tracker pass (5 min) "
@@ -591,8 +594,40 @@ def build_prompt(targets: list[dict], *, now_et: str, head: str,
     return "\n".join(lines)
 
 
+def anomaly_picks(path: Path = ANOMALIES_FILE) -> list[dict]:
+    """The pending grader anomalies' picks ({link, capper}, one per link),
+    snapshotted at spawn so the card links what the agent was sent to fix."""
+    picks, seen = [], set()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        link = r.get("link") or ""
+        if r.get("status") == "pending" and link and link not in seen:
+            seen.add(link)
+            picks.append({"link": link, "capper": r.get("capper") or ""})
+    return picks
+
+
+def _pick_links(picks: list[dict], limit: int = 8) -> str:
+    esc = html.escape
+    links = [f'<a href="{esc(p["link"], quote=True)}">'
+             f'{esc((p.get("capper") or "pick").strip()[:40] or "pick")}</a>'
+             for p in picks[:limit]]
+    more = f" +{len(picks) - limit} more" if len(picks) > limit else ""
+    return "🔗 " + " · ".join(links) + more
+
+
 def dm_card(targets: list[dict], reports: dict[str, dict], *, commits: list[str],
-            status_after: dict[str, str], meta: dict, pushed: bool | None) -> str:
+            status_after: dict[str, str], meta: dict, pushed: bool | None,
+            picks: dict[str, list[dict]] | None = None) -> str:
+    """`picks[target key]` = the pick messages that target is about (grader
+    anomalies) — linked under the target's headline."""
     esc = html.escape
     blocks = []
     for t in targets:
@@ -604,8 +639,10 @@ def dm_card(targets: list[dict], reports: dict[str, dict], *, commits: list[str]
         if r.get("action"):
             inner.append(f"<b>Action:</b> {esc(r['action'])}")
         inner.append(f"<b>Check now:</b> {esc(status_after.get(t['uuid'], '?'))}")
+        links = (picks or {}).get(t["key"])
         blocks.append(f"{emoji} <b>{esc(label(t))}</b> — {esc(lbl)}\n"
-                      f"<blockquote expandable>{chr(10).join(inner)}</blockquote>")
+                      + (_pick_links(links) + "\n" if links else "")
+                      + f"<blockquote expandable>{chr(10).join(inner)}</blockquote>")
     foot = ["<b>Commits:</b> " + (esc("; ".join(commits)) if commits else "none")]
     if pushed is False:
         foot.append("⚠️ PUSH FAILED")
@@ -860,6 +897,11 @@ def main() -> int:
         run_dir = OUT_DIR / now.strftime("%Y%m%d-%H%M%S")
         record: dict = {"ts": now.isoformat(timespec="seconds"),
                         "targets": [label(t) for t in eligible]}
+        # Snapshot BEFORE the agent resolves them: the card links these picks.
+        picks = {t["key"]: p for t in eligible
+                 if t.get("env_key") == ANOMALY_KEY and (p := anomaly_picks())}
+        if picks:
+            record["picks"] = {label(t): picks[t["key"]] for t in eligible if t["key"] in picks}
         head0, dirty0 = ua.git_head(), ua.git_dirty_paths()
         invoker = RepairInvoker(
             os.environ.get("HC_REPAIR_CLAUDE_BIN") or ua.DEFAULT_CLAUDE_BIN,
@@ -904,7 +946,7 @@ def main() -> int:
         ua.append_runs_log(RUNS_LOG, record)
         if ua.send_watchdog_dm(dm_card(eligible, reports, commits=commits,
                                        status_after=status_after, meta=invoker.last_call,
-                                       pushed=pushed), as_html=True):
+                                       pushed=pushed, picks=picks), as_html=True):
             # The card IS the agent-first notification; a failed send leaves
             # notified unset so a later pass raw-alerts instead.
             for t in eligible:

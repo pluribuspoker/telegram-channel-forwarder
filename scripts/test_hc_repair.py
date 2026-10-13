@@ -167,6 +167,30 @@ check("prompt starts with the skill", p.startswith("/investigate "))
 card = hr.dm_card(two, rep, commits=[], status_after={"jobs-uuid": "up"}, meta={}, pushed=None)
 check("card has both targets + check status",
       "sauce-watch.service" in card and "env-backup.path" in card and "up" in card)
+check("card without picks has no link line", "🔗" not in card)
+
+# 7b. Grader-anomaly cards link the picks pending at spawn (2026-10-13: two
+#     cards named a capper but nothing to tap).
+import json  # noqa: E402
+import tempfile  # noqa: E402
+_af = Path(tempfile.mkdtemp()) / "grader_anomalies.jsonl"
+_af.write_text("\n".join(json.dumps(r) for r in [
+    {"id": "a", "status": "pending", "text": "x", "link": "https://t.me/c/1/2", "capper": "Wager Stalk 💎"},
+    {"id": "b", "status": "pending", "text": "y", "link": "https://t.me/c/1/2", "capper": "Wager Stalk 💎"},
+    {"id": "c", "status": "resolved", "text": "z", "link": "https://t.me/c/1/3", "capper": "Old"},
+    {"id": "d", "status": "pending", "text": "legacy row, no key"},
+]) + "\nnot json\n", encoding="utf-8")
+ap = hr.anomaly_picks(_af)
+check("anomaly_picks: pending + linked only, one per link",
+      ap == [{"link": "https://t.me/c/1/2", "capper": "Wager Stalk 💎"}], f"{ap}")
+check("anomaly_picks: missing file → []", hr.anomaly_picks(_af.parent / "nope") == [])
+card = hr.dm_card([judge], {judge["key"]: {"outcome": "fixed_verified", "issue": "i"}},
+                  commits=[], status_after={}, meta={}, pushed=None,
+                  picks={judge["key"]: ap + [{"link": "https://t.me/c/1/9?a=1&b=2", "capper": ""}]})
+check("card links each pick under the headline, before the quote",
+      '🔗 <a href="https://t.me/c/1/2">Wager Stalk 💎</a> · '
+      '<a href="https://t.me/c/1/9?a=1&amp;b=2">pick</a>' in card
+      and card.index("🔗") < card.index("<blockquote"), card)
 
 # 8. Invoker swaps model/effort.
 inv = hr.RepairInvoker("/bin/claude", oauth_token="t")
