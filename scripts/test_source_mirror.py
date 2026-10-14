@@ -114,10 +114,10 @@ def main():
     c2 = _Client(text="Dagger\n\nEagles / Bears UNDER 42.5 2U")
     run({f"{DEST}:3922": entry()}, c2)
     check("unpriced pending pick gets the odds tag",
-          c2.edits and "[-112]" in c2.edits[0][2] and "✅" not in c2.edits[0][2])
+          c2.edits and "\u2060-112" in c2.edits[0][2] and "✅" not in c2.edits[0][2])
     run({f"{DEST}:3922": entry("LOSS")}, c2)
     check("later result adds the emoji after the tag",
-          len(c2.edits) == 2 and c2.edits[1][2].count("[-112]") == 1 and "❌" in c2.edits[1][2])
+          len(c2.edits) == 2 and c2.edits[1][2].count("\u2060-112") == 1 and "❌" in c2.edits[1][2])
 
     # 4: dupe marker follows its primary
     reset()

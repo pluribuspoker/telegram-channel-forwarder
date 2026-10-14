@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 from telethon.helpers import add_surrogate, del_surrogate
 
 from common import (
+    ODDS_TAG_RE,
     VERDICT_EMOJI,
     UNKNOWN_MAX_ATTEMPTS,
     effective_grade_date,
@@ -190,9 +191,9 @@ _BET_SIGNAL_RE = re.compile(
     r'|\b\d+\.5\b',        # half-point lines
     re.IGNORECASE,
 )
-# Our own appended odds tag, e.g. " [+172]" / " [-120 live]" — stripped before
-# the thin check so a re-run doesn't count our tag as a betting signal.
-_OWN_ODDS_TAG_RE = re.compile(r'\[[+-]\d{3,4}[^\]]*\]')
+# Our own appended odds tag (common.odds_tag, e.g. " +172" / " -120 live") —
+# stripped before the thin check so a re-run doesn't count it as a bet signal.
+_OWN_ODDS_TAG_RE = ODDS_TAG_RE
 
 
 def _is_text_thin(text: str) -> bool:

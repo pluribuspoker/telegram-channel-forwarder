@@ -76,17 +76,17 @@ CASES = [
      CFL_TEXT, [CFL_PICK], -132, CFL_TEXT),
     ("write-up repeats the team name, beyond threshold: 'now' on the pick line",
      CFL_TEXT, [CFL_PICK], -190,
-     CFL_TEXT.replace("(-125) / (5u) ", "(-125) / (5u) [-190 now]")),
+     CFL_TEXT.replace("(-125) / (5u) ", "(-125) / (5u) \u2060-190 now")),
     ("angle record holds the bet number: no tag on the angle line",
      TOTAL_TEXT, [TOTAL_PICK], -105, TOTAL_TEXT),
     ("within threshold, no blockquote to leak onto",
      PLAIN, [PICK], -138, PLAIN),
     ("beyond threshold: 'now' marker on the PICK line, not the angle line",
      WITH_ANGLE, [PICK], -190,
-     WITH_ANGLE.replace("3.5 -145", "3.5 -145 [-190 now]")),
+     WITH_ANGLE.replace("3.5 -145", "3.5 -145 \u2060-190 now")),
     ("no stated price: plain tag still lands on the pick line",
      NO_PRICE, [PICK], -138,
-     NO_PRICE.replace("over 3.5", "over 3.5 [-138]")),
+     NO_PRICE.replace("over 3.5", "over 3.5 \u2060-138")),
 ]
 
 

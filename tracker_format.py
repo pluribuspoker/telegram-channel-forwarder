@@ -2,11 +2,12 @@ import re
 
 import httpx
 
-from common import VERDICT_EMOJI, parlay_combined_odds, ticket_combined_odds
+from common import (ODDS_TAG_RE, VERDICT_EMOJI, has_odds_tag, modernize_odds_tags,
+                    odds_tag, parlay_combined_odds, ticket_combined_odds)
 from tracker_grading import _overall_verdict
 
 _PICK_EMOJI = {k: v for k, v in VERDICT_EMOJI.items() if k in ("WIN", "LOSS", "PUSH")}
-_ODDS_TAG_RE = re.compile(r'\s*\[[+-]\d{3,4}[^\]]*\]')
+_ODDS_TAG_RE = ODDS_TAG_RE
 _SOURCE_ODDS_RE = re.compile(r'[+-]\d{3,4}(?!\.\d)(?!\d)')
 
 # When a pick's message already states its price (e.g. "(-110)") we normally
@@ -99,7 +100,7 @@ def _norm_abbr(s: str) -> str:
 
 _BET_LINE_RE = re.compile(
     r'(?i)'
-    r'(?:\[?[+-]\d{3,4}\]?'           # odds like +150, [-110]
+    r'(?:\[?[+-]\d{3,4}\]?'           # odds like +150, our tag, legacy [-110]
     r'|\b\d+\.5\b'                     # half-point lines (spreads/totals)
     r'|\b\d+\s*units?\b'              # unit sizing
     r'|\bml\b|\bmoneyline\b'          # moneyline keywords
@@ -523,7 +524,7 @@ def _fmt_odds_audit(pick: dict, sport: str, capper: str, result) -> str:
     desc = pick.get("description", "")
     bk   = result.bookmaker or "?"
     lines = [
-        f"📊 <b>odds</b>: {desc} → [{fmt}]",
+        f"📊 <b>odds</b>: {desc} → {fmt}",
         f"{result.match_type} · {bk}",
     ]
     if result.api_line is not None and result.pick_line is not None and result.api_line != result.pick_line:
@@ -546,24 +547,26 @@ def _strip_replaced_tags(lines: list[str], idxs: list[int], odds_by_pick: dict) 
     replaced with a quote (`replaced` = the old price, tracker.py), so the
     new tag can land — every renderer starts from the live post text, which
     still carries the old one. Only an unambiguous tag goes: exactly one
-    "[old]"/"[old now]" in the post; two legs sharing the old price keep it.
+    "old"/"old now" tag in the post; two legs sharing the old price keep it.
     Idempotent: once swapped, the old tag is gone."""
     for i in idxs:
         entry = odds_by_pick.get(str(i)) or {}
         old = entry.get("replaced")
         if not isinstance(old, int) or old == _held_odds(entry):
             continue
-        sign = "+" if old > 0 else ""
-        for stale in (f" [{sign}{old}]", f" [{sign}{old} now]"):
-            where = [j for j, line in enumerate(lines) if stale in line]
-            if len(where) == 1 and lines[where[0]].count(stale) == 1:
-                lines[where[0]] = lines[where[0]].replace(stale, "", 1)
+        for stale in (odds_tag(old), odds_tag(old, "now")):
+            pat = re.compile(re.escape(stale) + r"(?!\d| (?:live|pre|now)\b)")
+            where = [(j, n) for j, line in enumerate(lines) if (n := len(pat.findall(line)))]
+            if len(where) == 1 and where[0][1] == 1:
+                j = where[0][0]
+                lines[j] = pat.sub("", lines[j], count=1)
                 break
 
 
 def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     """
-    Insert odds tags directly after each pick line, e.g. 'Duke -4.5 (-153)'.
+    Insert odds tags directly after each pick line, e.g. 'Duke -4.5 -153'
+    (common.odds_tag: a bare price behind the invisible ODDS_TAG_MARK).
 
     For parlays: inserts combined parlay price on the header line (the line
     containing "parlay" that isn't a leg bullet). Individual leg prices are
@@ -574,7 +577,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     parlay_idxs = [i for i, p in enumerate(picks) if p.get("is_parlay_leg")]
     standalone_idxs = [i for i, p in enumerate(picks) if not p.get("is_parlay_leg")]
 
-    lines = text.rstrip().split("\n")
+    lines = modernize_odds_tags(text).rstrip().split("\n")
     # Angle records live in blockquotes and are never the bet, so no pass may
     # tag one — a team word or bet number appearing in the record ("35-10 off
     # 1 loss" under "Dbacks ML") must not attract the tag. _match_pick_line
@@ -592,7 +595,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         _leg_odds = [_held_odds(odds_by_pick.get(str(i), {})) for i in parlay_idxs]
         _comb = ticket_combined_odds([picks[i] for i in parlay_idxs], _leg_odds)
         if _comb is not None:
-            combined_tag = f" [{'+' if _comb > 0 else ''}{_comb}]"
+            combined_tag = odds_tag(_comb)
             # Find the parlay/teaser header line (e.g. "Two Team Teaser / Parlay:")
             # Prefer this over team-name matching, which can misfire when a leg
             # line itself mentions multiple teams (e.g. "Pistons / Magic o208.5").
@@ -605,8 +608,8 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             # header nearest the legs, not the prose mention. Fall back to the
             # first keyword line when there's no colon-label header.
             #
-            # The optional trailing "[+101]" in the pattern keeps this idempotent:
-            # once we've appended the price the header becomes "Parlay: [+101]"
+            # The optional trailing tag in the pattern keeps this idempotent:
+            # once we've appended the price the header becomes "Parlay: +101"
             # (no longer colon-terminated), and without tolerating that tag a
             # re-run would fail to re-find the header and wrongly tag the prose
             # line instead.
@@ -614,7 +617,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             for j, line in enumerate(lines):
                 if j in bq_lines or _is_link_line(line):
                     continue
-                if re.search(r'\b(?:parlay|teaser)\b[^:\n]*:(?:\s*\[[+-]\d[^\]]*\])?\s*$', line, re.IGNORECASE):
+                if re.search(r'\b(?:parlay|teaser)\b[^:\n]*:(?:\s*\[[+-]\d[^\]]*\]|\s*\u2060[+-]\d+)?\s*$', line, re.IGNORECASE):
                     header_j = j
                     break
             if header_j < 0:
@@ -650,9 +653,6 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         if not standalone_idxs:
             return "\n".join(lines)
 
-    def _fmt(v: int) -> str:
-        return f"+{v}" if v > 0 else str(v)
-
     def _odds_tag(idx: int) -> str | None:
         entry = odds_by_pick.get(str(idx), {})
         odds_val = _held_odds(entry)
@@ -663,19 +663,19 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             # The game had already started at grade time, so the primary line is
             # the in-game (live) price. When odds.py also captured the pregame
             # closing line (_try_pregame), show both — the live price the capper
-            # saw plus the pre-game closing line — e.g. "[+1200 live] [-107 pre]".
-            tag = f" [{_fmt(odds_val)} live]"
+            # saw plus the pre-game closing line — e.g. "+1200 live -107 pre".
+            tag = odds_tag(odds_val, "live")
             pre = entry.get("pregame_odds")
             if pre is not None and pre != odds_val:
-                tag += f" [{_fmt(pre)} pre]"
+                tag += odds_tag(pre, "pre")
             return tag
         if match_type.startswith("pregame_"):
-            return f" [{_fmt(odds_val)} pre]"
-        return f" [{_fmt(odds_val)}]"
+            return odds_tag(odds_val, "pre")
+        return odds_tag(odds_val)
 
-    def _place(j: int, odds_tag: str, allow_source: bool = False,
+    def _place(j: int, tag: str, allow_source: bool = False,
                declined: list | None = None):
-        """Place odds_tag on line j. Returns True if the tag was placed OR our
+        """Place tag on line j. Returns True if the tag was placed OR our
         own tag is already there (pick is done); returns None if the line
         already carries a DIFFERENT pick's tag, so the caller should keep
         searching. This stops one pick from claiming another pick's already-
@@ -692,12 +692,12 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
         rule rather than let the pick fall through to the unmatched fallbacks."""
         line = lines[j]
         if _ODDS_TAG_RE.search(line):
-            if odds_tag.strip() in line:
+            if has_odds_tag(line, tag):
                 return True
             # A line carrying BOTH a tag and the capper's own price is the
             # "now" case below, already resolved on an earlier pass. Its tag
-            # ("[-190 now]") isn't textually equal to the plain tag we recompute
-            # here ("[-190]"), so record it as declined rather than reporting
+            # ("-190 now") isn't the plain tag we recompute here ("-190"),
+            # so record it as declined rather than reporting
             # the pick unmatched — otherwise a re-run strands a second tag on an
             # unrelated line. Tags are stripped before testing so we read the
             # capper's price, not the digits inside our own tag.
@@ -710,20 +710,20 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 declined.append(j)
             return None
         if _SOURCE_ODDS_RE.search(line) and not allow_source:
-            if odds_tag.strip() in line:
+            if has_odds_tag(line, tag):
                 return True
             if declined is not None and j not in declined:
                 declined.append(j)
             return None
-        lines[j] = f"{line.rstrip()}{odds_tag}"
+        lines[j] = f"{line.rstrip()}{tag}"
         return True
 
     standalone_unmatched: list[int] = []
     for idx, pick in enumerate(picks):
         if pick.get("is_parlay_leg"):
             continue  # parlay legs handled above via combined odds
-        odds_tag = _odds_tag(idx)
-        if odds_tag is None:
+        pick_tag = _odds_tag(idx)
+        if pick_tag is None:
             continue
         # If the source already states its own price (e.g. "Renegades -4.5
         # (-110)") we normally skip — the capper already showed the number.
@@ -741,7 +741,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             ) <= _ODDS_MOVE_THRESHOLD:
                 continue
             moved = True
-            odds_tag = f" [{_fmt(cur_odds)} now]"
+            pick_tag = odds_tag(cur_odds, "now")
 
         search_terms = _pick_search_terms(pick)
 
@@ -763,7 +763,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 if j in bq_lines or _is_link_line(line):
                     continue
                 if desc in _norm_abbr(line.lower()):
-                    if _place(j, odds_tag, allow_source=moved, declined=src_declined):
+                    if _place(j, pick_tag, allow_source=moved, declined=src_declined):
                         desc_matched = True
                         break
                     if src_declined:
@@ -776,7 +776,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 if " @ " in line and not _BET_LINE_RE.search(line):
                     continue  # skip game-info headers, but keep pick lines
                 if any(term in line.lower() for term in search_terms):
-                    if _place(j, odds_tag, allow_source=moved, declined=src_declined):
+                    if _place(j, pick_tag, allow_source=moved, declined=src_declined):
                         desc_matched = True
                         break
                     if src_declined:
@@ -807,7 +807,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                     if " @ " in line and not _BET_LINE_RE.search(line):
                         continue
                     if desc_stripped in _norm_abbr(line.lower()):
-                        if _place(j, odds_tag, allow_source=moved, declined=src_declined):
+                        if _place(j, pick_tag, allow_source=moved, declined=src_declined):
                             desc_matched = True
                             break
                         if src_declined:
@@ -827,7 +827,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                     if " @ " in row and not _BET_LINE_RE.search(row):
                         continue
                     if line_str in row:
-                        if _place(j, odds_tag, allow_source=moved, declined=src_declined):
+                        if _place(j, pick_tag, allow_source=moved, declined=src_declined):
                             desc_matched = True
                             break
                         if src_declined:
@@ -854,7 +854,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 if score > best_score:
                     best_score = score
                     best_j = j
-            if best_j >= 0 and _place(best_j, odds_tag, allow_source=moved, declined=src_declined):
+            if best_j >= 0 and _place(best_j, pick_tag, allow_source=moved, declined=src_declined):
                 desc_matched = True
 
         if not desc_matched and src_declined:
@@ -877,7 +877,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 and abs(_american_to_prob(cur_odds) - _american_to_prob(line_odds))
                 > _ODDS_MOVE_THRESHOLD
             ):
-                _place(j, f" [{_fmt(cur_odds)} now]", allow_source=True)
+                _place(j, odds_tag(cur_odds, "now"), allow_source=True)
             desc_matched = True
 
         if not desc_matched:
@@ -889,11 +889,11 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     # _insert_emojis uses, so the odds and the later verdict emoji land together.
     if len(standalone_idxs) == 1 and len(standalone_unmatched) == 1:
         idx = standalone_unmatched[0]
-        odds_tag = _odds_tag(idx)
-        if odds_tag is not None:
+        pick_tag = _odds_tag(idx)
+        if pick_tag is not None:
             best = _best_content_line(lines)
             if best is not None and not _ODDS_TAG_RE.search(lines[best]) and not _SOURCE_ODDS_RE.search(lines[best]):
-                lines[best] = f"{lines[best].rstrip()}{odds_tag}"
+                lines[best] = f"{lines[best].rstrip()}{pick_tag}"
 
     return "\n".join(lines)
 

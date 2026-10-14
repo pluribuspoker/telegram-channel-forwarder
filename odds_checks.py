@@ -13,6 +13,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from common import ODDS_TAG_MARK
+
 # Main spreads/totals sit near -110; a proximity estimate 1-1.5 pts off can
 # reach about ±160. Past these the price is an alternate or a wrong market.
 LINE_DOG, LINE_FAV = 170, -230
@@ -82,8 +84,9 @@ def miss_class(match_type: str) -> str | None:
 
 
 _TEASER_RE = re.compile(r"\bteas(?:e|er|ed)\b", re.IGNORECASE)
-_NOW_TAG_RE = re.compile(r"\[([+-]\d{3,4}) now\]")
-_SRC_PRICE_RE = re.compile(r"(?<![\d.\[])([+-]\d{3,4})(?![\d.])")
+# Our "now" tag (common.odds_tag) and the legacy bracket form "[-190 now]".
+_NOW_TAG_RE = re.compile(r"(?:\[([+-]\d{3,4}) now\]|\u2060([+-]\d{3,4}) now)")
+_SRC_PRICE_RE = re.compile(r"(?<![\d.\[\u2060])([+-]\d{3,4})(?![\d.])")
 
 
 def _pregame(o: dict, now: datetime) -> bool:
@@ -152,7 +155,7 @@ def scan_entry(key: str, entry: dict, *, now: datetime | None = None,
         # states their own number, _insert_odds shows ours only on a big move
         # (the `now` check below) — "Michigan -3 -160" carries no tag at all.
         shown = pick.get("is_parlay_leg") or re.search(
-            rf"\[{re.escape(fmt(price))}\b", text)
+            rf"(?:\[|{ODDS_TAG_MARK}){re.escape(fmt(price))}(?!\d)", text)
         if not shown or any(abs(implied(s) - implied(price)) <= NOW_MOVE for s in stated):
             pass
         elif pick.get("is_parlay_leg"):
@@ -198,12 +201,12 @@ def scan_entry(key: str, entry: dict, *, now: datetime | None = None,
             if teaser and comb is not None and comb > TEASER_MAX:
                 hit(-1, "teaser_long", comb, f"{len(legs)}-leg teaser at {fmt(comb)}")
 
-    # The capper's own stated price vs ours ("Bills -3 (-110) [-190 now]").
+    # The capper's own stated price vs ours ("Bills -3 (-110) -190 now").
     for line in text.split("\n"):
         now_tag = _NOW_TAG_RE.search(line)
         if not now_tag:
             continue
-        ours = int(now_tag.group(1))
+        ours = int(now_tag.group(1) or now_tag.group(2))
         stated = [int(s) for s in _SRC_PRICE_RE.findall(_NOW_TAG_RE.sub("", line))]
         if stated and min(abs(implied(s) - implied(ours)) for s in stated) > NOW_MOVE:
             hit(-1, "now_move", ours, f"stated {', '.join(fmt(s) for s in stated)}"

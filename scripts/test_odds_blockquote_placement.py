@@ -83,7 +83,7 @@ def check(name, got, want):
 def main():
     # 1. The reported message: tag on the pick line, blockquote untouched.
     got = _insert_odds(DBACKS_TEXT, [DBACKS_PICK], DBACKS_ODDS)
-    want = "TMS\n\nDbacks ML [-141]\n\n<blockquote>35-10 off 1 loss</blockquote>"
+    want = "TMS\n\nDbacks ML \u2060-141\n\n<blockquote>35-10 off 1 loss</blockquote>"
     check("dbacks tag on pick line", got, want)
 
     # 2. Idempotent — a second pass changes nothing (the tracker re-runs
@@ -95,26 +95,26 @@ def main():
     check(
         "emoji converges on the tagged line",
         graded,
-        "TMS\n\nDbacks ML [-141]✅\n\n<blockquote>35-10 off 1 loss</blockquote>",
+        "TMS\n\nDbacks ML \u2060-141✅\n\n<blockquote>35-10 off 1 loss</blockquote>",
     )
 
     # 4. Multi-line blockquote: the "36-19 MLB Fav ML" record line must lose to
     # the real pick line even though it out-scores it on bet-line keywords.
     got = _insert_odds(DBACKS_MULTI_BQ, [DBACKS_PICK], DBACKS_MULTI_ODDS)
     want = (
-        "TMS\n\nDbacks ML [+120]\n\n<blockquote>30-9 off 1 loss (5-0 off 1 loss L30 days)\n"
+        "TMS\n\nDbacks ML \u2060+120\n\n<blockquote>30-9 off 1 loss (5-0 off 1 loss L30 days)\n"
         "36-19 MLB Fav ML</blockquote>"
     )
     check("multi-line blockquote never takes the tag", got, want)
 
     # 5. Team name appearing only inside the blockquote must not attract the tag.
     got = _insert_odds(SD_TEXT, [SD_PICK], SD_ODDS)
-    want = "OG\n\nSD ML [-115]\n\n<blockquote>Padres 30-9 at home</blockquote>"
+    want = "OG\n\nSD ML \u2060-115\n\n<blockquote>Padres 30-9 at home</blockquote>"
     check("team word in blockquote ignored", got, want)
 
     # 6. Single-pick fallback skips blockquote lines.
     got = _insert_odds(SLANG_TEXT, [SLANG_PICK], SLANG_ODDS)
-    want = "Cap\n\nnuking the AL tonight [+250]\n\n<blockquote>5-0 on nukes</blockquote>"
+    want = "Cap\n\nnuking the AL tonight \u2060+250\n\n<blockquote>5-0 on nukes</blockquote>"
     check("best-content fallback skips blockquote", got, want)
     check(
         "_best_content_line skips blockquote",

@@ -47,7 +47,7 @@ SNELL_PICK = {
 SKUBAL_PICK = dict(SNELL_PICK, description="Tarik Skubal over 8.5 Pitcher Ks",
                    player="Tarik Skubal")
 
-SNELL_HTML = ('◼️ Trent\n\nLife on line. Snell getting 9. [-105]\n\n'
+SNELL_HTML = ('◼️ Trent\n\nLife on line. Snell getting 9. \u2060-105\n\n'
               '<a href="https://x.com/BookitWithTrent/status/2091582265528557787">'
               '🔗 View on X</a>')
 SKUBAL_HTML = ('◼️ Trent\n\nLife on line. Skubal getting 9.\n\n'
@@ -56,7 +56,7 @@ SKUBAL_HTML = ('◼️ Trent\n\nLife on line. Skubal getting 9.\n\n'
 
 # ── the incident: emoji must land on the pick line, not the link ─────────────
 out = _insert_emojis(SNELL_HTML, [(SNELL_PICK, "LOSS", "calc", "MLB", "2026-08-23")])
-check("Snell ❌ on the pick line", "[-105]❌" in out, repr(out))
+check("Snell ❌ on the pick line", "\u2060-105❌" in out, repr(out))
 check("Snell link line untouched", "</a>❌" not in out and "X❌" not in out, repr(out))
 
 out69 = _insert_emojis(SKUBAL_HTML, [(SKUBAL_PICK, "WIN", "calc", "MLB", "2026-08-22")])
@@ -106,7 +106,7 @@ tricky_pick = {"description": "Minnesota Timberwolves / Philadelphia 76ers under
                "player": None, "line": 265}
 odds_out = _insert_odds(tricky, [tricky_pick], {"0": {"odds": -110, "match_type": "exact"}})
 check("odds tag on the bet line, not the URL",
-      "under 265 [-110]" in odds_out and "</a> [-110]" not in odds_out, repr(odds_out))
+      "under 265 \u2060-110" in odds_out and "</a> \u2060-110" not in odds_out, repr(odds_out))
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

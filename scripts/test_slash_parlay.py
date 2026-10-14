@@ -111,10 +111,10 @@ odds = {"0": {"odds": -430, "match_type": "exact"}, "1": {"odds": -210, "match_t
 out = _insert_odds(html, picks, odds)
 bet_line = out.split("\n")[2]
 combined = parlay_combined_odds([-430, -210])
-ok = bet_line == f"Gantt / Chairez ML [{combined}]"
+ok = bet_line == f"Gantt / Chairez ML \u2060{combined}"
 fails += not ok
 print(f"{'PASS' if ok else 'FAIL'}  rendered tag is the combined parlay price\n"
-      f"      expected {f'Gantt / Chairez ML [{combined}]'!r}  got {bet_line!r}")
+      f"      expected {f'Gantt / Chairez ML \u2060{combined}'!r}  got {bet_line!r}")
 
 # ...and stays there: the tracker re-derives the edit from live text every cycle.
 ok = _insert_odds(out, picks, odds) == out
@@ -122,7 +122,7 @@ fails += not ok
 print(f"{'PASS' if ok else 'FAIL'}  placement is idempotent across a second pass")
 
 # The angle record must never attract the tag.
-ok = "35-13 parlays [" not in out
+ok = "35-13 parlays \u2060" not in out
 fails += not ok
 print(f"{'PASS' if ok else 'FAIL'}  blockquote angle record left untagged")
 

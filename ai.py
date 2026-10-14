@@ -12,7 +12,7 @@ import time
 from datetime import date as _date, timedelta
 
 
-from common import is_btts_as_total, is_regulation_ml
+from common import ODDS_TAG_RE, is_btts_as_total, is_regulation_ml
 from scores import (
     ESPN_LEAGUES,
     fetch_espn,
@@ -623,8 +623,8 @@ def _demote_unworded_card_parlay(parsed: dict, text: str, has_image: bool) -> No
     for line in text.split("\n"):
         if line.lstrip().startswith(">") or "http" in line.lower():
             continue  # angle records and links are never a bet line
-        # Our own [odds] tags ride along when a live post is re-parsed.
-        tokens = _CARD_BET_TOKEN_RE.findall(re.sub(r"\[[^\]]*\]", "", line))
+        # Our own odds tags ride along when a live post is re-parsed.
+        tokens = _CARD_BET_TOKEN_RE.findall(re.sub(r"\[[^\]]*\]", "", ODDS_TAG_RE.sub("", line)))
         if tokens:
             bet_lines.append(len(tokens))
     if len(bet_lines) != len(picks) or any(n != 1 for n in bet_lines):

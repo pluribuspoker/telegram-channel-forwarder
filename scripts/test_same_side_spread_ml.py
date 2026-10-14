@@ -81,9 +81,9 @@ with contextlib.redirect_stdout(io.StringIO()):
 odds = {"0": {"odds": -105, "match_type": "exact"}, "1": {"odds": -130, "match_type": "exact"}}
 out = _insert_odds(INCIDENT_TEXT, parsed["picks"], odds)
 checks = [
-    ("no multiplied [+245]", "[+245]" not in out),
-    ("spread price shown", "[-105]" in out),
-    ("ML price shown", "[-130]" in out),
+    ("no multiplied \u2060+245", "\u2060+245" not in out),
+    ("spread price shown", "\u2060-105" in out),
+    ("ML price shown", "\u2060-130" in out),
     ("odds idempotent", _insert_odds(out, parsed["picks"], odds) == out),
 ]
 # Emojis: a full-game spread and ML on one side both settle at the final, so
@@ -95,8 +95,8 @@ verdicts = [(parsed["picks"][0], "LOSS", "", "NCAAF"), (parsed["picks"][1], "WIN
 graded = _insert_emojis(out, verdicts)
 lines = graded.split("\n")
 checks += [
-    ("spread verdict beside the spread price", any("[-105]❌" in ln for ln in lines)),
-    ("ML verdict beside the ML price", any("[-130]✅" in ln for ln in lines)),
+    ("spread verdict beside the spread price", any("\u2060-105❌" in ln for ln in lines)),
+    ("ML verdict beside the ML price", any("\u2060-130✅" in ln for ln in lines)),
     ("emoji re-insert is a no-op", _insert_emojis(graded, verdicts) == graded),
 ]
 for name, ok in checks:

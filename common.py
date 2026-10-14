@@ -141,6 +141,37 @@ def ticket_combined_odds(leg_picks: list[dict], leg_odds: list[int | None]) -> i
         return None
     return parlay_combined_odds(leg_odds)
 
+
+# Our odds tag on a pick post is a bare price: "Bills ML -130", "+1200 live
+# -107 pre", "(-110) -190 now" (operator 2026-10-13; was bracketed "[-130]").
+# A bare price reads exactly like one the capper typed, so every tag starts
+# with an invisible WORD JOINER (U+2060), kept by Telegram through send and
+# edit. The marker is how the renderers re-find, swap and strip their own tag.
+# ODDS_TAG_RE still matches the legacy bracket form so old posts stay
+# idempotent; _insert_odds rewrites a legacy tag on its post's next render.
+ODDS_TAG_MARK = "⁠"
+ODDS_TAG_RE = re.compile(
+    r"\s*(?:\[[+-]\d{3,4}[^\]]*\]|⁠[+-]\d{3,4}(?: (?:live|pre|now))?(?!\d))")
+LEGACY_ODDS_TAG_RE = re.compile(r"\[([+-]\d{3,4})( (?:live|pre|now))?\]")
+
+
+def odds_tag(price: int, kind: str = "") -> str:
+    """One odds tag with its leading space: ' ⁠-130', ' ⁠+1200 live'."""
+    return f" {ODDS_TAG_MARK}{'+' if price > 0 else ''}{price}" + (f" {kind}" if kind else "")
+
+
+def has_odds_tag(line: str, tag: str) -> bool:
+    """`tag` (one or more odds_tag()s) sits on `line` as a whole tag — never
+    the prefix of a longer price (-130 in -1300) or of a kinded tag (-190 in
+    "-190 now")."""
+    return re.search(re.escape(tag.strip()) + r"(?!\d| (?:live|pre|now)\b)", line) is not None
+
+
+def modernize_odds_tags(text: str) -> str:
+    """Legacy bracket tags → the bare marked form ("[-190 now]" → "⁠-190 now")."""
+    return LEGACY_ODDS_TAG_RE.sub(lambda m: f"{ODDS_TAG_MARK}{m[1]}{m[2] or ''}", text)
+
+
 VERDICT_EMOJI = {
     "WIN":     "✅",
     "LOSS":    "❌",

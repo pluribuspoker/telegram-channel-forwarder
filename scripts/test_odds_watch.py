@@ -46,7 +46,7 @@ def rules(entry, key="-100:1"):
 
 # ── recall: the hand-reported classes ────────────────────────────────────────
 VT = {  # 2026-10-02 Trent 133: same-side spread & ML parsed as a 2-leg parlay
-    "html_text": "VIRGINIA TECH (5U)\n\n-2.5 SPREAD &amp; ML 🔒 [+245]",
+    "html_text": "VIRGINIA TECH (5U)\n\n-2.5 SPREAD &amp; ML 🔒 \u2060+245",
     "parsed": {"picks": [
         pick("Virginia Tech Hokies -2.5 (parlay leg)", "spread", teams=["Virginia Tech Hokies"], leg=True, line=-2.5),
         pick("Virginia Tech Hokies ML (parlay leg)", "moneyline", teams=["Virginia Tech Hokies"], leg=True)]},
@@ -58,7 +58,7 @@ VT = {  # 2026-10-02 Trent 133: same-side spread & ML parsed as a 2-leg parlay
 check("VT same-game parlay: no displayable product → no flag", rules(VT) == [], rules(VT))
 
 TT = {  # bare "Chiefs over 42.5" misread as a team total → deep alternate
-    "html_text": "Chiefs over 42.5 [+3500]",
+    "html_text": "Chiefs over 42.5 \u2060+3500",
     "parsed": {"picks": [pick("Kansas City Chiefs team total over 42.5", "team_total",
                               teams=["Kansas City Chiefs"], line=42.5)]},
     "odds_by_pick": {"0": o(3500)},
@@ -66,7 +66,7 @@ TT = {  # bare "Chiefs over 42.5" misread as a team total → deep alternate
 check("team-total misread +3500 → band", rules(TT) == ["band"], rules(TT))
 
 TEASER = {  # teaser legs priced at the pre-tease main lines
-    "html_text": "7 pt teaser: [+264]\nEagles PK\nRams +0.5",
+    "html_text": "7 pt teaser: \u2060+264\nEagles PK\nRams +0.5",
     "parsed": {"picks": [
         pick("Eagles PK teaser leg", "spread", teams=["Philadelphia Eagles"], leg=True, line=0),
         pick("Rams +0.5 teaser leg", "spread", teams=["Los Angeles Rams"], leg=True, line=0.5)]},
@@ -77,7 +77,7 @@ TEASER_OK = {**TEASER, "odds_by_pick": {"0": o(-250), "1": o(-240)}}
 check("teaser at teased-line prices is quiet (leg band exempt)", rules(TEASER_OK) == [], rules(TEASER_OK))
 
 WRONG_GAME = {
-    "html_text": "Bulldogs +6.5 [-110]",
+    "html_text": "Bulldogs +6.5 \u2060-110",
     "parsed": {"picks": [pick("Mississippi State +6.5", "spread", teams=["Mississippi State Bulldogs"], line=6.5)]},
     "odds_by_pick": {"0": o(-110, commence_time="2026-09-19T23:45Z")},
     "espn_events": {"0": {"status": "bound", "kickoff": "2026-09-26T23:45Z",
@@ -87,19 +87,19 @@ check("price from last week's game → game_mismatch", rules(WRONG_GAME) == ["ga
 SAME_GAME = {**WRONG_GAME, "odds_by_pick": {"0": o(-110, commence_time="2026-09-26T23:40Z")}}
 check("same kickoff (minutes apart) is quiet", rules(SAME_GAME) == [], rules(SAME_GAME))
 
-NOW = {"html_text": "Bills -3 (-110) [-190 now]",
+NOW = {"html_text": "Bills -3 (-110) \u2060-190 now",
        "parsed": {"picks": [pick("Bills -3 (-110)", "spread", teams=["Buffalo Bills"], line=-3)]},
        "odds_by_pick": {"0": o(-190)}}
 check("stated -110 vs ours -190 → now_move", "now_move" in rules(NOW), rules(NOW))
-NOW_SMALL = {**NOW, "html_text": "Bills -3 (-110) [-125 now]", "odds_by_pick": {"0": o(-125)}}
+NOW_SMALL = {**NOW, "html_text": "Bills -3 (-110) \u2060-125 now", "odds_by_pick": {"0": o(-125)}}
 check("a small move stays quiet", rules(NOW_SMALL) == [], rules(NOW_SMALL))
 
-PROX = {"html_text": "Broncos +7.5 [-169]",
+PROX = {"html_text": "Broncos +7.5 \u2060-169",
         "parsed": {"picks": [pick("Broncos +7.5", "spread", teams=["Denver Broncos"], line=7.5)]},
         "odds_by_pick": {"0": o(-169, "proximity_2.5pts", api_line=5.0)}}
 check("estimate 2.5 pts off → estimate", rules(PROX) == ["estimate"], rules(PROX))
 # 2026-10-03 TCU +8.5: Pinnacle had only the +8 main line at pricing time.
-TCU = {"html_text": "TCU +8.5 [-179]",
+TCU = {"html_text": "TCU +8.5 \u2060-179",
        "parsed": {"picks": [pick("TCU +8.5", "spread", teams=["TCU Horned Frogs"], line=8.5)]},
        "odds_by_pick": {"0": o(-179, "proximity_0.5pts", api_line=8.0, bookmaker="pinnacle")}}
 check("even a half-point estimate → estimate (hunt the exact line)",
@@ -112,7 +112,7 @@ STARTED = {**TCU, "odds_by_pick": {"0": o(-179, "proximity_0.5pts", api_line=8.0
                                            commence_time="2020-01-01T00:00Z")}}
 check("an estimate on a started game is quiet (nothing pregame to find)",
       rules(STARTED) == [], rules(STARTED))
-PROX_LEG = {"html_text": "Parlay: [+270]\nTCU +8.5\nEagles ML",
+PROX_LEG = {"html_text": "Parlay: \u2060+270\nTCU +8.5\nEagles ML",
             "parsed": {"picks": [pick("TCU +8.5", "spread", teams=["TCU Horned Frogs"], leg=True, line=8.5),
                                  pick("Eagles ML", "moneyline", teams=["Philadelphia Eagles"], leg=True)]},
             "odds_by_pick": {"0": o(-179, "proximity_0.5pts", api_line=8.0), "1": o(-150)}}
@@ -132,17 +132,17 @@ ELKINS = {  # real cache entry shape: capper stated +500, we priced +561
     "odds_by_pick": {"0": o(561)},
 }
 check("long ML corroborated by the capper's price is quiet", rules(ELKINS) == [], rules(ELKINS))
-ELKINS_UNSTATED = {**ELKINS, "html_text": "Darren Elkins ML 1u [+561]", "parsed": {"picks": [pick("Darren Elkins ML", "moneyline")]}}
+ELKINS_UNSTATED = {**ELKINS, "html_text": "Darren Elkins ML 1u \u2060+561", "parsed": {"picks": [pick("Darren Elkins ML", "moneyline")]}}
 check("the same long ML unstated → ml_long", rules(ELKINS_UNSTATED) == ["ml_long"], rules(ELKINS_UNSTATED))
-LIVE = {"html_text": "Jets +14.5 [+1200 live]",
+LIVE = {"html_text": "Jets +14.5 \u2060+1200 live",
         "parsed": {"picks": [pick("Jets +14.5", "spread", teams=["New York Jets"], line=14.5)]},
         "odds_by_pick": {"0": o(1200, "live_exact")}}
 check("live prices are exempt", rules(LIVE) == [], rules(LIVE))
-MAIN = {"html_text": "Broncos +3.5 [-190]",
+MAIN = {"html_text": "Broncos +3.5 \u2060-190",
         "parsed": {"picks": [pick("Broncos +3.5", "spread", teams=["Denver Broncos"], line=3.5)]},
         "odds_by_pick": {"0": o(-190)}}
 check("a priced alternate within the band is quiet", rules(MAIN) == [], rules(MAIN))
-TWO_GAMES = {"html_text": "Parlay: [+264]\nEagles ML\nRavens ML",
+TWO_GAMES = {"html_text": "Parlay: \u2060+264\nEagles ML\nRavens ML",
              "parsed": {"picks": [pick("Eagles ML", "moneyline", teams=["Philadelphia Eagles"], leg=True),
                                   pick("Ravens ML", "moneyline", teams=["Baltimore Ravens"], leg=True)]},
              "odds_by_pick": {"0": o(-325), "1": o(-375)}}
@@ -255,12 +255,12 @@ hh = oc.scan_entry("-1:1", HELD, now=NOW_T)
 check("a held leg is ONE hold flag carrying the gate's reasons (no double band)",
       [h["rule"] for h in hh] == ["hold"] and "band: +3500" in hh[0]["detail"], hh)
 check("_insert_odds shows no tag for a held leg",
-      "[+3500]" not in _insert_odds("Chiefs over 42.5", TT["parsed"]["picks"], HELD["odds_by_pick"]))
+      "\u2060+3500" not in _insert_odds("Chiefs over 42.5", TT["parsed"]["picks"], HELD["odds_by_pick"]))
 check("…and the tag returns once released",
-      "[+3500]" in _insert_odds("Chiefs over 42.5", TT["parsed"]["picks"], {"0": o(3500)}))
+      "\u2060+3500" in _insert_odds("Chiefs over 42.5", TT["parsed"]["picks"], {"0": o(3500)}))
 vt_held = {"0": o(-105), "1": {**o(-130), "hold": {"why": ["x"], "at": "t"}}}
 check("one held parlay leg hides the combined ticket tag",
-      "[+245]" not in _insert_odds("VT\n-2.5 SPREAD & ML parlay:", VT["parsed"]["picks"], vt_held))
+      "\u2060+245" not in _insert_odds("VT\n-2.5 SPREAD & ML parlay:", VT["parsed"]["picks"], vt_held))
 h0 = {**hh[0], "hold_at": "2026-10-03T11:55:00+00:00"}
 check("a fresh hold the agent is about to judge is not released",
       ow.release_due([h0], {}, NOW_T, agent_keys={ow.instance_key(h0)}) == [])
@@ -386,21 +386,21 @@ check("retry: estimates keep the 30-min spacing",
 swap = {"0": o(-160, bookmaker="pinnacle", replaced=-179)}
 tcu_pick = TCU["parsed"]["picks"]
 check("swap: the quote replaces the estimate's tag on the live text",
-      _insert_odds("TCU +8.5 [-179]", tcu_pick, swap) == "TCU +8.5 [-160]",
-      _insert_odds("TCU +8.5 [-179]", tcu_pick, swap))
+      _insert_odds("TCU +8.5 \u2060-179", tcu_pick, swap) == "TCU +8.5 \u2060-160",
+      _insert_odds("TCU +8.5 \u2060-179", tcu_pick, swap))
 check("swap: idempotent once swapped",
-      _insert_odds("TCU +8.5 [-160]", tcu_pick, swap) == "TCU +8.5 [-160]")
+      _insert_odds("TCU +8.5 \u2060-160", tcu_pick, swap) == "TCU +8.5 \u2060-160")
 two = [pick("TCU +8.5", "spread", teams=["TCU Horned Frogs"], line=8.5),
        pick("Baylor -3", "spread", teams=["Baylor Bears"], line=-3)]
-amb = "TCU +8.5 [-179]\nBaylor -3 [-179]"
+amb = "TCU +8.5 \u2060-179\nBaylor -3 \u2060-179"
 check("swap: an ambiguous old tag (two legs at that price) is left alone",
       _insert_odds(amb, two, {"0": o(-160, replaced=-179), "1": o(-179)}) == amb)
 check("swap: a held quote just drops the stale estimate tag",
-      _insert_odds("TCU +8.5 [-179]", tcu_pick,
+      _insert_odds("TCU +8.5 \u2060-179", tcu_pick,
                    {"0": o(-160, replaced=-179, hold={"why": ["x"]})}) == "TCU +8.5")
 stated = [pick("TCU +8.5 (-150)", "spread", teams=["TCU Horned Frogs"], line=8.5)]
-check("swap: a stale [X now] tag goes too",
-      _insert_odds("TCU +8.5 (-150) [-179 now]", stated, {"0": o(-160, replaced=-179)})
+check("swap: a stale 'X now' tag goes too",
+      _insert_odds("TCU +8.5 (-150) \u2060-179 now", stated, {"0": o(-160, replaced=-179)})
       == "TCU +8.5 (-150)")
 
 print(f"\n{'ALL PASS' if not failures else f'{len(failures)} FAILED'}")

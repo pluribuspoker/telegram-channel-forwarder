@@ -403,7 +403,10 @@ def parse_blockquote(bq_text: str) -> list[dict]:
 
 # ── Message-level helpers ─────────────────────────────────────────────────
 
-_ODDS_BRACKET_RE = re.compile(r"\[([+-]\d{3,4})(?:\s|])")
+# The tracker's odds tag: a bare price behind an invisible U+2060 marker
+# (common.odds_tag; this script runs standalone, so the marker is inlined),
+# or the legacy bracket form "[-130]".
+_ODDS_BRACKET_RE = re.compile(r"(?:\[|\u2060)([+-]\d{3,4})(?:\s|]|$)")
 _ODDS_PAREN_RE = re.compile(r"\(([+-]\d{3,4})\)")
 
 _VERDICT_MAP = {

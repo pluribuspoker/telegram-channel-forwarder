@@ -76,8 +76,8 @@ check("team-less legs (props) keep the product",
 
 # ── the tag on the post ──────────────────────────────────────────────────────
 out = _insert_odds(RAW, PICKS, ODDS)
-check("post: standalone Kings tag still lands", "1U Kings ML [-102]" in out, out)
-check("post: no multiplied ticket tag", "-127" not in out and "Galatasaray: [" not in out, out)
+check("post: standalone Kings tag still lands", "1U Kings ML \u2060-102" in out, out)
+check("post: no multiplied ticket tag", "-127" not in out and "Galatasaray: \u2060" not in out, out)
 check("post: capper's own +100 untouched", out.endswith("SGP: BTTS + Barca ML +100"), out)
 check("post: idempotent", _insert_odds(out, PICKS, ODDS) == out)
 cross = [dict(PICKS[2], description="Barcelona ML"), dict(PICKS[2], description="Arsenal ML",
@@ -85,7 +85,7 @@ cross = [dict(PICKS[2], description="Barcelona ML"), dict(PICKS[2], description=
 xout = _insert_odds("Parlay:\nBarcelona ML\nArsenal ML", cross,
                     {"0": {"odds": -380}, "1": {"odds": -200}})
 check("post: a cross-game parlay keeps its combined tag",
-      xout.startswith(f"Parlay: [{parlay_combined_odds([-380, -200])}]"), xout)
+      xout.startswith(f"Parlay: \u2060{parlay_combined_odds([-380, -200])}"), xout)
 
 # ── the broadcast ────────────────────────────────────────────────────────────
 
