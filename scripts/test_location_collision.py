@@ -95,10 +95,24 @@ async def main() -> None:
           await resolve("Washington ML today", "2026-10-09",
                         datetime(2026, 10, 9, 16, 0, tzinfo=timezone.utc)), huskies)
 
-    # Lookahead NFL picks keep the parse: no positive evidence for the Huskies.
-    check("Friday afternoon, no day word → kept",
+    # 24h window (operator 2026-10-14): Friday afternoon, 9h before the Huskies
+    # and two days before the Commanders, is the Huskies.
+    check("Friday afternoon, no day word → Huskies",
           await resolve("Washington ML", "2026-10-09",
-                        datetime(2026, 10, 9, 16, 0, tzinfo=timezone.utc)), unchanged)
+                        datetime(2026, 10, 9, 16, 0, tzinfo=timezone.utc)), huskies)
+    # Lookahead NFL picks posted more than a day before the college game keep
+    # the parse: no positive evidence for the Huskies.
+    check("Thursday, 29h before the Huskies → kept",
+          await resolve("Washington ML", "2026-10-08",
+                        datetime(2026, 10, 8, 20, 0, tzinfo=timezone.utc)), unchanged)
+    # Both inside the day and close together: not lopsided enough to flip.
+    close = week_cache()
+    close[("NFL", "2026-10-10")] = _sb(("New York Giants", "Washington Commanders",
+                                        "2026-10-10T04:00Z"))
+    check("Commanders 3h after the Huskies → kept",
+          await resolve("Washington ML", "2026-10-09",
+                        datetime(2026, 10, 9, 16, 0, tzinfo=timezone.utc), cache=close),
+          unchanged)
     check("Saturday post (Huskies already played) → kept",
           await resolve("Washington ML today", "2026-10-10",
                         datetime(2026, 10, 10, 16, 0, tzinfo=timezone.utc)), unchanged)
@@ -143,9 +157,9 @@ async def main() -> None:
           await resolve(jax_text, "2026-10-13", jax_post, parse=jags, cache=dict(jax_cache)),
           (("NCAAF", ["Jacksonville State Gamecocks"],
             "Jacksonville State Gamecocks -2.5 (-115)"), True))
-    check("Jaguars lookahead, no JSU kickoff near → kept",
-          await resolve(jax_text, "2026-10-13",
-                        datetime(2026, 10, 13, 15, 0, tzinfo=timezone.utc),
+    check("Jaguars lookahead, JSU 28h out → kept",
+          await resolve(jax_text, "2026-10-12",
+                        datetime(2026, 10, 12, 20, 0, tzinfo=timezone.utc),
                         parse=jags, cache=dict(jax_cache)), (jags, False))
     check("'Jags' typed → kept",
           await resolve("Jacksonville Jags -2.5", "2026-10-13", jax_post,

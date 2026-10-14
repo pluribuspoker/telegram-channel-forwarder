@@ -2911,6 +2911,10 @@ _NICKNAME_COLLISIONS: dict[str, list[tuple[str, str]]] = {
 # near one; anything less lopsided is escalated to a human instead of guessed.
 _COLLISION_NEAR_HOURS = 2.0
 _COLLISION_FAR_HOURS  = 6.0
+# The city-name resolver's window (operator 2026-10-14: 24h, was the 2h above):
+# the other team kicks off within a day of the post and at least
+# _COLLISION_FAR_HOURS before the parsed team's game.
+_LOCATION_NEAR_HOURS = 24.0
 
 
 def _event_start(evt: dict) -> _datetime | None:
@@ -3304,8 +3308,8 @@ async def resolve_nickname_collision(
 # parse's pick here is usually right — NFL picks post days ahead, so "the
 # Commanders don't play today" is no evidence at all (the validate_sport trap).
 # The schedule overrules the parse only on POSITIVE evidence for the other team:
-# it kicks off within _COLLISION_NEAR_HOURS while the parsed one is
-# _COLLISION_FAR_HOURS+ away, or the capper wrote "today"/"tonight" and only it
+# it kicks off within _LOCATION_NEAR_HOURS and _COLLISION_FAR_HOURS+ before
+# the parsed one, or the capper wrote "today"/"tonight" and only it
 # plays today. ("Dagger: Washington ML (main play)… other cappers on Washington
 # today", posted 10 min before Iowa at Washington, parsed as the Commanders two
 # days out — bound, priced and pending on the wrong game, 2026-10-09.)
@@ -3433,8 +3437,8 @@ async def resolve_location_collision(
         start, day = nxt[cand_team]
         hours = (start - post_time).total_seconds() / 3600
         own_hours = (own[0] - post_time).total_seconds() / 3600 if own else None
-        imminent = hours <= _COLLISION_NEAR_HOURS and (own_hours is None
-                                                       or own_hours >= _COLLISION_FAR_HOURS)
+        imminent = hours <= _LOCATION_NEAR_HOURS and (
+            own_hours is None or own_hours - hours >= _COLLISION_FAR_HOURS)
         same_day = bool(_SAME_DAY_RE.search(low) and day == date_str
                         and (own is None or own[1] != date_str))
         if imminent or same_day:
