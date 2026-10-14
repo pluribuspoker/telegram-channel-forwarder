@@ -416,6 +416,63 @@ def _mark_slash_parlay_legs(parsed: dict, text: str) -> None:
             return
 
 
+_NUM_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _merge_game_title_total(parsed: dict, text: str) -> None:
+    """Re-join a game-title total the model split into one total per team.
+
+    "Feyenoord / Como O2.5" is the Como at Feyenoord match total (DraftKings
+    o2.5 -165), but it parsed as two parlay legs ("Feyenoord game over 2.5",
+    "Como game over 2.5") that both bound to the same event and multiplied into
+    a fake +158 (2026-10-14); each would also grade as its own leg of one game.
+
+    Fires only on the unambiguous shape: one non-blockquote line, two
+    slash segments, two total picks each naming ONE team that sits in a
+    different segment, the same line/direction/period, and the line's number
+    written exactly once on that line, after the last team name. Per-team
+    lines ("Feyenoord O2.5 / Como O2.5") write the number twice and stay a
+    parlay; team totals and props are never touched.
+    """
+    picks = parsed.get("picks") or []
+    totals = [p for p in picks
+              if p.get("bet_type") == "total" and not p.get("player")
+              and not p.get("prop_stat") and len(p.get("teams") or []) == 1
+              and isinstance(p.get("line"), (int, float))]
+    if len(totals) < 2:
+        return
+    for line in text.split("\n"):
+        if line.lstrip().startswith(">") or line.count("/") != 1:
+            continue
+        segments = [seg.lower() for seg in line.split("/")]
+        owner: dict[int, dict] = {}
+        for pick in totals:
+            ln = float(pick["line"])
+            if ([float(n) for n in _NUM_RE.findall(segments[0])].count(ln) != 0
+                    or [float(n) for n in _NUM_RE.findall(segments[1])].count(ln) != 1):
+                continue
+            tokens = {w for w in re.split(r"[^\w'-]+", pick["teams"][0].lower()) if len(w) > 3}
+            hit = [i for i, seg in enumerate(segments) if any(t in seg for t in tokens)]
+            if len(hit) == 1 and hit[0] not in owner:
+                owner[hit[0]] = pick
+        if len(owner) != 2:
+            continue
+        a, b = owner[0], owner[1]
+        if ((a.get("direction") or "").lower() != (b.get("direction") or "").lower()
+                or (a.get("period") or "game") != (b.get("period") or "game")):
+            continue
+        rest = [p for p in picks if p is not a and p is not b]
+        a["teams"] = [a["teams"][0], b["teams"][0]]
+        a["is_parlay_leg"] = any(p.get("is_parlay_leg") for p in rest)
+        unit = " goals" if "goal" in (a.get("description") or "").lower() else ""
+        a["description"] = (f"{a['teams'][0]} vs {a['teams'][1]} game total "
+                            f"{(a.get('direction') or 'over').lower()} {a['line']:g}{unit}")
+        parsed["picks"] = [p for p in picks if p is not b]
+        print(f"    [parse] game-title total split per team ({line.strip()!r}) "
+              f"→ one game total")
+        return
+
+
 # "team total"/"TT" written anywhere in the message. Whole-text on purpose:
 # when the words appear at all, leave the model's team_total reading alone.
 _TT_MARKER_RE = re.compile(r"\btt\b|\bteam[\s-]*total", re.IGNORECASE)
@@ -941,6 +998,7 @@ async def claude_parse(
 
     if parsed:
         _drop_capper_header_pick(parsed, text, capper_name)
+        _merge_game_title_total(parsed, text)   # before slash legs: one bet, not two
         _mark_slash_parlay_legs(parsed, text)   # before teaser fix: it needs the flags
         _fix_teaser_stated_lines(parsed, text)
         _fix_bare_game_total(parsed, text)
