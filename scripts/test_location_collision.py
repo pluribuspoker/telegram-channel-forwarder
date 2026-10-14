@@ -127,6 +127,30 @@ async def main() -> None:
                         datetime(2026, 10, 11, 15, 30, tzinfo=timezone.utc), parse=hp),
           (CMD, True))
 
+    # 2026-10-13: Dagger's "Jacksonville -2.5" 15 min before FIU at Jacksonville
+    # State parsed as the Jaguars (London, Sunday 13:30Z) and sat pending on them.
+    jsu = ("FIU Panthers", "Jacksonville State Gamecocks", "2026-10-14T00:00Z")
+    jax_cache = {}
+    for d in ("2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16"):
+        jax_cache[("NCAAF", d)] = {"events": []}
+        jax_cache[("NFL", d)] = {"events": []}
+    jax_cache[("NCAAF", "2026-10-13")] = _sb(jsu)
+    jags = ("NFL", ["Jacksonville Jaguars"], "Jacksonville Jaguars -2.5 (-115)")
+    jax_post = datetime(2026, 10, 13, 23, 45, 42, tzinfo=timezone.utc)
+    # Byte-exact raw_text of -1002486251914:4027.
+    jax_text = "Dagger\n\n❗️❗️MAIN PLAY❗️❗️\n\nJacksonville -2.5 -115 2U"
+    check("Jacksonville incident → Jax State",
+          await resolve(jax_text, "2026-10-13", jax_post, parse=jags, cache=dict(jax_cache)),
+          (("NCAAF", ["Jacksonville State Gamecocks"],
+            "Jacksonville State Gamecocks -2.5 (-115)"), True))
+    check("Jaguars lookahead, no JSU kickoff near → kept",
+          await resolve(jax_text, "2026-10-13",
+                        datetime(2026, 10, 13, 15, 0, tzinfo=timezone.utc),
+                        parse=jags, cache=dict(jax_cache)), (jags, False))
+    check("'Jags' typed → kept",
+          await resolve("Jacksonville Jags -2.5", "2026-10-13", jax_post,
+                        parse=jags, cache=dict(jax_cache)), (jags, False))
+
     print(f"\n{'PASS' if not FAILS else f'FAIL ({FAILS})'}")
     sys.exit(1 if FAILS else 0)
 

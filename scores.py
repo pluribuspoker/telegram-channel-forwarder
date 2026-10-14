@@ -3318,6 +3318,8 @@ _LOCATION_COLLISIONS: dict[str, list[list[tuple[str, str]]]] = {
     "minnesota":  [[("NFL", "Minnesota Vikings"), ("NCAAF", "Minnesota Golden Gophers")],
                    [("NBA", "Minnesota Timberwolves"), ("NCAAB", "Minnesota Golden Gophers")]],
     "tennessee":  [[("NFL", "Tennessee Titans"), ("NCAAF", "Tennessee Volunteers")]],
+    # No school plays football as bare "Jacksonville": cappers mean Jax State.
+    "jacksonville": [[("NFL", "Jacksonville Jaguars"), ("NCAAF", "Jacksonville State Gamecocks")]],
     "miami":      [[("NFL", "Miami Dolphins"), ("NCAAF", "Miami Hurricanes")],
                    [("NBA", "Miami Heat"), ("NCAAB", "Miami Hurricanes")]],
     "buffalo":    [[("NFL", "Buffalo Bills"), ("NCAAF", "Buffalo Bulls")]],
@@ -3330,6 +3332,10 @@ _LOCATION_COLLISIONS: dict[str, list[list[tuple[str, str]]]] = {
     "portland":   [[("NBA", "Portland Trail Blazers"), ("NCAAB", "Portland Pilots")]],
     "indiana":    [[("NBA", "Indiana Pacers"), ("NCAAB", "Indiana Hoosiers")]],
     "milwaukee":  [[("NBA", "Milwaukee Bucks"), ("NCAAB", "Milwaukee Panthers")]],
+}
+# Typed short nicknames beyond each team's last word ("Jags -2.5").
+_LOCATION_NICKNAMES: dict[str, tuple[str, ...]] = {
+    "Jacksonville Jaguars": ("jags",),
 }
 # "Washington State", "Miami (OH)", "Arizona St." are other schools entirely.
 _LOCATION_NOT_FOLLOWED = r"(?!\s*(?:st\b|st\.|state\b|\(\s*oh|oh\b|ohio\b))"
@@ -3373,7 +3379,8 @@ async def resolve_location_collision(
     if not group:
         return sport, teams, description, None
     # A typed nickname ("Huskies", "Commanders") already decided it.
-    if any(re.search(rf"\b{re.escape(t.split()[-1].lower())}\b", low) for _s, t in group):
+    if any(re.search(rf"\b{re.escape(n)}\b", low) for _s, t in group
+           for n in (t.split()[-1].lower(), *_LOCATION_NICKNAMES.get(t, ()))):
         return sport, teams, description, None
 
     try:
