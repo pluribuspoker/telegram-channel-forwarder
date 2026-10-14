@@ -242,8 +242,9 @@ async def _fetch_impl(since: datetime, limit: int) -> list[dict]:
 # (journal + ping body), keep them precise. Bootstrap degradation (failed
 # create attempts / fallback page / content heuristic — the staged-rollout
 # early warning: 2026-09-23 had 6 wobbly runs, the 4th ~25h before the
-# outage) is RECORDED here as degraded_events; scripts/hc_digest.py reads
-# this state file and reports 4+ events/24h in the daily digest.
+# outage) is RECORDED here as degraded_events — no DM and no digest (the
+# daily digest was removed 2026-10-14); it is forensics for whoever
+# diagnoses a Trent outage (4+ events/24h = the next X change is rolling out).
 
 # State, kept outside the repo (same spot as mem_watchdog). A module-level
 # Path so tests can point it at a temp file.
@@ -294,7 +295,7 @@ def _report_fetch_failure(e: _XFetchError) -> None:
 def _after_conclusive_fetch(report: dict, now: datetime | None = None) -> None:
     """Health bookkeeping once a fetch PROVED X access works: record bootstrap
     degradation (failed create attempts / fallback page / content heuristic)
-    into the state file for the daily digest. No DMs — ever (operator
+    into the state file (outage forensics). No DMs — ever (operator
     2026-10-11); stale down_alerted_at/last_auth_alert/last_degraded_alert
     keys in old state files are ignored, never resurrected."""
     now = now or datetime.now(timezone.utc)

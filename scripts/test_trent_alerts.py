@@ -11,7 +11,7 @@ the cookies until diagnose_failure separated the cases.
 
 Pins: _report_fetch_failure never DMs and prints the remedy for the agent,
 the runner is free of repair triggers and attempt-gating env, degradation
-events are RECORDED for the daily digest (hc_digest reads the state file;
+events are RECORDED in the state file as outage forensics (no digest since 2026-10-14;
 48h prune) with zero DM machinery left in the module, and state round-trips.
 
 Offline and silent: httpx.post raises, WATCHDOG_* are unset, the state file
@@ -186,7 +186,7 @@ try:
 finally:
     tw._fetch_impl = saved_impl
 
-# (d) degradation events: recorded for the daily digest, pruned at 48h --------
+# (d) degradation events: recorded as outage forensics, pruned at 48h --------
 _reset()
 for i in range(10):
     tw._after_conclusive_fetch(CLEAN, now=T + i * MIN15)
