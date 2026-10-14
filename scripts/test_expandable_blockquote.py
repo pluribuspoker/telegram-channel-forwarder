@@ -87,7 +87,7 @@ def main() -> int:
     tagged = _insert_odds(ht, picks, odds)
     lines = tagged.split("\n")
     bq = _blockquote_lines(lines)
-    tag_lines = [i for i, l in enumerate(lines) if "\u2060+160" in l]
+    tag_lines = [i for i, l in enumerate(lines) if "[+160" in l or "[160" in l]
     check("odds tag placed", bool(tag_lines), tagged[:200])
     check("odds tag outside the expandable quote", all(i not in bq for i in tag_lines),
           f"tag on lines {tag_lines}, bq lines {sorted(bq)}")

@@ -84,7 +84,7 @@ def miss_class(match_type: str) -> str | None:
 
 
 _TEASER_RE = re.compile(r"\bteas(?:e|er|ed)\b", re.IGNORECASE)
-# Our "now" tag (common.odds_tag) and the legacy bracket form "[-190 now]".
+# Our "now" tag (common.odds_tag: "[-190 now]"; briefly marker + "-190 now").
 _NOW_TAG_RE = re.compile(r"(?:\[([+-]\d{3,4}) now\]|\u2060([+-]\d{3,4}) now)")
 _SRC_PRICE_RE = re.compile(r"(?<![\d.\[\u2060])([+-]\d{3,4})(?![\d.])")
 
@@ -201,7 +201,7 @@ def scan_entry(key: str, entry: dict, *, now: datetime | None = None,
             if teaser and comb is not None and comb > TEASER_MAX:
                 hit(-1, "teaser_long", comb, f"{len(legs)}-leg teaser at {fmt(comb)}")
 
-    # The capper's own stated price vs ours ("Bills -3 (-110) -190 now").
+    # The capper's own stated price vs ours ("Bills -3 (-110) [-190 now]").
     for line in text.split("\n"):
         now_tag = _NOW_TAG_RE.search(line)
         if not now_tag:

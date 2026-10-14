@@ -87,11 +87,11 @@ check("price from last week's game → game_mismatch", rules(WRONG_GAME) == ["ga
 SAME_GAME = {**WRONG_GAME, "odds_by_pick": {"0": o(-110, commence_time="2026-09-26T23:40Z")}}
 check("same kickoff (minutes apart) is quiet", rules(SAME_GAME) == [], rules(SAME_GAME))
 
-NOW = {"html_text": "Bills -3 (-110) \u2060-190 now",
+NOW = {"html_text": "Bills -3 (-110) [-190 now]",
        "parsed": {"picks": [pick("Bills -3 (-110)", "spread", teams=["Buffalo Bills"], line=-3)]},
        "odds_by_pick": {"0": o(-190)}}
 check("stated -110 vs ours -190 → now_move", "now_move" in rules(NOW), rules(NOW))
-NOW_SMALL = {**NOW, "html_text": "Bills -3 (-110) \u2060-125 now", "odds_by_pick": {"0": o(-125)}}
+NOW_SMALL = {**NOW, "html_text": "Bills -3 (-110) [-125 now]", "odds_by_pick": {"0": o(-125)}}
 check("a small move stays quiet", rules(NOW_SMALL) == [], rules(NOW_SMALL))
 
 PROX = {"html_text": "Broncos +7.5 \u2060-169",
@@ -134,7 +134,7 @@ ELKINS = {  # real cache entry shape: capper stated +500, we priced +561
 check("long ML corroborated by the capper's price is quiet", rules(ELKINS) == [], rules(ELKINS))
 ELKINS_UNSTATED = {**ELKINS, "html_text": "Darren Elkins ML 1u \u2060+561", "parsed": {"picks": [pick("Darren Elkins ML", "moneyline")]}}
 check("the same long ML unstated → ml_long", rules(ELKINS_UNSTATED) == ["ml_long"], rules(ELKINS_UNSTATED))
-LIVE = {"html_text": "Jets +14.5 \u2060+1200 live",
+LIVE = {"html_text": "Jets +14.5 [+1200 live]",
         "parsed": {"picks": [pick("Jets +14.5", "spread", teams=["New York Jets"], line=14.5)]},
         "odds_by_pick": {"0": o(1200, "live_exact")}}
 check("live prices are exempt", rules(LIVE) == [], rules(LIVE))
@@ -399,8 +399,8 @@ check("swap: a held quote just drops the stale estimate tag",
       _insert_odds("TCU +8.5 \u2060-179", tcu_pick,
                    {"0": o(-160, replaced=-179, hold={"why": ["x"]})}) == "TCU +8.5")
 stated = [pick("TCU +8.5 (-150)", "spread", teams=["TCU Horned Frogs"], line=8.5)]
-check("swap: a stale 'X now' tag goes too",
-      _insert_odds("TCU +8.5 (-150) \u2060-179 now", stated, {"0": o(-160, replaced=-179)})
+check("swap: a stale [X now] tag goes too",
+      _insert_odds("TCU +8.5 (-150) [-179 now]", stated, {"0": o(-160, replaced=-179)})
       == "TCU +8.5 (-150)")
 
 print(f"\n{'ALL PASS' if not failures else f'{len(failures)} FAILED'}")

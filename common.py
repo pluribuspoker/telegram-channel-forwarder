@@ -142,34 +142,39 @@ def ticket_combined_odds(leg_picks: list[dict], leg_odds: list[int | None]) -> i
     return parlay_combined_odds(leg_odds)
 
 
-# Our odds tag on a pick post is a bare price: "Bills ML -130", "+1200 live
-# -107 pre", "(-110) -190 now" (operator 2026-10-13; was bracketed "[-130]").
-# A bare price reads exactly like one the capper typed, so every tag starts
-# with an invisible WORD JOINER (U+2060), kept by Telegram through send and
-# edit. The marker is how the renderers re-find, swap and strip their own tag.
-# ODDS_TAG_RE still matches the legacy bracket form so old posts stay
-# idempotent; _insert_odds rewrites a legacy tag on its post's next render.
-ODDS_TAG_MARK = "⁠"
+# Our odds tag on a pick post (operator 2026-10-13): a plain price renders
+# bare ("Bills ML -130", was "[-130]"); a kinded one keeps its brackets
+# ("[+1200 live] [-107 pre]", "(-110) [-190 now]"). A bare price reads exactly
+# like one the capper typed, so a plain tag starts with an invisible WORD
+# JOINER (U+2060), kept by Telegram through send and edit — the marker is how
+# the renderers re-find, swap and strip their own tag; brackets mark the
+# kinded ones. ODDS_TAG_RE also matches the superseded forms (bracketed plain
+# "[-130]", marker + "-190 now") so old posts stay idempotent;
+# _insert_odds rewrites them via normalize_odds_tags on the next render.
+ODDS_TAG_MARK = "\u2060"
 ODDS_TAG_RE = re.compile(
-    r"\s*(?:\[[+-]\d{3,4}[^\]]*\]|⁠[+-]\d{3,4}(?: (?:live|pre|now))?(?!\d))")
-LEGACY_ODDS_TAG_RE = re.compile(r"\[([+-]\d{3,4})( (?:live|pre|now))?\]")
+    r"\s*(?:\[[+-]\d{3,4}[^\]]*\]|\u2060[+-]\d{3,4}(?: (?:live|pre|now))?(?!\d))")
+_BRACKET_PLAIN_TAG_RE = re.compile(r"\[([+-]\d{3,4})\]")
+_MARKED_KINDED_TAG_RE = re.compile(r"\u2060([+-]\d{3,4}) (live|pre|now)\b")
 
 
 def odds_tag(price: int, kind: str = "") -> str:
-    """One odds tag with its leading space: ' ⁠-130', ' ⁠+1200 live'."""
-    return f" {ODDS_TAG_MARK}{'+' if price > 0 else ''}{price}" + (f" {kind}" if kind else "")
+    """One odds tag with its leading space: ' \u2060-130', ' [+1200 live]'."""
+    p = f"{'+' if price > 0 else ''}{price}"
+    return f" [{p} {kind}]" if kind else f" {ODDS_TAG_MARK}{p}"
 
 
 def has_odds_tag(line: str, tag: str) -> bool:
-    """`tag` (one or more odds_tag()s) sits on `line` as a whole tag — never
-    the prefix of a longer price (-130 in -1300) or of a kinded tag (-190 in
-    "-190 now")."""
+    """`tag` (one or more odds_tag()s) sits on `line` as a whole tag — a plain
+    tag never matches the prefix of a longer price (-130 in -1300)."""
     return re.search(re.escape(tag.strip()) + r"(?!\d| (?:live|pre|now)\b)", line) is not None
 
 
-def modernize_odds_tags(text: str) -> str:
-    """Legacy bracket tags → the bare marked form ("[-190 now]" → "⁠-190 now")."""
-    return LEGACY_ODDS_TAG_RE.sub(lambda m: f"{ODDS_TAG_MARK}{m[1]}{m[2] or ''}", text)
+def normalize_odds_tags(text: str) -> str:
+    """Superseded tag forms → the current ones: "[-130]" → "\u2060-130",
+    "\u2060-190 now" → "[-190 now]"."""
+    text = _BRACKET_PLAIN_TAG_RE.sub(lambda m: f"{ODDS_TAG_MARK}{m[1]}", text)
+    return _MARKED_KINDED_TAG_RE.sub(lambda m: f"[{m[1]} {m[2]}]", text)
 
 
 VERDICT_EMOJI = {

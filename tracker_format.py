@@ -2,7 +2,7 @@ import re
 
 import httpx
 
-from common import (ODDS_TAG_RE, VERDICT_EMOJI, has_odds_tag, modernize_odds_tags,
+from common import (ODDS_TAG_RE, VERDICT_EMOJI, has_odds_tag, normalize_odds_tags,
                     odds_tag, parlay_combined_odds, ticket_combined_odds)
 from tracker_grading import _overall_verdict
 
@@ -577,7 +577,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
     parlay_idxs = [i for i, p in enumerate(picks) if p.get("is_parlay_leg")]
     standalone_idxs = [i for i, p in enumerate(picks) if not p.get("is_parlay_leg")]
 
-    lines = modernize_odds_tags(text).rstrip().split("\n")
+    lines = normalize_odds_tags(text).rstrip().split("\n")
     # Angle records live in blockquotes and are never the bet, so no pass may
     # tag one — a team word or bet number appearing in the record ("35-10 off
     # 1 loss" under "Dbacks ML") must not attract the tag. _match_pick_line
@@ -663,7 +663,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
             # The game had already started at grade time, so the primary line is
             # the in-game (live) price. When odds.py also captured the pregame
             # closing line (_try_pregame), show both — the live price the capper
-            # saw plus the pre-game closing line — e.g. "+1200 live -107 pre".
+            # saw plus the pre-game closing line — e.g. "[+1200 live] [-107 pre]".
             tag = odds_tag(odds_val, "live")
             pre = entry.get("pregame_odds")
             if pre is not None and pre != odds_val:
@@ -696,7 +696,7 @@ def _insert_odds(text: str, picks: list[dict], odds_by_pick: dict) -> str:
                 return True
             # A line carrying BOTH a tag and the capper's own price is the
             # "now" case below, already resolved on an earlier pass. Its tag
-            # ("-190 now") isn't the plain tag we recompute here ("-190"),
+            # ("[-190 now]") isn't the plain tag we recompute here ("-190"),
             # so record it as declined rather than reporting
             # the pick unmatched — otherwise a re-run strands a second tag on an
             # unrelated line. Tags are stripped before testing so we read the
