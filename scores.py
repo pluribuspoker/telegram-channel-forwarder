@@ -3332,13 +3332,22 @@ _LOCATION_COLLISIONS: dict[str, list[list[tuple[str, str]]]] = {
     "portland":   [[("NBA", "Portland Trail Blazers"), ("NCAAB", "Portland Pilots")]],
     "indiana":    [[("NBA", "Indiana Pacers"), ("NCAAB", "Indiana Hoosiers")]],
     "milwaukee":  [[("NBA", "Milwaukee Bucks"), ("NCAAB", "Milwaukee Panthers")]],
+    "detroit":    [[("NBA", "Detroit Pistons"), ("NCAAB", "Detroit Mercy Titans")]],
+    # Bare city for its "State" school, as with Jacksonville above.
+    "sacramento": [[("NBA", "Sacramento Kings"), ("NCAAB", "Sacramento State Hornets")]],
+    "cleveland":  [[("NBA", "Cleveland Cavaliers"), ("NCAAB", "Cleveland State Vikings")]],
+    "chicago":    [[("NBA", "Chicago Bulls"), ("NCAAB", "Chicago State Cougars")]],
 }
+# Deliberately absent: "boston" (BC and BU both play — a bare "Boston" names
+# neither) and D-II/III namesakes (Indianapolis, New England) ESPN never slates.
 # Typed short nicknames beyond each team's last word ("Jags -2.5").
 _LOCATION_NICKNAMES: dict[str, tuple[str, ...]] = {
     "Jacksonville Jaguars": ("jags",),
 }
-# "Washington State", "Miami (OH)", "Arizona St." are other schools entirely.
-_LOCATION_NOT_FOLLOWED = r"(?!\s*(?:st\b|st\.|state\b|\(\s*oh|oh\b|ohio\b))"
+# "Washington State", "Miami (OH)", "Arizona St.", "Utah Tech", "Houston
+# Christian" are other schools entirely.
+_LOCATION_NOT_FOLLOWED = (r"(?!\s*(?:st\b|st\.|state\b|\(\s*oh|oh\b|ohio\b"
+                          r"|tech\b|christian\b|college\b|university\b))")
 _SAME_DAY_RE = re.compile(r"\b(today|tonight|tonite)\b", re.IGNORECASE)
 _ET = ZoneInfo("America/New_York")
 _OTHER_DAY_RE = re.compile(

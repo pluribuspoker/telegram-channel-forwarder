@@ -151,6 +151,37 @@ async def main() -> None:
           await resolve("Jacksonville Jags -2.5", "2026-10-13", jax_post,
                         parse=jags, cache=dict(jax_cache)), (jags, False))
 
+    # NBA ↔ NCAAB namesakes: "Detroit ML" an hour before Detroit Mercy tips,
+    # Pistons a day out → Mercy; a Pistons game tonight keeps the parse.
+    mercy = ("Oakland Golden Grizzlies", "Detroit Mercy Titans", "2026-11-04T00:00Z")
+    pistons = ("Detroit Pistons", "Boston Celtics", "2026-11-04T23:30Z")
+    nba_cache = {}
+    for d in ("2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06"):
+        nba_cache[("NCAAB", d)] = {"events": []}
+        nba_cache[("NBA", d)] = {"events": []}
+    nba_cache[("NCAAB", "2026-11-03")] = _sb(mercy)
+    nba_cache[("NBA", "2026-11-04")] = _sb(pistons)
+    det = ("NBA", ["Detroit Pistons"], "Detroit Pistons ML")
+    det_post = datetime(2026, 11, 3, 23, 0, tzinfo=timezone.utc)
+    check("Detroit ML before Mercy tip → Detroit Mercy",
+          await resolve("Detroit ML", "2026-11-03", det_post, parse=det, cache=dict(nba_cache)),
+          (("NCAAB", ["Detroit Mercy Titans"], "Detroit Mercy Titans ML"), True))
+    same_night = dict(nba_cache)
+    same_night[("NBA", "2026-11-03")] = _sb(("Detroit Pistons", "Boston Celtics",
+                                             "2026-11-04T00:30Z"))
+    check("Pistons also tonight → kept",
+          await resolve("Detroit ML", "2026-11-03", det_post, parse=det, cache=same_night),
+          (det, False))
+    # "Utah Tech" is its own school: a (wrong) Jazz parse is never re-pointed
+    # at the Utes.
+    jazz = ("NBA", ["Utah Jazz"], "Utah Jazz ML")
+    utes_cache = {k: {"events": []} for k in nba_cache}
+    utes_cache[("NCAAB", "2026-11-03")] = _sb(("Utah Tech Trailblazers", "Utah Utes",
+                                               "2026-11-04T00:00Z"))
+    check("Utah Tech typed → kept",
+          await resolve("Utah Tech ML", "2026-11-03", det_post, parse=jazz, cache=utes_cache),
+          (jazz, False))
+
     print(f"\n{'PASS' if not FAILS else f'FAIL ({FAILS})'}")
     sys.exit(1 if FAILS else 0)
 
