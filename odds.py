@@ -1500,6 +1500,12 @@ async def _soccer_espn_odds(pick: dict, teams: list[str],
     bk = extract_espn_bookmaker(comp)
     r = lookup_pick_odds("Soccer", pick, [bk]) if bk else None
     state = ((event.get("status") or {}).get("type") or {}).get("state", "")
+    if (state == "pre" and pick.get("bet_type") == "team_total"
+            and (not r or r.get("adjusted_odds") is None)):
+        # ESPN's DraftKings block has no team totals; Pinnacle's league feed does.
+        pin = await _soccer_pinnacle_team_total(event, pick, teams)
+        if pin is not None:
+            r = pin
     if state != "pre":
         if r and r.get("adjusted_odds") is not None:
             return OddsResult(match_type=f"pregame_espn_{r['match_type']}", odds=r["adjusted_odds"],
@@ -2773,6 +2779,45 @@ async def _soccer_btts_odds(pick: dict, teams: list[str], today: str | None = No
     # Mapped league, not listed yet — retryable (free) until kickoff.
     return OddsResult(match_type="no_game", pick_line=pick.get("line"),
                       game_date=gd, commence_time=commence)
+
+
+async def _soccer_pinnacle_team_total(event: dict, pick: dict, teams: list[str],
+                                      now: datetime | None = None) -> dict | None:
+    """Soccer team total from Pinnacle's league feed for the ESPN-bound event.
+
+    Pregame only; the same uid-league map as BTTS picks the Pinnacle league(s).
+    The matchup must start within 3 h of the ESPN kickoff, so a one-team pick
+    can't bind the club's next game in the same competition. Only team_totals
+    are read: Pinnacle's soccer handicaps/totals are Asian quarter lines, and
+    those markets keep their ESPN pricing. Exact line only (soccer has no
+    line-gap allowance). A mapped league that doesn't list the game yet →
+    lookup dict with no_game (retryable until kickoff); unmapped → None.
+    """
+    now = now or datetime.now(timezone.utc)
+    m = re.search(r"~l:(\d+)~", event.get("uid") or "")
+    leagues = _PINNACLE_SOCCER_LEAGUES.get(m.group(1) if m else "", ())
+    if not leagues or not event.get("date"):
+        return None
+    kickoff = datetime.fromisoformat(event["date"].replace("Z", "+00:00"))
+    for league in leagues:
+        matchups, markets = await _fetch_pinnacle_league_raw(league)
+        games = [(mm, e) for e in matchups if e.get("type") == "matchup" and not e.get("parentId")
+                 and e.get("units", "Regular") == "Regular" and (mm := _pinnacle_minimal_event(e))]
+        eid = _find_event_id([mm for mm, _ in games], teams, as_of=kickoff)
+        if not eid:
+            continue
+        minimal, matchup = next((mm, e) for mm, e in games if mm["id"] == eid)
+        start = datetime.fromisoformat(minimal["commence_time"].replace("Z", "+00:00"))
+        if abs((start - kickoff).total_seconds()) > 3 * 3600:
+            continue
+        if start <= now or matchup.get("isLive"):
+            return None
+        bks = _pinnacle_bookmakers(matchup, markets, "Soccer")
+        for b in bks:
+            b["markets"] = [mk for mk in b["markets"] if mk["key"].startswith("team_totals")]
+        return lookup_pick_odds("Soccer", pick, bks)
+    return {"match_type": "no_game", "pick_line": pick.get("line"), "api_line": None,
+            "computed_odds": None, "adjusted_odds": None, "bookmaker": None}
 
 
 def _is_estimate(r: dict) -> bool:
