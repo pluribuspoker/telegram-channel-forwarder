@@ -1,0 +1,28 @@
+# Pick review pass (scripts/pick_review.py): every 3 min, ONE subscription
+# Claude call (Opus 5.5 medium, no tools — pick_reviewer.py) per new review
+# question: each fresh parse, each newly resolved leg (with the ESPN final),
+# each message that parsed to no picks, and from 05:45 ET yesterday's
+# messages end to end. Flags queue in logs/pick_review_state.json and start
+# pick-review-agent.service. Kill switch PICK_REVIEW_DISABLED=1. Covered by
+# the heartbeat's "VPS jobs" check.
+#
+# TimeoutStartSec=1800 = MAX_CALLS (40) × a slow call + ESPN reads; a timer
+# tick while a pass runs is coalesced by systemd.
+[Unit]
+Description=Pick review (Claude reviews every parse, verdict and no-parse)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+EnvironmentFile=-/home/forwarder/.claude/auth.env
+Environment=PATH=/home/forwarder/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/forwarder
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/scripts/pick_review.py
+TimeoutStartSec=1800
+SyslogIdentifier=pick-review

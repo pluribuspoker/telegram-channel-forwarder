@@ -1,0 +1,27 @@
+# Pick review agent (scripts/pick_review.py --agent): started by the review
+# pass when flags are pending. ONE headless /investigate agent (Opus 5.5
+# high, subscription-billed, full authority — operator 2026-10-15) per batch
+# of up to 4 flagged messages; it judges, repairs and may push/restart. Every
+# outcome is DM'd as a card via the watchdog bot. Guards in the script:
+# PICK_REVIEW_AGENT_DISABLED=1, flock, stands down while the nightly audit /
+# odds watch / hc-repair runs, 2 runs per message, 12 agents/24 h.
+#
+# TimeoutStartSec=8400 = 3 rounds × agent kill (2400s) + git/push/DM.
+[Unit]
+Description=Pick review agent (headless /investigate repair of flagged picks)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forwarder
+Group=forwarder
+WorkingDirectory=/home/forwarder/app
+EnvironmentFile=/home/forwarder/app/.env
+EnvironmentFile=-/home/forwarder/app/.env.local
+EnvironmentFile=-/home/forwarder/.claude/auth.env
+Environment=PATH=/home/forwarder/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/forwarder
+ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/scripts/pick_review.py --agent
+TimeoutStartSec=8400
+SyslogIdentifier=pick-review-agent

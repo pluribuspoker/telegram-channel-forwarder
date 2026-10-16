@@ -1,0 +1,9 @@
+[Unit]
+Description=Pick review pass every 3 min (Claude reviews every new parse/verdict/no-parse)
+
+[Timer]
+OnCalendar=*:1/3
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target
