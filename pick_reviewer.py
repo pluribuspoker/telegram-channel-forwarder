@@ -71,6 +71,10 @@ Conventions you must not flag:
   it. A pick's null `sport` inherits the post's sport.
 - A leg whose price is `held` is already with the odds reviewer; don't flag
   that price.
+- Our price is the sportsbook feed's price at post time, not the capper's
+  number: it may differ from the price the capper wrote (books and times
+  differ — +124 vs a stated +110 is normal). Flag a price only when it is for
+  a different bet, side, line, period or game.
 """
 
 PARSE_PROMPT = _COMMON + """
