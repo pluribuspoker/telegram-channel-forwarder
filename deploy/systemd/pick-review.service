@@ -23,6 +23,7 @@ EnvironmentFile=-/home/forwarder/app/.env.local
 EnvironmentFile=-/home/forwarder/.claude/auth.env
 Environment=PATH=/home/forwarder/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=/home/forwarder
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/home/forwarder/venv/bin/python /home/forwarder/app/scripts/pick_review.py
 TimeoutStartSec=1800
 SyslogIdentifier=pick-review
