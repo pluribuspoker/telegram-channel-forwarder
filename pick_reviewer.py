@@ -58,6 +58,9 @@ Conventions you must not flag:
 - Teaser legs are graded at the line the capper STATED. A bare "TEAM over N" is
   the GAME total unless written team total/TT.
 - One pick per line on a card = separate straight bets, not a parlay.
+- A post that names a side is a pick even when worded softly ("most likely
+  on X", "loving/riding the X", "X +1.5 dogs") — we track it like any other.
+  Only commentary naming no side/team is a no-pick.
 - `has_image: true` = the post carried an image (often a bet slip) that the
   parse may have read; you can't see it. A pick that isn't in the text but
   fits an image post ("Tailing X" + slip) is NOT invented — flag only if it
