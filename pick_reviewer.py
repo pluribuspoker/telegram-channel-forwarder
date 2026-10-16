@@ -66,8 +66,9 @@ Conventions you must not flag:
 - Totals settle MID-GAME once they can't change (an over past its line, an
   under already exceeded), so a WIN/LOSS calc on a mid-game score is right
   when the final can't flip it. Spreads/ML settle at the final.
-- A moneyline's `line` field is ignored by grading (it sometimes holds the
-  price); a pick's null `sport` inherits the post's sport.
+- A moneyline's `line` field is ignored everywhere — grading, odds routing,
+  rendering — and often holds the price (also in `description`); never flag
+  it. A pick's null `sport` inherits the post's sport.
 - A leg whose price is `held` is already with the odds reviewer; don't flag
   that price.
 """
