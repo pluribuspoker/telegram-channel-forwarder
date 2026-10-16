@@ -8,11 +8,12 @@ The Seahawks 14–17 Broncos merge read "Seahawks/Broncos U41.5" under a header
 that already names the game, interleaved sides with totals, and wrapped
 "RIGGED / GEMS" and a stranded "· Boyer" onto their own lines. Pinned:
 
-  1. under a score header, game totals and team-level props drop the matchup;
+  1. under a score header, game totals and team-level props drop the matchup
+     and totals spell out Over/Under ("Under 41.5");
      team totals keep their team; headerless merges keep the matchup
   2. lines order sides → totals → props, message order within each
   3. capper names and the "· name" join use non-breaking spaces (both senders)
-  4. 2+ bets all won → 🧹 after the header, all lost → 🥶; mixed, a push, a
+  4. 2+ bets all won → 🧹🧹🧹 after the header, all lost → 🥶🥶🥶; mixed, a push, a
      single bet, or a headerless merge → no icon, never tally text
   5. the dedupe fingerprint keeps the full label (no broadcast_lines re-seed)
 """
@@ -86,16 +87,16 @@ text = run(ITEMS)
 lines = text.split("\n")
 bets = [l.split(" ·")[0] for l in lines[2:]]
 check("1 totals drop the matchup under the header",
-      bets == ["✅ Broncos +3 -125", "✅ Broncos ML +124", "✅ U41.5 -123", "✅ U40.5 -110"], repr(bets))
+      bets == ["✅ Broncos +3 -125", "✅ Broncos ML +124", "✅ Under 41.5 -123", "✅ Under 40.5 -110"], repr(bets))
 check("2 sides before totals, message order kept", bets[0].startswith("✅ Broncos +3"), repr(bets))
 check("3 capper name + middot join are non-breaking",
       f"·{NB}<a" in lines[2] and f"RIGGED{NB}GEMS" in lines[2] and "· <a" not in text, repr(lines[2]))
-check("4 clean sweep → 🧹 after the header", lines[0].endswith("</u></b> 🧹"), repr(lines[0]))
+check("4 clean sweep → 🧹🧹🧹 after the header", lines[0].endswith("</u></b> 🧹🧹🧹"), repr(lines[0]))
 
 # Team total keeps its team; 1H keeps its period; team-level prop drops the matchup
-check("team total keeps its team", _format_pick(TT, in_game=True) == "Broncos O20.5",
+check("team total keeps its team", _format_pick(TT, in_game=True) == "Broncos Over 20.5",
       _format_pick(TT, in_game=True))
-check("period total keeps the period", _format_pick(H1, in_game=True) == "1H U20.5",
+check("period total keeps the period", _format_pick(H1, in_game=True) == "1H Under 20.5",
       _format_pick(H1, in_game=True))
 check("BTTS drops the matchup in-game", _format_pick(BTTS, in_game=True) == "BTTS Yes",
       _format_pick(BTTS, in_game=True))
@@ -110,7 +111,7 @@ check("headerless merge keeps the matchup, no icon",
 
 # Reverse sweep / mixed / push / single
 t3 = run([it(SPREAD, "LOSS", -125, "A", 1), it(U415, "LOSS", -110, "B", 2)])
-check("reverse sweep → 🥶", t3.split("\n")[0].endswith(" 🥶"), repr(t3))
+check("reverse sweep → 🥶🥶🥶", t3.split("\n")[0].endswith(" 🥶🥶🥶"), repr(t3))
 t4 = run([it(SPREAD, "WIN", -125, "A", 1), it(U415, "LOSS", -110, "B", 2)])
 check("mixed → no icon", t4.split("\n")[0].endswith("</u></b>"), repr(t4))
 t5 = run([it(SPREAD, "WIN", -125, "A", 1), it(U415, "PUSH", -110, "B", 2)])

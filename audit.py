@@ -166,8 +166,8 @@ def _format_pick(pick: dict, in_game: bool = False) -> str:
     """Build a standardized, odds-free pick description from structured parse fields.
 
     `in_game` = the line renders under a final-score header that already names the
-    game, so game-level bets drop the matchup ("U41.5", not "Seahawks/Broncos
-    U41.5"; operator 2026-10-16). Display only — fingerprints and Sheets always
+    game, so game-level bets drop the matchup and totals spell out the side
+    ("Under 41.5", not "Seahawks/Broncos U41.5"; operator 2026-10-16). Display only — fingerprints and Sheets always
     use the full label.
 
     Wraps `_format_pick_body` with a net for the period qualifier: every branch is
@@ -231,6 +231,10 @@ def _format_pick_body(pick: dict, in_game: bool = False) -> str:
     # "Dallas Wings 79.5" — a number with no bet. Fall through to the description.
     if bet_type in ("total", "team_total") and line is not None and direction in ("over", "under"):
         d = "O" if direction == "over" else "U"
+        if in_game:
+            # Spelled out under the score header, where the bet stands alone
+            # ("Under 41.5"; operator 2026-10-16). Compact lines keep "U41.5".
+            d = "Over " if direction == "over" else "Under "
         if bet_type == "team_total" and team:
             head = team
         elif in_game:
@@ -325,8 +329,8 @@ def _market_rank(pick: dict) -> int:
 
 
 # Header icon for a game where every merged bet won / lost (2+ bets; a push
-# breaks the sweep). Icons only, no tally text (operator 2026-10-16).
-SWEEP_ICON = {"WIN": "🧹", "LOSS": "🥶"}
+# breaks the sweep). Icons only (three in a row), no tally text (operator 2026-10-16).
+SWEEP_ICON = {"WIN": "🧹🧹🧹", "LOSS": "🥶🥶🥶"}
 
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "picks.db")
