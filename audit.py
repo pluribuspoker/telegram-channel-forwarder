@@ -162,15 +162,20 @@ def _short_team(name: str) -> str:
     return _TEAM_SHORT_NAMES.get(" ".join(str(name).split()).casefold(), name)
 
 
-def _format_pick(pick: dict) -> str:
+def _format_pick(pick: dict, in_game: bool = False) -> str:
     """Build a standardized, odds-free pick description from structured parse fields.
+
+    `in_game` = the line renders under a final-score header that already names the
+    game, so game-level bets drop the matchup ("U41.5", not "Seahawks/Broncos
+    U41.5"; operator 2026-10-16). Display only — fingerprints and Sheets always
+    use the full label.
 
     Wraps `_format_pick_body` with a net for the period qualifier: every branch is
     supposed to interpolate it, and two of them didn't, so a first-half under went
     out as a full-game one. If a future branch forgets, appending the tag names the
     right bet in a slightly odd order — strictly better than naming the wrong one.
     """
-    label = _format_pick_body(pick)
+    label = _format_pick_body(pick, in_game)
     tag = _period_tag(pick)
     if not tag or tag.strip() in label:
         return label
@@ -181,7 +186,7 @@ def _format_pick(pick: dict) -> str:
     return f"{label}{tag}"
 
 
-def _format_pick_body(pick: dict) -> str:
+def _format_pick_body(pick: dict, in_game: bool = False) -> str:
     bet_type  = pick.get("bet_type", "")
     # New list on purpose — never mutate the parse's own teams in place.
     teams     = [_short_team(t) for t in (pick.get("teams") or [])]
@@ -228,6 +233,8 @@ def _format_pick_body(pick: dict) -> str:
         d = "O" if direction == "over" else "U"
         if bet_type == "team_total" and team:
             head = team
+        elif in_game:
+            head = ""
         elif len(teams) >= 2:
             head = f"{teams[0]}/{teams[1]}"
         elif team:
@@ -255,11 +262,11 @@ def _format_pick_body(pick: dict) -> str:
 
     # Team-level props (BTTS, clean sheet, etc.) — no player, but has teams + prop_stat
     if bet_type == "prop" and prop_stat and teams:
-        matchup = " vs ".join(teams) if len(teams) >= 2 else teams[0]
+        matchup = "" if in_game else (" vs ".join(teams) if len(teams) >= 2 else teams[0])
         stat = prop_stat
         if prop_stat == "BTTS" and direction:
             stat += " Yes" if direction == "over" else " No"
-        return f"{matchup}{period_tag} {stat}"
+        return f"{matchup}{period_tag} {stat}".lstrip()
 
     # Fallback to cleaned description string
     return _clean_desc(pick.get("description", ""))
@@ -294,6 +301,32 @@ def _capper_label(capper_name: str) -> str:
     if len(label) > 40:
         label = label[:39].rstrip() + "…"
     return label
+
+
+def _nb(s: str) -> str:
+    """Non-breaking spaces, so a capper name wraps as one piece ("RIGGED GEMS"
+    never splits across lines, and "· Boyer" never strands the middot)."""
+    return str(s).replace(" ", "\u00a0")
+
+
+# Merged result lines read sides → totals → props (operator 2026-10-16).
+_SIDE_BET_TYPES = ("spread", "moneyline", "double_chance", "draw_no_bet")
+
+
+def _market_rank(pick: dict) -> int:
+    bet_type = pick.get("bet_type", "")
+    if is_btts_as_total(pick):
+        return 2
+    if bet_type in _SIDE_BET_TYPES:
+        return 0
+    if bet_type in ("total", "team_total"):
+        return 1
+    return 2 if bet_type == "prop" else 3
+
+
+# Header icon for a game where every merged bet won / lost (2+ bets; a push
+# breaks the sweep). Icons only, no tally text (operator 2026-10-16).
+SWEEP_ICON = {"WIN": "🧹", "LOSS": "🥶"}
 
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "picks.db")
@@ -703,7 +736,7 @@ class AuditLog:
         # grammar broadcast_group uses — so every
         # result line in the feed reads one way (operator-picked, 2026-09-20).
         capper_linked = f'<b><a href="{link}">{e(capper_label)}</a></b>' if capper_label else f'<a href="{link}">view</a>'
-        capper_tail = f'<a href="{link}">{e(capper_label) if capper_label else "view"}</a>'
+        capper_tail = f'<a href="{link}">{_nb(e(capper_label)) if capper_label else "view"}</a>'
 
         # Detect a parlay from ALL passed legs, not just the resolved ones: a
         # parlay that settled on one lost leg still passes its other (voided /
@@ -804,12 +837,12 @@ class AuditLog:
                 lines.append(f"{overall_emoji} {ticket_line}")
                 text = capper_linked + "\n" + "\n".join(lines)
             else:
-                text = f"{overall_emoji} {ticket_line} · {capper_tail}"
+                text = f"{overall_emoji} {ticket_line} ·\u00a0{capper_tail}"
         elif len(picks) == 1:
             desc, verdict, odds_str = picks[0]
             emoji = VERDICT_EMOJI.get(verdict, "")
             odds_part = f" {e(odds_str)}" if odds_str else ""
-            text = f"{emoji} {e(desc)}{odds_part} · {capper_tail}"
+            text = f"{emoji} {e(desc)}{odds_part} ·\u00a0{capper_tail}"
         else:
             # Non-parlay multi-pick: one emoji per pick
             lines = [_pick_line(d, v, o) for d, v, o in picks]
@@ -895,19 +928,29 @@ class AuditLog:
 
         specs: list[tuple[str, str, str]] = []       # (verdict, desc, odds) in first-seen order
         who: list[list[str]] = []                    # linked capper names per spec
+        ranks: list[int] = []                        # market rank per spec
         seen: dict[tuple[str, str, str], int] = {}
         for it in items:
-            key = (it["verdict"], _format_pick(it["pick"]), _fmt_odds(it.get("odds")))
+            # Under the score header the matchup is already named — game-level
+            # bets render bare ("U41.5"). Headerless merges keep it.
+            desc = _format_pick(it["pick"], in_game=bool(header))
+            key = (it["verdict"], desc, _fmt_odds(it.get("odds")))
             label = _capper_label(it.get("capper", ""))
             link = _pick_link(it["channel_id"], it["message_id"])
-            linked = f'<a href="{link}">{e(label) if label else "view"}</a>'
+            linked = f'<a href="{link}">{_nb(e(label)) if label else "view"}</a>'
             idx = seen.get(key)
             if idx is None:
                 seen[key] = len(specs)
                 specs.append(key)
                 who.append([linked])
+                ranks.append(_market_rank(it["pick"]))
             elif linked not in who[idx]:
                 who[idx].append(linked)
+
+        # Sides, then totals, then props; message order within each (stable sort).
+        order = sorted(range(len(specs)), key=lambda i: ranks[i])
+        specs = [specs[i] for i in order]
+        who = [who[i] for i in order]
 
         # The header carries bold + underline and a blank line under it; the pick
         # descriptions stay plain. Bolding those too (the first cut did) left the
@@ -917,10 +960,13 @@ class AuditLog:
         for (verdict, desc, odds_str), names in zip(specs, who):
             odds_part = f" {e(odds_str)}" if odds_str else ""
             lines.append(
-                f"{VERDICT_EMOJI.get(verdict, '')} {e(desc)}{odds_part} · {', '.join(names)}"
+                f"{VERDICT_EMOJI.get(verdict, '')} {e(desc)}{odds_part} ·\u00a0{', '.join(names)}"
             )
 
-        text = "\n".join(([f"<b><u>{e(header)}</u></b>", ""] if header else []) + lines)
+        verdicts = {v for v, _, _ in specs}
+        sweep = SWEEP_ICON.get(next(iter(verdicts))) if len(specs) >= 2 and len(verdicts) == 1 else None
+        title = f"<b><u>{e(header)}</u></b>" + (f" {sweep}" if sweep else "")
+        text = "\n".join(([title, ""] if header else []) + lines)
         link = _pick_link(items[0]["channel_id"], items[0]["message_id"])
         await self._post_broadcast(
             target=target_channel, text=text, reply_to_id=reply_to_id, link=link

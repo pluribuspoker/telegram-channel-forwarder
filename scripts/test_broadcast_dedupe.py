@@ -114,8 +114,8 @@ br(audit, 3864, [(U475, "LOSS", -141)])
 check("first message's result posts", len(posts) == 1, repr(posts))
 t = posts[0] if posts else ""
 check("first post renders the compact line, bet before capper",
-      t.startswith("❌ Colts/Chiefs U47.5 -141 · ")
-      and t.index("U47.5") < t.index("Midwest Mike"), t)
+      t.startswith("❌ Colts/Chiefs U47.5 -141 ·\u00a0")
+      and t.index("U47.5") < t.index("Midwest\u00a0Mike"), t)
 
 br(audit, 3868, [(U475, "LOSS", -141)])
 check("recap restating the same pick does NOT post again (the incident)",
@@ -158,7 +158,7 @@ br(audit5, 2, TICKET)
 check("restated ticket does NOT post again", len(posts5) == 1, repr(posts5))
 br(audit5, 3, TICKET + [(BRONCOS, "WIN", -148)])
 check("restated ticket + a NEW straight posts only the straight, compact",
-      len(posts5) == 2 and "Parlay" not in posts5[1] and " · " in posts5[1],
+      len(posts5) == 2 and "Parlay" not in posts5[1] and " ·\u00a0" in posts5[1],
       repr(posts5))
 
 # ── 9-11: broadcast_group shares the same memory ─────────────────────────────
@@ -169,7 +169,7 @@ br(audit6, 1, [(U475, "LOSS", -141)])
 bg(audit6, [item(U475, "LOSS", -141, msg_id=2),
             item(U475, "LOSS", -141, capper="Other Guy", msg_id=3)])
 check("group drops the line a compact post already carried, keeps the other capper",
-      len(posts6) == 2 and "Other Guy" in posts6[1] and "Midwest" not in posts6[1],
+      len(posts6) == 2 and "Other\u00a0Guy" in posts6[1] and "Midwest" not in posts6[1],
       repr(posts6))
 bg(audit6, [item(U475, "LOSS", -141, msg_id=4)])
 check("group with nothing new skips the post entirely", len(posts6) == 2, repr(posts6))
@@ -179,7 +179,7 @@ audit7 = mk(fresh_db(), posts7)
 bg(audit7, [item(U475, "LOSS", -141, msg_id=1),
             item(U475, "LOSS", -141, msg_id=2)])
 check("one capper restated INSIDE one group collapses to one link",
-      len(posts7) == 1 and posts7[0].count("Midwest Mike") == 1, repr(posts7))
+      len(posts7) == 1 and posts7[0].count("Midwest\u00a0Mike") == 1, repr(posts7))
 
 # ── 12: the window expires ────────────────────────────────────────────────────
 

@@ -137,28 +137,28 @@ def run_broadcast(leg_verdicts_by_idx: dict) -> list[dict]:
 posts = run_broadcast({0: "PUSH", 1: "WIN"})
 # Renderer grammar since a96b89e/0e94a65/01aa422 (2026-09-20/21): nickname-short
 # teams, bare odds, capper after a middot — this file kept the old shape until 10-07.
-EXPECTED = ('✅ Parlay: Brewers F5 ML ♻️ / Yankees F5 ML -310 · '
+EXPECTED = ('✅ Parlay: Brewers F5 ML ♻️ / Yankees F5 ML -310 ·\u00a0'
             '<a href="https://t.me/c/2486251914/3794">Empire</a>')
 check("broadcast is ✅ with pushed leg marked and the reduced price",
       len(posts) == 1 and posts[0]["text"] == EXPECTED,
       repr(posts))
 
 posts = run_broadcast({0: "PUSH", 1: "PUSH"})
-EXPECTED_ALL_PUSH = ('♻️ Parlay: Brewers F5 ML ♻️ / Yankees F5 ML ♻️ · '
+EXPECTED_ALL_PUSH = ('♻️ Parlay: Brewers F5 ML ♻️ / Yankees F5 ML ♻️ ·\u00a0'
                      '<a href="https://t.me/c/2486251914/3794">Empire</a>')
 check("all-push broadcast is ♻️ with no price (whole stake refunded)",
       len(posts) == 1 and posts[0]["text"] == EXPECTED_ALL_PUSH,
       repr(posts))
 
 posts = run_broadcast({0: "PUSH", 1: "LOSS"})
-EXPECTED_LOSS = ('❌ Parlay: Brewers F5 ML ♻️ / Yankees F5 ML -310 · '
+EXPECTED_LOSS = ('❌ Parlay: Brewers F5 ML ♻️ / Yankees F5 ML -310 ·\u00a0'
                  '<a href="https://t.me/c/2486251914/3794">Empire</a>')
 check("push+loss broadcast is ❌ priced on the live leg",
       len(posts) == 1 and posts[0]["text"] == EXPECTED_LOSS,
       repr(posts))
 
 posts = run_broadcast({0: "WIN", 1: "WIN"})
-EXPECTED_SWEEP = ('✅ Parlay: Brewers F5 ML / Yankees F5 ML -108 · '
+EXPECTED_SWEEP = ('✅ Parlay: Brewers F5 ML / Yankees F5 ML -108 ·\u00a0'
                   '<a href="https://t.me/c/2486251914/3794">Empire</a>')
 check("all-win broadcast unchanged (full combined price, no markers)",
       len(posts) == 1 and posts[0]["text"] == EXPECTED_SWEEP,

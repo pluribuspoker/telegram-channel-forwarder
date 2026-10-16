@@ -169,7 +169,7 @@ text = posts[0]["text"] if posts else ""
 print("single+final:", text.replace("\n", " | "))
 check("single+final posts once", len(posts) == 1, f"{len(posts)} posts")
 check("single+final has score header", "<b><u>" in text and "Marlins 1–6 Cubs" in text, text)
-check("single+final capper after middot", "· <a href=" in text and "Midwest Mike" in text, text)
+check("single+final capper after middot", "·\u00a0<a href=" in text and "Midwest\u00a0Mike" in text, text)
 check("single+final pick line", "✅ Cubs ML -167" in text, text)
 
 # ── 2. lone result, game in progress -> compact line, no running score ────────
@@ -177,15 +177,15 @@ posts = run_flush({"events": [make_event(completed=False)]}, n_items=1)
 text = posts[0]["text"] if posts else ""
 print("single+live:", text.replace("\n", " | "))
 check("single+live posts once", len(posts) == 1, f"{len(posts)} posts")
-check("single+live stays compact", "<u>" not in text and " · " in text, text)
+check("single+live stays compact", "<u>" not in text and " ·\u00a0" in text, text)
 check("single+live leads with the bet, capper after dash",
-      text.startswith("✅ Cubs ML -167 · <a href="), text)
+      text.startswith("✅ Cubs ML -167 ·\u00a0<a href="), text)
 
 # ── 3. lone result, no ESPN event -> compact line ─────────────────────────────
 posts = run_flush({"events": []}, n_items=1)
 text = posts[0]["text"] if posts else ""
 check("single+no-event posts once", len(posts) == 1, f"{len(posts)} posts")
-check("single+no-event stays compact", "<u>" not in text and " · " in text, text)
+check("single+no-event stays compact", "<u>" not in text and " ·\u00a0" in text, text)
 
 # ── 4. two cappers on the game -> still ONE merged message ────────────────────
 posts = run_flush({"events": [make_event(completed=True)]}, n_items=2)
@@ -193,7 +193,7 @@ text = posts[0]["text"] if posts else ""
 print("merged:", text.replace("\n", " | "))
 check("merge posts once", len(posts) == 1, f"{len(posts)} posts")
 check("merge has score header", "Marlins 1–6 Cubs" in text, text)
-check("merge names both cappers", "Midwest Mike" in text and "Tony" in text, text)
+check("merge names both cappers", "Midwest\u00a0Mike" in text and "Tony" in text, text)
 
 # ── 5. two cappers, game in progress -> ONE merged message, NO header ─────────
 # The title header is exclusively the final-score format (2026-09-07, "WIS VS
@@ -208,7 +208,7 @@ check("merge+live has no header", "<u>" not in text and "Marlins" not in text
       and not text.startswith("\n"), text)
 check("merge+live keeps both pick lines",
       text.count("✅ Cubs ML -167") >= 1
-      and "Midwest Mike" in text and "Tony" in text, text)
+      and "Midwest\u00a0Mike" in text and "Tony" in text, text)
 
 # ── 6. multi-pick, both legs on ONE game, final -> group format, line per leg ─
 # The legs' name keys differ (bet side vs matchup) — only the ESPN event upgrade
@@ -221,7 +221,7 @@ text = posts[0]["text"] if posts else ""
 print("multi+final:", text.replace("\n", " | "))
 check("multi+final posts once", len(posts) == 1, f"{len(posts)} posts")
 check("multi+final has score header", "<b><u>" in text and "Marlins 1–6 Cubs" in text, text)
-check("multi+final one line per leg", text.count("· <a href=") == 2, text)
+check("multi+final one line per leg", text.count("·\u00a0<a href=") == 2, text)
 check("multi+final keeps both verdicts", "✅" in text and "❌" in text, text)
 
 # ── 7. multi-pick + a lone single on the same game -> ONE merged message ──────
@@ -234,8 +234,8 @@ text = posts[0]["text"] if posts else ""
 print("multi+single:", text.replace("\n", " | "))
 check("multi+single posts once", len(posts) == 1, f"{len(posts)} posts")
 check("multi+single has score header", "Marlins 1–6 Cubs" in text, text)
-check("multi+single has 3 pick lines", text.count("· <a href=") == 3, text)
-check("multi+single names both cappers", "Midwest Mike" in text and "Andrew C" in text, text)
+check("multi+single has 3 pick lines", text.count("·\u00a0<a href=") == 3, text)
+check("multi+single names both cappers", "Midwest\u00a0Mike" in text and "Andrew\u00a0C" in text, text)
 
 # ── 8. multi-pick legs on DIFFERENT games -> compact multi-pick message ───────
 # Second leg's team is on no scoreboard event: its name key survives the upgrade,
@@ -351,7 +351,7 @@ print("soccer+final:", text.replace("\n", " | "))
 check("soccer+final posts once", len(posts) == 1, f"{len(posts)} posts")
 check("soccer+final has ⚽️ score header",
       "<b><u>⚽️ Atlético 1–2 Liverpool</u></b>" in text, text)
-check("soccer+final capper after middot", "· <a href=" in text and "James Bets" in text, text)
+check("soccer+final capper after middot", "·\u00a0<a href=" in text and "James\u00a0Bets" in text, text)
 
 print()
 if failures:
