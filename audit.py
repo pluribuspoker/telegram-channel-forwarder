@@ -157,9 +157,35 @@ _TEAM_SHORT_NAMES_RAW: dict[str, str] = {
 _TEAM_SHORT_NAMES = {k.casefold(): v for k, v in _TEAM_SHORT_NAMES_RAW.items()}
 
 
-def _short_team(name: str) -> str:
-    """Nickname for a mapped full team name; anything unlisted passes through."""
-    return _TEAM_SHORT_NAMES.get(" ".join(str(name).split()).casefold(), name)
+# College teams render as the SCHOOL ("Appalachian State Mountaineers" →
+# "Appalachian State"), the way cappers write them — operator 2026-10-17.
+# ESPN's exact displayName → location pairs, plus mascots that never end a
+# school's own name for the parse's non-ESPN spellings; rebuilt by
+# scripts/build_college_team_names.py. Missing file = names pass unchanged.
+_COLLEGE_SPORTS = {"NCAAF", "NCAAB"}
+try:
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "data", "college_team_names.json"), encoding="utf-8") as _f:
+        _college = json.load(_f)
+except (OSError, ValueError):
+    _college = {}
+_COLLEGE_SCHOOLS = {k.casefold(): v for k, v in (_college.get("names") or {}).items()}
+# Longest first, so "Crimson Tide" goes before a bare "Tide" could.
+_COLLEGE_MASCOTS = sorted((m.casefold() for m in _college.get("mascots") or []),
+                          key=len, reverse=True)
+
+
+def _short_team(name: str, sport: str | None = None) -> str:
+    """Nickname for a mapped pro team, school for a college team; else unchanged."""
+    key = " ".join(str(name).split()).casefold()
+    short = _TEAM_SHORT_NAMES.get(key) or _COLLEGE_SCHOOLS.get(key)
+    if short:
+        return short
+    if sport in _COLLEGE_SPORTS:
+        for mascot in _COLLEGE_MASCOTS:
+            if key.endswith(" " + mascot):
+                return " ".join(str(name).split())[:len(key) - len(mascot) - 1]
+    return name
 
 
 def _format_pick(pick: dict, in_game: bool = False) -> str:
@@ -189,7 +215,7 @@ def _format_pick(pick: dict, in_game: bool = False) -> str:
 def _format_pick_body(pick: dict, in_game: bool = False) -> str:
     bet_type  = pick.get("bet_type", "")
     # New list on purpose — never mutate the parse's own teams in place.
-    teams     = [_short_team(t) for t in (pick.get("teams") or [])]
+    teams     = [_short_team(t, pick.get("sport")) for t in (pick.get("teams") or [])]
     line      = pick.get("line")
     direction = pick.get("direction") or ""
     player    = pick.get("player") or ""

@@ -194,7 +194,7 @@ CASES = [
 
     # ── nickname rendering (operator-picked, 2026-09-20) ─────────────────────
     # Mapped full names render nickname-short in every structured branch;
-    # anything off the allowlist (KBO, soccer clubs, college, countries) and
+    # anything off the allowlist (KBO, soccer clubs, countries) and
     # the _clean_desc fallback's free text render unchanged.
     ("nickname: ML", P(bet_type="moneyline", teams=["Denver Broncos"],
                        period="game", sport="NFL",
@@ -209,9 +209,29 @@ CASES = [
     ("nickname: KBO team passes through",
      P(bet_type="moneyline", teams=["KIA Tigers"], period="game", sport="KBO",
        description="KIA Tigers ML"), "KIA Tigers ML"),
-    ("nickname: college team passes through",
+    ("nickname: bare college school passes through",
      P(bet_type="spread", teams=["Ohio State"], line=-6.5, period="game",
        sport="NCAAF"), "Ohio State -6.5"),
+    # College renders as the school (operator 2026-10-17): ESPN's exact names,
+    # then a trailing mascot off the parse's own spellings.
+    ("college: mascots drop from a game total",
+     P(bet_type="total", teams=["Appalachian State Mountaineers",
+                                "Coastal Carolina Chanticleers"],
+       line=49.5, direction="over", period="game", sport="NCAAF"),
+     "Appalachian State/Coastal Carolina O49.5"),
+    ("college: multi-word mascot, school keeps 'State'",
+     P(bet_type="spread", teams=["Penn State Nittany Lions"], line=-3.5,
+       period="game", sport="NCAAF"), "Penn State -3.5"),
+    ("college: ESPN exact name keeps the parenthetical",
+     P(bet_type="moneyline", teams=["Miami (OH) RedHawks"], period="game",
+       sport="NCAAB", description="Miami OH ML"), "Miami (OH) ML"),
+    ("college: school whose tail looks like a word stays whole",
+     P(bet_type="moneyline", teams=["Bowling Green"], period="game",
+       sport="NCAAF", description="Bowling Green ML"), "Bowling Green ML"),
+    ("college: mascot strip never runs for a pro/soccer sport",
+     P(bet_type="moneyline", teams=["Philadelphia Union"], period="game",
+       sport="Soccer", description="Philadelphia Union ML"),
+     "Philadelphia Union ML"),
     ("nickname: country passes through",
      P(bet_type="moneyline", teams=["Costa Rica"], period="game",
        sport="Soccer", description="Costa Rica ML"), "Costa Rica ML"),
