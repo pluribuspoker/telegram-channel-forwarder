@@ -275,10 +275,49 @@ def test_bovada_parent_fallback():
     check("kept only the NFL block's events", [e.get("id") for e in events], [BOV_NFL["id"]])
 
 
+def test_in_word_name_collision():
+    """A bare book name inside a longer word must not bind ("Kansas" ⊂ "Arkansas").
+
+    2026-10-17, "Arkansas +6.5" (odds watch, -1004427337587:528): both free
+    pickers bound Arkansas Razorbacks to Kansas @ Kansas State because
+    _team_matches fell back to a character substring, so the exact quotes
+    (Pinnacle main +6.5 -115, Bovada alt +6.5 -125) never reached the pick and
+    ESPN's -125 estimate off +6 survived only by being nearer. Real payloads
+    captured 2026-10-17 15:24 UTC (Bovada trimmed to its line groups).
+    """
+    from scores import _team_matches
+    for term, name, want in [("Arkansas Razorbacks", "Kansas", False), ("FC Barcelona", "Elon", False),
+                             ("Indianapolis Colts", "Indiana", False), ("Arkansas Razorbacks", "Arkansas", True),
+                             ("Inter Miami CF", "Inter Miami", True), ("Kansas Jayhawks", "Kansas", True)]:
+        check(f"_team_matches({term!r}, {name!r})", _team_matches(term, name), want)
+    fx = json.load(open(FIX / "ncaaf_ark_van_kansas_20261017.json"))
+    pick = {"bet_type": "spread", "teams": ["Arkansas Razorbacks"], "line": 6.5,
+            "period": "game", "description": "Arkansas +6.5"}
+    before = datetime(2026, 10, 17, 15, 24, tzinfo=timezone.utc)
+    orig_pin, orig_bov = odds._fetch_pinnacle_league, odds._fetch_bovada_events
+
+    async def fake_pin(sport):
+        return fx["pinnacle"]["matchups"], fx["pinnacle"]["markets"]
+
+    async def fake_bov(sport):
+        return fx["bovada_events"]
+    odds._fetch_pinnacle_league, odds._fetch_bovada_events = fake_pin, fake_bov
+    try:
+        pin_bk, _, ct = asyncio.run(odds._fetch_pinnacle_bookmakers("NCAAF", pick["teams"], now=before))
+        check("Pinnacle binds Arkansas @ Vanderbilt", ct, "2026-10-17T23:00:00Z")
+        r = lookup_pick_odds("NCAAF", pick, pin_bk)
+        check("Pinnacle quotes +6.5 exactly", (r.get("match_type"), r.get("adjusted_odds")), ("exact", -115))
+        ev, _ = odds._bovada_pick_event(fx["bovada_events"], pick["teams"], allow_started=False, now=before)
+        check("Bovada binds Arkansas @ Vanderbilt", (ev or {}).get("description"), "Arkansas @ Vanderbilt")
+    finally:
+        odds._fetch_pinnacle_league, odds._fetch_bovada_events = orig_pin, orig_bov
+
+
 def main():
     test_shaper()
     test_league_filters()
     test_school_collision()
+    test_in_word_name_collision()
     test_better_free_result()
     test_source_order()
     test_bovada_parent_fallback()

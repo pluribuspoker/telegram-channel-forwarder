@@ -2352,7 +2352,13 @@ def _team_matches(term: str, team_name: str) -> bool:
     # ("Guilherme Pat" ↔ "Pat Guilherme"). Reject a bare substring buried inside
     # a single word (e.g. "Ko" inside "Balko"/"Guskov"/"Shevchenko"), a false
     # positive that made short fighter/team tokens hijack the wrong event.
-    return n in t or sorted(t_words) == sorted(n_words)
+    # Word-aligned in this direction too: a bare book name inside a longer
+    # word ("Kansas" in "Arkansas Razorbacks", "Elon" in "FC Barcelona")
+    # bound Arkansas picks to Kansas State @ Kansas on Pinnacle+Bovada
+    # (2026-10-17).
+    return (any(t_words[i: i + len(n_words)] == n_words
+                for i in range(len(t_words) - len(n_words) + 1))
+            or sorted(t_words) == sorted(n_words))
 
 
 def _event_term_hits(event: dict, teams: list[str], player: str = "") -> int:
