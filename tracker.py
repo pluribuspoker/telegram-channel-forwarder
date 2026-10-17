@@ -1155,7 +1155,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                     # changed (day hint now points to the correct game).
                     if cached_leg and day_hint and cached_leg.get("game_date") and cached_leg["game_date"] != day_hint:
                         cached_leg = None
-                    if cached_leg and cached_leg.get("verdict") in ("WIN", "LOSS", "PUSH"):
+                    if cached_leg and cached_leg.get("verdict") in ("WIN", "LOSS", "PUSH", "VOID"):
                         # Resolved leg — use cached verdict, skip ESPN + Claude calls
                         verdict   = cached_leg["verdict"]
                         calc      = cached_leg["calc"]
@@ -1235,7 +1235,7 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                                         if n >= UNKNOWN_MAX_ATTEMPTS:
                                             print(f"  ⏹ {msg.id} leg {i} ungradeable after {n} "
                                                   f"attempts — no longer grading")
-                        if leg_bound and verdict not in ("WIN", "LOSS", "PUSH") and not dry_run:
+                        if leg_bound and verdict not in ("WIN", "LOSS", "PUSH", "VOID") and not dry_run:
                             await _stuck_tripwire(
                                 leg_bound, pick, pick_sport, audit, capper, cache_key, i)
                     verdicts.append((pick, verdict, calc, pick_sport, game_date))
@@ -1325,12 +1325,15 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 if not graded or parlay_blocks_edit:
                     new_leg_verdicts = dict(cached_leg_verdicts)  # preserve previously cached
                     for j, (lpick, lverdict, lcalc, lps, lgd, *_) in enumerate(verdicts):
-                        if lverdict in ("WIN", "LOSS", "PUSH"):
+                        if lverdict in ("WIN", "LOSS", "PUSH", "VOID"):
                             entry = {
                                 "verdict": lverdict, "calc": lcalc,
                                 "sport": lps, "game_date": lgd or date_str,
                             }
-                            if cached_leg_verdicts.get(str(j), {}).get("broadcasted"):
+                            # VOID (postponed/cancelled — no action) is terminal
+                            # and never broadcast: mark it done immediately.
+                            if lverdict == "VOID" or \
+                                    cached_leg_verdicts.get(str(j), {}).get("broadcasted"):
                                 entry["broadcasted"] = True
                             new_leg_verdicts[str(j)] = entry
                     pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick, pikkit_by_pick)
@@ -1422,12 +1425,15 @@ async def run_live(dry_run: bool = False, days: int = 7, channel: int | None = N
                 terminal_channel = channel_id in user_edit_channels and not edit_failed
                 new_leg_verdicts = dict(cached_leg_verdicts)
                 for j, (lpick, lverdict, lcalc, lps, lgd, *_) in enumerate(verdicts):
-                    if lverdict in ("WIN", "LOSS", "PUSH"):
+                    if lverdict in ("WIN", "LOSS", "PUSH", "VOID"):
                         already_bc = cached_leg_verdicts.get(str(j), {}).get("broadcasted", False)
                         new_leg_verdicts[str(j)] = {
                             "verdict": lverdict, "calc": lcalc,
                             "sport": lps, "game_date": lgd or date_str,
-                            "broadcasted": already_bc or terminal_channel,
+                            # VOID (postponed/cancelled — no action) is terminal
+                            # and never broadcast: done the moment it's written.
+                            "broadcasted": already_bc or terminal_channel
+                                           or lverdict == "VOID",
                         }
                 pending_cache[cache_key] = _pending_entry(capper, parsed, new_leg_verdicts, pending_cache.get(cache_key, {}), odds_by_pick, pikkit_by_pick)
                 # Update HTML text after emoji edit so daemon sees current state

@@ -2525,6 +2525,50 @@ def _is_period_complete(event: dict, sport: str, period: str) -> bool:
     return current_period > max(period_indices)
 
 
+# Books refund ("no action") a bet whose game is postponed or cancelled off its
+# scheduled day — the makeup is a NEW betting event (ESPN mints a new event id:
+# Rays@Guardians stayed STATUS_POSTPONED as 401908026 while the makeup became
+# 401908027), so the matched/bound event can never complete and the leg would
+# otherwise sit pending until the stale retire. STATUS_SUSPENDED is deliberately
+# NOT here: a suspended game resumes under the SAME event and its bets settle on
+# completion — that one fails open to waiting.
+_VOID_STATUSES = frozenset({"STATUS_POSTPONED", "STATUS_CANCELED", "STATUS_CANCELLED"})
+_VOID_GRACE_H = 6
+
+
+def _postponed_void(stype: dict, pick: dict, event: dict,
+                    scoreboard: dict) -> tuple[str, str] | None:
+    """("VOID", calc) for a definitively postponed/cancelled game, else None.
+
+    Every sign must be unambiguous, else fail open to pending: the status NAMES
+    the postponement (a bare incomplete "post" state stays None), the scheduled
+    start is _VOID_GRACE_H+ hours gone (a weather call reversed into a same-day
+    restart reads SCHEDULED/DELAYED again well inside that), and the pick's
+    teams match exactly ONE game on this scoreboard — the postponed half of a
+    doubleheader must never void a bet the played half can settle.
+    """
+    if stype.get("name") not in _VOID_STATUSES:
+        return None
+    try:
+        kickoff = _datetime.fromisoformat(str(event.get("date", "")).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if kickoff.tzinfo is None:
+        kickoff = kickoff.replace(tzinfo=timezone.utc)
+    if _datetime.now(timezone.utc) < kickoff + timedelta(hours=_VOID_GRACE_H):
+        return None
+    ids = find_event_ids(scoreboard.get("events", []),
+                         pick.get("teams") or [], pick.get("player") or "")
+    if len(ids) != 1:
+        return None
+    comp = (event.get("competitions") or [{}])[0]
+    by_side = {c.get("homeAway"): c for c in comp.get("competitors", [])}
+    away = ((by_side.get("away") or {}).get("team") or {}).get("displayName", "")
+    home = ((by_side.get("home") or {}).get("team") or {}).get("displayName", "")
+    label = "postponed" if stype.get("name") == "STATUS_POSTPONED" else "canceled"
+    return ("VOID", f"[{label}] {away} vs {home} — no action")
+
+
 def try_early_grade_math(
     sport: str, pick: dict, scoreboard: dict | None,
 ) -> tuple[str, str] | None:
@@ -2601,9 +2645,11 @@ def try_early_grade_math(
     if state not in ("in", "post"):
         return None
     final = state == "post"
-    # "post" also covers postponed/suspended/cancelled — those carry no result.
+    # "post" also covers postponed/suspended/cancelled — no scoreline to grade,
+    # but a named postponement/cancellation past its day VOIDs the bet (books
+    # refund; the makeup game is a new event id, so waiting here never ends).
     if final and not stype.get("completed"):
-        return None
+        return _postponed_void(stype, pick, event, scoreboard)
     # A completed period of a live game is as settled as a final: once the
     # 6th inning / 3rd quarter has started, the F5/1H scoreline can never
     # move again. `_is_period_complete` returns False for period="game" and

@@ -23,6 +23,7 @@ path. Those are pinned too, since a guard that silently swallowed a pick would
 be a worse bug than the one being fixed.
 """
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -107,6 +108,32 @@ WNBA_HALFTIME = event("Golden State Valkyries", [26, 18], "Dallas Wings",
                       [21, 15], state="in", completed=False, period=2)
 
 
+def dead_event(status_name, hours_ago, *, second_game=False, no_date=False):
+    """A postponed/cancelled-shaped scoreboard: named dead status, kickoff in
+    the past. `second_game` adds a played game with the same team — the
+    doubleheader shape that must block the void."""
+    sb = event("Tampa Bay Rays", [0], "Cleveland Guardians", [0], completed=False)
+    ev = sb["events"][0]
+    ev["status"]["type"]["name"] = status_name
+    if not no_date:
+        ev["date"] = (datetime.now(timezone.utc)
+                      - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%MZ")
+    if second_game:
+        twin = event("Tampa Bay Rays", [0, 2, 1], "Cleveland Guardians",
+                     [1, 0, 0])["events"][0]
+        twin["id"] = "401002"
+        sb["events"].append(twin)
+    return sb
+
+
+PPD_OLD = dead_event("STATUS_POSTPONED", 10)          # 6h grace long gone
+PPD_FRESH = dead_event("STATUS_POSTPONED", 2)         # inside the grace window
+CANC_OLD = dead_event("STATUS_CANCELED", 10)
+SUSP_OLD = dead_event("STATUS_SUSPENDED", 10)         # resumes — never voided
+PPD_DOUBLEHEADER = dead_event("STATUS_POSTPONED", 10, second_game=True)
+PPD_NO_DATE = dead_event("STATUS_POSTPONED", 10, no_date=True)
+
+
 def P(**kw):
     base = {"bet_type": "total", "teams": ["Dallas Wings"], "player": "",
             "line": 79.5, "direction": "under", "period": "1h", "sport": "WNBA"}
@@ -150,7 +177,29 @@ CASES = [
     ("mid-game, under not yet decided", "WNBA",
      P(period="game", line=200.5), WNBA_LIVE, None),
 
+    # ── postponed/cancelled: a NAMED dead status past its day = VOID ──────────
+    # Rays@Guardians 2026-10-16: ESPN kept the postponed game as its own event
+    # (STATUS_POSTPONED forever) and minted a NEW id for the makeup, so the
+    # matched/bound event never completes and the leg sat pending until the
+    # stale retire. Books refund the bet — the makeup is a new betting event.
+    ("postponed past its day → VOID", "MLB",
+     S(teams=["Tampa Bay Rays"]), PPD_OLD, ("VOID", "postponed")),
+    ("postponed total voids too", "MLB",
+     P(sport="MLB", period="game", line=7.5, teams=["Tampa Bay Rays"]),
+     PPD_OLD, ("VOID", "postponed")),
+    ("canceled → VOID", "MLB", S(teams=["Tampa Bay Rays"]), CANC_OLD, ("VOID", "canceled")),
+    # ...and every ambiguous sign fails open to pending instead:
+    ("postponed but kickoff only 2h gone — could still be same-day", "MLB",
+     S(teams=["Tampa Bay Rays"]), PPD_FRESH, None),
+    ("suspended resumes under the SAME event — wait, never void", "MLB",
+     S(teams=["Tampa Bay Rays"]), SUSP_OLD, None),
+    ("postponed half of a doubleheader — the played half owns the bet", "MLB",
+     S(teams=["Tampa Bay Rays"]), PPD_DOUBLEHEADER, None),
+    ("postponed with no kickoff date on the event", "MLB",
+     S(teams=["Tampa Bay Rays"]), PPD_NO_DATE, None),
+
     # ── guards fail open → None → normal context+Claude path ──────────────────
+    # (no status NAME here — a bare incomplete "post" state is never voided)
     ("postponed/suspended is not a result", "WNBA", P(), WNBA_PPD, None),
     ("soccer left to Claude (extra-time rule)", "Soccer",
      P(sport="Soccer", period="game", line=2.5, teams=["Dallas Wings"]), WNBA, None),

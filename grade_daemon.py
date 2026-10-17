@@ -791,11 +791,13 @@ async def _grade_cycle(
         is_parlay_entry = any(p.get("is_parlay_leg") for p in picks)
         parlay_lost = is_parlay_entry and _parlay_lost(picks, leg_verdicts)
 
-        # Figure out which legs still need grading
+        # Figure out which legs still need grading. VOID is terminal too — a
+        # postponed/cancelled no-action leg (or a lost ticket's moot leg) must
+        # not be re-graded every cycle or counted toward the stale retire.
         unresolved_indices = []
         for i in range(len(picks)):
             leg = leg_verdicts.get(str(i))
-            if not leg or leg.get("verdict") not in ("WIN", "LOSS", "PUSH"):
+            if not leg or leg.get("verdict") not in ("WIN", "LOSS", "PUSH", "VOID"):
                 if parlay_lost and picks[i].get("is_parlay_leg"):
                     continue  # parlay already lost — its pending leg is moot
                 unresolved_indices.append(i)
@@ -1008,6 +1010,18 @@ async def _grade_cycle(
                     "sport": pick_sport, "game_date": game_date or eff_date,
                 }
                 newly_resolved.append((i, pick, verdict, calc, pick_sport, game_date))
+            elif verdict == "VOID":
+                # Postponed/cancelled off its day: no action, stake refunded.
+                # Terminal and silent — broadcasted=True keeps it out of every
+                # broadcast and emoji pass (the _void_moot_parlay_legs shape).
+                leg_verdicts[str(i)] = {
+                    "verdict": "VOID", "calc": calc,
+                    "sport": pick_sport, "game_date": game_date or eff_date,
+                    "broadcasted": True,
+                }
+                entry["leg_verdicts"] = leg_verdicts
+                dirty = True
+                print(f"  ∅ {cache_key} {capper[:15]:<15} VOID — {calc[:60]}")
 
         if not newly_resolved:
             if unresolved_indices:
